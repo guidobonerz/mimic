@@ -1,0 +1,29 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cpu-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache CPU test data
+        uses: actions/cache@v4
+        with:
+          path: testdata
+          key: testdata-${{ hashFiles('tools/fetch-testdata.sh') }}
+      - run: bash tools/fetch-testdata.sh
+      - name: Full Tom Harte suite + Dormann
+        env:
+          EMU_TESTDATA_DIR: ${{ github.workspace }}/testdata
+          EMU_HARTE_FULL: "1"
+        run: cargo test -p cpu-6502 --release -- --ignored

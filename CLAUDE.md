@@ -81,7 +81,8 @@ pub trait Cpu {
 pub trait Machine: Send {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason;
     fn step_cycle(&mut self) -> StopReason;
-    fn framebuffer(&self) -> FrameRef;                  // Indexed+palette or RGB (Amiga HAM)
+    fn framebuffer(&self) -> FrameRef;                  // Indexed+palette or RGB (Amiga HAM); partial while halted mid-frame
+    fn beam(&self) -> Option<BeamPos>;                  // frame, raster line, cycle in line, hpos; None without a beam
     fn memory_spaces(&self) -> Vec<MemSpace>;           // CPU, chip RAM, fast RAM, ROM, drive, VDC RAM…
     fn chips(&self) -> Vec<ChipInfo>;                   // register dumps for debugger views
     fn devices(&self) -> Vec<DeviceId>;                 // debug targets, main CPU first: "cpu", 1541, C128 Z80, Copper, Blitter
@@ -306,7 +307,8 @@ The web frontend uses these over WebSocket to forward browser keyboard/gamepad/m
 - Emulation runs on its own thread; the server communicates via a command queue + event channel. Never lock the emulation thread from a network task.
 - **Native protocol** (binary over TCP, JSON over WebSocket, same message set):
   - Session: `list_machines`, `attach`, `capabilities`
-  - Execution: `pause`, `resume`, `step_instr`, `step_over`, `step_out`, `step_cycle`, `run_to`, `step_frame`, `reset`
+  - Execution: `pause`, `resume`, `step_instr`, `step_over`, `step_out`, `step_cycle`, `step_line`, `run_to`, `step_frame`, `reset`
+  - Raster: `beam` position, `step_line` (follow a frame being drawn line by line, with the partial frame), raster trace (instructions and traced reads/writes stamped with frame/line/cycle; ring buffer in `DebugHooks`, zero cost when off)
   - Breakpoints: exec, read/write watchpoints, chip-register I/O, raster line/cycle, IRQ/NMI; conditions + hit counts
   - Inspect/modify: registers, memory (peek, bank-aware), disassembly, chip registers, stack
   - State: `save_state`, `load_state`, rewind ring buffer
@@ -333,6 +335,10 @@ cargo test --workspace                       # unit + integration (ROM tests ski
 EMU_ROM_DIR=~/roms cargo test --workspace -- --include-ignored
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
+bash tools/fetch-testdata.sh                 # Harte + Dormann CPU test data into testdata/ (~850 MB)
+EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-6502 --release -- --ignored   # every 10th Harte test
+EMU_HARTE_FULL=1 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-6502 --release -- --ignored
+python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 cargo bench -p cpu-6502                      # before/after when touching hot paths
 cargo build -p emu-web --target wasm32-unknown-unknown
 cargo run -p emu-headless -- --machine c64 --prg demo.prg --frames 300 --snapshot out.png

@@ -87,8 +87,14 @@ impl Registry {
         self.entries.iter().find(|e| e.id == id)
     }
 
-    pub fn create(&self, id: &str, config: &MachineConfig) -> Result<Box<dyn Machine>, ConfigError> {
-        let entry = self.get(id).ok_or_else(|| ConfigError::UnknownMachine(id.to_owned()))?;
+    pub fn create(
+        &self,
+        id: &str,
+        config: &MachineConfig,
+    ) -> Result<Box<dyn Machine>, ConfigError> {
+        let entry = self
+            .get(id)
+            .ok_or_else(|| ConfigError::UnknownMachine(id.to_owned()))?;
         (entry.create)(config)
     }
 }
@@ -102,7 +108,12 @@ mod tests {
     }
 
     fn entry(id: &'static str, name: &'static str) -> MachineEntry {
-        MachineEntry { id, name, models: &["pal", "ntsc"], create: needs_kernal }
+        MachineEntry {
+            id,
+            name,
+            models: &["pal", "ntsc"],
+            create: needs_kernal,
+        }
     }
 
     #[test]

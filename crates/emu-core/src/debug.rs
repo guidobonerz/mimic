@@ -1,4 +1,4 @@
-//! Debug hooks: breakpoints, watchpoints and memory freezes.
+//! Debug hooks: breakpoints, watchpoints, memory freezes and the raster trace.
 //!
 //! Hot-path contract (golden rule 5): machines ask the cheap `*_armed` queries
 //! first and only call the `check_*` / `on_*` methods when something is armed.
@@ -10,9 +10,10 @@
 
 use std::collections::BTreeMap;
 
+use crate::beam::{BeamPos, TraceBuffer, TraceConfig, TraceEntry, TraceEvent};
 use crate::bus::Size;
 use crate::freeze::{Freeze, FreezeMode};
-use crate::machine::{MemSpaceId, StopReason};
+use crate::machine::{DeviceId, MemSpaceId, StopReason};
 use crate::savestate::{StateError, StateReader, StateWriter};
 
 const PAGE_BITS: u32 = 12;
@@ -127,9 +128,17 @@ pub enum BreakpointKind {
     /// Instruction fetch at `addr`.
     Exec { space: MemSpaceId, addr: u32 },
     /// Read watchpoint over `addr..addr + len` (also used for chip-register I/O).
-    Read { space: MemSpaceId, addr: u32, len: u32 },
+    Read {
+        space: MemSpaceId,
+        addr: u32,
+        len: u32,
+    },
     /// Write watchpoint over `addr..addr + len`.
-    Write { space: MemSpaceId, addr: u32, len: u32 },
+    Write {
+        space: MemSpaceId,
+        addr: u32,
+        len: u32,
+    },
     /// Raster position; `cycle: None` matches the start of the line.
     Raster { line: u16, cycle: Option<u16> },
     /// Interrupt taken by the CPU.
@@ -151,7 +160,13 @@ pub struct Breakpoint {
 
 impl Breakpoint {
     pub fn new(kind: BreakpointKind) -> Self {
-        Self { kind, enabled: true, ignore_count: 0, hits: 0, temporary: false }
+        Self {
+            kind,
+            enabled: true,
+            ignore_count: 0,
+            hits: 0,
+            temporary: false,
+        }
     }
 }
 
@@ -174,15 +189,20 @@ struct SpaceHooks {
     freeze_read: AddrBitmap,
     /// Writes are suppressed (BlockWrites).
     freeze_write: AddrBitmap,
-    /// `read_watch | freeze_read`: one test on the read path.
+    trace_read: AddrBitmap,
+    trace_write: AddrBitmap,
+    /// `read_watch | freeze_read | trace_read`: one test on the read path.
     read_any: AddrBitmap,
-    /// `write_watch | freeze_write`: one test on the write path.
+    /// `write_watch | freeze_write | trace_write`: one test on the write path.
     write_any: AddrBitmap,
 }
 
 impl SpaceHooks {
     fn clear_bitmaps(&mut self) {
-        *self = SpaceHooks { big_endian: self.big_endian, ..SpaceHooks::default() };
+        *self = SpaceHooks {
+            big_endian: self.big_endian,
+            ..SpaceHooks::default()
+        };
     }
 }
 
@@ -227,6 +247,10 @@ pub struct DebugHooks {
     nmi_armed: bool,
     pending: Option<StopReason>,
     blocked_write: Option<BlockedWrite>,
+    trace_config: TraceConfig,
+    trace: TraceBuffer,
+    /// Stop at the start of the next raster line (`step_line`).
+    line_step: bool,
 }
 
 impl DebugHooks {
@@ -324,12 +348,41 @@ impl DebugHooks {
             .filter(|f| f.enabled && f.mode == FreezeMode::ReapplyPerFrame)
     }
 
+    /// Stop with [`StopReason::StepDone`] when the beam reaches cycle 0 of the
+    /// next raster line, so a frame can be followed line by line. One-shot:
+    /// cleared when it fires.
+    pub fn set_line_step(&mut self, on: bool) {
+        self.line_step = on;
+        self.rebuild();
+    }
+
+    /// Replace the raster-trace configuration; clears the trace buffer.
+    pub fn set_trace(&mut self, config: TraceConfig) {
+        self.trace = TraceBuffer::new(config.capacity);
+        self.trace_config = config;
+        self.rebuild();
+    }
+
+    pub fn trace_config(&self) -> &TraceConfig {
+        &self.trace_config
+    }
+
+    /// Remove and return the recorded trace entries, oldest first.
+    pub fn drain_trace(&mut self) -> Vec<TraceEntry> {
+        self.trace.drain()
+    }
+
+    /// Entries lost to the ring buffer since the last drain.
+    pub fn trace_dropped(&self) -> u64 {
+        self.trace.dropped()
+    }
+
     fn rebuild(&mut self) {
         for space in &mut self.spaces {
             space.clear_bitmaps();
         }
         self.frozen_bytes.clear();
-        self.raster_armed = false;
+        self.raster_armed = self.line_step;
         self.irq_armed = false;
         self.nmi_armed = false;
 
@@ -355,6 +408,21 @@ impl DebugHooks {
                 BreakpointKind::Raster { .. } => self.raster_armed = true,
                 BreakpointKind::Interrupt(InterruptKind::Irq) => self.irq_armed = true,
                 BreakpointKind::Interrupt(InterruptKind::Nmi) => self.nmi_armed = true,
+            }
+        }
+
+        for r in &self.trace_config.reads {
+            let hooks = space_mut(&mut self.spaces, r.space);
+            for i in 0..r.len.min(MAX_RANGE) {
+                hooks.trace_read.set(r.addr.wrapping_add(i));
+                hooks.read_any.set(r.addr.wrapping_add(i));
+            }
+        }
+        for r in &self.trace_config.writes {
+            let hooks = space_mut(&mut self.spaces, r.space);
+            for i in 0..r.len.min(MAX_RANGE) {
+                hooks.trace_write.set(r.addr.wrapping_add(i));
+                hooks.write_any.set(r.addr.wrapping_add(i));
             }
         }
 
@@ -404,6 +472,12 @@ impl DebugHooks {
     #[inline]
     pub fn raster_armed(&self) -> bool {
         self.raster_armed
+    }
+
+    /// True if every instruction start must be passed to [`DebugHooks::trace_instr`].
+    #[inline]
+    pub fn trace_instr_armed(&self) -> bool {
+        self.trace_config.instructions
     }
 
     #[inline]
@@ -489,7 +563,12 @@ impl DebugHooks {
                     if s == space && overlaps(a, len, addr, n))
             });
             if let Some(id) = hit {
-                self.set_pending(StopReason::Watchpoint { id, space, addr, write: false });
+                self.set_pending(StopReason::Watchpoint {
+                    id,
+                    space,
+                    addr,
+                    write: false,
+                });
             }
         }
         v
@@ -514,17 +593,97 @@ impl DebugHooks {
                     if s == space && overlaps(a, len, addr, n))
             });
             if let Some(id) = hit {
-                self.set_pending(StopReason::Watchpoint { id, space, addr, write: true });
+                self.set_pending(StopReason::Watchpoint {
+                    id,
+                    space,
+                    addr,
+                    write: true,
+                });
             }
         }
         if blocked {
-            self.blocked_write = Some(BlockedWrite { space, addr, size, value });
+            self.blocked_write = Some(BlockedWrite {
+                space,
+                addr,
+                size,
+                value,
+            });
         }
         !blocked
     }
 
+    /// Record an instruction start (call when [`DebugHooks::trace_instr_armed`]).
+    pub fn trace_instr(&mut self, device: DeviceId, pc: u32, beam: BeamPos) {
+        if self.trace_config.instructions {
+            self.trace.push(TraceEntry {
+                beam,
+                event: TraceEvent::Instr { device, pc },
+            });
+        }
+    }
+
+    /// Record a guest read if it hits a traced range. Call alongside
+    /// [`DebugHooks::on_read`] when [`DebugHooks::read_armed`]; `value` is
+    /// what the guest saw.
+    pub fn trace_read(
+        &mut self,
+        space: MemSpaceId,
+        addr: u32,
+        size: Size,
+        value: u32,
+        beam: BeamPos,
+    ) {
+        if self
+            .space(space)
+            .is_some_and(|h| h.trace_read.test_range(addr, size.bytes()))
+        {
+            self.trace.push(TraceEntry {
+                beam,
+                event: TraceEvent::Read {
+                    space,
+                    addr,
+                    size,
+                    value,
+                },
+            });
+        }
+    }
+
+    /// Record a guest write if it hits a traced range. Call alongside
+    /// [`DebugHooks::on_write`] when [`DebugHooks::write_armed`]. Blocked
+    /// writes are traced too: the trace shows what the guest attempted.
+    pub fn trace_write(
+        &mut self,
+        space: MemSpaceId,
+        addr: u32,
+        size: Size,
+        value: u32,
+        beam: BeamPos,
+    ) {
+        if self
+            .space(space)
+            .is_some_and(|h| h.trace_write.test_range(addr, size.bytes()))
+        {
+            self.trace.push(TraceEntry {
+                beam,
+                event: TraceEvent::Write {
+                    space,
+                    addr,
+                    size,
+                    value,
+                },
+            });
+        }
+    }
+
     /// Check the beam position. Returns true if emulation must stop.
     pub fn check_raster(&mut self, line: u16, cycle: u16) -> bool {
+        if self.line_step && cycle == 0 {
+            self.line_step = false;
+            self.rebuild();
+            self.set_pending(StopReason::StepDone);
+            return true;
+        }
         let hit = self.register_hit(|kind| match *kind {
             BreakpointKind::Raster { line: l, cycle: c } => l == line && c.unwrap_or(0) == cycle,
             _ => false,
@@ -609,13 +768,16 @@ mod tests {
         }
         assert_eq!(b.len(), 6);
         assert!(!b.test(1));
-        assert!(!b.test(0x1_0000_0));
+        assert!(!b.test(0x0010_0000));
         assert!(b.test_range(4094, 2));
         assert!(!b.test_range(1, 62));
         assert!(b.clear(4096));
         assert!(!b.clear(4096));
         assert!(!b.test(4096));
-        assert!(!b.clear(0xffff_ffff), "clearing an unallocated page is a no-op");
+        assert!(
+            !b.clear(0xffff_ffff),
+            "clearing an unallocated page is a no-op"
+        );
         b.clear_all();
         assert!(b.is_empty() && !b.test(0));
     }
@@ -632,7 +794,10 @@ mod tests {
     #[test]
     fn exec_breakpoint_with_ignore_count() {
         let mut hooks = DebugHooks::new();
-        let mut bp = Breakpoint::new(BreakpointKind::Exec { space: CPU, addr: 0xc000 });
+        let mut bp = Breakpoint::new(BreakpointKind::Exec {
+            space: CPU,
+            addr: 0xc000,
+        });
         bp.ignore_count = 2;
         let id = hooks.insert_breakpoint(bp);
         assert!(hooks.exec_armed(CPU));
@@ -648,23 +813,38 @@ mod tests {
     #[test]
     fn disabled_and_temporary_breakpoints() {
         let mut hooks = DebugHooks::new();
-        let id = hooks.add_breakpoint(BreakpointKind::Exec { space: CPU, addr: 0x1000 });
+        let id = hooks.add_breakpoint(BreakpointKind::Exec {
+            space: CPU,
+            addr: 0x1000,
+        });
         hooks.set_breakpoint_enabled(id, false);
         assert!(!hooks.exec_armed(CPU));
 
-        let mut bp = Breakpoint::new(BreakpointKind::Exec { space: CPU, addr: 0x2000 });
+        let mut bp = Breakpoint::new(BreakpointKind::Exec {
+            space: CPU,
+            addr: 0x2000,
+        });
         bp.temporary = true;
         let tmp = hooks.insert_breakpoint(bp);
         assert!(hooks.check_exec(CPU, 0x2000));
-        assert!(hooks.breakpoint(tmp).is_none(), "temporary breakpoint removed after stop");
+        assert!(
+            hooks.breakpoint(tmp).is_none(),
+            "temporary breakpoint removed after stop"
+        );
         assert!(!hooks.exec_armed(CPU));
     }
 
     #[test]
     fn removing_one_of_two_overlapping_breakpoints_keeps_the_other() {
         let mut hooks = DebugHooks::new();
-        let a = hooks.add_breakpoint(BreakpointKind::Exec { space: CPU, addr: 0x0400 });
-        let b = hooks.add_breakpoint(BreakpointKind::Exec { space: CPU, addr: 0x0400 });
+        let a = hooks.add_breakpoint(BreakpointKind::Exec {
+            space: CPU,
+            addr: 0x0400,
+        });
+        let b = hooks.add_breakpoint(BreakpointKind::Exec {
+            space: CPU,
+            addr: 0x0400,
+        });
         hooks.remove_breakpoint(a);
         assert!(hooks.check_exec(CPU, 0x0400));
         assert_eq!(hooks.take_stop(), Some(StopReason::Breakpoint(b)));
@@ -673,8 +853,16 @@ mod tests {
     #[test]
     fn read_and_write_watchpoints_over_ranges() {
         let mut hooks = DebugHooks::new();
-        let r = hooks.add_breakpoint(BreakpointKind::Read { space: CPU, addr: 0xd000, len: 0x40 });
-        let w = hooks.add_breakpoint(BreakpointKind::Write { space: CPU, addr: 0xd020, len: 1 });
+        let r = hooks.add_breakpoint(BreakpointKind::Read {
+            space: CPU,
+            addr: 0xd000,
+            len: 0x40,
+        });
+        let w = hooks.add_breakpoint(BreakpointKind::Write {
+            space: CPU,
+            addr: 0xd020,
+            len: 1,
+        });
         assert!(hooks.read_armed(CPU) && hooks.write_armed(CPU));
         assert!(!hooks.read_armed(CHIP));
 
@@ -683,12 +871,22 @@ mod tests {
         assert_eq!(hooks.on_read(CPU, 0xd03f, Size::Byte, 7), 7);
         assert_eq!(
             hooks.take_stop(),
-            Some(StopReason::Watchpoint { id: r, space: CPU, addr: 0xd03f, write: false })
+            Some(StopReason::Watchpoint {
+                id: r,
+                space: CPU,
+                addr: 0xd03f,
+                write: false
+            })
         );
         assert!(hooks.on_write(CPU, 0xd020, Size::Byte, 1));
         assert_eq!(
             hooks.take_stop(),
-            Some(StopReason::Watchpoint { id: w, space: CPU, addr: 0xd020, write: true })
+            Some(StopReason::Watchpoint {
+                id: w,
+                space: CPU,
+                addr: 0xd020,
+                write: true
+            })
         );
     }
 
@@ -696,10 +894,18 @@ mod tests {
     fn block_writes_freeze() {
         let mut hooks = DebugHooks::new();
         let id = hooks.add_freeze(Freeze::new(CPU, 0x00c0, Size::Byte, 3));
-        assert!(!hooks.on_write(CPU, 0x00c0, Size::Byte, 2), "write is blocked");
+        assert!(
+            !hooks.on_write(CPU, 0x00c0, Size::Byte, 2),
+            "write is blocked"
+        );
         assert_eq!(
             hooks.take_blocked_write(),
-            Some(BlockedWrite { space: CPU, addr: 0x00c0, size: Size::Byte, value: 2 })
+            Some(BlockedWrite {
+                space: CPU,
+                addr: 0x00c0,
+                size: Size::Byte,
+                value: 2
+            })
         );
         assert!(hooks.on_write(CPU, 0x00c1, Size::Byte, 2));
         assert_eq!(hooks.on_read(CPU, 0x00c0, Size::Byte, 0x55), 3);
@@ -735,20 +941,34 @@ mod tests {
     fn word_freeze_respects_byte_order() {
         let mut hooks = DebugHooks::new();
         hooks.add_freeze(Freeze::new(CPU, 0x10, Size::Word, 0x1234));
-        assert_eq!(hooks.on_read(CPU, 0x10, Size::Byte, 0), 0x34, "little-endian low byte");
+        assert_eq!(
+            hooks.on_read(CPU, 0x10, Size::Byte, 0),
+            0x34,
+            "little-endian low byte"
+        );
         assert_eq!(hooks.on_read(CPU, 0x11, Size::Byte, 0), 0x12);
 
         hooks.set_big_endian(CHIP, true);
         hooks.add_freeze(Freeze::new(CHIP, 0x100, Size::Word, 0xabcd));
-        assert_eq!(hooks.on_read(CHIP, 0x100, Size::Byte, 0), 0xab, "big-endian high byte first");
+        assert_eq!(
+            hooks.on_read(CHIP, 0x100, Size::Byte, 0),
+            0xab,
+            "big-endian high byte first"
+        );
         assert_eq!(hooks.on_read(CHIP, 0x100, Size::Word, 0), 0xabcd);
-        assert_eq!(hooks.on_read(CHIP, 0x0ff, Size::Long, 0x1111_1111), 0x11ab_cd11);
+        assert_eq!(
+            hooks.on_read(CHIP, 0x0ff, Size::Long, 0x1111_1111),
+            0x11ab_cd11
+        );
     }
 
     #[test]
     fn raster_and_interrupt_breakpoints() {
         let mut hooks = DebugHooks::new();
-        hooks.add_breakpoint(BreakpointKind::Raster { line: 0x33, cycle: None });
+        hooks.add_breakpoint(BreakpointKind::Raster {
+            line: 0x33,
+            cycle: None,
+        });
         hooks.add_breakpoint(BreakpointKind::Interrupt(InterruptKind::Nmi));
         assert!(hooks.raster_armed());
         assert!(hooks.interrupt_armed(InterruptKind::Nmi));
@@ -777,7 +997,11 @@ mod tests {
             restored.freezes().collect::<Vec<_>>(),
             hooks.freezes().collect::<Vec<_>>()
         );
-        assert_eq!(restored.on_read(CPU, 0x02, Size::Byte, 0), 1, "bitmaps rebuilt on load");
+        assert_eq!(
+            restored.on_read(CPU, 0x02, Size::Byte, 0),
+            1,
+            "bitmaps rebuilt on load"
+        );
         assert_eq!(
             restored.add_freeze(Freeze::new(CPU, 0, Size::Byte, 0)),
             FreezeId(2),
@@ -796,8 +1020,92 @@ mod tests {
         let mut other = DebugHooks::new();
         other.add_freeze(Freeze::new(CPU, 0x99, Size::Byte, 5));
         let truncated = &data[..data.len() - 1];
-        assert!(other.load_freezes(&mut StateReader::new(truncated)).is_err());
+        assert!(other
+            .load_freezes(&mut StateReader::new(truncated))
+            .is_err());
         assert_eq!(other.freezes().count(), 1);
         assert_eq!(other.on_read(CPU, 0x99, Size::Byte, 0), 5);
+    }
+
+    fn beam(line: u16, cycle: u16) -> BeamPos {
+        BeamPos {
+            frame: 0,
+            line,
+            cycle,
+            hpos: 0,
+        }
+    }
+
+    #[test]
+    fn raster_trace_records_only_traced_ranges() {
+        use crate::beam::{TraceConfig, TraceEvent, TraceRange};
+
+        let mut hooks = DebugHooks::new();
+        assert!(!hooks.write_armed(CPU));
+        hooks.set_trace(TraceConfig {
+            instructions: true,
+            writes: vec![TraceRange {
+                space: CPU,
+                addr: 0xd020,
+                len: 2,
+            }],
+            ..TraceConfig::default()
+        });
+        assert!(hooks.trace_instr_armed());
+        assert!(hooks.write_armed(CPU), "trace ranges arm the write path");
+        assert!(!hooks.read_armed(CPU));
+
+        hooks.trace_instr(DeviceId("cpu"), 0x0810, beam(0x30, 12));
+        for addr in [0xd020, 0xd021, 0xd022] {
+            assert!(
+                hooks.on_write(CPU, addr, Size::Byte, 6),
+                "tracing never blocks"
+            );
+            hooks.trace_write(CPU, addr, Size::Byte, 6, beam(0x30, 15));
+        }
+        assert_eq!(hooks.take_stop(), None, "tracing never stops");
+
+        let t = hooks.drain_trace();
+        assert_eq!(t.len(), 3);
+        assert_eq!(
+            t[0].event,
+            TraceEvent::Instr {
+                device: DeviceId("cpu"),
+                pc: 0x0810
+            }
+        );
+        assert_eq!(t[1].beam, beam(0x30, 15));
+        assert!(matches!(t[2].event, TraceEvent::Write { addr: 0xd021, .. }));
+        assert!(hooks.drain_trace().is_empty());
+
+        hooks.set_trace(TraceConfig::default());
+        assert!(!hooks.write_armed(CPU));
+        assert!(!hooks.trace_instr_armed());
+    }
+
+    #[test]
+    fn line_step_stops_once_at_next_line_start() {
+        let mut hooks = DebugHooks::new();
+        hooks.set_line_step(true);
+        assert!(hooks.raster_armed());
+        assert!(!hooks.check_raster(10, 5));
+        assert!(hooks.check_raster(11, 0));
+        assert_eq!(hooks.take_stop(), Some(StopReason::StepDone));
+        assert!(!hooks.raster_armed(), "one-shot");
+        assert!(!hooks.check_raster(12, 0));
+    }
+
+    #[test]
+    fn line_step_keeps_raster_breakpoints_armed() {
+        let mut hooks = DebugHooks::new();
+        hooks.add_breakpoint(BreakpointKind::Raster {
+            line: 100,
+            cycle: None,
+        });
+        hooks.set_line_step(true);
+        assert!(hooks.check_raster(1, 0));
+        assert_eq!(hooks.take_stop(), Some(StopReason::StepDone));
+        assert!(hooks.raster_armed());
+        assert!(hooks.check_raster(100, 0));
     }
 }

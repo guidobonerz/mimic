@@ -77,7 +77,15 @@ impl Freeze {
         };
         let enabled = r.bool()?;
         let label = if r.bool()? { Some(r.string()?) } else { None };
-        Ok(Self { space, addr, size, value, mode, enabled, label })
+        Ok(Self {
+            space,
+            addr,
+            size,
+            value,
+            mode,
+            enabled,
+            label,
+        })
     }
 }
 

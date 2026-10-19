@@ -1,5 +1,6 @@
 //! The machine abstraction every frontend, debugger and preview talks to.
 
+use crate::beam::BeamPos;
 use crate::bus::Size;
 use crate::cpu::{Instr, RegisterSet};
 use crate::debug::{BpId, DebugHooks};
@@ -54,11 +55,22 @@ pub enum StopReason {
     /// A single-step request completed.
     StepDone,
     Breakpoint(BpId),
-    Watchpoint { id: BpId, space: MemSpaceId, addr: u32, write: bool },
+    Watchpoint {
+        id: BpId,
+        space: MemSpaceId,
+        addr: u32,
+        write: bool,
+    },
     /// A processor halted itself (6502 JAM). Legitimate guest behaviour.
-    CpuJam { device: DeviceId, pc: u32 },
+    CpuJam {
+        device: DeviceId,
+        pc: u32,
+    },
     /// The emulation reached an illegal state; never a panic.
-    Fault { device: DeviceId, reason: &'static str },
+    Fault {
+        device: DeviceId,
+        reason: &'static str,
+    },
 }
 
 /// Debugger access to one processor of a machine (main CPU, 1541, C128 Z80,
@@ -91,8 +103,16 @@ pub trait Machine: Send {
     /// Emulate exactly one master cycle.
     fn step_cycle(&mut self) -> StopReason;
 
-    /// The current field: full visible area including border, plus signal metadata.
+    /// The current field: full visible area including border, plus signal
+    /// metadata. While halted mid-frame it is the partially drawn field:
+    /// lines above [`Machine::beam`] are new, lines below are from the
+    /// previous field.
     fn framebuffer(&self) -> FrameRef<'_>;
+
+    /// Where the video beam is now. `None` for machines without a beam
+    /// (test machines). Raster breakpoints, line stepping, the raster trace
+    /// and beam overlays use this, never chip-specific registers.
+    fn beam(&self) -> Option<BeamPos>;
 
     fn memory_spaces(&self) -> Vec<MemSpace>;
 

@@ -10,3 +10,12 @@ workspace = true
 
 [dependencies]
 emu-core.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[[bench]]
+name = "tick"
+harness = false

@@ -14,7 +14,10 @@ impl FlatBus {
     /// `addr_bits` up to 24 (16 MiB).
     pub fn new(addr_bits: u8) -> Self {
         let addr_bits = addr_bits.min(24);
-        Self { mem: vec![0; 1 << addr_bits], addr_bits }
+        Self {
+            mem: vec![0; 1 << addr_bits],
+            addr_bits,
+        }
     }
 
     /// Copy `data` to `addr`, wrapping at the top of the address space.

@@ -62,7 +62,10 @@ pub struct LumaChroma {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PixelData<'a> {
     /// Palette indices (8-bit machines).
-    Indexed { pixels: &'a [u8], palette: &'a [Rgb8] },
+    Indexed {
+        pixels: &'a [u8],
+        palette: &'a [Rgb8],
+    },
     /// Direct color (Amiga, HAM).
     Rgb(&'a [Rgb8]),
 }
@@ -88,9 +91,10 @@ impl FrameRef<'_> {
         }
         let i = y as usize * self.width as usize + x as usize;
         match self.pixels {
-            PixelData::Indexed { pixels, palette } => {
-                pixels.get(i).and_then(|&p| palette.get(usize::from(p))).copied()
-            }
+            PixelData::Indexed { pixels, palette } => pixels
+                .get(i)
+                .and_then(|&p| palette.get(usize::from(p)))
+                .copied(),
             PixelData::Rgb(pixels) => pixels.get(i).copied(),
         }
     }
@@ -102,12 +106,22 @@ mod tests {
 
     #[test]
     fn rgb_at_resolves_palette_and_bounds() {
-        let palette = [Rgb8 { r: 0, g: 0, b: 0 }, Rgb8 { r: 255, g: 255, b: 255 }];
+        let palette = [
+            Rgb8 { r: 0, g: 0, b: 0 },
+            Rgb8 {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        ];
         let pixels = [0, 1, 1, 7];
         let frame = FrameRef {
             width: 2,
             height: 2,
-            pixels: PixelData::Indexed { pixels: &pixels, palette: &palette },
+            pixels: PixelData::Indexed {
+                pixels: &pixels,
+                palette: &palette,
+            },
             luma_chroma: None,
             signal: SignalInfo {
                 pixel_clock_hz: 7_881_984,

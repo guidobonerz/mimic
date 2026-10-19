@@ -41,3 +41,8 @@ emu-preview = { path = "crates/emu-preview" }
 emu-desktop = { path = "crates/emu-desktop" }
 emu-web = { path = "crates/emu-web" }
 emu-headless = { path = "crates/emu-headless" }
+
+# External (dev-dependencies only so far).
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

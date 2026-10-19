@@ -31,7 +31,11 @@ impl fmt::Display for StateError {
         match self {
             StateError::Truncated => f.write_str("savestate is truncated"),
             StateError::Missing(tag) => {
-                write!(f, "savestate chunk {} is missing", String::from_utf8_lossy(tag))
+                write!(
+                    f,
+                    "savestate chunk {} is missing",
+                    String::from_utf8_lossy(tag)
+                )
             }
             StateError::UnsupportedVersion { tag, version } => write!(
                 f,
@@ -298,7 +302,13 @@ mod tests {
         w.chunk(*b"CPU0", 3, |_| {});
         let data = w.into_bytes();
         let err = StateReader::new(&data).chunk(*b"CPU0", 2).unwrap_err();
-        assert_eq!(err, StateError::UnsupportedVersion { tag: *b"CPU0", version: 3 });
+        assert_eq!(
+            err,
+            StateError::UnsupportedVersion {
+                tag: *b"CPU0",
+                version: 3
+            }
+        );
     }
 
     #[test]
@@ -321,7 +331,10 @@ mod tests {
 
     #[test]
     fn invalid_bool_and_utf8_are_rejected() {
-        assert_eq!(StateReader::new(&[2]).bool(), Err(StateError::Invalid("bool")));
+        assert_eq!(
+            StateReader::new(&[2]).bool(),
+            Err(StateError::Invalid("bool"))
+        );
         let mut w = StateWriter::new();
         w.bytes(&[0xff, 0xfe]);
         let data = w.into_bytes();

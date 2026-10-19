@@ -41,12 +41,29 @@ pub struct MachineKey(pub u16);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InputEvent {
     /// Joystick.
-    Digital { dirs: Dirs, buttons: u8 },
+    Digital {
+        dirs: Dirs,
+        buttons: u8,
+    },
     /// Paddles / pots.
-    Analog { axis: u8, value: u16 },
-    MouseRel { dx: i16, dy: i16, buttons: u8 },
-    LightPen { x: u16, y: u16, trigger: bool },
-    Key { machine_key: MachineKey, down: bool },
+    Analog {
+        axis: u8,
+        value: u16,
+    },
+    MouseRel {
+        dx: i16,
+        dy: i16,
+        buttons: u8,
+    },
+    LightPen {
+        x: u16,
+        y: u16,
+        trigger: bool,
+    },
+    Key {
+        machine_key: MachineKey,
+        down: bool,
+    },
 }
 
 /// Where an event goes.
@@ -106,7 +123,10 @@ mod tests {
         TimedInput {
             at: Cycle(at),
             target: InputTarget::Keyboard,
-            event: InputEvent::Key { machine_key: MachineKey(code), down: true },
+            event: InputEvent::Key {
+                machine_key: MachineKey(code),
+                down: true,
+            },
         }
     }
 

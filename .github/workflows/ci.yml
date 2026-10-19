@@ -34,6 +34,20 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      - name: Cache CPU test data
+        uses: actions/cache@v4
+        with:
+          path: testdata
+          key: testdata-${{ hashFiles('tools/fetch-testdata.sh') }}
+      - name: Fetch CPU test data
+        shell: bash
+        run: bash tools/fetch-testdata.sh
+      # Harte: every 10th test per opcode on push; the full suite runs nightly.
+      - name: CPU test suites (Harte sample, Dormann)
+        shell: bash
+        env:
+          EMU_TESTDATA_DIR: ${{ github.workspace }}/testdata
+        run: cargo test -p cpu-6502 --release -- --ignored
 
   wasm:
     runs-on: ubuntu-latest
