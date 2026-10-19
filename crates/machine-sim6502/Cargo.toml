@@ -1,0 +1,13 @@
+[package]
+name = "machine-sim6502"
+description = "6502 reference machine: NMOS 6502, 64 KB RAM, minimal raster video chip"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-6502.workspace = true

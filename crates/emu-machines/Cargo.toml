@@ -18,3 +18,4 @@ machine-c128.workspace = true
 machine-amiga.workspace = true
 machine-atari8.workspace = true
 machine-cpc.workspace = true
+machine-sim6502.workspace = true

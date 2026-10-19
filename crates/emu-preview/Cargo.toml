@@ -11,3 +11,4 @@ workspace = true
 [dependencies]
 emu-core.workspace = true
 video-crt.workspace = true
+png.workspace = true

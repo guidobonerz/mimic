@@ -49,6 +49,7 @@ crates/
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
   machine-amiga/  machine-atari8/  machine-cpc/
+  machine-sim6502/ Reference/test machine: 6502 + 64 KB RAM + minimal raster chip (not real hardware)
   emu-machines/    Fills the machine registry; the only crate that links every machine-*
   emu-debug/       Debug server: native protocol + adapters (VICE binary monitor, GDB RSP, DAP)
   emu-preview/     Frame encoders, snapshot endpoint, WebSocket stream, overlays
@@ -305,7 +306,7 @@ The web frontend uses these over WebSocket to forward browser keyboard/gamepad/m
 
 - Listens on `127.0.0.1` only by default; remote binding requires `--debug-bind` **and** a token.
 - Emulation runs on its own thread; the server communicates via a command queue + event channel. Never lock the emulation thread from a network task.
-- **Native protocol** (binary over TCP, JSON over WebSocket, same message set):
+- **Native protocol** (binary over TCP, JSON over WebSocket, same message set; Phase 1 ships JSON lines over TCP, documented in `emu-debug/src/protocol.rs`, contract test in `tests/tests/debug_protocol.rs`):
   - Session: `list_machines`, `attach`, `capabilities`
   - Execution: `pause`, `resume`, `step_instr`, `step_over`, `step_out`, `step_cycle`, `step_line`, `run_to`, `step_frame`, `reset`
   - Raster: `beam` position, `step_line` (follow a frame being drawn line by line, with the partial frame), raster trace (instructions and traced reads/writes stamped with frame/line/cycle; ring buffer in `DebugHooks`, zero cost when off)
@@ -342,6 +343,7 @@ python tools/check-deps.py                   # dependency direction (golden rule
 cargo bench -p cpu-6502                      # before/after when touching hot paths
 cargo build -p emu-web --target wasm32-unknown-unknown
 cargo run -p emu-headless -- --machine c64 --prg demo.prg --frames 300 --snapshot out.png
+cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines debug protocol on 127.0.0.1:6510
 ```
 
 ## Testing

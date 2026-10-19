@@ -18,6 +18,7 @@ pub mod media;
 pub mod port;
 pub mod registry;
 pub mod savestate;
+pub mod scheduler;
 pub mod testing;
 
 pub use beam::{BeamPos, TraceConfig, TraceEntry, TraceEvent, TraceRange};
@@ -29,3 +30,4 @@ pub use frame::FrameRef;
 pub use freeze::{Freeze, FreezeMode};
 pub use machine::{ChipInfo, DebugTarget, DeviceId, Machine, MemSpace, MemSpaceId, StopReason};
 pub use savestate::{Savestate, StateError, StateReader, StateWriter};
+pub use scheduler::{ClockDivider, Event, EventId, Scheduler};

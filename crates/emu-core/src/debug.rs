@@ -251,6 +251,8 @@ pub struct DebugHooks {
     trace: TraceBuffer,
     /// Stop at the start of the next raster line (`step_line`).
     line_step: bool,
+    /// Stop after the next completed instruction of the main CPU (`step_instr`).
+    instr_step: bool,
 }
 
 impl DebugHooks {
@@ -354,6 +356,12 @@ impl DebugHooks {
     pub fn set_line_step(&mut self, on: bool) {
         self.line_step = on;
         self.rebuild();
+    }
+
+    /// Stop with [`StopReason::StepDone`] after the main CPU completes its
+    /// next instruction. One-shot: cleared when it fires.
+    pub fn set_instr_step(&mut self, on: bool) {
+        self.instr_step = on;
     }
 
     /// Replace the raster-trace configuration; clears the trace buffer.
@@ -472,6 +480,11 @@ impl DebugHooks {
     #[inline]
     pub fn raster_armed(&self) -> bool {
         self.raster_armed
+    }
+
+    #[inline]
+    pub fn instr_step_armed(&self) -> bool {
+        self.instr_step
     }
 
     /// True if every instruction start must be passed to [`DebugHooks::trace_instr`].
@@ -674,6 +687,17 @@ impl DebugHooks {
                 },
             });
         }
+    }
+
+    /// Call when the main CPU completed an instruction and
+    /// [`DebugHooks::instr_step_armed`]. Returns true if emulation must stop.
+    pub fn check_instr_step(&mut self) -> bool {
+        if !self.instr_step {
+            return false;
+        }
+        self.instr_step = false;
+        self.set_pending(StopReason::StepDone);
+        true
     }
 
     /// Check the beam position. Returns true if emulation must stop.

@@ -1,5 +1,237 @@
-//! Headless runner.
+//! Headless runner: run a machine for N frames, write snapshots and
+//! savestates, or serve it to a debugger. No window, no audio.
 
 #![forbid(unsafe_code)]
 
-fn main() {}
+use std::fs;
+use std::net::SocketAddr;
+use std::process::ExitCode;
+
+use emu_core::registry::MachineConfig;
+use emu_core::{DebugHooks, StopReason};
+use emu_debug::{DebugServer, ServerConfig, Session};
+
+const USAGE: &str = "\
+usage: emu-headless [options]
+
+  --machine ID          machine id (default: sim6502); see --list
+  --model NAME          model variant
+  --prg FILE            program to load (machine role \"program\")
+  --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
+  --option KEY=VALUE    machine option (repeatable)
+  --frames N            frames to run (default: 1)
+  --snapshot FILE.png   write the last frame as PNG
+  --load-state FILE     restore a savestate before running
+  --save-state FILE     write a savestate after running
+  --debug [ADDR]        serve the debug protocol instead of running frames
+                        (default 127.0.0.1:6510; loopback only)
+  --run                 with --debug: start running instead of paused
+  --no-realtime         with --debug: run as fast as possible
+  --list                list machines and exit
+  --help                show this help";
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Args {
+    machine: String,
+    config: MachineConfig,
+    frames: u64,
+    snapshot: Option<String>,
+    load_state: Option<String>,
+    save_state: Option<String>,
+    debug: Option<SocketAddr>,
+    run: bool,
+    realtime: bool,
+    list: bool,
+    help: bool,
+}
+
+const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
+
+fn key_value(s: &str, flag: &str) -> Result<(String, String), String> {
+    s.split_once('=')
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .ok_or_else(|| format!("{flag} expects KEY=VALUE, got '{s}'"))
+}
+
+fn read(path: &str) -> Result<Vec<u8>, String> {
+    fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))
+}
+
+fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
+    let mut args = Args {
+        machine: "sim6502".into(),
+        frames: 1,
+        realtime: true,
+        ..Args::default()
+    };
+    let mut it = argv.into_iter().peekable();
+    while let Some(flag) = it.next() {
+        let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} needs a value"));
+        match flag.as_str() {
+            "--machine" => args.machine = value("--machine")?,
+            "--model" => args.config.model = Some(value("--model")?),
+            "--prg" => {
+                let path = value("--prg")?;
+                args.config.roms.insert("program".into(), read(&path)?);
+            }
+            "--rom" => {
+                let (role, path) = key_value(&value("--rom")?, "--rom")?;
+                args.config.roms.insert(role, read(&path)?);
+            }
+            "--option" => {
+                let (k, v) = key_value(&value("--option")?, "--option")?;
+                args.config.options.insert(k, v);
+            }
+            "--frames" => {
+                let n = value("--frames")?;
+                args.frames = n.parse().map_err(|_| format!("bad frame count '{n}'"))?;
+            }
+            "--snapshot" => args.snapshot = Some(value("--snapshot")?),
+            "--load-state" => args.load_state = Some(value("--load-state")?),
+            "--save-state" => args.save_state = Some(value("--save-state")?),
+            "--debug" => {
+                let addr = match it.peek() {
+                    Some(a) if !a.starts_with("--") => it.next().unwrap_or_default(),
+                    _ => DEFAULT_DEBUG_ADDR.to_string(),
+                };
+                let addr = addr
+                    .parse()
+                    .map_err(|_| format!("bad debug address '{addr}'"))?;
+                args.debug = Some(addr);
+            }
+            "--run" => args.run = true,
+            "--no-realtime" => args.realtime = false,
+            "--list" => args.list = true,
+            "--help" | "-h" => args.help = true,
+            other => return Err(format!("unknown option '{other}'")),
+        }
+    }
+    Ok(args)
+}
+
+fn run(args: Args) -> Result<ExitCode, String> {
+    let registry = emu_machines::registry();
+    if args.list {
+        for e in registry.entries() {
+            println!("{:<10} {} (models: {})", e.id, e.name, e.models.join(", "));
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let mut machine = registry
+        .create(&args.machine, &args.config)
+        .map_err(|e| e.to_string())?;
+    if let Some(path) = &args.load_state {
+        machine
+            .load_state(&read(path)?)
+            .map_err(|e| format!("{path}: {e}"))?;
+    }
+
+    if let Some(bind) = args.debug {
+        let session = Session::new(machine, args.machine.clone());
+        let server = DebugServer::start(
+            session,
+            ServerConfig {
+                bind,
+                run: args.run,
+                realtime: args.realtime,
+            },
+        )
+        .map_err(|e| format!("debug server: {e}"))?;
+        eprintln!(
+            "debug server for '{}' listening on {} ({})",
+            args.machine,
+            server.addr(),
+            if args.run { "running" } else { "paused" }
+        );
+        server.wait();
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let mut dbg = DebugHooks::new();
+    let mut code = ExitCode::SUCCESS;
+    let mut frames = 0;
+    while frames < args.frames {
+        match machine.run_frame(&mut dbg) {
+            StopReason::FrameDone => frames += 1,
+            other => {
+                eprintln!("stopped after {frames} frame(s): {other:?}");
+                code = ExitCode::from(2);
+                break;
+            }
+        }
+    }
+
+    if let Some(path) = &args.snapshot {
+        let png = emu_preview::encode_png(&machine.framebuffer());
+        fs::write(path, png).map_err(|e| format!("cannot write {path}: {e}"))?;
+    }
+    if let Some(path) = &args.save_state {
+        fs::write(path, machine.save_state()).map_err(|e| format!("cannot write {path}: {e}"))?;
+    }
+    match machine.beam() {
+        Some(b) => println!(
+            "{}: {frames} frame(s), beam at frame {} line {} cycle {}",
+            args.machine, b.frame, b.line, b.cycle
+        ),
+        None => println!("{}: {frames} frame(s)", args.machine),
+    }
+    Ok(code)
+}
+
+fn main() -> ExitCode {
+    let args = match parse_args(std::env::args().skip(1)) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}\n\n{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if args.help {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    run(args).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        ExitCode::FAILURE
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(s: &str) -> Result<Args, String> {
+        parse_args(s.split_whitespace().map(String::from))
+    }
+
+    #[test]
+    fn defaults() {
+        let a = parse("").unwrap();
+        assert_eq!(a.machine, "sim6502");
+        assert_eq!(a.frames, 1);
+        assert!(a.realtime);
+        assert_eq!(a.debug, None);
+    }
+
+    #[test]
+    fn options_and_debug_address() {
+        let a = parse("--machine c64 --frames 300 --option start=0810 --debug --run").unwrap();
+        assert_eq!(a.machine, "c64");
+        assert_eq!(a.frames, 300);
+        assert_eq!(a.config.options["start"], "0810");
+        assert_eq!(a.debug, Some(DEFAULT_DEBUG_ADDR.parse().unwrap()));
+        assert!(a.run);
+        let a = parse("--debug 127.0.0.1:7000").unwrap();
+        assert_eq!(a.debug, Some("127.0.0.1:7000".parse().unwrap()));
+    }
+
+    #[test]
+    fn errors() {
+        assert!(parse("--frames").is_err());
+        assert!(parse("--frames x").is_err());
+        assert!(parse("--option novalue").is_err());
+        assert!(parse("--bogus").is_err());
+        assert!(parse("--prg does/not/exist.prg").is_err());
+    }
+}
