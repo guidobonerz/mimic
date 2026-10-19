@@ -360,7 +360,7 @@ cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines deb
 
 ## Roadmap and current phase
 
-Work in phase order; each phase ends at a verifiable gate. **Current phase: 1.**
+Work in phase order; each phase ends at a verifiable gate. **Current phase: 2.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green.)
 
 | # | Phase | Est. | Gate |
 | --- | --- | --- | --- |

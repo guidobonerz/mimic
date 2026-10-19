@@ -9,6 +9,7 @@ use emu_core::registry::Registry;
 pub fn registry() -> Registry {
     let mut r = Registry::new();
     r.register(machine_sim6502::entry());
+    r.register(machine_c64::entry());
     r
 }
 
@@ -22,8 +23,11 @@ mod tests {
     fn registered_machines_run_a_frame() {
         let r = registry();
         assert!(!r.entries().is_empty());
+        // Machines that need ROMs accept built-in stubs for tests.
+        let mut config = MachineConfig::default();
+        config.options.insert("roms".into(), "stub".into());
         for entry in r.entries() {
-            let mut m = r.create(entry.id, &MachineConfig::default()).unwrap();
+            let mut m = r.create(entry.id, &config).unwrap();
             assert_eq!(m.run_frame(&mut DebugHooks::new()), StopReason::FrameDone);
             assert_eq!(m.devices().first().map(|d| d.0), Some("cpu"));
         }
