@@ -78,24 +78,25 @@ pub trait Cpu {
     fn disassemble(&self, bus: &dyn Bus, addr: u32) -> Instr;
 }
 
-pub trait Machine {
+pub trait Machine: Send {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason;
     fn step_cycle(&mut self) -> StopReason;
     fn framebuffer(&self) -> FrameRef;                  // Indexed+palette or RGB (Amiga HAM)
     fn memory_spaces(&self) -> Vec<MemSpace>;           // CPU, chip RAM, fast RAM, ROM, drive, VDC RAM…
     fn chips(&self) -> Vec<ChipInfo>;                   // register dumps for debugger views
-    fn devices(&self) -> Vec<DeviceId>;                 // extra debug targets: 1541, C128 Z80, Copper, Blitter
+    fn devices(&self) -> Vec<DeviceId>;                 // debug targets, main CPU first: "cpu", 1541, C128 Z80, Copper, Blitter
+    fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget>; // regs, set_reg, peek/poke per MemSpace, disassemble
     fn ports(&self) -> Vec<PortInfo>;                   // physical connectors (see "External devices and ports")
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError>;
     fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>>;
     fn media_slots(&self) -> Vec<MediaSlotInfo>;        // drive 8, DF0:, D1:, tape, cartridge port …
-    fn media_slot(&mut self, slot: SlotId) -> &mut dyn MediaSlot;
+    fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot>;     // None for an unknown slot
     fn save_state(&self) -> Vec<u8>;
-    fn load_state(&mut self, s: &[u8]);
+    fn load_state(&mut self, s: &[u8]) -> Result<(), StateError>; // corrupt data never panics
 }
 ```
 
-Multi-CPU machines (C64 + 1541, C128 8502 + Z80, Amiga Copper/Blitter) expose each processor as a separate debug target via `devices()`, each with its own address space.
+Multi-CPU machines (C64 + 1541, C128 8502 + Z80, Amiga Copper/Blitter) expose each processor as a separate debug target via `devices()`, each with its own address space. The debugger reaches registers, memory and disassembly only through `debug_target()` → `DebugTarget`, never through a concrete CPU type.
 
 ## Machine notes
 
@@ -141,7 +142,7 @@ pub trait PortDevice: Send {
     fn write_lines(&mut self, lines: PortLines, now: Cycle); // what the machine drives
     fn input(&mut self, ev: &InputEvent);                // host-neutral events from the host layer
     fn save_state(&self) -> Vec<u8>;
-    fn load_state(&mut self, s: &[u8]);
+    fn load_state(&mut self, s: &[u8]) -> Result<(), StateError>;
 }
 ```
 
