@@ -8,6 +8,7 @@ use std::ops::BitOr;
 
 use crate::cycle::Cycle;
 use crate::port::PortId;
+use crate::savestate::{Savestate, StateError, StateReader, StateWriter};
 
 /// Joystick directions as a bit set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -115,6 +116,116 @@ impl InputQueue {
     }
 }
 
+/// Upper bound on queued events; protects savestate loading.
+pub const MAX_QUEUED: usize = 1 << 16;
+
+fn write_event(w: &mut StateWriter, e: &TimedInput) {
+    w.u64(e.at.0);
+    match e.target {
+        InputTarget::Keyboard => w.u8(0xff),
+        InputTarget::Port(p) => w.u8(p.0.min(0xfe)),
+    }
+    match e.event {
+        InputEvent::Digital { dirs, buttons } => {
+            w.u8(0);
+            w.u8(dirs.0);
+            w.u8(buttons);
+        }
+        InputEvent::Analog { axis, value } => {
+            w.u8(1);
+            w.u8(axis);
+            w.u16(value);
+        }
+        InputEvent::MouseRel { dx, dy, buttons } => {
+            w.u8(2);
+            w.u16(dx as u16);
+            w.u16(dy as u16);
+            w.u8(buttons);
+        }
+        InputEvent::LightPen { x, y, trigger } => {
+            w.u8(3);
+            w.u16(x);
+            w.u16(y);
+            w.bool(trigger);
+        }
+        InputEvent::Key { machine_key, down } => {
+            w.u8(4);
+            w.u16(machine_key.0);
+            w.bool(down);
+        }
+    }
+}
+
+fn read_event(r: &mut StateReader<'_>) -> Result<TimedInput, StateError> {
+    let at = Cycle(r.u64()?);
+    let target = match r.u8()? {
+        0xff => InputTarget::Keyboard,
+        p => InputTarget::Port(PortId(p)),
+    };
+    let event = match r.u8()? {
+        0 => InputEvent::Digital {
+            dirs: Dirs(r.u8()?),
+            buttons: r.u8()?,
+        },
+        1 => InputEvent::Analog {
+            axis: r.u8()?,
+            value: r.u16()?,
+        },
+        2 => InputEvent::MouseRel {
+            dx: r.u16()? as i16,
+            dy: r.u16()? as i16,
+            buttons: r.u8()?,
+        },
+        3 => InputEvent::LightPen {
+            x: r.u16()?,
+            y: r.u16()?,
+            trigger: r.bool()?,
+        },
+        4 => InputEvent::Key {
+            machine_key: MachineKey(r.u16()?),
+            down: r.bool()?,
+        },
+        _ => return Err(StateError::Invalid("input event kind")),
+    };
+    Ok(TimedInput { at, target, event })
+}
+
+const QUEUE_TAG: [u8; 4] = *b"INPQ";
+const QUEUE_VERSION: u16 = 1;
+
+impl Savestate for InputQueue {
+    fn save(&self, w: &mut StateWriter) {
+        w.chunk(QUEUE_TAG, QUEUE_VERSION, |w| {
+            w.u32(self.events.len() as u32);
+            for e in &self.events {
+                write_event(w, e);
+            }
+        });
+    }
+
+    /// Atomic: on error the queue is unchanged.
+    fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
+        let (_, mut c) = r.chunk(QUEUE_TAG, QUEUE_VERSION)?;
+        let n = c.u32()? as usize;
+        if n > MAX_QUEUED {
+            return Err(StateError::Invalid("input queue length"));
+        }
+        let mut events = VecDeque::with_capacity(n);
+        for _ in 0..n {
+            events.push_back(read_event(&mut c)?);
+        }
+        if !events
+            .iter()
+            .zip(events.iter().skip(1))
+            .all(|(a, b)| a.at <= b.at)
+        {
+            return Err(StateError::Invalid("input queue order"));
+        }
+        self.events = events;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +252,44 @@ mod tests {
         let order: Vec<_> = std::iter::from_fn(|| q.pop_due(Cycle(20))).collect();
         assert_eq!(order, vec![key(10, 2), key(10, 4), key(20, 1), key(20, 3)]);
         assert!(q.is_empty());
+    }
+
+    #[test]
+    fn queue_savestate_round_trip() {
+        let mut q = InputQueue::new();
+        q.push(key(5, 7));
+        q.push(TimedInput {
+            at: Cycle(9),
+            target: InputTarget::Port(PortId(1)),
+            event: InputEvent::Digital {
+                dirs: Dirs::UP | Dirs::RIGHT,
+                buttons: 1,
+            },
+        });
+        q.push(TimedInput {
+            at: Cycle(9),
+            target: InputTarget::Port(PortId(0)),
+            event: InputEvent::MouseRel {
+                dx: -3,
+                dy: 4,
+                buttons: 2,
+            },
+        });
+        let mut w = StateWriter::new();
+        q.save(&mut w);
+        let data = w.into_bytes();
+        let mut r = InputQueue::new();
+        r.load(&mut StateReader::new(&data)).unwrap();
+        let a: Vec<_> = std::iter::from_fn(|| q.pop_due(Cycle(100))).collect();
+        let b: Vec<_> = std::iter::from_fn(|| r.pop_due(Cycle(100))).collect();
+        assert_eq!(a, b);
+
+        let mut keep = InputQueue::new();
+        keep.push(key(1, 1));
+        assert!(keep
+            .load(&mut StateReader::new(&data[..data.len() - 1]))
+            .is_err());
+        assert_eq!(keep.len(), 1);
     }
 
     #[test]

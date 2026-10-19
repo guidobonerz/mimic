@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 emu-core.workspace = true
 emu-machines.workspace = true
+machine-c64.workspace = true
 
 [dev-dependencies]
 emu-debug.workspace = true

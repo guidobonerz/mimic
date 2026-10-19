@@ -10,3 +10,5 @@ workspace = true
 
 [dependencies]
 emu-core.workspace = true
+serde.workspace = true
+toml.workspace = true

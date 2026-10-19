@@ -46,6 +46,27 @@ fn c64_boots_to_ready() {
     );
     assert_eq!(row, Some(5), "READY. below the banner");
 
+    // Type a BASIC line; the KERNAL scans the matrix through CIA1.
+    let (events, end) = emu_tests::typing::type_text("PRINT 6*7\n", m.now().0);
+    for e in events {
+        m.input(e);
+    }
+    while m.now().0 < end + 100_000 {
+        m.run_frame(&mut dbg);
+    }
+    let cpu = m.debug_target(DeviceId("cpu")).unwrap();
+    let screen: Vec<u8> = (0x0400..0x07e8)
+        .map(|a| cpu.peek(ram, a, Size::Byte).unwrap() as u8)
+        .collect();
+    // " 42" in screen codes below the typed line.
+    let answer = [0x20, 0x34, 0x32];
+    let typed = screen
+        .windows(5)
+        .position(|w| w == [0x10, 0x12, 0x09, 0x0e, 0x14]);
+    let result = screen.windows(3).position(|w| w == answer);
+    assert!(typed.is_some(), "PRINT not echoed");
+    assert_eq!(result.map(|p| p / 40), typed.map(|p| p / 40 + 1));
+
     // Light blue border around a blue screen.
     let f = m.framebuffer();
     let border = f.rgb_at(2, 2).unwrap();

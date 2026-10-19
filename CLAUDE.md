@@ -88,6 +88,8 @@ pub trait Machine: Send {
     fn chips(&self) -> Vec<ChipInfo>;                   // register dumps for debugger views
     fn devices(&self) -> Vec<DeviceId>;                 // debug targets, main CPU first: "cpu", 1541, C128 Z80, Copper, Blitter
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget>; // regs, set_reg, peek/poke per MemSpace, disassemble
+    fn input(&mut self, ev: TimedInput);                // queued, applied exactly at ev.at (part of savestate)
+    fn now(&self) -> Cycle;                             // master cycles since power-on, time base of TimedInput
     fn ports(&self) -> Vec<PortInfo>;                   // physical connectors (see "External devices and ports")
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError>;
     fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>>;

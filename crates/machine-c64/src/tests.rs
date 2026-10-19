@@ -172,7 +172,7 @@ fn nmi_is_edge_triggered() {
     let nmi = [0xe6, 0x11, 0x40];
     let mut m = machine(&code, &[0x40], &nmi);
     run_cycles(&mut m, 20);
-    m.interrupts_mut().set_nmi(nmi::RESTORE, true);
+    m.io.keyboard.restore = true;
     run_cycles(&mut m, 60);
     assert_eq!(m.mem.ram[0x11], 1, "held low: one NMI only");
     m.interrupts_mut().set_nmi(nmi::CARTRIDGE, true);
@@ -181,7 +181,7 @@ fn nmi_is_edge_triggered() {
         m.mem.ram[0x11], 1,
         "second source on an active line: no edge"
     );
-    m.interrupts_mut().set_nmi(nmi::RESTORE, false);
+    m.io.keyboard.restore = false;
     m.interrupts_mut().set_nmi(nmi::CARTRIDGE, false);
     run_cycles(&mut m, 2);
     m.interrupts_mut().set_nmi(nmi::CARTRIDGE, true);
@@ -339,4 +339,129 @@ fn tod_runs_at_fifty_hertz() {
         m.run_frame(&mut dbg);
     }
     assert!((19..=20).contains(&tenths(&m)), "{}", tenths(&m));
+}
+
+fn key_event(at: u64, k: emu_core::input::MachineKey, down: bool) -> TimedInput {
+    TimedInput {
+        at: Cycle(at),
+        target: InputTarget::Keyboard,
+        event: emu_core::input::InputEvent::Key {
+            machine_key: k,
+            down,
+        },
+    }
+}
+
+fn joy_event(at: u64, port: PortId, dirs: emu_core::input::Dirs, buttons: u8) -> TimedInput {
+    TimedInput {
+        at: Cycle(at),
+        target: InputTarget::Port(port),
+        event: emu_core::input::InputEvent::Digital { dirs, buttons },
+    }
+}
+
+#[test]
+fn keyboard_matrix_through_cia1() {
+    let mut m = stub();
+    m.run_frame(&mut DebugHooks::new()); // IOINIT: DDRA = $FF, DDRB = $00
+    assert!(m.poke(CPU_SPACE, 0xdc00, Size::Byte, 0xfe)); // scan column 0
+    assert_eq!(m.peek(CPU_SPACE, 0xdc01, Size::Byte), Some(0xff));
+    let now = m.now().0;
+    m.input(key_event(now, keyboard::keys::RETURN, true));
+    m.step_cycle();
+    assert_eq!(m.peek(CPU_SPACE, 0xdc01, Size::Byte), Some(0xfd), "row 1");
+    assert!(m.poke(CPU_SPACE, 0xdc00, Size::Byte, 0xfd)); // other column
+    assert_eq!(m.peek(CPU_SPACE, 0xdc01, Size::Byte), Some(0xff));
+    m.input(key_event(now, keyboard::keys::RETURN, false));
+    m.step_cycle();
+    assert!(m.poke(CPU_SPACE, 0xdc00, Size::Byte, 0xfe));
+    assert_eq!(m.peek(CPU_SPACE, 0xdc01, Size::Byte), Some(0xff));
+}
+
+#[test]
+fn joystick_in_port_2_reads_on_port_a() {
+    use emu_core::input::Dirs;
+    let mut m = stub();
+    m.run_frame(&mut DebugHooks::new());
+    let now = m.now().0;
+    m.input(joy_event(now, CONTROL_PORT_2, Dirs::UP | Dirs::RIGHT, 1));
+    m.step_cycle();
+    // IOINIT leaves $DC00 = $7F; up (bit 0), right (bit 3), fire (bit 4) low.
+    assert_eq!(m.peek(CPU_SPACE, 0xdc00, Size::Byte), Some(0x66));
+    m.input(joy_event(now, CONTROL_PORT_2, Dirs::NONE, 0));
+    m.step_cycle();
+    assert_eq!(m.peek(CPU_SPACE, 0xdc00, Size::Byte), Some(0x7f));
+}
+
+#[test]
+fn input_is_applied_exactly_at_its_cycle() {
+    let mut m = stub();
+    m.run_frame(&mut DebugHooks::new());
+    m.poke(CPU_SPACE, 0xdc00, Size::Byte, 0xfe);
+    let at = m.now().0 + 100;
+    m.input(key_event(at, keyboard::keys::RETURN, true));
+    while m.now().0 < at {
+        assert_eq!(m.peek(CPU_SPACE, 0xdc01, Size::Byte), Some(0xff));
+        m.step_cycle();
+    }
+    m.step_cycle();
+    assert_eq!(m.peek(CPU_SPACE, 0xdc01, Size::Byte), Some(0xfd));
+}
+
+#[test]
+fn restore_key_raises_nmi() {
+    let mut m = stub();
+    m.run_frame(&mut DebugHooks::new());
+    let now = m.now().0;
+    m.input(key_event(now, keyboard::RESTORE, true));
+    m.step_cycle();
+    assert_ne!(m.ints.nmi & nmi::RESTORE, 0);
+}
+
+#[test]
+fn ports_accept_only_control_port_devices() {
+    let mut m = stub();
+    let names: Vec<_> = m.ports().iter().map(|p| (p.name, p.connected)).collect();
+    assert_eq!(names, [("control port 1", false), ("control port 2", true)]);
+    let atari = Box::new(Joystick::new(PortKind::AtariJoy));
+    assert!(matches!(
+        m.connect(CONTROL_PORT_1, atari),
+        Err(PortError::Incompatible { .. })
+    ));
+    let joy = || Box::new(Joystick::new(PortKind::CbmControl));
+    assert!(matches!(
+        m.connect(CONTROL_PORT_2, joy()),
+        Err(PortError::Occupied(_))
+    ));
+    assert!(matches!(
+        m.connect(PortId(5), joy()),
+        Err(PortError::NoSuchPort(_))
+    ));
+    assert!(m.connect(CONTROL_PORT_1, joy()).is_ok());
+    assert!(m.disconnect(CONTROL_PORT_2).is_some());
+    assert!(m.disconnect(CONTROL_PORT_2).is_none());
+}
+
+#[test]
+fn savestate_carries_queued_input_and_device_state() {
+    use emu_core::input::Dirs;
+    let mut a = stub();
+    a.run_frame(&mut DebugHooks::new());
+    let now = a.now().0;
+    a.input(joy_event(now, CONTROL_PORT_2, Dirs::LEFT, 0));
+    a.input(key_event(now + 5000, keyboard::keys::SPACE, true));
+    a.step_cycle();
+    let state = a.save_state();
+    let mut b = stub();
+    b.load_state(&state).unwrap();
+    assert_eq!(b.save_state(), state);
+    let mut dbg = DebugHooks::new();
+    a.run_frame(&mut dbg);
+    b.run_frame(&mut dbg);
+    assert_eq!(a.save_state(), b.save_state());
+    assert!(
+        b.io.keyboard.pressed(keyboard::keys::SPACE),
+        "queued event replayed"
+    );
+    assert_eq!(b.io.port_lines[1] & 0x04, 0x04, "joystick state restored");
 }

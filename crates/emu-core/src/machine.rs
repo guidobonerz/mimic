@@ -3,8 +3,10 @@
 use crate::beam::BeamPos;
 use crate::bus::Size;
 use crate::cpu::{Instr, RegisterSet};
+use crate::cycle::Cycle;
 use crate::debug::{BpId, DebugHooks};
 use crate::frame::FrameRef;
+use crate::input::TimedInput;
 use crate::media::{MediaSlot, MediaSlotInfo, SlotId};
 use crate::port::{PortDevice, PortError, PortId, PortInfo};
 use crate::savestate::StateError;
@@ -124,6 +126,14 @@ pub trait Machine: Send {
 
     /// Debugger access to one of `devices()`; `None` for an unknown id.
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget>;
+
+    /// Queue an input event. It is applied exactly at `ev.at` (immediately if
+    /// that cycle has passed); queued events are part of the savestate, so
+    /// recorded input replays bit-exactly.
+    fn input(&mut self, ev: TimedInput);
+
+    /// Master cycles since power-on; the time base of [`TimedInput::at`].
+    fn now(&self) -> Cycle;
 
     /// Physical connectors.
     fn ports(&self) -> Vec<PortInfo>;

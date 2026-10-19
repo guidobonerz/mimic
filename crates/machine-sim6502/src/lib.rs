@@ -16,10 +16,12 @@
 pub mod video;
 
 use cpu_6502::Cpu6502;
+use emu_core::input::TimedInput;
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use emu_core::Cycle;
 use emu_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, FrameRef, Instr,
     Machine, MemSpace, MemSpaceId, RegisterSet, Savestate, Scheduler, Size, StateError,
@@ -328,6 +330,13 @@ impl Machine for Sim6502 {
 
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget> {
         (dev == CPU).then_some(self as &mut dyn DebugTarget)
+    }
+
+    /// The reference machine has no keyboard or ports: events are dropped.
+    fn input(&mut self, _ev: TimedInput) {}
+
+    fn now(&self) -> Cycle {
+        self.sched.now()
     }
 
     fn ports(&self) -> Vec<PortInfo> {

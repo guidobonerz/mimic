@@ -133,6 +133,12 @@ impl Machine for Fake {
         (dev.0 == "cpu").then_some(self as &mut dyn DebugTarget)
     }
 
+    fn input(&mut self, _ev: emu_core::input::TimedInput) {}
+
+    fn now(&self) -> emu_core::Cycle {
+        emu_core::Cycle(0)
+    }
+
     fn ports(&self) -> Vec<PortInfo> {
         Vec::new()
     }

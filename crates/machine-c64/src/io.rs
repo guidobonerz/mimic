@@ -18,6 +18,7 @@ use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::vic2::{Vic2, VicMemory};
 use emu_core::{ClockDivider, Savestate, StateError, StateReader, StateWriter};
 
+use crate::keyboard::Keyboard;
 use crate::memory::Memory;
 
 /// PAL C64 CPU clock and mains frequency for the TOD input.
@@ -30,6 +31,10 @@ pub struct Io {
     pub cia1: Cia,
     pub cia2: Cia,
     tod: ClockDivider,
+    pub keyboard: Keyboard,
+    /// Pins pulled low by the devices in control ports 1 and 2
+    /// (`PortLines::pulled_low`), refreshed when their input changes.
+    pub port_lines: [u32; 2],
 }
 
 /// The VIC-II's view of memory: one 16 KB bank of RAM, with the character
@@ -62,6 +67,8 @@ impl Io {
             cia1: Cia::new(model),
             cia2: Cia::new(model),
             tod: ClockDivider::new(MAINS_HZ, CPU_HZ).expect("CPU clock is non-zero"),
+            keyboard: Keyboard::default(),
+            port_lines: [0; 2],
         }
     }
 
@@ -86,10 +93,13 @@ impl Io {
         }
     }
 
-    /// External pull-downs on CIA1 ports A/B: keyboard matrix and joysticks
-    /// (none yet).
+    /// Levels on CIA1 ports A/B: control port 2 on PA0–4, control port 1 on
+    /// PB0–4 (up, down, left, right, fire), then the keyboard matrix.
     fn cia1_ext(&self) -> (u8, u8) {
-        (0xff, 0xff)
+        let joy = |lines: u32| -> u8 { !((lines & 0x0f) as u8 | ((lines >> 1) & 0x10) as u8) };
+        let a = self.cia1.port_a_out() & joy(self.port_lines[1]);
+        let b = self.cia1.port_b_out() & joy(self.port_lines[0]);
+        self.keyboard.resolve(a, b)
     }
 
     /// External levels on CIA2 ports: IEC bus inputs and user port (none yet).
@@ -151,12 +161,23 @@ impl Savestate for Io {
         self.cia1.save(w);
         self.cia2.save(w);
         self.tod.save(w);
+        w.chunk(*b"C64K", 1, |w| {
+            w.u64(self.keyboard.matrix);
+            w.bool(self.keyboard.restore);
+            w.u32(self.port_lines[0]);
+            w.u32(self.port_lines[1]);
+        });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
         self.vic.load(r)?;
         self.cia1.load(r)?;
         self.cia2.load(r)?;
-        self.tod.load(r)
+        self.tod.load(r)?;
+        let (_, mut c) = r.chunk(*b"C64K", 1)?;
+        self.keyboard.matrix = c.u64()?;
+        self.keyboard.restore = c.bool()?;
+        self.port_lines = [c.u32()?, c.u32()?];
+        Ok(())
     }
 }

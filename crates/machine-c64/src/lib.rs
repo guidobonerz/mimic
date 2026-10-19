@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod io;
+pub mod keyboard;
 pub mod memory;
 pub mod pla;
 pub mod stub;
@@ -21,11 +22,14 @@ pub mod stub;
 use chips_cbm::cia::CiaModel;
 use chips_cbm::vic2;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
+use devices_input::Joystick;
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
+use emu_core::input::{InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
+use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use emu_core::Cycle;
 use emu_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, HookedBus, Instr,
     Machine, MemSpace, MemSpaceId, RegisterSet, Savestate, Scheduler, Size, StateError,
@@ -186,14 +190,31 @@ fn load_roms(config: &MachineConfig) -> Result<Roms, ConfigError> {
     }
 }
 
-#[derive(Clone)]
+/// Control port 1 and 2 (`PortId(0)`, `PortId(1)`).
+pub const CONTROL_PORT_1: PortId = PortId(0);
+pub const CONTROL_PORT_2: PortId = PortId(1);
+const PORT_NAMES: [&str; 2] = ["control port 1", "control port 2"];
+
 pub struct C64 {
     cpu: Cpu6502,
     mem: Memory,
     io: Io,
     ints: Interrupts,
     sched: Scheduler,
+    input: InputQueue,
+    ports: [Option<Box<dyn PortDevice>>; 2],
     palette: [Rgb8; 16],
+    field_done_pending: bool,
+}
+
+/// The clonable part of the machine, for atomic savestate loading.
+struct Snapshot {
+    cpu: Cpu6502,
+    mem: Memory,
+    io: Io,
+    ints: Interrupts,
+    sched: Scheduler,
+    input: InputQueue,
     field_done_pending: bool,
 }
 
@@ -214,12 +235,22 @@ impl C64 {
             Some("6526a") => CiaModel::Mos6526A,
             Some(other) => return Err(ConfigError::Invalid(format!("cia option '{other}'"))),
         };
+        // Default devices: a joystick in control port 2 (`options["port2"] = "none"`
+        // leaves it empty).
+        let port2: Option<Box<dyn PortDevice>> =
+            match config.options.get("port2").map(String::as_str) {
+                None | Some("joystick") => Some(Box::new(Joystick::new(PortKind::CbmControl))),
+                Some("none") => None,
+                Some(other) => return Err(ConfigError::Invalid(format!("port2 option '{other}'"))),
+            };
         Ok(Self {
             cpu,
             mem: Memory::new(load_roms(config)?),
             io: Io::new(cia),
             ints: Interrupts::default(),
             sched: Scheduler::new(),
+            input: InputQueue::new(),
+            ports: [None, port2],
             palette: vic2::palette::palette(),
             field_done_pending: false,
         })
@@ -235,6 +266,9 @@ impl C64 {
 
     /// One CPU cycle (φ2). Returns `Some` if emulation must stop.
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        while let Some(ev) = self.input.pop_due(self.sched.now()) {
+            self.apply_input(ev);
+        }
         // φ1: VIC-II access; its BA decides whether the CPU may read.
         let bank = self.io.vic_bank();
         self.io.vic.phi1(&VicView {
@@ -303,11 +337,37 @@ impl C64 {
         }
     }
 
+    fn apply_input(&mut self, ev: TimedInput) {
+        match ev.target {
+            InputTarget::Keyboard => {
+                if let emu_core::input::InputEvent::Key { machine_key, down } = ev.event {
+                    self.io.keyboard.set(machine_key, down);
+                }
+            }
+            InputTarget::Port(p) => {
+                if let Some(Some(dev)) = self.ports.get_mut(usize::from(p.0)) {
+                    dev.input(&ev.event);
+                }
+                self.refresh_port(p);
+            }
+        }
+    }
+
+    fn refresh_port(&mut self, p: PortId) {
+        let now = self.sched.now();
+        if let Some(lines) = self.io.port_lines.get_mut(usize::from(p.0)) {
+            *lines = self.ports[usize::from(p.0)]
+                .as_ref()
+                .map_or(0, |d| d.read_lines(now).pulled_low);
+        }
+    }
+
     fn update_interrupts(&mut self) {
         let (vic, cia1, cia2) = (self.io.vic.irq(), self.io.cia1.irq(), self.io.cia2.irq());
         self.ints.set_irq(irq::VIC, vic);
         self.ints.set_irq(irq::CIA1, cia1);
         self.ints.set_nmi(nmi::CIA2, cia2);
+        self.ints.set_nmi(nmi::RESTORE, self.io.keyboard.restore);
     }
 
     fn apply_frame_freezes(&mut self, dbg: &DebugHooks) {
@@ -456,16 +516,48 @@ impl Machine for C64 {
         (dev == CPU).then_some(self as &mut dyn DebugTarget)
     }
 
+    fn input(&mut self, ev: TimedInput) {
+        self.input.push(ev);
+    }
+
+    fn now(&self) -> Cycle {
+        self.sched.now()
+    }
+
     fn ports(&self) -> Vec<PortInfo> {
-        Vec::new()
+        (0..2)
+            .map(|i| PortInfo {
+                id: PortId(i as u8),
+                kind: PortKind::CbmControl,
+                name: PORT_NAMES[i],
+                connected: self.ports[i].is_some(),
+            })
+            .collect()
     }
 
-    fn connect(&mut self, port: PortId, _dev: Box<dyn PortDevice>) -> Result<(), PortError> {
-        Err(PortError::NoSuchPort(port))
+    fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError> {
+        let slot = self
+            .ports
+            .get_mut(usize::from(port.0))
+            .ok_or(PortError::NoSuchPort(port))?;
+        if dev.kind() != PortKind::CbmControl {
+            return Err(PortError::Incompatible {
+                port: PortKind::CbmControl,
+                device: dev.kind(),
+            });
+        }
+        if slot.is_some() {
+            return Err(PortError::Occupied(port));
+        }
+        *slot = Some(dev);
+        self.refresh_port(port);
+        Ok(())
     }
 
-    fn disconnect(&mut self, _port: PortId) -> Option<Box<dyn PortDevice>> {
-        None
+    fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>> {
+        let dev = self.ports.get_mut(usize::from(port.0))?.take();
+        self.refresh_port(port);
+        dev
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
@@ -487,11 +579,27 @@ impl Machine for C64 {
         self.mem.save(&mut w);
         self.io.save(&mut w);
         self.sched.save(&mut w);
+        self.input.save(&mut w);
+        w.chunk(*b"PORT", 1, |w| {
+            for p in &self.ports {
+                w.bytes(&p.as_ref().map(|d| d.save_state()).unwrap_or_default());
+            }
+        });
         w.into_bytes()
     }
 
+    /// Atomic: components load into copies; port devices (not clonable)
+    /// are restored from their own backup if a later one fails.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
-        let mut next = self.clone();
+        let mut next = Snapshot {
+            cpu: self.cpu.clone(),
+            mem: self.mem.clone(),
+            io: self.io.clone(),
+            ints: self.ints,
+            sched: self.sched.clone(),
+            input: self.input.clone(),
+            field_done_pending: self.field_done_pending,
+        };
         let mut r = StateReader::new(s);
         let (version, mut c) = r.chunk(*b"C64S", 2)?;
         if version < 2 {
@@ -509,7 +617,39 @@ impl Machine for C64 {
         next.mem.load(&mut r)?;
         next.io.load(&mut r)?;
         next.sched.load(&mut r)?;
-        *self = next;
+        next.input.load(&mut r)?;
+        let (_, mut c) = r.chunk(*b"PORT", 1)?;
+        let port_states = [c.bytes()?, c.bytes()?];
+        let backups: Vec<Vec<u8>> = self
+            .ports
+            .iter()
+            .map(|p| p.as_ref().map(|d| d.save_state()).unwrap_or_default())
+            .collect();
+        let mut failed = None;
+        for (dev, state) in self.ports.iter_mut().zip(port_states) {
+            if let (Some(dev), false) = (dev, state.is_empty()) {
+                if let Err(e) = dev.load_state(state) {
+                    failed = Some(e);
+                    break;
+                }
+            }
+        }
+        if let Some(e) = failed {
+            // A device that failed kept its state; restore the others.
+            for (dev, backup) in self.ports.iter_mut().zip(&backups) {
+                if let Some(d) = dev {
+                    let _ = d.load_state(backup);
+                }
+            }
+            return Err(e);
+        }
+        self.cpu = next.cpu;
+        self.mem = next.mem;
+        self.io = next.io;
+        self.ints = next.ints;
+        self.sched = next.sched;
+        self.input = next.input;
+        self.field_done_pending = next.field_done_pending;
         Ok(())
     }
 }
