@@ -3,3 +3,4 @@
 #![forbid(unsafe_code)]
 
 pub mod cia;
+pub mod vic2;

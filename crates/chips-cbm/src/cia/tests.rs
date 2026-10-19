@@ -117,6 +117,11 @@ fn enabling_the_mask_for_a_set_flag_raises_irq_and_clearing_does_not_lower_it() 
     assert!(!c.irq());
     write_cycle(&mut c, 0x0d, 0x81);
     c.tick();
+    assert!(
+        !c.irq(),
+        "mask write takes effect one cycle later (Lorenz imr)"
+    );
+    c.tick();
     assert!(c.irq());
     write_cycle(&mut c, 0x0d, 0x01);
     assert!(c.irq(), "only an ICR read clears the IRQ");
@@ -142,11 +147,13 @@ fn force_load_is_a_strobe() {
     c.write(0x05, 0x56);
     idle(&mut c, 2);
     assert_eq!(c.ta.counter, 0x5678);
-    c.write(0x04, 0x00);
-    c.write(0x05, 0x10); // latch $1000, counter reloads (stopped)
+    c.tick(); // leave the reload cycle
+    c.write(0x04, 0x00); // latch $5600; a low-byte write never loads
     write_cycle(&mut c, 0x0e, 0x10);
     assert_eq!(c.peek(0x0e, NONE, NONE), 0, "strobe not stored");
-    assert_eq!(read_cycle(&mut c, 0x05), 0x10);
+    // The load happens two cycles after the write (LoadA0 → LoadA1).
+    assert_eq!(read_cycle(&mut c, 0x04), 0x78);
+    assert_eq!(read_cycle(&mut c, 0x04), 0x00);
 }
 
 #[test]
@@ -252,8 +259,9 @@ fn time_of_day_counts_latches_and_alarms() {
 }
 
 #[test]
-fn old_cia_loses_timer_b_flag_when_icr_read_in_underflow_cycle() {
-    for (model, expected) in [(CiaModel::Mos6526, 0), (CiaModel::Mos6526A, icr::TB)] {
+fn icr_read_in_the_timer_b_underflow_cycle_reports_the_flag() {
+    // Lorenz cia1tb (old CIA) #05: the flag is visible in that very cycle.
+    for model in [CiaModel::Mos6526, CiaModel::Mos6526A] {
         let mut c = Cia::new(model);
         c.write(0x06, 2);
         c.write(0x07, 0);
@@ -262,15 +270,32 @@ fn old_cia_loses_timer_b_flag_when_icr_read_in_underflow_cycle() {
         let mut seen = None;
         for _ in 0..10 {
             c.tick();
-            if c.tb_underflow_now {
+            if c.peek(0x0d, NONE, NONE) & icr::TB != 0 {
                 seen = Some(c.read(0x0d, NONE, NONE) & icr::TB);
                 break;
             }
         }
-        assert_eq!(seen, Some(expected), "{model:?}");
+        assert_eq!(seen, Some(icr::TB), "{model:?}");
     }
 }
 
+#[test]
+fn latch_write_in_the_reload_cycle_reaches_the_counter() {
+    // Lorenz cia1ta #08.
+    let mut c = timer_a(2);
+    write_cycle(&mut c, 0x0e, 0x01);
+    loop {
+        c.tick();
+        if c.peek(0x0d, NONE, NONE) & icr::TA != 0 {
+            break;
+        }
+    }
+    c.write(0x04, 20);
+    assert_eq!(c.ta.counter, 20);
+    c.tick();
+    c.write(0x04, 30);
+    assert_eq!(c.ta.counter, 20, "only in the reload cycle");
+}
 #[test]
 fn savestate_round_trip_mid_count() {
     let mut a = timer_a(7);

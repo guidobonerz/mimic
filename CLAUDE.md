@@ -336,9 +336,11 @@ cargo test --workspace                       # unit + integration (ROM tests ski
 EMU_ROM_DIR=~/roms cargo test --workspace -- --include-ignored
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
-bash tools/fetch-testdata.sh                 # Harte + Dormann CPU test data into testdata/ (~850 MB)
+bash tools/fetch-testdata.sh                 # Harte, Dormann, Lorenz test data into testdata/ (~850 MB)
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-6502 --release -- --ignored   # every 10th Harte test
 EMU_HARTE_FULL=1 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-6502 --release -- --ignored
+EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz lorenz_suite_stub -- --ignored   # Lorenz, no ROMs (CI gate)
+EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz lorenz_suite -- --ignored --exact
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 cargo bench -p cpu-6502                      # before/after when touching hot paths
 cargo build -p emu-web --target wasm32-unknown-unknown

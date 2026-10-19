@@ -441,6 +441,25 @@ mod tests {
     }
 
     #[test]
+    fn late_nmi_during_brk_waits_for_the_first_handler_instruction() {
+        // Lorenz "nmi": an NMI arriving after the vector is chosen is taken
+        // only after the first instruction of the BRK handler.
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0x00, 0x00]);
+        bus.load(0xfffa, &[0x00, 0xa0, 0x00, 0xb0, 0x00, 0x90]);
+        bus.load(0x9000, &[0xea, 0xea]); // NOP; NOP
+        for _ in 0..5 {
+            cpu.tick(&mut bus);
+        }
+        cpu.set_nmi(true);
+        step(&mut cpu, &mut bus); // rest of BRK
+        assert_eq!(cpu.pc(), 0x9000, "IRQ/BRK vector, no hijack");
+        step(&mut cpu, &mut bus); // first handler instruction
+        assert_eq!(cpu.pc(), 0x9001);
+        step(&mut cpu, &mut bus); // now the NMI sequence
+        assert_eq!(cpu.pc(), 0xa000);
+    }
+
+    #[test]
     fn nmi_is_edge_triggered() {
         let (mut cpu, mut bus) = cpu_at(0x0400, &[0xea; 8]);
         bus.load(0xfffa, &[0x00, 0xa0]);

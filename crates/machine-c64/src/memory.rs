@@ -14,9 +14,12 @@ pub const BASIC_SIZE: usize = 0x2000;
 pub const CHARGEN_SIZE: usize = 0x1000;
 
 /// External levels on the 6510 port inputs: LORAM/HIRAM/CHAREN have
-/// pull-ups, bit 4 is the cassette sense line (high = no key pressed).
-/// Bits 6/7 are not bonded out on the 6510 (mask `$3F`).
+/// pull-ups, bit 4 is the cassette sense line (high = no key pressed), bit 5
+/// (motor) reads low through the motor driver. Bits 3, 6 and 7 float: they
+/// keep the level last driven onto them (Lorenz cpuport). The slow fall-off
+/// of that charge is not modelled yet.
 const PORT_PULLUPS: u8 = 0x17;
+const PORT_FLOATING: u8 = 0xc8;
 
 #[derive(Clone)]
 pub struct Roms {
@@ -35,6 +38,8 @@ pub struct Memory {
     /// Cartridge port lines, true = high (no cartridge).
     pub game: bool,
     pub exrom: bool,
+    /// Levels held on the floating port bits 3, 6, 7.
+    floating: u8,
     /// Current PLA mapping, recomputed when its inputs change.
     map: Map,
 }
@@ -48,6 +53,7 @@ impl Memory {
             port: IoPort::new(0x3f),
             game: true,
             exrom: true,
+            floating: 0,
             map: pla::TABLE[31],
         };
         m.update_map();
@@ -77,13 +83,16 @@ impl Memory {
 
     /// The 6510 port read value for `$00`/`$01`.
     pub fn port_read(&self, addr: u16) -> u8 {
-        self.port.read(addr as u8, PORT_PULLUPS)
+        self.port
+            .read(addr as u8, PORT_PULLUPS | (self.floating & PORT_FLOATING))
     }
 
     /// CPU write to `$00`/`$01`: goes to the port and, as on the real board,
     /// also to the RAM cell underneath.
     pub fn port_write(&mut self, addr: u16, v: u8) {
         self.port.write(addr as u8, v);
+        let driven = self.port.ddr & PORT_FLOATING;
+        self.floating = (self.floating & !driven) | (self.port.data & driven);
         self.ram[usize::from(addr)] = v;
         self.update_map();
     }
@@ -128,7 +137,7 @@ impl Memory {
 }
 
 const TAG: [u8; 4] = *b"C64M";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Memory {
     fn save(&self, w: &mut StateWriter) {
@@ -137,6 +146,7 @@ impl Savestate for Memory {
             w.raw(&self.color[..]);
             w.bool(self.game);
             w.bool(self.exrom);
+            w.u8(self.floating);
         });
         self.port.save(w);
     }
@@ -145,7 +155,10 @@ impl Savestate for Memory {
     /// configuration, not the state. On error the memory may be partially
     /// loaded: callers load into a copy.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
+        if version < VERSION {
+            return Err(StateError::UnsupportedVersion { tag: TAG, version });
+        }
         c.raw_into(&mut self.ram[..])?;
         c.raw_into(&mut self.color[..])?;
         if self.color.iter().any(|&v| v > 0x0f) {
@@ -153,6 +166,7 @@ impl Savestate for Memory {
         }
         self.game = c.bool()?;
         self.exrom = c.bool()?;
+        self.floating = c.u8()? & PORT_FLOATING;
         self.port.load(r)?;
         self.update_map();
         Ok(())

@@ -322,6 +322,8 @@ dependencies = [
  "emu-core",
  "emu-debug",
  "emu-machines",
+ "emu-preview",
+ "media-backends",
  "serde_json",
 ]
 

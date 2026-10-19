@@ -140,8 +140,10 @@ impl Core {
         }
         self.t += 1;
         // Interrupts are polled at the end of every cycle but the last, so the
-        // value from the penultimate cycle decides.
-        if !skip_poll {
+        // value from the penultimate cycle decides. BRK and the interrupt
+        // sequences do not poll: the first handler instruction always runs
+        // before the next interrupt (Lorenz nmi).
+        if !skip_poll && self.op != 0x00 {
             self.poll = self.nmi_pending || (self.irq_line && self.p & I == 0);
         }
         if self.jammed {
@@ -157,6 +159,7 @@ impl Core {
             // The fetched opcode is discarded and PC is not incremented.
             read(bus, self.pc);
             self.op = 0x00;
+            self.poll = false;
             self.seq = if self.reset_pending {
                 Seq::Reset
             } else {
@@ -249,6 +252,17 @@ impl Core {
             }
             3 => {
                 self.push(bus, self.pc as u8);
+                // An NMI that is pending here hijacks BRK and IRQ. One that
+                // arrives later waits for the first handler instruction
+                // (Lorenz "nmi").
+                self.vector = if self.seq == Seq::Reset {
+                    0xfffc
+                } else if self.nmi_pending {
+                    self.nmi_pending = false;
+                    0xfffa
+                } else {
+                    0xfffe
+                };
                 false
             }
             4 => {
@@ -258,15 +272,6 @@ impl Core {
                     self.p | U
                 };
                 self.push(bus, p);
-                // An NMI that arrives up to here hijacks BRK and IRQ.
-                self.vector = if self.seq == Seq::Reset {
-                    0xfffc
-                } else if self.nmi_pending {
-                    self.nmi_pending = false;
-                    0xfffa
-                } else {
-                    0xfffe
-                };
                 false
             }
             5 => {

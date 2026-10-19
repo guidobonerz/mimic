@@ -18,6 +18,7 @@ usage: emu-headless [options]
   --model NAME          model variant
   --prg FILE            program to load (machine role \"program\")
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
+  --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
   --frames N            frames to run (default: 1)
   --snapshot FILE.png   write the last frame as PNG
@@ -34,6 +35,7 @@ usage: emu-headless [options]
 struct Args {
     machine: String,
     config: MachineConfig,
+    rom_dir: Option<String>,
     frames: u64,
     snapshot: Option<String>,
     load_state: Option<String>,
@@ -78,6 +80,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 let (role, path) = key_value(&value("--rom")?, "--rom")?;
                 args.config.roms.insert(role, read(&path)?);
             }
+            "--rom-dir" => args.rom_dir = Some(value("--rom-dir")?),
             "--option" => {
                 let (k, v) = key_value(&value("--option")?, "--option")?;
                 args.config.options.insert(k, v);
@@ -109,6 +112,27 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
     Ok(args)
 }
 
+/// Fill in ROMs the machine needs from --rom-dir or EMU_ROM_DIR, unless
+/// given individually or replaced by stubs.
+fn with_rom_dir(args: &Args) -> Result<MachineConfig, String> {
+    let mut config = args.config.clone();
+    let specs = media_backends::roms::specs(&args.machine);
+    let missing = specs.iter().any(|s| !config.roms.contains_key(s.role));
+    if !missing || config.options.contains_key("roms") {
+        return Ok(config);
+    }
+    let dir = match (&args.rom_dir, media_backends::roms::env_dir()) {
+        (Some(d), _) => std::path::PathBuf::from(d),
+        (None, Some(d)) => d,
+        (None, None) => return Ok(config),
+    };
+    let found = media_backends::roms::load(&dir, &args.machine).map_err(|e| e.to_string())?;
+    for (role, data) in found {
+        config.roms.entry(role).or_insert(data);
+    }
+    Ok(config)
+}
+
 fn run(args: Args) -> Result<ExitCode, String> {
     let registry = emu_machines::registry();
     if args.list {
@@ -118,8 +142,9 @@ fn run(args: Args) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    let config = with_rom_dir(&args)?;
     let mut machine = registry
-        .create(&args.machine, &args.config)
+        .create(&args.machine, &config)
         .map_err(|e| e.to_string())?;
     if let Some(path) = &args.load_state {
         machine

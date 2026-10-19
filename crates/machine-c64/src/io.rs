@@ -2,27 +2,23 @@
 //!
 //! | Range         | Chip                                   |
 //! | ------------- | -------------------------------------- |
-//! | `$D000–$D3FF` | VIC-II (not yet emulated)              |
+//! | `$D000–$D3FF` | VIC-II, 64 registers mirrored          |
 //! | `$D400–$D7FF` | SID (not yet emulated)                 |
 //! | `$D800–$DBFF` | colour RAM, 4 bits                     |
 //! | `$DC00–$DCFF` | CIA1, 16 registers mirrored            |
 //! | `$DD00–$DDFF` | CIA2, 16 registers mirrored            |
 //! | `$DE00–$DFFF` | I/O1, I/O2 (cartridge port)            |
 //!
-//! Wiring (C64 schematic 251469): CIA1 IRQ → CPU /IRQ, CIA2 IRQ → CPU /NMI.
-//! CIA1 ports scan the keyboard and read the joysticks; CIA2 port A selects
-//! the VIC bank and drives the IEC bus. Both TOD inputs get the 50/60 Hz
-//! power-line signal.
+//! Wiring (C64 schematic 251469): VIC-II and CIA1 IRQ → CPU /IRQ, CIA2 IRQ
+//! → CPU /NMI, VIC-II BA → CPU RDY. CIA1 ports scan the keyboard and read
+//! the joysticks; CIA2 port A bits 0–1 select the VIC bank (inverted) and
+//! drive the IEC bus. Both TOD inputs get the 50/60 Hz power-line signal.
 
 use chips_cbm::cia::{Cia, CiaModel};
+use chips_cbm::vic2::{Vic2, VicMemory};
 use emu_core::{ClockDivider, Savestate, StateError, StateReader, StateWriter};
 
 use crate::memory::Memory;
-
-/// Placeholder for the value on the data bus when nothing drives it. On the
-/// real machine it is the byte the VIC-II fetched in the previous half
-/// cycle; that arrives with the VIC-II.
-pub const OPEN_BUS: u8 = 0xff;
 
 /// PAL C64 CPU clock and mains frequency for the TOD input.
 const CPU_HZ: u32 = 985_248;
@@ -30,22 +26,58 @@ const MAINS_HZ: u32 = 50;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Io {
+    pub vic: Vic2,
     pub cia1: Cia,
     pub cia2: Cia,
     tod: ClockDivider,
 }
 
+/// The VIC-II's view of memory: one 16 KB bank of RAM, with the character
+/// ROM at `$1000–$1FFF` in banks 0 and 2, plus colour RAM.
+pub struct VicView<'a> {
+    pub mem: &'a Memory,
+    /// Bank base address: `$0000`, `$4000`, `$8000` or `$C000`.
+    pub bank: u16,
+}
+
+impl VicMemory for VicView<'_> {
+    fn read(&self, addr: u16) -> u8 {
+        let addr = addr & 0x3fff;
+        if self.bank & 0x4000 == 0 && addr & 0x3000 == 0x1000 {
+            self.mem.roms.chargen[usize::from(addr & 0x0fff)]
+        } else {
+            self.mem.ram[usize::from(self.bank | addr)]
+        }
+    }
+
+    fn color(&self, index: u16) -> u8 {
+        self.mem.color[usize::from(index & 0x3ff)]
+    }
+}
+
 impl Io {
     pub fn new(model: CiaModel) -> Self {
         Self {
+            vic: Vic2::new(),
             cia1: Cia::new(model),
             cia2: Cia::new(model),
             tod: ClockDivider::new(MAINS_HZ, CPU_HZ).expect("CPU clock is non-zero"),
         }
     }
 
-    /// Chip clocks for one φ2 cycle, before the CPU's access.
-    pub fn tick(&mut self) {
+    /// VIC bank selected by CIA2 PA0/PA1 (active low).
+    pub fn vic_bank(&self) -> u16 {
+        u16::from(!self.cia2.port_a_out() & 3) << 14
+    }
+
+    /// The byte on the data bus when nothing else drives it: the VIC-II's
+    /// last fetch.
+    pub fn open_bus(&self) -> u8 {
+        self.vic.last_bus()
+    }
+
+    /// CIA clocks for one φ2 cycle, before the CPU's access.
+    pub fn tick_cias(&mut self) {
         self.cia1.tick();
         self.cia2.tick();
         for _ in 0..self.tod.tick() {
@@ -68,6 +100,7 @@ impl Io {
     pub fn read(&mut self, mem: &Memory, addr: u16) -> u8 {
         let reg = addr as u8 & 0x0f;
         match addr {
+            0xd000..=0xd3ff => self.vic.read(addr as u8),
             0xdc00..=0xdcff => {
                 let (a, b) = self.cia1_ext();
                 self.cia1.read(reg, a, b)
@@ -84,8 +117,9 @@ impl Io {
     pub fn peek(&self, mem: &Memory, addr: u16) -> u8 {
         let reg = addr as u8 & 0x0f;
         match addr {
+            0xd000..=0xd3ff => self.vic.peek(addr as u8),
             // Colour RAM: only 4 bits exist, the upper nibble is open bus.
-            0xd800..=0xdbff => (OPEN_BUS & 0xf0) | mem.color[usize::from(addr & 0x3ff)],
+            0xd800..=0xdbff => (self.open_bus() & 0xf0) | mem.color[usize::from(addr & 0x3ff)],
             0xdc00..=0xdcff => {
                 let (a, b) = self.cia1_ext();
                 self.cia1.peek(reg, a, b)
@@ -94,14 +128,15 @@ impl Io {
                 let (a, b) = self.cia2_ext();
                 self.cia2.peek(reg, a, b)
             }
-            // VIC-II, SID, I/O1, I/O2: not yet emulated.
-            _ => OPEN_BUS,
+            // SID, I/O1, I/O2: not yet emulated.
+            _ => self.open_bus(),
         }
     }
 
     pub fn write(&mut self, mem: &mut Memory, addr: u16, v: u8) {
         let reg = addr as u8 & 0x0f;
         match addr {
+            0xd000..=0xd3ff => self.vic.write(addr as u8, v),
             0xd800..=0xdbff => mem.color[usize::from(addr & 0x3ff)] = v & 0x0f,
             0xdc00..=0xdcff => self.cia1.write(reg, v),
             0xdd00..=0xddff => self.cia2.write(reg, v),
@@ -112,12 +147,14 @@ impl Io {
 
 impl Savestate for Io {
     fn save(&self, w: &mut StateWriter) {
+        self.vic.save(w);
         self.cia1.save(w);
         self.cia2.save(w);
         self.tod.save(w);
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
+        self.vic.load(r)?;
         self.cia1.load(r)?;
         self.cia2.load(r)?;
         self.tod.load(r)

@@ -39,8 +39,7 @@ use emu_core::{Savestate, StateError, StateReader, StateWriter};
 /// Chip revision. They differ in interrupt timing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CiaModel {
-    /// Original 6526 (C64 until 1986): IRQ output one cycle after the flag;
-    /// reading ICR in the cycle timer B underflows loses that flag.
+    /// Original 6526 (C64 until 1986): IRQ output one cycle after the flag.
     #[default]
     Mos6526,
     /// 6526A / 8521 (C64C, C128): IRQ output in the same cycle as the flag.
@@ -67,8 +66,10 @@ const COUNT0: u8 = 0x01;
 const COUNT1: u8 = 0x02;
 const COUNT2: u8 = 0x04;
 const COUNT3: u8 = 0x08;
-/// Force load pending for the next cycle (not shifted).
-const LOAD: u8 = 0x10;
+/// Force load: written into LOAD0, performed when it reaches LOAD1 one
+/// cycle later, i.e. two cycles after the write (Lorenz LoadA0/LoadA1).
+const LOAD1: u8 = 0x10;
+const LOAD0: u8 = 0x40;
 /// One-shot bit as it was in the previous cycle (not shifted).
 const ONESHOT0: u8 = 0x20;
 /// Count stages that move on by the shift; inputs are OR-ed in afterwards.
@@ -94,6 +95,9 @@ pub struct Timer {
     toggle: bool,
     /// Pulse-mode output: high for the cycle after an underflow.
     pulse: bool,
+    /// The counter was reloaded from the latch in this cycle; a latch
+    /// write in the same cycle still reaches the counter (Lorenz cia1ta #08).
+    reloaded: bool,
 }
 
 impl Timer {
@@ -112,13 +116,18 @@ impl Timer {
     /// input first, then act on the stages.
     fn tick(&mut self, input: Input) -> bool {
         self.pulse = false;
-        let load = self.delay & LOAD != 0;
+        self.reloaded = false;
+        let load = self.delay & LOAD1 != 0;
+        let load_next = self.delay & LOAD0 != 0;
         let oneshot_before = self.delay & ONESHOT0 != 0;
         let mut d = (self.delay << 1) & SHIFT_KEEP;
         match input {
             Input::Phi2 | Input::Cascade => d |= COUNT1,
             Input::CntEdge => d |= COUNT0,
             Input::None => {}
+        }
+        if load_next {
+            d |= LOAD1;
         }
         self.delay = d;
 
@@ -129,6 +138,7 @@ impl Timer {
         if self.counter == 0 && self.delay & COUNT2 != 0 {
             underflow = true;
             self.counter = self.latch;
+            self.reloaded = true;
             // The clock behind the underflow never reaches the decrement stage.
             self.delay &= !COUNT2;
             self.toggle = !self.toggle;
@@ -139,8 +149,11 @@ impl Timer {
             }
         }
         if load {
+            // Like an underflow reload, a force load removes the next clock
+            // (Lorenz cia1ta #05/#0d, irq).
             self.counter = self.latch;
-            self.delay &= !COUNT2;
+            self.reloaded = true;
+            self.delay &= !(COUNT2 | LOAD1);
         }
         if self.cr & CR_ONESHOT != 0 {
             self.delay |= ONESHOT0;
@@ -154,20 +167,26 @@ impl Timer {
             self.toggle = true;
         }
         if v & CR_LOAD != 0 {
-            self.delay |= LOAD;
+            self.delay |= LOAD0;
         }
         self.cr = v & !CR_LOAD;
     }
 
     fn write_hi(&mut self, v: u8) {
         self.latch = (self.latch & 0x00ff) | (u16::from(v) << 8);
+        if self.reloaded {
+            self.counter = self.latch;
+        }
         if self.cr & CR_START == 0 {
-            self.delay |= LOAD;
+            self.delay |= LOAD0;
         }
     }
 
     fn write_lo(&mut self, v: u8) {
         self.latch = (self.latch & 0xff00) | u16::from(v);
+        if self.reloaded {
+            self.counter = self.latch;
+        }
     }
 
     /// Level of the PB6/PB7 timer output.
@@ -186,6 +205,7 @@ impl Timer {
         w.u8(self.delay);
         w.bool(self.toggle);
         w.bool(self.pulse);
+        w.bool(self.reloaded);
     }
 
     fn load(r: &mut StateReader<'_>) -> Result<Self, StateError> {
@@ -196,8 +216,9 @@ impl Timer {
             delay: r.u8()?,
             toggle: r.bool()?,
             pulse: r.bool()?,
+            reloaded: r.bool()?,
         };
-        if t.cr & CR_LOAD != 0 || t.delay & !(SHIFT_KEEP | COUNT0 | LOAD | ONESHOT0) != 0 {
+        if t.cr & CR_LOAD != 0 || t.delay & !(SHIFT_KEEP | COUNT0 | LOAD0 | LOAD1 | ONESHOT0) != 0 {
             return Err(StateError::Invalid("CIA timer state"));
         }
         Ok(t)
@@ -345,8 +366,8 @@ pub struct Cia {
     irq: bool,
     /// Old 6526: IRQ output rises at the next tick.
     irq_next: bool,
-    /// Timer B underflowed in this cycle (old-6526 ICR read bug).
-    tb_underflow_now: bool,
+    /// An ICR mask write takes effect at the next tick (Lorenz imr).
+    mask_written: bool,
     cnt_in: bool,
     cnt_edge: bool,
     flag_in: bool,
@@ -368,7 +389,7 @@ impl Cia {
             mask: 0,
             irq: false,
             irq_next: false,
-            tb_underflow_now: false,
+            mask_written: false,
             cnt_in: true,
             cnt_edge: false,
             flag_in: true,
@@ -449,6 +470,10 @@ impl Cia {
         if std::mem::take(&mut self.irq_next) {
             self.irq = true;
         }
+        if std::mem::take(&mut self.mask_written) {
+            // Enabling a source whose flag is already set raises IRQ.
+            self.raise(0);
+        }
         let cnt_edge = std::mem::take(&mut self.cnt_edge);
 
         let ta_input = match (self.ta.cr & CR_START != 0, self.ta.cr & 0x20 != 0) {
@@ -471,7 +496,6 @@ impl Cia {
             }
         };
         let tb_under = self.tb.tick(tb_input);
-        self.tb_underflow_now = tb_under;
 
         if ta_under {
             self.serial_ta_underflow();
@@ -536,11 +560,7 @@ impl Cia {
         match reg & 0x0f {
             0x08..=0x0b => self.tod.read(reg & 0x0f),
             0x0d => {
-                let mut flags = self.flags;
-                if self.model == CiaModel::Mos6526 && self.tb_underflow_now {
-                    flags &= !icr::TB;
-                }
-                let v = flags | if self.irq { icr::IRQ } else { 0 };
+                let v = self.flags | if self.irq { icr::IRQ } else { 0 };
                 self.flags = 0;
                 self.irq = false;
                 self.irq_next = false;
@@ -597,8 +617,7 @@ impl Cia {
                 } else {
                     self.mask &= !(v & 0x1f);
                 }
-                // Enabling a source whose flag is already set raises IRQ.
-                self.raise(0);
+                self.mask_written = true;
             }
             0x0e => {
                 if (v ^ self.ta.cr) & 0x40 != 0 {
@@ -654,7 +673,7 @@ impl Savestate for Cia {
             w.u8(self.mask);
             w.bool(self.irq);
             w.bool(self.irq_next);
-            w.bool(self.tb_underflow_now);
+            w.bool(self.mask_written);
             w.bool(self.cnt_in);
             w.bool(self.cnt_edge);
             w.bool(self.flag_in);
@@ -698,7 +717,7 @@ impl Savestate for Cia {
         n.mask = c.u8()? & 0x1f;
         n.irq = c.bool()?;
         n.irq_next = c.bool()?;
-        n.tb_underflow_now = c.bool()?;
+        n.mask_written = c.bool()?;
         n.cnt_in = c.bool()?;
         n.cnt_edge = c.bool()?;
         n.flag_in = c.bool()?;

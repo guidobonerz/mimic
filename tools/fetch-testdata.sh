@@ -50,4 +50,35 @@ for i in $(seq 0 255); do
 done
 echo "$HARTE_COMMIT" > "$DEST/65x02/COMMIT"
 
+# Wolfgang Lorenz C64 Emulator Test Suite 2.15 (public domain), as kept in the
+# VICE test programs, pinned to an SVN revision. Only the plain C64 builds;
+# the *new variants target the 6526A and are selected by the runner.
+LORENZ_REV=46290
+LORENZ_URL="https://svn.code.sf.net/p/vice-emu/code/!svn/bc/$LORENZ_REV/testprogs/general/Lorenz-2.15/src"
+LORENZ_TESTS="start ldab ldaz ldazx ldaa ldaax ldaay ldaix ldaiy staz stazx staa staax staay
+staix staiy ldxb ldxz ldxzy ldxa ldxay stxz stxzy stxa ldyb ldyz ldyzx ldya ldyax styz
+styzx stya taxn tayn txan tyan tsxn txsn phan plan phpn plpn inxn inyn dexn deyn incz inczx
+inca incax decz deczx deca decax asln aslz aslzx asla aslax lsrn lsrz lsrzx lsra lsrax roln
+rolz rolzx rola rolax rorn rorz rorzx rora rorax andb andz andzx anda andax anday andix andiy
+orab oraz orazx oraa oraax oraay oraix oraiy eorb eorz eorzx eora eorax eoray eorix eoriy
+clcn secn cldn sedn clin sein clvn adcb adcz adczx adca adcax adcay adcix adciy sbcb sbcz
+sbczx sbca sbcax sbcay sbcix sbciy cmpb cmpz cmpzx cmpa cmpax cmpay cmpix cmpiy cpxb cpxz
+cpxa cpyb cpyz cpya bitz bita brkn rtin jsrw rtsn jmpw jmpi beqr bner bmir bplr bcsr bccr
+bvsr bvcr nopn nopb nopz nopzx nopa nopax asoz asozx asoa asoax asoay asoix asoiy rlaz rlazx
+rlaa rlaax rlaay rlaix rlaiy lsez lsezx lsea lseax lseay lseix lseiy rraz rrazx rraa rraax
+rraay rraix rraiy dcmz dcmzx dcma dcmax dcmay dcmix dcmiy insz inszx insa insax insay insix
+insiy laxz laxzy laxa laxay laxix laxiy axsz axszy axsa axsix alrb arrb aneb lxab sbxb shaay
+shaiy shxay shyax shsay lasay ancb sbcb-eb trap1 trap2 trap3 trap4 trap5 trap6 trap7 trap8
+trap9 trap10 trap11 trap12 trap13 trap14 trap15 trap16 trap17 branchwrap mmufetch mmu
+cpuport cputiming irq nmi cia1tb123 cia2tb123 cia1pb6 cia1pb7 cia2pb6 cia2pb7 cia1tab
+loadth cnto2 icr01 imr flipos oneshot cntdef cia1ta cia1tb cia2ta cia2tb
+irqnew nminew icr01new imrnew cia1tanew cia1tbnew cia1tabnew cia2tanew cia2tbnew"
+
+echo "Lorenz test suite -> $DEST/lorenz"
+mkdir -p "$DEST/lorenz"
+for t in $LORENZ_TESTS; do
+  fetch "$LORENZ_URL/$t.prg" "$DEST/lorenz/$t.prg"
+done
+echo "$LORENZ_REV" > "$DEST/lorenz/REVISION"
+
 echo "done. export EMU_TESTDATA_DIR=$DEST"

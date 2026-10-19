@@ -1,9 +1,8 @@
 //! Commodore 64.
 //!
 //! Phase 2 builds this up chip by chip. Present so far: 6510 with its I/O
-//! port, PLA banking, RAM, ROMs, colour RAM, both CIAs and the IRQ/NMI
-//! wiring. The VIC-II and SID follow; until the VIC-II exists the frame
-//! timing is a fixed PAL 312 × 63 cycle count and the picture is black.
+//! port, PLA banking, RAM, ROMs, colour RAM, VIC-II (PAL 6569), both CIAs
+//! and the IRQ/NMI/RDY wiring. The SID follows.
 //!
 //! CIA revision: options["cia"] = "6526" (default, original C64) or
 //! "6526a" (C64C).
@@ -17,12 +16,12 @@
 pub mod io;
 pub mod memory;
 pub mod pla;
+pub mod stub;
 
 use chips_cbm::cia::CiaModel;
+use chips_cbm::vic2;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use emu_core::frame::{
-    FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
-};
+use emu_core::frame::{FrameRef, PixelData, Rgb8};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
@@ -33,8 +32,8 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
-use io::{Io, OPEN_BUS};
-use memory::{Memory, Roms, BASIC_SIZE, CHARGEN_SIZE, KERNAL_SIZE};
+use io::{Io, VicView};
+use memory::{Memory, Roms, BASIC_SIZE, CHARGEN_SIZE};
 use pla::Bank;
 
 pub const CPU: DeviceId = DeviceId("cpu");
@@ -45,11 +44,13 @@ pub const RAM_SPACE: MemSpaceId = MemSpaceId(1);
 /// The 1 KB × 4 bit colour RAM.
 pub const COLOR_SPACE: MemSpaceId = MemSpaceId(2);
 
-const LINES: u32 = 312;
-const CYCLES_PER_LINE: u32 = 63;
-const CYCLES_PER_FRAME: u32 = LINES * CYCLES_PER_LINE;
-const WIDTH: u32 = 384;
-const HEIGHT: u32 = 272;
+/// VIC-II register names $D000–$D02E (C64 Programmer's Reference Guide).
+const VIC_REGS: [&str; 47] = [
+    "M0X", "M0Y", "M1X", "M1Y", "M2X", "M2Y", "M3X", "M3Y", "M4X", "M4Y", "M5X", "M5Y", "M6X",
+    "M6Y", "M7X", "M7Y", "MSBX", "CR1", "RASTER", "LPX", "LPY", "MXE", "CR2", "MXYE", "MEMPTR",
+    "IRR", "IMR", "MXDP", "MXMC", "MXXE", "MXM", "MXD", "EC", "B0C", "B1C", "B2C", "B3C", "MM0",
+    "MM1", "M0C", "M1C", "M2C", "M3C", "M4C", "M5C", "M6C", "M7C",
+];
 
 pub fn entry() -> MachineEntry {
     MachineEntry {
@@ -103,7 +104,7 @@ fn cpu_peek(mem: &Memory, io: &Io, addr: u16) -> u8 {
     match mem.read(addr) {
         Some(v) => v,
         None if mem.bank(addr) == Bank::Io => io.peek(mem, addr),
-        None => OPEN_BUS,
+        None => io.open_bus(),
     }
 }
 
@@ -119,7 +120,7 @@ impl Bus for C64Bus<'_> {
         u32::from(match self.mem.read(a) {
             Some(v) => v,
             None if self.mem.bank(a) == Bank::Io => self.io.read(self.mem, a),
-            None => OPEN_BUS,
+            None => self.io.open_bus(),
         })
     }
 
@@ -158,29 +159,6 @@ impl Bus for PeekBus<'_> {
     }
 }
 
-/// Built-in KERNAL replacement for runs without ROMs: initialises stack and
-/// CPU port, then idles; IRQ and NMI return immediately. Written for this
-/// project, not derived from the Commodore KERNAL.
-fn stub_kernal() -> Box<[u8; KERNAL_SIZE]> {
-    let mut k = Box::new([0xff; KERNAL_SIZE]);
-    let code = [
-        0x78, // E000 SEI
-        0xa2, 0xff, // E001 LDX #$FF
-        0x9a, // E003 TXS
-        0xd8, // E004 CLD
-        // Data latch before DDR, or the ROMs vanish when the pins turn to outputs.
-        0xa9, 0x37, // E005 LDA #$37
-        0x85, 0x01, // E007 STA $01
-        0xa9, 0x2f, // E009 LDA #$2F
-        0x85, 0x00, // E00B STA $00
-        0x4c, 0x0d, 0xe0, // E00D JMP $E00D
-        0x40, // E010 RTI
-    ];
-    k[..code.len()].copy_from_slice(&code);
-    k[0x1ffa..].copy_from_slice(&[0x10, 0xe0, 0x00, 0xe0, 0x10, 0xe0]);
-    k
-}
-
 fn rom<const N: usize>(config: &MachineConfig, role: &str) -> Result<Box<[u8; N]>, ConfigError> {
     let data = config
         .roms
@@ -195,7 +173,7 @@ fn rom<const N: usize>(config: &MachineConfig, role: &str) -> Result<Box<[u8; N]
 fn load_roms(config: &MachineConfig) -> Result<Roms, ConfigError> {
     match config.options.get("roms").map(String::as_str) {
         Some("stub") => Ok(Roms {
-            kernal: stub_kernal(),
+            kernal: stub::kernal(),
             basic: Box::new([0xff; BASIC_SIZE]),
             chargen: Box::new([0; CHARGEN_SIZE]),
         }),
@@ -208,8 +186,6 @@ fn load_roms(config: &MachineConfig) -> Result<Roms, ConfigError> {
     }
 }
 
-const PALETTE: [Rgb8; 1] = [Rgb8 { r: 0, g: 0, b: 0 }];
-
 #[derive(Clone)]
 pub struct C64 {
     cpu: Cpu6502,
@@ -217,9 +193,7 @@ pub struct C64 {
     io: Io,
     ints: Interrupts,
     sched: Scheduler,
-    frame: u64,
-    frame_cycle: u32,
-    pixels: Vec<u8>,
+    palette: [Rgb8; 16],
     field_done_pending: bool,
 }
 
@@ -246,9 +220,7 @@ impl C64 {
             io: Io::new(cia),
             ints: Interrupts::default(),
             sched: Scheduler::new(),
-            frame: 0,
-            frame_cycle: 0,
-            pixels: vec![0; (WIDTH * HEIGHT) as usize],
+            palette: vic2::palette::palette(),
             field_done_pending: false,
         })
     }
@@ -258,19 +230,22 @@ impl C64 {
     }
 
     fn beam_pos(&self) -> BeamPos {
-        let cycle = (self.frame_cycle % CYCLES_PER_LINE) as u16;
-        BeamPos {
-            frame: self.frame,
-            line: (self.frame_cycle / CYCLES_PER_LINE) as u16,
-            cycle,
-            hpos: cycle * 8,
-        }
+        self.io.vic.beam()
     }
 
     /// One CPU cycle (φ2). Returns `Some` if emulation must stop.
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
-        // Chips clock first: a CPU read in this cycle sees this cycle's state.
-        self.io.tick();
+        // φ1: VIC-II access; its BA decides whether the CPU may read.
+        let bank = self.io.vic_bank();
+        self.io.vic.phi1(&VicView {
+            mem: &self.mem,
+            bank,
+        });
+        self.cpu.set_rdy(self.io.vic.ba());
+        // CIAs clock before the CPU access: a read sees this cycle's state.
+        self.io.tick_cias();
+        // Lines are sampled after the CIA clock: an NMI raised now is an edge
+        // even if the CPU's ICR read in this cycle releases it (Lorenz icr01).
         self.update_interrupts();
         self.cpu.set_irq(self.ints.irq != 0);
         self.cpu.set_nmi(self.ints.nmi != 0);
@@ -288,14 +263,14 @@ impl C64 {
             };
             self.cpu.tick(&mut hooked)
         };
+        // φ2: VIC-II's own phi2 accesses, pixel output, beam advance.
+        let bank = self.io.vic_bank();
+        let new_field = self.io.vic.phi2(&VicView {
+            mem: &self.mem,
+            bank,
+        });
         self.update_interrupts();
         self.sched.tick();
-        self.frame_cycle += 1;
-        let new_field = self.frame_cycle == CYCLES_PER_FRAME;
-        if new_field {
-            self.frame_cycle = 0;
-            self.frame += 1;
-        }
 
         if let Some(dbg) = dbg {
             if let CycleResult::InstrDone { next_pc } = result {
@@ -329,7 +304,8 @@ impl C64 {
     }
 
     fn update_interrupts(&mut self) {
-        let (cia1, cia2) = (self.io.cia1.irq(), self.io.cia2.irq());
+        let (vic, cia1, cia2) = (self.io.vic.irq(), self.io.cia1.irq(), self.io.cia2.irq());
+        self.ints.set_irq(irq::VIC, vic);
         self.ints.set_irq(irq::CIA1, cia1);
         self.ints.set_nmi(nmi::CIA2, cia2);
     }
@@ -359,7 +335,8 @@ impl Machine for C64 {
         if std::mem::take(&mut self.field_done_pending) {
             return StopReason::FrameDone;
         }
-        if self.frame_cycle == 0 {
+        let b = self.beam_pos();
+        if b.line == 0 && b.cycle == 0 {
             self.apply_frame_freezes(dbg);
         }
         loop {
@@ -378,22 +355,14 @@ impl Machine for C64 {
 
     fn framebuffer(&self) -> FrameRef<'_> {
         FrameRef {
-            width: WIDTH,
-            height: HEIGHT,
+            width: vic2::WIDTH,
+            height: vic2::HEIGHT,
             pixels: PixelData::Indexed {
-                pixels: &self.pixels,
-                palette: &PALETTE,
+                pixels: self.io.vic.pixels(),
+                palette: &self.palette,
             },
             luma_chroma: None,
-            signal: SignalInfo {
-                pixel_clock_hz: 7_881_984,
-                active_pixels: WIDTH,
-                total_pixels: CYCLES_PER_LINE * 8,
-                lines_per_field: LINES,
-                standard: VideoStandard::Pal,
-                output: OutputType::SVideo,
-                field: FieldParity::Progressive,
-            },
+            signal: vic2::SIGNAL,
         }
     }
 
@@ -466,6 +435,16 @@ impl Machine for C64 {
             },
             cia("cia1", 0xdc00, &self.io.cia1),
             cia("cia2", 0xdd00, &self.io.cia2),
+            ChipInfo {
+                name: "vic2",
+                regs: VIC_REGS
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &name)| {
+                        reg(name, Some(0xd000 + i as u32), self.io.vic.peek(i as u8), 8)
+                    })
+                    .collect(),
+            },
         ]
     }
 
@@ -499,11 +478,9 @@ impl Machine for C64 {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"C64S", 1, |w| {
+        w.chunk(*b"C64S", 2, |w| {
             w.u8(self.ints.irq);
             w.u8(self.ints.nmi);
-            w.u64(self.frame);
-            w.u32(self.frame_cycle);
             w.bool(self.field_done_pending);
         });
         self.cpu.save(&mut w);
@@ -516,16 +493,17 @@ impl Machine for C64 {
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut next = self.clone();
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"C64S", 1)?;
+        let (version, mut c) = r.chunk(*b"C64S", 2)?;
+        if version < 2 {
+            return Err(StateError::UnsupportedVersion {
+                tag: *b"C64S",
+                version,
+            });
+        }
         next.ints = Interrupts {
             irq: c.u8()?,
             nmi: c.u8()?,
         };
-        next.frame = c.u64()?;
-        next.frame_cycle = c.u32()?;
-        if next.frame_cycle >= CYCLES_PER_FRAME {
-            return Err(StateError::Invalid("frame cycle"));
-        }
         next.field_done_pending = c.bool()?;
         next.cpu.load(&mut r)?;
         next.mem.load(&mut r)?;

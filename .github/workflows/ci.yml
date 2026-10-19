@@ -48,6 +48,13 @@ jobs:
         env:
           EMU_TESTDATA_DIR: ${{ github.workspace }}/testdata
         run: cargo test -p cpu-6502 --release -- --ignored
+      # Phase 2 gate: Lorenz C64 test suite without ROMs (stub KERNAL), ≥ 90 %.
+      - name: Lorenz suite (stub ROMs)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        env:
+          EMU_TESTDATA_DIR: ${{ github.workspace }}/testdata
+        run: cargo test -p emu-tests --release --test lorenz lorenz_suite_stub -- --ignored --nocapture
 
   wasm:
     runs-on: ubuntu-latest

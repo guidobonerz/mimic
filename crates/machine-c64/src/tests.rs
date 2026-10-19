@@ -1,4 +1,5 @@
 use super::*;
+use crate::memory::KERNAL_SIZE;
 
 /// Config with test ROMs (not Commodore ROMs): `code` at $E000 is the reset
 /// entry, `irq` at $E100 is the IRQ handler, `nmi` at $E200 the NMI handler.
@@ -46,13 +47,29 @@ fn ddr_before_data_latch_banks_everything_out() {
 #[test]
 fn stub_kernal_boots_and_sets_up_the_port() {
     let mut m = stub();
-    assert_eq!(m.run_frame(&mut DebugHooks::new()), StopReason::FrameDone);
-    // The frame may end inside the idle JMP.
-    assert!((0xe00d..=0xe00f).contains(&m.regs().get("PC").unwrap()));
+    let mut dbg = DebugHooks::new();
+    let idle = dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+        space: CPU_SPACE,
+        addr: u32::from(stub::IDLE),
+    });
+    assert_eq!(m.run_frame(&mut dbg), StopReason::Breakpoint(idle));
     assert_eq!(m.peek(CPU_SPACE, 0, Size::Byte), Some(0x2f));
+    // IOINIT leaves $01 = $E7: outputs 0–2 and 5 high, bit 4 input pulled up.
     assert_eq!(m.peek(CPU_SPACE, 1, Size::Byte), Some(0x37));
     assert_eq!(m.mem.mode(), 31);
-    assert_eq!(m.sched.now().0, u64::from(CYCLES_PER_FRAME));
+    assert_eq!(
+        m.peek(RAM_SPACE, 0x0314, Size::Word),
+        Some(0xea31),
+        "RESTOR"
+    );
+    assert_eq!(m.io.cia1.ta.latch, 0x4025, "IOINIT: 1/60 s IRQ timer");
+    // The CIA1 timer interrupt runs through the KERNAL entry and returns.
+    dbg.remove_breakpoint(idle);
+    let entry = dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+        space: CPU_SPACE,
+        addr: 0xea31,
+    });
+    assert_eq!(m.run_frame(&mut dbg), StopReason::Breakpoint(entry));
 }
 
 #[test]
@@ -107,7 +124,11 @@ fn colour_ram_has_four_bits() {
     let mut m = machine(&code, &[0x40], &[0x40]);
     m.run_frame(&mut DebugHooks::new());
     assert_eq!(m.peek(COLOR_SPACE, 0, Size::Byte), Some(0x0f));
-    assert_eq!(m.peek(RAM_SPACE, 0x10, Size::Byte), Some(0xff));
+    // Upper nibble: open bus (the VIC-II's last fetch at the time of the read).
+    assert_eq!(
+        m.peek(RAM_SPACE, 0x10, Size::Byte).map(|v| v & 0x0f),
+        Some(0x0f)
+    );
     assert_eq!(
         m.peek(RAM_SPACE, 0xd800, Size::Byte),
         Some(0),
@@ -116,7 +137,18 @@ fn colour_ram_has_four_bits() {
 }
 
 #[test]
-fn irq_line_is_wired_or() {
+fn interrupt_lines_are_wired_or() {
+    let mut i = Interrupts::default();
+    i.set_irq(irq::VIC, true);
+    i.set_irq(irq::CARTRIDGE, true);
+    i.set_irq(irq::VIC, false);
+    assert_ne!(i.irq, 0, "cartridge still pulls the line");
+    i.set_irq(irq::CARTRIDGE, false);
+    assert_eq!(i.irq, 0);
+}
+
+#[test]
+fn irq_is_level_triggered() {
     // Main: CLI, loop. IRQ handler: INC $10, RTI (source never cleared, so
     // the CPU re-enters as soon as RTI restores I = 0).
     let code = [0x58, 0x4c, 0x01, 0xe0];
@@ -124,21 +156,16 @@ fn irq_line_is_wired_or() {
     let mut m = machine(&code, &irq, &[0x40]);
     run_cycles(&mut m, 20);
     assert_eq!(m.mem.ram[0x10], 0);
-    m.interrupts_mut().set_irq(irq::VIC, true);
-    m.interrupts_mut().set_irq(irq::CIA1, true);
+    m.interrupts_mut().set_irq(irq::CARTRIDGE, true);
     run_cycles(&mut m, 40);
     let count = m.mem.ram[0x10];
     assert!(count >= 2, "IRQ taken repeatedly while held: {count}");
-    m.interrupts_mut().set_irq(irq::VIC, false);
-    run_cycles(&mut m, 40);
-    assert!(m.mem.ram[0x10] > count, "CIA1 still holds the line");
-    m.interrupts_mut().set_irq(irq::CIA1, false);
+    m.interrupts_mut().set_irq(irq::CARTRIDGE, false);
     run_cycles(&mut m, 20);
     let settled = m.mem.ram[0x10];
     run_cycles(&mut m, 40);
     assert_eq!(m.mem.ram[0x10], settled, "line released");
 }
-
 #[test]
 fn nmi_is_edge_triggered() {
     let code = [0x4c, 0x00, 0xe0];
@@ -290,15 +317,26 @@ fn cia_registers_are_mirrored_and_visible_to_the_debugger() {
 #[test]
 fn tod_runs_at_fifty_hertz() {
     let mut m = stub();
-    m.io.cia1.write(0x0e, 0x80);
-    m.io.cia1.write(0x08, 0);
     let mut dbg = DebugHooks::new();
+    m.run_frame(&mut dbg); // boot (IOINIT rewrites CRA)
+    let cra = m.io.cia1.ta.cr;
+    m.io.cia1.write(0x0e, cra | 0x80);
+    m.io.cia1.write(0x0b, 0x01);
+    m.io.cia1.write(0x0a, 0);
+    m.io.cia1.write(0x09, 0);
+    m.io.cia1.write(0x08, 0);
     for _ in 0..50 {
         m.run_frame(&mut dbg);
     }
-    // 50 frames ≈ 0.998 s at 985 248 Hz / 19 656 cycles per frame.
-    assert_eq!(m.io.cia1.tod.time[1], 0x00);
-    assert_eq!(m.io.cia1.tod.time[0], 0x09);
-    m.run_frame(&mut dbg);
-    assert_eq!(m.io.cia1.tod.time[1], 0x01);
+    // 50 frames ≈ 0.998 s at 985 248 Hz / 19 656 cycles per frame; the
+    // power-line phase is arbitrary, so allow one tenth either way.
+    let tenths = |m: &C64| {
+        let t = m.io.cia1.tod.time;
+        u32::from(t[1] >> 4) * 100 + u32::from(t[1] & 15) * 10 + u32::from(t[0])
+    };
+    assert!((9..=10).contains(&tenths(&m)), "{}", tenths(&m));
+    for _ in 0..50 {
+        m.run_frame(&mut dbg);
+    }
+    assert!((19..=20).contains(&tenths(&m)), "{}", tenths(&m));
 }
