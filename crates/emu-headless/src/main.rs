@@ -7,8 +7,9 @@ use std::fs;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 
+use emu_core::media::{MediaKind, SlotId};
 use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, StopReason};
+use emu_core::{DebugHooks, Machine, StopReason};
 use emu_debug::{DebugServer, ServerConfig, Session};
 
 const USAGE: &str = "\
@@ -16,7 +17,10 @@ usage: emu-headless [options]
 
   --machine ID          machine id (default: sim6502); see --list
   --model NAME          model variant
-  --prg FILE            program to load (machine role \"program\")
+  --prg FILE            program (PRG/T64) into the machine's program slot,
+                        or as its \"program\" ROM role (sim6502)
+  --disk FILE           disk image into the first disk drive (drive 8)
+  --autostart           load and run the disk after boot (C64)
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
   --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
@@ -36,6 +40,8 @@ struct Args {
     machine: String,
     config: MachineConfig,
     rom_dir: Option<String>,
+    prg: Option<String>,
+    disk: Option<String>,
     frames: u64,
     snapshot: Option<String>,
     load_state: Option<String>,
@@ -72,9 +78,10 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
         match flag.as_str() {
             "--machine" => args.machine = value("--machine")?,
             "--model" => args.config.model = Some(value("--model")?),
-            "--prg" => {
-                let path = value("--prg")?;
-                args.config.roms.insert("program".into(), read(&path)?);
+            "--prg" => args.prg = Some(value("--prg")?),
+            "--disk" => args.disk = Some(value("--disk")?),
+            "--autostart" => {
+                args.config.options.insert("autostart".into(), "on".into());
             }
             "--rom" => {
                 let (role, path) = key_value(&value("--rom")?, "--rom")?;
@@ -133,6 +140,22 @@ fn with_rom_dir(args: &Args) -> Result<MachineConfig, String> {
     Ok(config)
 }
 
+fn slot_of(m: &dyn Machine, kind: MediaKind) -> Option<SlotId> {
+    m.media_slots()
+        .into_iter()
+        .find(|s| s.kind == kind)
+        .map(|s| s.id)
+}
+
+fn insert(m: &mut dyn Machine, slot: SlotId, path: &str) -> Result<(), String> {
+    let media = media_backends::image::open(std::path::Path::new(path))
+        .map_err(|e| format!("{path}: {e}"))?;
+    m.media_slot(slot)
+        .ok_or("no such slot")?
+        .insert(media)
+        .map_err(|e| format!("{path}: {e}"))
+}
+
 fn run(args: Args) -> Result<ExitCode, String> {
     let registry = emu_machines::registry();
     if args.list {
@@ -142,10 +165,27 @@ fn run(args: Args) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let config = with_rom_dir(&args)?;
+    let mut config = with_rom_dir(&args)?;
     let mut machine = registry
         .create(&args.machine, &config)
         .map_err(|e| e.to_string())?;
+    if let Some(path) = &args.prg {
+        match slot_of(machine.as_ref(), MediaKind::Program) {
+            Some(slot) => insert(machine.as_mut(), slot, path)?,
+            None => {
+                // Machines without a program slot take it as a ROM role.
+                config.roms.insert("program".into(), read(path)?);
+                machine = registry
+                    .create(&args.machine, &config)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    if let Some(path) = &args.disk {
+        let slot = slot_of(machine.as_ref(), MediaKind::Disk)
+            .ok_or_else(|| format!("{} has no disk drive (DOS ROM missing?)", args.machine))?;
+        insert(machine.as_mut(), slot, path)?;
+    }
     if let Some(path) = &args.load_state {
         machine
             .load_state(&read(path)?)
@@ -257,6 +297,9 @@ mod tests {
         assert!(parse("--frames x").is_err());
         assert!(parse("--option novalue").is_err());
         assert!(parse("--bogus").is_err());
-        assert!(parse("--prg does/not/exist.prg").is_err());
+        assert!(parse("--disk").is_err());
+        let a = parse("--disk x.d64 --autostart").unwrap();
+        assert_eq!(a.disk.as_deref(), Some("x.d64"));
+        assert_eq!(a.config.options["autostart"], "on");
     }
 }

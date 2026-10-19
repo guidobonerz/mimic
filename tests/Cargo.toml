@@ -16,5 +16,6 @@ machine-c64.workspace = true
 [dev-dependencies]
 emu-debug.workspace = true
 emu-preview.workspace = true
+media.workspace = true
 media-backends.workspace = true
 serde_json.workspace = true

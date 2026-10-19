@@ -2,4 +2,5 @@
 
 #![forbid(unsafe_code)]
 
+pub mod image;
 pub mod roms;

@@ -2,7 +2,11 @@
 //!
 //! Phase 2 builds this up chip by chip. Present so far: 6510 with its I/O
 //! port, PLA banking, RAM, ROMs, colour RAM, VIC-II (PAL 6569), both CIAs
-//! and the IRQ/NMI/RDY wiring. The SID follows.
+//! the IRQ/NMI/RDY wiring, keyboard, control ports, a true-emulated 1541 as
+//! drive 8 and a "program" slot for PRG/T64. The SID follows.
+//!
+//! Drive 8 needs `roms["dos1541"]` (16 KB); without it there is no drive.
+//! `options["autostart"] = "on"` loads and runs the disk in drive 8 after boot.
 //!
 //! CIA revision: options["cia"] = "6526" (default, original C64) or
 //! "6526a" (C64C).
@@ -13,8 +17,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod drive;
 pub mod io;
 pub mod keyboard;
+pub mod loader;
 pub mod memory;
 pub mod pla;
 pub mod stub;
@@ -26,7 +32,7 @@ use devices_input::Joystick;
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
-use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
@@ -36,7 +42,9 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
+use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use io::{Io, VicView};
+use loader::{Autostart, ProgramSlot, BOOT_FRAMES};
 use memory::{Memory, Roms, BASIC_SIZE, CHARGEN_SIZE};
 use pla::Bank;
 
@@ -195,6 +203,9 @@ pub const CONTROL_PORT_1: PortId = PortId(0);
 pub const CONTROL_PORT_2: PortId = PortId(1);
 const PORT_NAMES: [&str; 2] = ["control port 1", "control port 2"];
 
+pub const SLOT_DRIVE8: SlotId = SlotId(0);
+pub const SLOT_PROGRAM: SlotId = SlotId(1);
+
 pub struct C64 {
     cpu: Cpu6502,
     mem: Memory,
@@ -203,6 +214,9 @@ pub struct C64 {
     sched: Scheduler,
     input: InputQueue,
     ports: [Option<Box<dyn PortDevice>>; 2],
+    drive: Option<Drive8>,
+    program: ProgramSlot,
+    autostart: Autostart,
     palette: [Rgb8; 16],
     field_done_pending: bool,
 }
@@ -243,6 +257,20 @@ impl C64 {
                 Some("none") => None,
                 Some(other) => return Err(ConfigError::Invalid(format!("port2 option '{other}'"))),
             };
+        let stub = config.options.get("roms").is_some_and(|r| r == "stub");
+        let drive = match config.options.get("drive8").map(String::as_str) {
+            Some("none") => None,
+            None | Some("1541") if !stub && config.roms.contains_key("dos1541") => {
+                Some(Drive8::new(rom(config, "dos1541")?))
+            }
+            None | Some("1541") => None,
+            Some(other) => return Err(ConfigError::Invalid(format!("drive8 option '{other}'"))),
+        };
+        let autostart = match config.options.get("autostart").map(String::as_str) {
+            None | Some("off") => Autostart::Off,
+            Some("on") => Autostart::Armed,
+            Some(other) => return Err(ConfigError::Invalid(format!("autostart option '{other}'"))),
+        };
         Ok(Self {
             cpu,
             mem: Memory::new(load_roms(config)?),
@@ -251,6 +279,9 @@ impl C64 {
             sched: Scheduler::new(),
             input: InputQueue::new(),
             ports: [None, port2],
+            drive,
+            program: ProgramSlot::default(),
+            autostart,
             palette: vic2::palette::palette(),
             field_done_pending: false,
         })
@@ -303,8 +334,22 @@ impl C64 {
             mem: &self.mem,
             bank,
         });
+        // Serial bus: the drive sees what the C64 drives now.
+        let c64 = drive::c64_lines(self.io.cia2.port_a_out());
+        let mut drive_stop = None;
+        self.io.iec = match &mut self.drive {
+            Some(d) => {
+                let (bus, stop) = d.run(c64, dbg.as_deref_mut());
+                drive_stop = stop;
+                bus
+            }
+            None => c64,
+        };
         self.update_interrupts();
         self.sched.tick();
+        if new_field {
+            self.frame_tasks();
+        }
 
         if let Some(dbg) = dbg {
             if let CycleResult::InstrDone { next_pc } = result {
@@ -326,6 +371,10 @@ impl C64 {
                 self.field_done_pending |= new_field;
                 return Some(stop);
             }
+        }
+        if drive_stop.is_some() {
+            self.field_done_pending |= new_field;
+            return drive_stop;
         }
         match result {
             CycleResult::Jammed => Some(StopReason::CpuJam {
@@ -359,6 +408,55 @@ impl C64 {
             *lines = self.ports[usize::from(p.0)]
                 .as_ref()
                 .map_or(0, |d| d.read_lines(now).pulled_low);
+        }
+    }
+
+    /// Program injection and autostart, once BASIC has booted.
+    fn frame_tasks(&mut self) {
+        if self.io.vic.beam().frame < BOOT_FRAMES {
+            return;
+        }
+        if let Some(prg) = self.program.pending.take() {
+            self.inject(&prg);
+            if prg.load == 0x0801 {
+                self.type_text("RUN\r");
+            }
+        }
+        match self.autostart {
+            Autostart::Armed => {
+                let has_disk = self.drive.as_ref().is_some_and(|d| d.drive.has_disk());
+                if has_disk {
+                    self.type_text("LOAD\"*\",8,1\r");
+                    self.autostart = Autostart::Loading;
+                } else {
+                    self.autostart = Autostart::Done;
+                }
+            }
+            Autostart::Loading => {
+                if loader::loaded(&self.mem.ram[0x0400..0x07e8]) {
+                    self.type_text("RUN\r");
+                    self.autostart = Autostart::Done;
+                }
+            }
+            Autostart::Off | Autostart::Done => {}
+        }
+    }
+
+    fn type_text(&mut self, text: &str) {
+        let (events, _) = keyboard::typed_events(text, self.sched.now().0);
+        for e in events {
+            self.input.push(e);
+        }
+    }
+
+    /// Put a program into RAM like the KERNAL LOAD does and set the BASIC
+    /// end-of-program pointers (VARTAB/ARYTAB/STREND, and $AE/$AF).
+    fn inject(&mut self, prg: &media::Prg) {
+        let load = usize::from(prg.load);
+        self.mem.ram[load..load + prg.data.len()].copy_from_slice(&prg.data);
+        let end = prg.end() as u16;
+        for ptr in [0x2d, 0x2f, 0x31, 0xae] {
+            self.mem.ram[ptr..ptr + 2].copy_from_slice(&end.to_le_bytes());
         }
     }
 
@@ -438,11 +536,21 @@ impl Machine for C64 {
             addr_bits,
             big_endian: false,
         };
-        vec![
+        let mut spaces = vec![
             space(CPU_SPACE, "cpu", 16),
             space(RAM_SPACE, "ram", 16),
             space(COLOR_SPACE, "colorram", 10),
-        ]
+        ];
+        if self.drive.is_some() {
+            spaces.push(MemSpace {
+                id: DRIVE_SPACE,
+                name: "drive8",
+                device: DRIVE8,
+                addr_bits: 16,
+                big_endian: false,
+            });
+        }
+        spaces
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -509,11 +617,21 @@ impl Machine for C64 {
     }
 
     fn devices(&self) -> Vec<DeviceId> {
-        vec![CPU]
+        let mut d = vec![CPU];
+        if self.drive.is_some() {
+            d.push(DRIVE8);
+        }
+        d
     }
 
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget> {
-        (dev == CPU).then_some(self as &mut dyn DebugTarget)
+        if dev == CPU {
+            return Some(self as &mut dyn DebugTarget);
+        }
+        match &mut self.drive {
+            Some(d) if dev == DRIVE8 => Some(&mut d.drive as &mut dyn DebugTarget),
+            _ => None,
+        }
     }
 
     fn input(&mut self, ev: TimedInput) {
@@ -561,25 +679,52 @@ impl Machine for C64 {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        Vec::new()
+        let mut slots = Vec::new();
+        if let Some(d) = &self.drive {
+            slots.push(MediaSlotInfo {
+                id: SLOT_DRIVE8,
+                name: "drive 8",
+                kind: MediaKind::Disk,
+                inserted: d.drive.has_disk(),
+            });
+        }
+        slots.push(MediaSlotInfo {
+            id: SLOT_PROGRAM,
+            name: "program",
+            kind: MediaKind::Program,
+            inserted: self.program.inserted(),
+        });
+        slots
     }
 
-    fn media_slot(&mut self, _slot: SlotId) -> Option<&mut dyn MediaSlot> {
-        None
+    fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
+        match slot {
+            SLOT_DRIVE8 => self
+                .drive
+                .as_mut()
+                .map(|d| &mut d.drive as &mut dyn MediaSlot),
+            SLOT_PROGRAM => Some(&mut self.program),
+            _ => None,
+        }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"C64S", 2, |w| {
+        w.chunk(*b"C64S", 3, |w| {
             w.u8(self.ints.irq);
             w.u8(self.ints.nmi);
             w.bool(self.field_done_pending);
+            w.u8(self.autostart.to_u8());
         });
         self.cpu.save(&mut w);
         self.mem.save(&mut w);
         self.io.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
+        w.chunk(*b"DRV8", 1, |w| w.bool(self.drive.is_some()));
+        if let Some(d) = &self.drive {
+            d.save(&mut w);
+        }
         w.chunk(*b"PORT", 1, |w| {
             for p in &self.ports {
                 w.bytes(&p.as_ref().map(|d| d.save_state()).unwrap_or_default());
@@ -601,8 +746,8 @@ impl Machine for C64 {
             field_done_pending: self.field_done_pending,
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"C64S", 2)?;
-        if version < 2 {
+        let (version, mut c) = r.chunk(*b"C64S", 3)?;
+        if version < 3 {
             return Err(StateError::UnsupportedVersion {
                 tag: *b"C64S",
                 version,
@@ -613,13 +758,44 @@ impl Machine for C64 {
             nmi: c.u8()?,
         };
         next.field_done_pending = c.bool()?;
+        let autostart =
+            Autostart::from_u8(c.u8()?).ok_or(StateError::Invalid("autostart state"))?;
         next.cpu.load(&mut r)?;
         next.mem.load(&mut r)?;
         next.io.load(&mut r)?;
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
-        let (_, mut c) = r.chunk(*b"PORT", 1)?;
-        let port_states = [c.bytes()?, c.bytes()?];
+
+        // Drive 8 (not clonable): keep a backup in case a later part fails.
+        let (_, mut c) = r.chunk(*b"DRV8", 1)?;
+        if c.bool()? != self.drive.is_some() {
+            return Err(StateError::Invalid("drive 8 configuration differs"));
+        }
+        let drive_backup = self.drive.as_ref().map(|d| {
+            let mut w = StateWriter::new();
+            d.save(&mut w);
+            w.into_bytes()
+        });
+        if let Some(d) = &mut self.drive {
+            d.load(&mut r)?;
+        }
+        let restore_drive = |drive: &mut Option<Drive8>| {
+            if let (Some(d), Some(b)) = (drive, &drive_backup) {
+                let _ = d.load(&mut StateReader::new(b));
+            }
+        };
+
+        let Ok((_, mut c)) = r.chunk(*b"PORT", 1) else {
+            restore_drive(&mut self.drive);
+            return Err(StateError::Missing(*b"PORT"));
+        };
+        let port_states = match (c.bytes(), c.bytes()) {
+            (Ok(a), Ok(b)) => [a, b],
+            (Err(e), _) | (_, Err(e)) => {
+                restore_drive(&mut self.drive);
+                return Err(e);
+            }
+        };
         let backups: Vec<Vec<u8>> = self
             .ports
             .iter()
@@ -641,6 +817,7 @@ impl Machine for C64 {
                     let _ = d.load_state(backup);
                 }
             }
+            restore_drive(&mut self.drive);
             return Err(e);
         }
         self.cpu = next.cpu;
@@ -650,6 +827,7 @@ impl Machine for C64 {
         self.sched = next.sched;
         self.input = next.input;
         self.field_done_pending = next.field_done_pending;
+        self.autostart = autostart;
         Ok(())
     }
 }

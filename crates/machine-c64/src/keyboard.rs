@@ -18,7 +18,8 @@
 //! | 6       | £        | *      | ;      | HOME  | R-SHIFT| =    | ↑    | /         |
 //! | 7       | 1        | ←      | CTRL   | 2     | SPACE  | C=   | Q    | RUN/STOP  |
 
-use emu_core::input::MachineKey;
+use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use emu_core::Cycle;
 
 pub const RESTORE: MachineKey = MachineKey(64);
 
@@ -121,7 +122,12 @@ const SHIFTED: [(char, char); 13] = [
 /// The key (and whether SHIFT is needed) for a character, upper-case
 /// letters only, as on the unshifted C64 character set.
 pub fn key_for_char(c: char) -> Option<(MachineKey, bool)> {
-    let c = c.to_ascii_uppercase();
+    // Carriage return and line feed both mean RETURN.
+    let c = if c == '\r' {
+        '\n'
+    } else {
+        c.to_ascii_uppercase()
+    };
     let base = |c: char| {
         CHARS
             .iter()
@@ -136,6 +142,41 @@ pub fn key_for_char(c: char) -> Option<(MachineKey, bool)> {
         .find(|&&(s, _)| s == c)
         .and_then(|&(_, b)| base(b))
         .map(|k| (k, true))
+}
+
+/// Cycles a typed key stays down, and the gap before the next one. The
+/// KERNAL scans once per 1/60 s IRQ (~16 400 cycles); two scans per phase.
+const TYPE_HOLD: u64 = 40_000;
+const TYPE_GAP: u64 = 40_000;
+
+/// Key events that type `text` from cycle `start` (characters without a key
+/// are skipped). Returns the events and the cycle after the last release.
+pub fn typed_events(text: &str, start: u64) -> (Vec<TimedInput>, u64) {
+    let key_event = |at: u64, k: MachineKey, down: bool| TimedInput {
+        at: Cycle(at),
+        target: InputTarget::Keyboard,
+        event: InputEvent::Key {
+            machine_key: k,
+            down,
+        },
+    };
+    let mut events = Vec::new();
+    let mut t = start;
+    for c in text.chars() {
+        let Some((k, shift)) = key_for_char(c) else {
+            continue;
+        };
+        if shift {
+            events.push(key_event(t, keys::LSHIFT, true));
+        }
+        events.push(key_event(t, k, true));
+        events.push(key_event(t + TYPE_HOLD, k, false));
+        if shift {
+            events.push(key_event(t + TYPE_HOLD, keys::LSHIFT, false));
+        }
+        t += TYPE_HOLD + TYPE_GAP;
+    }
+    (events, t)
 }
 
 /// Pressed keys as a 64-bit set plus RESTORE.

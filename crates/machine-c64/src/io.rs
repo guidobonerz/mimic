@@ -18,6 +18,8 @@ use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::vic2::{Vic2, VicMemory};
 use emu_core::{ClockDivider, Savestate, StateError, StateReader, StateWriter};
 
+use drives_cbm::IecLines;
+
 use crate::keyboard::Keyboard;
 use crate::memory::Memory;
 
@@ -35,6 +37,8 @@ pub struct Io {
     /// Pins pulled low by the devices in control ports 1 and 2
     /// (`PortLines::pulled_low`), refreshed when their input changes.
     pub port_lines: [u32; 2],
+    /// Serial bus levels after the last drive update.
+    pub iec: IecLines,
 }
 
 /// The VIC-II's view of memory: one 16 KB bank of RAM, with the character
@@ -69,6 +73,7 @@ impl Io {
             tod: ClockDivider::new(MAINS_HZ, CPU_HZ).expect("CPU clock is non-zero"),
             keyboard: Keyboard::default(),
             port_lines: [0; 2],
+            iec: IecLines::default(),
         }
     }
 
@@ -102,9 +107,11 @@ impl Io {
         self.keyboard.resolve(a, b)
     }
 
-    /// External levels on CIA2 ports: IEC bus inputs and user port (none yet).
+    /// External levels on CIA2 ports: PA6 CLK in and PA7 DATA in read the
+    /// serial bus line level (1 = released); the user port is open.
     fn cia2_ext(&self) -> (u8, u8) {
-        (0xff, 0xff)
+        let pa = 0x3f | if self.iec.clk { 0 } else { 0x40 } | if self.iec.data { 0 } else { 0x80 };
+        (pa, 0xff)
     }
 
     pub fn read(&mut self, mem: &Memory, addr: u16) -> u8 {
@@ -166,6 +173,9 @@ impl Savestate for Io {
             w.bool(self.keyboard.restore);
             w.u32(self.port_lines[0]);
             w.u32(self.port_lines[1]);
+            w.bool(self.iec.atn);
+            w.bool(self.iec.clk);
+            w.bool(self.iec.data);
         });
     }
 
@@ -178,6 +188,11 @@ impl Savestate for Io {
         self.keyboard.matrix = c.u64()?;
         self.keyboard.restore = c.bool()?;
         self.port_lines = [c.u32()?, c.u32()?];
+        self.iec = IecLines {
+            atn: c.bool()?,
+            clk: c.bool()?,
+            data: c.bool()?,
+        };
         Ok(())
     }
 }

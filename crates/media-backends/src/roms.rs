@@ -18,6 +18,8 @@ pub struct RomSpec {
     /// Accepted file name prefixes (lower case).
     pub prefixes: &'static [&'static str],
     pub size: usize,
+    /// The machine works without it (e.g. no disk drive).
+    pub optional: bool,
 }
 
 /// ROMs needed per machine id.
@@ -27,16 +29,25 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             role: "kernal",
             prefixes: &["kernal"],
             size: 0x2000,
+            optional: false,
         },
         RomSpec {
             role: "basic",
             prefixes: &["basic"],
             size: 0x2000,
+            optional: false,
         },
         RomSpec {
             role: "chargen",
             prefixes: &["chargen", "characters", "char"],
             size: 0x1000,
+            optional: false,
+        },
+        RomSpec {
+            role: "dos1541",
+            prefixes: &["dos1541-", "1541-", "dos1541."],
+            size: 0x4000,
+            optional: true,
         },
     ];
     match machine {
@@ -74,6 +85,7 @@ pub fn load(dir: &Path, machine: &str) -> io::Result<BTreeMap<String, Vec<u8>>> 
             Some((_, path, _)) => {
                 roms.insert(spec.role.to_string(), fs::read(path)?);
             }
+            None if spec.optional => {}
             None => {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
