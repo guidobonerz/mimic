@@ -1,0 +1,17 @@
+[package]
+name = "emu-headless"
+description = "Headless runner"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+emu-machines.workspace = true
+emu-debug.workspace = true
+emu-preview.workspace = true
+video-crt.workspace = true
+media-backends.workspace = true

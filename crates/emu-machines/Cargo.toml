@@ -1,0 +1,20 @@
+[package]
+name = "emu-machines"
+description = "Machine registry population: the only crate that links every machine-* crate"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+machine-pet.workspace = true
+machine-vic20.workspace = true
+machine-c64.workspace = true
+machine-ted.workspace = true
+machine-c128.workspace = true
+machine-amiga.workspace = true
+machine-atari8.workspace = true
+machine-cpc.workspace = true

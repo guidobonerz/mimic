@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "tests"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# No license on purpose: all rights reserved. Never publish to crates.io.
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+emu-core = { path = "crates/emu-core" }
+cpu-6502 = { path = "crates/cpu-6502" }
+cpu-z80 = { path = "crates/cpu-z80" }
+cpu-m68k = { path = "crates/cpu-m68k" }
+chips-cbm = { path = "crates/chips-cbm" }
+chips-amiga = { path = "crates/chips-amiga" }
+chips-atari = { path = "crates/chips-atari" }
+chips-amstrad = { path = "crates/chips-amstrad" }
+drives-cbm = { path = "crates/drives-cbm" }
+drives-other = { path = "crates/drives-other" }
+devices-input = { path = "crates/devices-input" }
+media = { path = "crates/media" }
+media-backends = { path = "crates/media-backends" }
+emu-input = { path = "crates/emu-input" }
+video-crt = { path = "crates/video-crt" }
+machine-pet = { path = "crates/machine-pet" }
+machine-vic20 = { path = "crates/machine-vic20" }
+machine-c64 = { path = "crates/machine-c64" }
+machine-ted = { path = "crates/machine-ted" }
+machine-c128 = { path = "crates/machine-c128" }
+machine-amiga = { path = "crates/machine-amiga" }
+machine-atari8 = { path = "crates/machine-atari8" }
+machine-cpc = { path = "crates/machine-cpc" }
+emu-machines = { path = "crates/emu-machines" }
+emu-debug = { path = "crates/emu-debug" }
+emu-preview = { path = "crates/emu-preview" }
+emu-desktop = { path = "crates/emu-desktop" }
+emu-web = { path = "crates/emu-web" }
+emu-headless = { path = "crates/emu-headless" }

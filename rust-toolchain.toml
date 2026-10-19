@@ -1,0 +1,6 @@
+[toolchain]
+# TODO: pin to an exact version (e.g. "1.xx.0") once the toolchain is installed,
+# so clippy results are identical locally and in CI.
+channel = "stable"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

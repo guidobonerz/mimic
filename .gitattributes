@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+# Reference frames and binary test data must never be touched by line-ending conversion.
+*.png binary
+*.qoi binary
+*.bin binary
+*.prg binary
+*.d64 binary
+*.adf binary
+*.atr binary
+*.dsk binary

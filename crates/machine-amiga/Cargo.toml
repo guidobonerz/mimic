@@ -1,0 +1,17 @@
+[package]
+name = "machine-amiga"
+description = "Commodore Amiga (OCS, later AGA)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-m68k.workspace = true
+chips-amiga.workspace = true
+drives-other.workspace = true
+devices-input.workspace = true
+media.workspace = true

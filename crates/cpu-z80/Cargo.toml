@@ -1,0 +1,12 @@
+[package]
+name = "cpu-z80"
+description = "Zilog Z80 (C128, CPC)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

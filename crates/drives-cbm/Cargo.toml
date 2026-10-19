@@ -1,0 +1,15 @@
+[package]
+name = "drives-cbm"
+description = "Commodore IEC bus and drives: 1541, 1571, 1581 (each with its own CPU)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-6502.workspace = true
+chips-cbm.workspace = true
+media.workspace = true

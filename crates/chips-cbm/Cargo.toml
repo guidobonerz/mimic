@@ -1,0 +1,12 @@
+[package]
+name = "chips-cbm"
+description = "Commodore chips: VIC, VIC-II(e), TED, VDC 8563, SID, CIA, VIA, PIA, MMU 8722"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

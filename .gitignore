@@ -1,0 +1,5 @@
+/target
+# Fetched by tools/fetch-testdata.sh, never committed (licenses / size).
+/testdata
+# User-supplied ROMs (golden rule 6).
+/roms

@@ -1,0 +1,11 @@
+[package]
+name = "emu-core"
+description = "Core traits (Cpu, Bus, Machine), scheduler, savestates, DebugHooks, FrameRef"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

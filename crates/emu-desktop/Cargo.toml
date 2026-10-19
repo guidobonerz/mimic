@@ -1,0 +1,18 @@
+[package]
+name = "emu-desktop"
+description = "Desktop frontend (winit + wgpu + egui)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+emu-machines.workspace = true
+emu-debug.workspace = true
+emu-preview.workspace = true
+video-crt.workspace = true
+emu-input.workspace = true
+media-backends.workspace = true

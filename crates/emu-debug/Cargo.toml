@@ -1,0 +1,12 @@
+[package]
+name = "emu-debug"
+description = "Debug server: native protocol + adapters (VICE binary monitor, GDB RSP, DAP)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
