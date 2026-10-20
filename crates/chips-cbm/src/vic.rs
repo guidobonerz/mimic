@@ -164,6 +164,9 @@ pub struct Vic {
     pending: Option<[u8; 4]>,
     last_bus: u8,
     pixels: Vec<u8>,
+    /// Paddle resistances on POTX/POTY (0 = none, 65535 = open), set by
+    /// the machine each cycle.
+    pots: [u16; 2],
     voices: [Voice; 4],
     noise: u16,
     resampler: Decimator,
@@ -188,6 +191,7 @@ impl Vic {
             pending: None,
             last_bus: 0xff,
             pixels: vec![0; (t.width() * t.height) as usize],
+            pots: [0xffff; 2],
             voices: [Voice::default(); 4],
             noise: 0xffff,
             resampler: Decimator::new(t.cpu_hz(), SAMPLE_RATE).expect("valid rates"),
@@ -254,9 +258,10 @@ impl Vic {
         match reg {
             3 => (self.regs[3] & 0x7f) | (((self.line & 1) as u8) << 7),
             4 => (self.line >> 1) as u8,
-            // No light pen or paddles: the pot counters run to the end.
+            // No light pen; the pot counters stop where the paddles' RC
+            // network charges (255: nothing connected).
             6 | 7 => 0,
-            8 | 9 => 0xff,
+            8 | 9 => (self.pots[usize::from(reg - 8)] >> 8) as u8,
             _ => self.regs[usize::from(reg)],
         }
     }
@@ -267,6 +272,11 @@ impl Vic {
 
     pub fn write(&mut self, reg: u8, v: u8) {
         self.regs[usize::from(reg & 0x0f)] = v;
+    }
+
+    /// Paddle resistances on POTX/POTY (0 = none, 65535 = open).
+    pub fn set_pots(&mut self, pots: [u16; 2]) {
+        self.pots = pots;
     }
 
     fn color_of(&self, kind: u8, char_color: u8) -> u8 {

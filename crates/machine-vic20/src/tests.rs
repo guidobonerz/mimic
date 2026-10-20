@@ -1,4 +1,5 @@
 use super::*;
+use devices_input::Joystick;
 use emu_core::input::{Dirs, InputEvent, MachineKey};
 use emu_core::media::{Media, MediaBackend, MediaError};
 
@@ -308,4 +309,30 @@ fn debugger_view() {
     assert_eq!(chips[0].regs.len(), 16);
     let instr = m.disassemble(0xe000);
     assert_eq!(instr.mnemonic, "SEI");
+}
+
+#[test]
+fn paddles_turn_the_vic_pots() {
+    use emu_core::input::{InputTarget, TimedInput};
+    let mut m = stub_with(&[("port1", "paddles")], "pal");
+    // Mid travel from the start.
+    assert_eq!(m.peek(CPU_SPACE, 0x9008, Size::Byte), Some(0x80));
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(CONTROL_PORT),
+        event: InputEvent::Analog {
+            axis: 1,
+            value: 0x2000,
+        },
+    });
+    m.run_frame(&mut DebugHooks::new());
+    assert_eq!(m.peek(CPU_SPACE, 0x9009, Size::Byte), Some(0x20));
+    assert!(Vic20::new(&{
+        let mut c = MachineConfig::default();
+        c.options.insert("roms".into(), "stub".into());
+        c.options.insert("port1".into(), "mouse".into());
+        c
+    })
+    .is_err());
 }

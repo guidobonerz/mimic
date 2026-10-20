@@ -48,6 +48,9 @@ pub struct Io {
     pub keyboard: Keyboard,
     /// Pins pulled low by the devices in control ports 1 and 2.
     pub port_lines: [u32; 2],
+    /// POTX/POTY resistances of the devices in control ports 1 and 2
+    /// (65535 = open).
+    pub port_analog: [[u16; 2]; 2],
     /// Serial bus levels after the last drive update.
     pub iec: IecLines,
 }
@@ -74,6 +77,7 @@ impl Io {
                 .expect("CPU clock is non-zero"),
             keyboard: Keyboard::default(),
             port_lines: [0; 2],
+            port_analog: [[u16::MAX; 2]; 2],
             iec: IecLines::default(),
         }
     }
@@ -116,6 +120,9 @@ impl Io {
             self.cia1.tod_tick();
             self.cia2.tod_tick();
         }
+        // CIA1 PA6/PA7 switch the pots of control port 1/2 to the SID.
+        self.sid
+            .set_pots(machine_c64_pots(self.cia1.port_a_out(), self.port_analog));
         let s = self.sid.clock();
         if let Some(out) = self.resampler.push(s) {
             if self.samples.len() < SAMPLE_RATE as usize * 4 {
@@ -222,7 +229,7 @@ impl Savestate for Io {
         w.chunk(*b"AUDR", 1, |w| self.resampler.save(w));
         self.tod.save(w);
         self.vdc_clock.save(w);
-        w.chunk(*b"C8IO", 2, |w| {
+        w.chunk(*b"C8IO", 3, |w| {
             w.u8(self.d02f);
             w.u8(self.d030);
             w.raw(&self.keyboard.columns);
@@ -235,6 +242,10 @@ impl Savestate for Io {
             w.bool(self.iec.clk);
             w.bool(self.iec.data);
             w.bool(self.iec.srq);
+            for pots in self.port_analog {
+                w.u16(pots[0]);
+                w.u16(pots[1]);
+            }
         });
     }
 
@@ -248,7 +259,7 @@ impl Savestate for Io {
         self.resampler.load(&mut c)?;
         self.tod.load(r)?;
         self.vdc_clock.load(r)?;
-        let (version, mut c) = r.chunk(*b"C8IO", 2)?;
+        let (version, mut c) = r.chunk(*b"C8IO", 3)?;
         self.d02f = c.u8()? | 0xf8;
         self.d030 = c.u8()? & 3;
         c.raw_into(&mut self.keyboard.columns)?;
@@ -263,6 +274,26 @@ impl Savestate for Io {
             // Version 1 predates fast serial.
             srq: version >= 2 && c.bool()?,
         };
+        // Version 3 adds the analog lines.
+        self.port_analog = if version >= 3 {
+            [[c.u16()?, c.u16()?], [c.u16()?, c.u16()?]]
+        } else {
+            [[u16::MAX; 2]; 2]
+        };
         Ok(())
     }
+}
+
+/// The pot lines the SID sees: CIA1 PA6 switches control port 1's POTX/POTY
+/// to it, PA7 port 2's (both together: in parallel), as on the C64.
+fn machine_c64_pots(cia1_pa: u8, ports: [[u16; 2]; 2]) -> [u16; 2] {
+    let mut pots = [u16::MAX; 2];
+    for (bit, port) in [(0x40, ports[0]), (0x80, ports[1])] {
+        if cia1_pa & bit != 0 {
+            for (p, r) in pots.iter_mut().zip(port) {
+                *p = (*p).min(r);
+            }
+        }
+    }
+    pots
 }

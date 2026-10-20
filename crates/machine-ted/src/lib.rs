@@ -38,7 +38,6 @@ pub mod stub;
 
 use chips_cbm::ted::{self, Ted};
 use cpu_6502::{Config as CpuConfig, Cpu6502, IoPort, Variant};
-use devices_input::Joystick;
 use drives_cbm::IecLines;
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
 use emu_core::hooked::HookedBus;
@@ -402,12 +401,13 @@ impl TedMachine {
             (None, Variant16::Plus4) | (Some("64k"), _) => 0xffff,
             (Some(other), _) => return Err(ConfigError::Invalid(format!("ram option '{other}'"))),
         };
-        let port1: Option<Box<dyn PortDevice>> =
-            match config.options.get("port1").map(String::as_str) {
-                None | Some("joystick") => Some(Box::new(Joystick::new(PortKind::CbmControl))),
-                Some("none") => None,
-                Some(other) => return Err(ConfigError::Invalid(format!("port1 option '{other}'"))),
-            };
+        // The Plus/4 and C16 ports have no pot lines: joysticks only.
+        let port1 = devices_input::control_port_option(
+            "port1",
+            config.options.get("port1").map(String::as_str),
+            "joystick",
+            false,
+        )?;
         let stub = config.options.get("roms").is_some_and(|r| r == "stub");
         let drive_roms = if stub {
             DriveRoms::default()

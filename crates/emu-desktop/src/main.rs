@@ -29,10 +29,10 @@ use emu_input::{Axis, Button, HostEvent, Mapper, Profile as InputProfile};
 use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer};
 use video_crt::Profile;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 use emu::{Shared, TapeKey};
 use gfx::Gfx;
@@ -67,6 +67,8 @@ F2/F4/F6/F8 = shifted F1/F3/F5/F7. Joystick (port 2): numeric keypad
 F12 switches between a machine's screens (C128: 40-column VIC and
 80-column VDC; the window starts on the one the 40/80 key selects).
 Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
+With --option port1=mouse1351 (or paddles, also port2) a click into the
+window captures the mouse for the machine; the middle button releases it.
 
 EMU_DESKTOP_DEBUG=1 prints frame and audio statistics every 5 s.";
 
@@ -253,6 +255,39 @@ struct App {
     period_ns: f64,
     /// A shift key is down (Shift+F9 = RECORD).
     shift: bool,
+    /// A port device wants the host mouse.
+    wants_mouse: bool,
+    /// The host mouse is captured for the machine.
+    mouse_captured: bool,
+    /// Host mouse buttons while captured (bit 0 left, bit 1 right).
+    mouse_buttons: u8,
+}
+
+impl App {
+    fn capture_mouse(&mut self, on: bool) {
+        let Some(w) = &self.window else { return };
+        if on {
+            let grabbed = w
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| w.set_cursor_grab(CursorGrabMode::Confined));
+            if grabbed.is_err() {
+                return;
+            }
+        } else {
+            let _ = w.set_cursor_grab(CursorGrabMode::None);
+        }
+        w.set_cursor_visible(!on);
+        self.mouse_captured = on;
+        self.mouse_buttons = 0;
+    }
+
+    fn send_mouse(&self, dx: i16, dy: i16) {
+        let _ = self.input.send(HostEvent::Mouse {
+            dx,
+            dy,
+            buttons: self.mouse_buttons,
+        });
+    }
 }
 
 impl App {
@@ -396,9 +431,36 @@ impl ApplicationHandler for App {
         self.window = Some(window);
     }
 
+    fn device_event(&mut self, _el: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            if self.mouse_captured {
+                let c = |v: f64| v.round().clamp(-32768.0, 32767.0) as i16;
+                self.send_mouse(c(dx), c(dy));
+            }
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::MouseInput { state, button, .. } if self.wants_mouse => {
+                let down = state == ElementState::Pressed;
+                match (self.mouse_captured, button) {
+                    (false, MouseButton::Left) if down => self.capture_mouse(true),
+                    (true, MouseButton::Middle) if down => self.capture_mouse(false),
+                    (true, MouseButton::Left | MouseButton::Right) => {
+                        let bit = if button == MouseButton::Left { 1 } else { 2 };
+                        if down {
+                            self.mouse_buttons |= bit;
+                        } else {
+                            self.mouse_buttons &= !bit;
+                        }
+                        self.send_mouse(0, 0);
+                    }
+                    _ => {}
+                }
+            }
+            WindowEvent::Focused(false) if self.mouse_captured => self.capture_mouse(false),
             WindowEvent::Resized(s) => {
                 if let Some(g) = &mut self.gfx {
                     g.resize(s.width, s.height);
@@ -495,7 +557,21 @@ fn run() -> Result<(), String> {
         Some(name) => load_profile(name)?,
         None => Profile::default_for(&args.machine),
     };
-    let mapper = Mapper::new(InputProfile::default_for(&args.machine));
+    let mut input_profile = InputProfile::default_for(&args.machine);
+    // A mouse or paddles in a control port: the captured host mouse drives
+    // them (click the window to capture, middle button to release).
+    for (option, port) in [("port1", 0u8), ("port2", 1)] {
+        if matches!(
+            args.config.options.get(option).map(String::as_str),
+            Some("mouse1351" | "paddles")
+        ) {
+            input_profile
+                .mouse
+                .push(emu_input::profile::MouseMap { port });
+        }
+    }
+    let wants_mouse = !input_profile.mouse.is_empty();
+    let mapper = Mapper::new(input_profile);
 
     let shared = Arc::new(Shared::new());
     let (tx, rx) = mpsc::channel();
@@ -572,6 +648,9 @@ fn run() -> Result<(), String> {
         nominal_period_ns: 0,
         period_ns: 0.0,
         shift: false,
+        wants_mouse,
+        mouse_captured: false,
+        mouse_buttons: 0,
     };
     let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
     shared.quit.store(true, Ordering::Relaxed);

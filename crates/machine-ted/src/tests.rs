@@ -1,4 +1,5 @@
 use super::*;
+use devices_input::Joystick;
 use emu_core::input::{Dirs, InputEvent, MachineKey};
 
 fn stub_with(variant: Variant16, model: &str, options: &[(&str, &str)]) -> TedMachine {

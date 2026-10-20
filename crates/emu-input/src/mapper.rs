@@ -42,6 +42,8 @@ pub struct Mapper {
     host_down: BTreeSet<String>,
     /// Left stick per pad: (x, y).
     sticks: BTreeMap<u8, (f32, f32)>,
+    /// Paddle buttons held per pad (bit 0 South, bit 1 East).
+    paddle_fire: BTreeMap<u8, u8>,
 }
 
 fn set(d: &mut Dirs, dir: Dirs, on: bool) {
@@ -70,6 +72,7 @@ impl Mapper {
             held: BTreeMap::new(),
             host_down: BTreeSet::new(),
             sticks: BTreeMap::new(),
+            paddle_fire: BTreeMap::new(),
         }
     }
 
@@ -98,6 +101,7 @@ impl Mapper {
                 }
             }
             HostEvent::Button { pad, button, down } => {
+                out.extend(self.paddle_buttons(*pad, *button, *down, now));
                 for (map, joy) in self.profile.joystick.iter().zip(&mut self.joys) {
                     if let JoystickSource::Gamepad { pad: p, fire, .. } = &map.source {
                         if p != pad {
@@ -140,7 +144,73 @@ impl Mapper {
                     }
                 }
                 self.flush_joysticks(now, &mut out);
+                self.paddle_axes(*pad, now, &mut out);
             }
+            HostEvent::Mouse { dx, dy, buttons } => {
+                for map in &self.profile.mouse {
+                    out.push(TimedInput {
+                        at: now,
+                        target: InputTarget::Port(PortId(map.port)),
+                        event: InputEvent::MouseRel {
+                            dx: *dx,
+                            dy: *dy,
+                            buttons: *buttons,
+                        },
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Stick X/Y of `pad` as the positions of the paddles it turns.
+    fn paddle_axes(&self, pad: u8, now: Cycle, out: &mut Vec<TimedInput>) {
+        let (x, y) = self.sticks.get(&pad).copied().unwrap_or_default();
+        let pos = |v: f32| ((v.clamp(-1.0, 1.0) + 1.0) * 32767.5) as u16;
+        for map in self.profile.paddles.iter().filter(|m| m.pad == pad) {
+            for (axis, v) in [(0, x), (1, y)] {
+                out.push(TimedInput {
+                    at: now,
+                    target: InputTarget::Port(PortId(map.port)),
+                    event: InputEvent::Analog {
+                        axis,
+                        value: pos(v),
+                    },
+                });
+            }
+        }
+    }
+
+    /// South/East of `pad` as the paddles' buttons.
+    fn paddle_buttons(
+        &mut self,
+        pad: u8,
+        button: Button,
+        down: bool,
+        now: Cycle,
+    ) -> Vec<TimedInput> {
+        let mut out = Vec::new();
+        let bit = match button {
+            Button::South => 1,
+            Button::East => 2,
+            _ => return out,
+        };
+        let state = self.paddle_fire.entry(pad).or_default();
+        if down {
+            *state |= bit;
+        } else {
+            *state &= !bit;
+        }
+        let buttons = *state;
+        for map in self.profile.paddles.iter().filter(|m| m.pad == pad) {
+            out.push(TimedInput {
+                at: now,
+                target: InputTarget::Port(PortId(map.port)),
+                event: InputEvent::Digital {
+                    dirs: Dirs::NONE,
+                    buttons,
+                },
+            });
         }
         out
     }
@@ -339,5 +409,60 @@ mod tests {
             Cycle(0),
         );
         assert!(ev.is_empty());
+    }
+
+    #[test]
+    fn mouse_and_paddles() {
+        let mut p = Profile::default_for("c64");
+        p.mouse.push(crate::profile::MouseMap { port: 0 });
+        p.paddles
+            .push(crate::profile::PaddleMap { port: 0, pad: 1 });
+        let mut m = Mapper::new(p);
+        let out = m.handle(
+            &HostEvent::Mouse {
+                dx: 3,
+                dy: -4,
+                buttons: 1,
+            },
+            Cycle(7),
+        );
+        assert_eq!(
+            out,
+            [TimedInput {
+                at: Cycle(7),
+                target: InputTarget::Port(PortId(0)),
+                event: InputEvent::MouseRel {
+                    dx: 3,
+                    dy: -4,
+                    buttons: 1
+                },
+            }]
+        );
+        let out = m.handle(
+            &HostEvent::Axis {
+                pad: 1,
+                axis: Axis::LeftX,
+                value: 1.0,
+            },
+            Cycle(8),
+        );
+        assert!(out.iter().any(|e| e.event
+            == InputEvent::Analog {
+                axis: 0,
+                value: 65535
+            }));
+        let out = m.handle(
+            &HostEvent::Button {
+                pad: 1,
+                button: Button::East,
+                down: true,
+            },
+            Cycle(9),
+        );
+        assert!(out.iter().any(|e| e.event
+            == InputEvent::Digital {
+                dirs: Dirs::NONE,
+                buttons: 2
+            }));
     }
 }

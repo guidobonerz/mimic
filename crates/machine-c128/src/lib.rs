@@ -43,7 +43,6 @@ use chips_cbm::sid::SidModel;
 use chips_cbm::{vdc, vic2};
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use cpu_z80::{IO_BASE, Z80};
-use devices_input::Joystick;
 use emu_core::frame::{FrameRef, PixelData, Rgb8, ScreenId, ScreenInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
@@ -331,11 +330,8 @@ impl C128 {
             Some("80") => true,
             Some(other) => return Err(ConfigError::Invalid(format!("display option '{other}'"))),
         };
-        let port2: Option<Box<dyn PortDevice>> = match option("port2") {
-            None | Some("joystick") => Some(Box::new(Joystick::new(PortKind::CbmControl))),
-            Some("none") => None,
-            Some(other) => return Err(ConfigError::Invalid(format!("port2 option '{other}'"))),
-        };
+        let port1 = devices_input::control_port_option("port1", option("port1"), "none", true)?;
+        let port2 = devices_input::control_port_option("port2", option("port2"), "joystick", true)?;
         let stub = option("roms") == Some("stub");
         let drive_roms = if stub {
             DriveRoms::default()
@@ -369,7 +365,7 @@ impl C128 {
         cpu.reset();
         let mut io = Io::new(vic, sid, vdc_kb);
         io.keyboard.display_80 = display_80;
-        Ok(Self {
+        let mut m = Self {
             cpu,
             z80: Z80::new(),
             mem: Memory::new(load_roms(config)?),
@@ -377,7 +373,7 @@ impl C128 {
             ints: (0, 0),
             sched: Scheduler::new(),
             input: InputQueue::new(),
-            ports: [None, port2],
+            ports: [port1, port2],
             drive,
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C64, cpu_hz),
@@ -388,7 +384,10 @@ impl C128 {
             boot_frame: 0,
             booted: false,
             debug_dev: CPU,
-        })
+        };
+        // The devices' lines from the start (paddles sit at mid travel).
+        m.refresh_ports();
+        Ok(m)
     }
 
     fn beam_pos(&self) -> BeamPos {
@@ -599,11 +598,17 @@ impl C128 {
 
     fn refresh_port(&mut self, p: PortId) {
         let now = self.sched.now();
-        if let Some(lines) = self.io.port_lines.get_mut(usize::from(p.0)) {
-            *lines = self.ports[usize::from(p.0)]
-                .as_ref()
-                .map_or(0, |d| d.read_lines(now).pulled_low);
+        let i = usize::from(p.0);
+        if i < 2 {
+            let lines = self.ports[i].as_ref().map(|d| d.read_lines(now));
+            self.io.port_lines[i] = lines.map_or(0, |l| l.pulled_low);
+            self.io.port_analog[i] = lines.map_or([u16::MAX; 2], |l| l.analog);
         }
+    }
+
+    fn refresh_ports(&mut self) {
+        self.refresh_port(PortId(0));
+        self.refresh_port(PortId(1));
     }
 
     /// The text screens: VIC (`$0400` of bank 0) and VDC (its RAM at 0).

@@ -1,5 +1,6 @@
 use super::*;
 use crate::memory::KERNAL_SIZE;
+use devices_input::{Joystick, Mouse1351};
 
 /// Config with test ROMs (not Commodore ROMs): `code` at $E000 is the reset
 /// entry, `irq` at $E100 is the IRQ handler, `nmi` at $E200 the NMI handler.
@@ -734,4 +735,40 @@ fn freeze_on_ram_under_rom_respects_banking() {
         m.mem.ram[0x0400], 0x55,
         "with RAM banked in, the frozen value"
     );
+}
+
+#[test]
+fn cia1_selects_whose_pots_the_sid_reads() {
+    let ports = [[0x1000, 0x2000], [0x3000, u16::MAX]];
+    assert_eq!(io::pot_lines(0x00, ports), [u16::MAX; 2], "none");
+    assert_eq!(io::pot_lines(0x40, ports), [0x1000, 0x2000], "port 1");
+    assert_eq!(io::pot_lines(0x80, ports), [0x3000, u16::MAX], "port 2");
+    assert_eq!(io::pot_lines(0xc0, ports), [0x1000, 0x2000], "parallel");
+}
+
+#[test]
+fn a_1351_in_port_1_shows_in_potx_poty() {
+    use emu_core::input::{InputEvent, InputTarget, TimedInput};
+    let mut m = stub();
+    assert!(m
+        .connect(CONTROL_PORT_1, Box::new(Mouse1351::new()))
+        .is_ok());
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(CONTROL_PORT_1),
+        event: InputEvent::MouseRel {
+            dx: 5,
+            dy: -2,
+            buttons: 1,
+        },
+    });
+    // CIA1 port A: PA6/PA7 outputs, PA6 high selects port 1.
+    assert!(m.poke(CPU_SPACE, 0xdc02, Size::Byte, 0xc0));
+    assert!(m.poke(CPU_SPACE, 0xdc00, Size::Byte, 0x40));
+    m.run_frame(&mut DebugHooks::new());
+    assert_eq!(m.peek(CPU_SPACE, 0xd419, Size::Byte), Some(10), "POTX");
+    assert_eq!(m.peek(CPU_SPACE, 0xd41a, Size::Byte), Some(4), "POTY");
+    // The left button is fire on control port 1 (CIA1 port B bit 4).
+    assert_eq!(m.peek(CPU_SPACE, 0xdc01, Size::Byte).unwrap() & 0x10, 0);
 }

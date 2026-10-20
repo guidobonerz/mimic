@@ -467,7 +467,14 @@ fn ports_devices_and_media() {
     let ports = c.ok(json!({"cmd": "list_ports"}));
     assert_eq!(ports[1]["name"], "control port 2");
     assert_eq!(ports[1]["connected"], true, "default joystick");
-    assert_eq!(ports[0]["devices"], json!(["joystick"]));
+    assert_eq!(
+        ports[0]["devices"],
+        json!(["joystick", "paddles", "mouse1351"])
+    );
+    c.ok(json!({"cmd": "connect_device", "port": 0, "device": "mouse1351"}));
+    assert_eq!(c.event("device_connected")["device"], "mouse1351");
+    c.ok(json!({"cmd": "disconnect_device", "port": 0}));
+    assert!(c.event("device_connected")["device"].is_null());
 
     c.ok(json!({"cmd": "connect_device", "port": 0, "device": "joystick"}));
     assert_eq!(c.event("device_connected")["port"], 0);

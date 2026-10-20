@@ -11,6 +11,12 @@
 //! | $19/$1A | POTX / POTY (read)                                               |
 //! | $1B/$1C | OSC3 (voice 3 waveform, upper 8 bits) / ENV3 (read)              |
 //!
+//! POTX/POTY: the SID discharges the pot capacitors for 256 cycles, then
+//! counts the cycles until they charge past the threshold; the count of the
+//! last 512-cycle period is the register value, so it grows with the
+//! resistance (255: nothing connected). The analog inputs are set with
+//! [`Sid::set_pots`] as resistance on a 0–65535 scale (65535 = open).
+//!
 //! Control register: 7 noise, 6 pulse, 5 saw, 4 triangle, 3 test, 2 ring
 //! modulation, 1 sync, 0 gate. Source: MOS 6581 data sheet; envelope rate
 //! periods derived from the data sheet attack times (2 ms … 8 s for 255
@@ -218,6 +224,10 @@ pub struct Sid {
     /// Last value on the data bus; write-only registers read it back.
     bus: u8,
     pub pot: [u8; 2],
+    /// Resistance on the POTX/POTY pins (0 = none, 65535 = open).
+    pot_in: [u16; 2],
+    /// Cycle in the 512-cycle pot measurement period.
+    pot_cycle: u16,
     // Filter state.
     lp: f32,
     bp: f32,
@@ -235,6 +245,8 @@ impl Sid {
             mode_vol: 0,
             bus: 0,
             pot: [0xff; 2],
+            pot_in: [0xffff; 2],
+            pot_cycle: 0,
             lp: 0.0,
             bp: 0.0,
         }
@@ -255,8 +267,18 @@ impl Sid {
         }
     }
 
+    /// The resistances on POTX/POTY (0 = none, 65535 = open).
+    pub fn set_pots(&mut self, pots: [u16; 2]) {
+        self.pot_in = pots;
+    }
+
     /// One φ2 cycle; returns the mixed output sample (≈ 16-bit range).
     pub fn clock(&mut self) -> i32 {
+        self.pot_cycle += 1;
+        if self.pot_cycle == 512 {
+            self.pot_cycle = 0;
+            self.pot = self.pot_in.map(|r| (r >> 8) as u8);
+        }
         for v in &mut self.voices {
             v.clock_osc();
         }
@@ -358,7 +380,7 @@ impl Sid {
 }
 
 const TAG: [u8; 4] = *b"SID0";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Sid {
     fn save(&self, w: &mut StateWriter) {
@@ -388,11 +410,14 @@ impl Savestate for Sid {
             w.raw(&self.pot);
             w.u32(self.lp.to_bits());
             w.u32(self.bp.to_bits());
+            w.u16(self.pot_in[0]);
+            w.u16(self.pot_in[1]);
+            w.u16(self.pot_cycle);
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut s = Sid::new(self.model, self.clock_hz);
         for v in s.voices.iter_mut() {
             v.freq = c.u16()?;
@@ -422,6 +447,11 @@ impl Savestate for Sid {
         s.bp = f32::from_bits(c.u32()?);
         if !s.lp.is_finite() || !s.bp.is_finite() {
             return Err(StateError::Invalid("SID filter state"));
+        }
+        // Version 1 predates the pot inputs.
+        if version >= 2 {
+            s.pot_in = [c.u16()?, c.u16()?];
+            s.pot_cycle = c.u16()? % 512;
         }
         *self = s;
         Ok(())

@@ -35,7 +35,6 @@ pub mod stub;
 use chips_cbm::via::Via;
 use chips_cbm::vic;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use devices_input::Joystick;
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
@@ -239,12 +238,12 @@ impl Vic20 {
             Some(r) => memory::expansion_for(r)
                 .ok_or_else(|| ConfigError::Invalid(format!("ram option '{r}'")))?,
         };
-        let port: Option<Box<dyn PortDevice>> =
-            match config.options.get("port1").map(String::as_str) {
-                None | Some("joystick") => Some(Box::new(Joystick::new(PortKind::CbmControl))),
-                Some("none") => None,
-                Some(other) => return Err(ConfigError::Invalid(format!("port1 option '{other}'"))),
-            };
+        let port = devices_input::control_port_option(
+            "port1",
+            config.options.get("port1").map(String::as_str),
+            "joystick",
+            true,
+        )?;
         let stub = config.options.get("roms").is_some_and(|r| r == "stub");
         let drive_roms = if stub {
             DriveRoms::default()
@@ -271,7 +270,7 @@ impl Vic20 {
             Some("on") => Autostart::Armed,
             Some(other) => return Err(ConfigError::Invalid(format!("autostart option '{other}'"))),
         };
-        Ok(Self {
+        let mut m = Self {
             cpu,
             mem: Memory::new(load_roms(config, model)?, expansion),
             io: Io::new(model),
@@ -285,7 +284,10 @@ impl Vic20 {
             palette: vic::palette::palette(),
             field_done_pending: false,
             boot_frame: 0,
-        })
+        };
+        // The devices' lines from the start (paddles sit at mid travel).
+        m.refresh_ports();
+        Ok(m)
     }
 
     fn beam_pos(&self) -> BeamPos {
@@ -401,10 +403,16 @@ impl Vic20 {
 
     fn refresh_port(&mut self) {
         let now = self.sched.now();
-        self.io.port_lines = self
-            .port
-            .as_ref()
-            .map_or(0, |d| d.read_lines(now).pulled_low);
+        let lines = self.port.as_ref().map(|d| d.read_lines(now));
+        self.io.port_lines = lines.map_or(0, |l| l.pulled_low);
+        // The paddles' pots go straight to the VIC's POTX/POTY.
+        self.io
+            .vic
+            .set_pots(lines.map_or([u16::MAX; 2], |l| l.analog));
+    }
+
+    fn refresh_ports(&mut self) {
+        self.refresh_port();
     }
 
     /// The text screen as the VIC shows it (for autostart).
@@ -838,6 +846,8 @@ impl Machine for Vic20 {
         self.field_done_pending = field_done_pending;
         self.autostart = autostart;
         self.boot_frame = boot_frame;
+        // The VIC's pot inputs come from the device in the port.
+        self.refresh_port();
         Ok(())
     }
 }

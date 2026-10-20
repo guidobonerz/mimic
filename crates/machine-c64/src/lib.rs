@@ -39,7 +39,6 @@ use chips_cbm::cia::CiaModel;
 use chips_cbm::sid::SidModel;
 use chips_cbm::vic2;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use devices_input::Joystick;
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
@@ -365,14 +364,11 @@ impl C64 {
             Some("6526a") => CiaModel::Mos6526A,
             Some(other) => return Err(ConfigError::Invalid(format!("cia option '{other}'"))),
         };
-        // Default devices: a joystick in control port 2 (`options["port2"] = "none"`
-        // leaves it empty).
-        let port2: Option<Box<dyn PortDevice>> =
-            match config.options.get("port2").map(String::as_str) {
-                None | Some("joystick") => Some(Box::new(Joystick::new(PortKind::CbmControl))),
-                Some("none") => None,
-                Some(other) => return Err(ConfigError::Invalid(format!("port2 option '{other}'"))),
-            };
+        // Devices: `options["port1"]`/`["port2"]` = "joystick", "paddles",
+        // "mouse1351" or "none"; by default a joystick in control port 2.
+        let option = |name: &str| config.options.get(name).map(String::as_str);
+        let port1 = devices_input::control_port_option("port1", option("port1"), "none", true)?;
+        let port2 = devices_input::control_port_option("port2", option("port2"), "joystick", true)?;
         let sid = match config.options.get("sid").map(String::as_str) {
             None | Some("6581") => SidModel::Mos6581,
             Some("8580") => SidModel::Mos8580,
@@ -404,14 +400,14 @@ impl C64 {
             Some("on") => Autostart::Armed,
             Some(other) => return Err(ConfigError::Invalid(format!("autostart option '{other}'"))),
         };
-        Ok(Self {
+        let mut m = Self {
             cpu,
             mem: Memory::new(load_roms(config)?),
             io: Io::new(vic, cia, sid),
             ints: Interrupts::default(),
             sched: Scheduler::new(),
             input: InputQueue::new(),
-            ports: [None, port2],
+            ports: [port1, port2],
             drive,
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C64, cpu_hz),
@@ -419,7 +415,11 @@ impl C64 {
             palette: vic2::palette::palette(),
             field_done_pending: false,
             boot_frame: 0,
-        })
+        };
+        // The devices' lines from the start (paddles sit at mid travel).
+        m.refresh_port(PortId(0));
+        m.refresh_port(PortId(1));
+        Ok(m)
     }
 
     pub fn interrupts_mut(&mut self) -> &mut Interrupts {
@@ -557,10 +557,11 @@ impl C64 {
 
     fn refresh_port(&mut self, p: PortId) {
         let now = self.sched.now();
-        if let Some(lines) = self.io.port_lines.get_mut(usize::from(p.0)) {
-            *lines = self.ports[usize::from(p.0)]
-                .as_ref()
-                .map_or(0, |d| d.read_lines(now).pulled_low);
+        let i = usize::from(p.0);
+        if i < 2 {
+            let lines = self.ports[i].as_ref().map(|d| d.read_lines(now));
+            self.io.port_lines[i] = lines.map_or(0, |l| l.pulled_low);
+            self.io.port_analog[i] = lines.map_or([u16::MAX; 2], |l| l.analog);
         }
     }
 

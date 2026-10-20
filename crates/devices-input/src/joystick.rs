@@ -68,9 +68,10 @@ impl PortDevice for Joystick {
     }
 
     fn read_lines(&self, _now: Cycle) -> PortLines {
+        // No pots: the analog lines stay open.
         PortLines {
             pulled_low: self.lines(),
-            analog: [0; 2],
+            analog: [u16::MAX; 2],
         }
     }
 

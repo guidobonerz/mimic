@@ -103,4 +103,11 @@ pub enum HostEvent {
         axis: Axis,
         value: f32,
     },
+    /// Motion of the captured host mouse (`dx` right, `dy` down) and its
+    /// buttons (bit 0 left, bit 1 right).
+    Mouse {
+        dx: i16,
+        dy: i16,
+        buttons: u8,
+    },
 }

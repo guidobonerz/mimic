@@ -19,6 +19,13 @@
 //! pad = 0
 //! fire = ["South"]
 //! deadzone = 0.5
+//!
+//! [[mouse]]                        # captured host mouse: 1351 or paddles
+//! port = 0
+//!
+//! [[paddles]]                      # gamepad stick X/Y turns paddle X/Y,
+//! port = 0                         # South/East are their buttons
+//! pad = 0
 //! ```
 
 use serde::Deserialize;
@@ -69,6 +76,21 @@ pub struct JoystickMap {
     pub source: JoystickSource,
 }
 
+/// The captured host mouse drives the device in a port (a mouse, or the
+/// paddles: horizontal motion turns paddle X).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct MouseMap {
+    pub port: u8,
+}
+
+/// A gamepad's left stick turns a pair of paddles.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct PaddleMap {
+    pub port: u8,
+    #[serde(default)]
+    pub pad: u8,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
@@ -77,6 +99,10 @@ pub struct Profile {
     pub keyboard: KeyboardMode,
     #[serde(default)]
     pub joystick: Vec<JoystickMap>,
+    #[serde(default)]
+    pub mouse: Vec<MouseMap>,
+    #[serde(default)]
+    pub paddles: Vec<PaddleMap>,
 }
 
 impl Profile {
@@ -121,6 +147,8 @@ impl Profile {
             machine: machine.into(),
             keyboard: KeyboardMode::Positional,
             joystick,
+            mouse: Vec::new(),
+            paddles: Vec::new(),
         }
     }
 }
