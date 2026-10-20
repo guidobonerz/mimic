@@ -3,7 +3,8 @@
 //! Phase 2 builds this up chip by chip. Present so far: 6510 with its I/O
 //! port, PLA banking, RAM, ROMs, colour RAM, VIC-II (PAL 6569), both CIAs
 //! the IRQ/NMI/RDY wiring, keyboard, control ports, a true-emulated 1541 as
-//! drive 8 and a "program" slot for PRG/T64. The SID follows.
+//! drive 8, a "program" slot for PRG/T64 and the SID (`options["sid"]` =
+//! "6581" or "8580"), producing 48 kHz mono audio.
 //!
 //! Drive 8 needs `roms["dos1541"]` (16 KB); without it there is no drive.
 //! `options["autostart"] = "on"` loads and runs the disk in drive 8 after boot.
@@ -26,6 +27,7 @@ pub mod pla;
 pub mod stub;
 
 use chips_cbm::cia::CiaModel;
+use chips_cbm::sid::SidModel;
 use chips_cbm::vic2;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use devices_input::Joystick;
@@ -257,6 +259,11 @@ impl C64 {
                 Some("none") => None,
                 Some(other) => return Err(ConfigError::Invalid(format!("port2 option '{other}'"))),
             };
+        let sid = match config.options.get("sid").map(String::as_str) {
+            None | Some("6581") => SidModel::Mos6581,
+            Some("8580") => SidModel::Mos8580,
+            Some(other) => return Err(ConfigError::Invalid(format!("sid option '{other}'"))),
+        };
         let stub = config.options.get("roms").is_some_and(|r| r == "stub");
         let drive = match config.options.get("drive8").map(String::as_str) {
             Some("none") => None,
@@ -274,7 +281,7 @@ impl C64 {
         Ok(Self {
             cpu,
             mem: Memory::new(load_roms(config)?),
-            io: Io::new(cia),
+            io: Io::new(cia, sid),
             ints: Interrupts::default(),
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -309,6 +316,7 @@ impl C64 {
         self.cpu.set_rdy(self.io.vic.ba());
         // CIAs clock before the CPU access: a read sees this cycle's state.
         self.io.tick_cias();
+        self.io.tick_sid();
         // Lines are sampled after the CIA clock: an NMI raised now is an edge
         // even if the CPU's ICR read in this cycle releases it (Lorenz icr01).
         self.update_interrupts();
@@ -521,6 +529,14 @@ impl Machine for C64 {
             },
             luma_chroma: None,
             signal: vic2::SIGNAL,
+        }
+    }
+
+    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+        out.append(&mut self.io.samples);
+        emu_core::AudioFormat {
+            sample_rate: emu_core::SAMPLE_RATE,
+            channels: 1,
         }
     }
 

@@ -83,6 +83,7 @@ pub trait Machine: Send {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason;
     fn step_cycle(&mut self) -> StopReason;
     fn framebuffer(&self) -> FrameRef;                  // Indexed+palette or RGB (Amiga HAM); partial while halted mid-frame
+    fn audio(&mut self, out: &mut Vec<i16>) -> AudioFormat; // samples since last call, fixed rate (48 kHz)
     fn beam(&self) -> Option<BeamPos>;                  // frame, raster line, cycle in line, hpos; None without a beam
     fn memory_spaces(&self) -> Vec<MemSpace>;           // CPU, chip RAM, fast RAM, ROM, drive, VDC RAM…
     fn chips(&self) -> Vec<ChipInfo>;                   // register dumps for debugger views

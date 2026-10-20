@@ -1,5 +1,6 @@
 //! The machine abstraction every frontend, debugger and preview talks to.
 
+use crate::audio::AudioFormat;
 use crate::beam::BeamPos;
 use crate::bus::Size;
 use crate::cpu::{Instr, RegisterSet};
@@ -110,6 +111,10 @@ pub trait Machine: Send {
     /// lines above [`Machine::beam`] are new, lines below are from the
     /// previous field.
     fn framebuffer(&self) -> FrameRef<'_>;
+
+    /// Append the audio samples produced since the last call to `out`.
+    /// Machines without sound append nothing.
+    fn audio(&mut self, out: &mut Vec<i16>) -> AudioFormat;
 
     /// Where the video beam is now. `None` for machines without a beam
     /// (test machines). Raster breakpoints, line stepping, the raster trace

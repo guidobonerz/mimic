@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audio;
 pub mod beam;
 pub mod bus;
 pub mod cpu;
@@ -22,6 +23,7 @@ pub mod savestate;
 pub mod scheduler;
 pub mod testing;
 
+pub use audio::{AudioFormat, Decimator, SAMPLE_RATE};
 pub use beam::{BeamPos, TraceConfig, TraceEntry, TraceEvent, TraceRange};
 pub use bus::{Bus, Size};
 pub use cpu::{Cpu, CycleResult, Instr, Register, RegisterSet};

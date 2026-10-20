@@ -3,7 +3,7 @@
 //! | Range         | Chip                                   |
 //! | ------------- | -------------------------------------- |
 //! | `$D000–$D3FF` | VIC-II, 64 registers mirrored          |
-//! | `$D400–$D7FF` | SID (not yet emulated)                 |
+//! | `$D400–$D7FF` | SID, 32 registers mirrored             |
 //! | `$D800–$DBFF` | colour RAM, 4 bits                     |
 //! | `$DC00–$DCFF` | CIA1, 16 registers mirrored            |
 //! | `$DD00–$DDFF` | CIA2, 16 registers mirrored            |
@@ -15,8 +15,11 @@
 //! drive the IEC bus. Both TOD inputs get the 50/60 Hz power-line signal.
 
 use chips_cbm::cia::{Cia, CiaModel};
+use chips_cbm::sid::{Sid, SidModel};
 use chips_cbm::vic2::{Vic2, VicMemory};
-use emu_core::{ClockDivider, Savestate, StateError, StateReader, StateWriter};
+use emu_core::{
+    ClockDivider, Decimator, Savestate, StateError, StateReader, StateWriter, SAMPLE_RATE,
+};
 
 use drives_cbm::IecLines;
 
@@ -27,11 +30,16 @@ use crate::memory::Memory;
 const CPU_HZ: u32 = 985_248;
 const MAINS_HZ: u32 = 50;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Io {
     pub vic: Vic2,
     pub cia1: Cia,
     pub cia2: Cia,
+    pub sid: Sid,
+    resampler: Decimator,
+    /// Audio produced but not yet taken by `Machine::audio` (output, not
+    /// machine state: not part of savestates).
+    pub samples: Vec<i16>,
     tod: ClockDivider,
     pub keyboard: Keyboard,
     /// Pins pulled low by the devices in control ports 1 and 2
@@ -65,11 +73,14 @@ impl VicMemory for VicView<'_> {
 }
 
 impl Io {
-    pub fn new(model: CiaModel) -> Self {
+    pub fn new(model: CiaModel, sid: SidModel) -> Self {
         Self {
             vic: Vic2::new(),
             cia1: Cia::new(model),
             cia2: Cia::new(model),
+            sid: Sid::new(sid, CPU_HZ),
+            resampler: Decimator::new(CPU_HZ, SAMPLE_RATE).expect("valid rates"),
+            samples: Vec::new(),
             tod: ClockDivider::new(MAINS_HZ, CPU_HZ).expect("CPU clock is non-zero"),
             keyboard: Keyboard::default(),
             port_lines: [0; 2],
@@ -86,6 +97,17 @@ impl Io {
     /// last fetch.
     pub fn open_bus(&self) -> u8 {
         self.vic.last_bus()
+    }
+
+    /// SID clock for one φ2 cycle; collects the resampled output.
+    pub fn tick_sid(&mut self) {
+        let s = self.sid.clock();
+        if let Some(out) = self.resampler.push(s) {
+            // Bound the backlog if nobody drains it (headless without --wav).
+            if self.samples.len() < SAMPLE_RATE as usize * 4 {
+                self.samples.push(out);
+            }
+        }
     }
 
     /// CIA clocks for one φ2 cycle, before the CPU's access.
@@ -135,6 +157,7 @@ impl Io {
         let reg = addr as u8 & 0x0f;
         match addr {
             0xd000..=0xd3ff => self.vic.peek(addr as u8),
+            0xd400..=0xd7ff => self.sid.peek(addr as u8),
             // Colour RAM: only 4 bits exist, the upper nibble is open bus.
             0xd800..=0xdbff => (self.open_bus() & 0xf0) | mem.color[usize::from(addr & 0x3ff)],
             0xdc00..=0xdcff => {
@@ -145,7 +168,7 @@ impl Io {
                 let (a, b) = self.cia2_ext();
                 self.cia2.peek(reg, a, b)
             }
-            // SID, I/O1, I/O2: not yet emulated.
+            // I/O1, I/O2: no cartridge.
             _ => self.open_bus(),
         }
     }
@@ -154,6 +177,7 @@ impl Io {
         let reg = addr as u8 & 0x0f;
         match addr {
             0xd000..=0xd3ff => self.vic.write(addr as u8, v),
+            0xd400..=0xd7ff => self.sid.write(addr as u8, v),
             0xd800..=0xdbff => mem.color[usize::from(addr & 0x3ff)] = v & 0x0f,
             0xdc00..=0xdcff => self.cia1.write(reg, v),
             0xdd00..=0xddff => self.cia2.write(reg, v),
@@ -167,6 +191,8 @@ impl Savestate for Io {
         self.vic.save(w);
         self.cia1.save(w);
         self.cia2.save(w);
+        self.sid.save(w);
+        w.chunk(*b"AUDR", 1, |w| self.resampler.save(w));
         self.tod.save(w);
         w.chunk(*b"C64K", 1, |w| {
             w.u64(self.keyboard.matrix);
@@ -183,6 +209,9 @@ impl Savestate for Io {
         self.vic.load(r)?;
         self.cia1.load(r)?;
         self.cia2.load(r)?;
+        self.sid.load(r)?;
+        let (_, mut c) = r.chunk(*b"AUDR", 1)?;
+        self.resampler.load(&mut c)?;
         self.tod.load(r)?;
         let (_, mut c) = r.chunk(*b"C64K", 1)?;
         self.keyboard.matrix = c.u64()?;

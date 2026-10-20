@@ -3,5 +3,6 @@
 #![forbid(unsafe_code)]
 
 pub mod cia;
+pub mod sid;
 pub mod via;
 pub mod vic2;

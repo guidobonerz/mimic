@@ -102,6 +102,13 @@ impl Machine for Fake {
         }
     }
 
+    fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {
+        emu_core::AudioFormat {
+            sample_rate: emu_core::SAMPLE_RATE,
+            channels: 1,
+        }
+    }
+
     fn beam(&self) -> Option<BeamPos> {
         Some(BeamPos {
             frame: self.frame,

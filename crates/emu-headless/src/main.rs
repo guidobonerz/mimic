@@ -26,6 +26,7 @@ usage: emu-headless [options]
   --option KEY=VALUE    machine option (repeatable)
   --frames N            frames to run (default: 1)
   --snapshot FILE.png   write the last frame as PNG
+  --wav FILE.wav        write the audio of the run (16-bit PCM)
   --load-state FILE     restore a savestate before running
   --save-state FILE     write a savestate after running
   --debug [ADDR]        serve the debug protocol instead of running frames
@@ -44,6 +45,7 @@ struct Args {
     disk: Option<String>,
     frames: u64,
     snapshot: Option<String>,
+    wav: Option<String>,
     load_state: Option<String>,
     save_state: Option<String>,
     debug: Option<SocketAddr>,
@@ -97,6 +99,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 args.frames = n.parse().map_err(|_| format!("bad frame count '{n}'"))?;
             }
             "--snapshot" => args.snapshot = Some(value("--snapshot")?),
+            "--wav" => args.wav = Some(value("--wav")?),
             "--load-state" => args.load_state = Some(value("--load-state")?),
             "--save-state" => args.save_state = Some(value("--save-state")?),
             "--debug" => {
@@ -216,8 +219,14 @@ fn run(args: Args) -> Result<ExitCode, String> {
     let mut dbg = DebugHooks::new();
     let mut code = ExitCode::SUCCESS;
     let mut frames = 0;
+    let mut audio = Vec::new();
+    let mut format = None;
     while frames < args.frames {
-        match machine.run_frame(&mut dbg) {
+        let stop = machine.run_frame(&mut dbg);
+        if args.wav.is_some() {
+            format = Some(machine.audio(&mut audio));
+        }
+        match stop {
             StopReason::FrameDone => frames += 1,
             other => {
                 eprintln!("stopped after {frames} frame(s): {other:?}");
@@ -231,6 +240,9 @@ fn run(args: Args) -> Result<ExitCode, String> {
         let png = emu_preview::encode_png(&machine.framebuffer());
         fs::write(path, png).map_err(|e| format!("cannot write {path}: {e}"))?;
     }
+    if let (Some(path), Some(format)) = (&args.wav, format) {
+        fs::write(path, wav(&audio, format)).map_err(|e| format!("cannot write {path}: {e}"))?;
+    }
     if let Some(path) = &args.save_state {
         fs::write(path, machine.save_state()).map_err(|e| format!("cannot write {path}: {e}"))?;
     }
@@ -242,6 +254,30 @@ fn run(args: Args) -> Result<ExitCode, String> {
         None => println!("{}: {frames} frame(s)", args.machine),
     }
     Ok(code)
+}
+
+/// A RIFF/WAVE file with 16-bit PCM samples.
+fn wav(samples: &[i16], format: emu_core::AudioFormat) -> Vec<u8> {
+    let channels = u16::from(format.channels.max(1));
+    let data_len = (samples.len() * 2) as u32;
+    let byte_rate = format.sample_rate * u32::from(channels) * 2;
+    let mut v = Vec::with_capacity(44 + data_len as usize);
+    v.extend_from_slice(b"RIFF");
+    v.extend_from_slice(&(36 + data_len).to_le_bytes());
+    v.extend_from_slice(b"WAVEfmt ");
+    v.extend_from_slice(&16u32.to_le_bytes());
+    v.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    v.extend_from_slice(&channels.to_le_bytes());
+    v.extend_from_slice(&format.sample_rate.to_le_bytes());
+    v.extend_from_slice(&byte_rate.to_le_bytes());
+    v.extend_from_slice(&(channels * 2).to_le_bytes());
+    v.extend_from_slice(&16u16.to_le_bytes());
+    v.extend_from_slice(b"data");
+    v.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        v.extend_from_slice(&s.to_le_bytes());
+    }
+    v
 }
 
 fn main() -> ExitCode {
@@ -268,6 +304,21 @@ mod tests {
 
     fn parse(s: &str) -> Result<Args, String> {
         parse_args(s.split_whitespace().map(String::from))
+    }
+
+    #[test]
+    fn wav_header() {
+        let w = wav(
+            &[1, -1],
+            emu_core::AudioFormat {
+                sample_rate: 48_000,
+                channels: 1,
+            },
+        );
+        assert_eq!(&w[..4], b"RIFF");
+        assert_eq!(w.len(), 48);
+        assert_eq!(u32::from_le_bytes(w[24..28].try_into().unwrap()), 48_000);
+        assert_eq!(&w[44..], &[1, 0, 0xff, 0xff]);
     }
 
     #[test]
@@ -298,6 +349,7 @@ mod tests {
         assert!(parse("--option novalue").is_err());
         assert!(parse("--bogus").is_err());
         assert!(parse("--disk").is_err());
+        assert!(parse("--wav").is_err());
         let a = parse("--disk x.d64 --autostart").unwrap();
         assert_eq!(a.disk.as_deref(), Some("x.d64"));
         assert_eq!(a.config.options["autostart"], "on");

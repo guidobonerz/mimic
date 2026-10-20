@@ -465,3 +465,47 @@ fn savestate_carries_queued_input_and_device_state() {
     );
     assert_eq!(b.io.port_lines[1] & 0x04, 0x04, "joystick state restored");
 }
+
+#[test]
+fn sid_output_reaches_the_audio_stream_at_the_right_pitch() {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("sid".into(), "8580".into());
+    let mut m = C64::new(&config).unwrap();
+    let mut dbg = DebugHooks::new();
+    m.run_frame(&mut dbg);
+    let mut audio = Vec::new();
+    let format = m.audio(&mut audio);
+    assert_eq!((format.sample_rate, format.channels), (48_000, 1));
+    assert!(
+        audio.iter().all(|&s| s == audio[0]),
+        "silent before the tone"
+    );
+
+    // Sawtooth, frequency $1000 (≈240 Hz at 985 248 Hz), full sustain.
+    for (reg, v) in [
+        (0x18, 0x0f),
+        (0x05, 0x00),
+        (0x06, 0xf0),
+        (0x00, 0x00),
+        (0x01, 0x10),
+        (0x04, 0x21),
+    ] {
+        assert!(m.poke(CPU_SPACE, 0xd400 + reg, Size::Byte, v));
+    }
+    audio.clear();
+    for _ in 0..50 {
+        m.run_frame(&mut dbg);
+    }
+    m.audio(&mut audio);
+    let seconds = audio.len() as f64 / 48_000.0;
+    assert!((0.99..=1.01).contains(&seconds), "{seconds}");
+    let tail = &audio[audio.len() / 2..];
+    let mean = tail.iter().map(|&s| f64::from(s)).sum::<f64>() / tail.len() as f64;
+    let crossings = tail
+        .windows(2)
+        .filter(|w| f64::from(w[0]) < mean && f64::from(w[1]) >= mean)
+        .count();
+    let hz = crossings as f64 / (tail.len() as f64 / 48_000.0);
+    assert!((230.0..=250.0).contains(&hz), "{hz} Hz");
+}
