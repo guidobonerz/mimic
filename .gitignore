@@ -3,3 +3,5 @@
 /testdata
 # User-supplied ROMs (golden rule 6).
 /roms
+# Python bytecode (tools/).
+__pycache__/

@@ -349,6 +349,9 @@ cargo bench -p cpu-6502                      # before/after when touching hot pa
 cargo build -p emu-web --target wasm32-unknown-unknown
 cargo run -p emu-headless -- --machine c64 --prg demo.prg --frames 300 --snapshot out.png
 cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines debug protocol on 127.0.0.1:6510
+cargo run -p emu-headless -- --machine c64 --vice --preview --run   # + VICE binary monitor (6502), live preview http://127.0.0.1:6580/
+python tools/polydbg.py regs                 # Python debug client (stdlib only): --help, or `shell` for a prompt
+python -m unittest discover -s tools         # its unit tests
 cargo run --release -p emu-desktop -- --machine c64 --disk game.d64 --autostart   # window, sound, keyboard, gamepad
 # Linux build deps for emu-desktop: libasound2-dev libudev-dev
 ```
@@ -367,7 +370,7 @@ cargo run --release -p emu-desktop -- --machine c64 --disk game.d64 --autostart 
 
 ## Roadmap and current phase
 
-Work in phase order; each phase ends at a verifiable gate. **Current phase: 3.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64.)
+Work in phase order; each phase ends at a verifiable gate. **Current phase: 4.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64. Phase 3 done 2026-10-20: VS64 debugs the C64 through the VICE binary monitor adapter.)
 
 | # | Phase | Est. | Gate |
 | --- | --- | --- | --- |

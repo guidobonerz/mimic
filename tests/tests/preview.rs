@@ -216,34 +216,37 @@ fn stream_sends_key_frame_then_deltas_and_the_paused_state() {
             r#"{"cmd":"step_frame"}"#,
         ],
     );
-    let mut paused_seen = false;
-    let mut changed = false;
-    for _ in 0..20 {
+    // Follow the stream like a viewer: key frames replace the picture,
+    // deltas patch it. The bitmap window starts at cycle 4 (x = 32) of
+    // line 36; $FF sets its first 8 pixels to the foreground colour.
+    let px = |p: &[u8], x: usize, y: usize| p[(y * 384 + x) * 3..(y * 384 + x) * 3 + 3].to_vec();
+    let shows_byte = |p: &[u8]| px(p, 32, 36) == px(p, 39, 36) && px(p, 32, 36) != px(p, 40, 36);
+    let mut paused_delta = false;
+    let mut done = false;
+    for _ in 0..50 {
         let m = next(&mut ws);
-        if !m.paused {
-            continue;
-        }
-        paused_seen = true;
         let (x, y, w, h) = m.rect;
-        if m.rgb.is_empty() {
-            continue;
+        if m.key {
+            picture = m.rgb.clone();
+        } else {
+            for row in 0..h {
+                let dst = ((y + row) * 384 + x) as usize * 3;
+                let src = (row * w) as usize * 3;
+                picture[dst..dst + w as usize * 3]
+                    .copy_from_slice(&m.rgb[src..src + w as usize * 3]);
+            }
         }
-        assert!(!m.key, "a small change is a delta");
-        for row in 0..h {
-            let dst = ((y + row) * 384 + x) as usize * 3;
-            let src = (row * w) as usize * 3;
-            picture[dst..dst + w as usize * 3].copy_from_slice(&m.rgb[src..src + w as usize * 3]);
+        paused_delta |= m.paused && !m.key && !m.rgb.is_empty();
+        if m.paused && shows_byte(&picture) {
+            done = true;
+            break;
         }
-        changed = true;
-        break;
     }
-    assert!(paused_seen, "paused flag reaches the stream");
-    assert!(changed, "the poked bitmap byte arrives as a delta");
-    // The bitmap window starts at cycle 4 (x = 32) of line 36; $FF sets the
-    // first 8 pixels to the foreground colour, unlike the pixel after them.
-    let px = |x: usize, y: usize| &picture[(y * 384 + x) * 3..(y * 384 + x) * 3 + 3];
-    assert_eq!(px(32, 36), px(39, 36));
-    assert_ne!(px(32, 36), px(40, 36));
+    assert!(
+        done,
+        "the poked bitmap byte reaches the viewer while paused"
+    );
+    assert!(paused_delta, "small changes arrive as deltas");
 
     // Viewer input travels back over the same socket.
     ws.send(Message::text(

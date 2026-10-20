@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependency direction (golden rules 1 and 10)
         run: python3 tools/check-deps.py
+      - name: Python debug client unit tests
+        run: python3 -m unittest discover -s tools -v
       - name: System libraries for the desktop frontend (ALSA, udev)
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
       - name: Install toolchain from rust-toolchain.toml
