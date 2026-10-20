@@ -44,8 +44,8 @@ use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
 use emu_core::{
-    BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, HookedBus, Instr,
-    Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
+    BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
+    MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
 
@@ -152,6 +152,102 @@ impl Bus for C64Bus<'_> {
         if !self.mem.write(a, v as u8) {
             self.io.write(self.mem, a, v as u8);
         }
+    }
+
+    fn addr_bits(&self) -> u8 {
+        16
+    }
+}
+
+/// The physical cell a CPU read of `a` gets its value from, if hooks can
+/// be bound to it: RAM (not the 6510 port at `$00`/`$01`) or colour RAM.
+fn physical_read(mem: &Memory, a: u16) -> Option<(MemSpaceId, u32)> {
+    match mem.bank(a) {
+        Bank::Ram if a >= 2 => Some((RAM_SPACE, u32::from(a))),
+        Bank::Io if (0xd800..0xdc00).contains(&a) => Some((COLOR_SPACE, u32::from(a & 0x3ff))),
+        _ => None,
+    }
+}
+
+/// The physical cell a CPU write of `a` lands in: RAM also under ROM
+/// (writes go through), colour RAM in the I/O area.
+fn physical_write(mem: &Memory, a: u16) -> Option<(MemSpaceId, u32)> {
+    match mem.bank(a) {
+        Bank::Ram | Bank::Basic | Bank::Kernal | Bank::Char => Some((RAM_SPACE, u32::from(a))),
+        Bank::Io if (0xd800..0xdc00).contains(&a) => Some((COLOR_SPACE, u32::from(a & 0x3ff))),
+        _ => None,
+    }
+}
+
+/// The CPU bus with debug hooks on the CPU view and on the physical memory
+/// an access lands in, so freezes and watchpoints on RAM and colour RAM
+/// hold whatever the banking ("freezes respect banking"). Where both
+/// apply, the CPU view is outermost. With nothing armed this costs a few
+/// length checks per access (golden rule 5).
+struct HookedC64Bus<'a, 'b> {
+    bus: &'a mut C64Bus<'b>,
+    dbg: Option<&'a mut DebugHooks>,
+    beam: BeamPos,
+}
+
+impl HookedC64Bus<'_, '_> {
+    fn physical_armed(dbg: &DebugHooks, write: bool) -> bool {
+        if write {
+            dbg.write_armed(RAM_SPACE) || dbg.write_armed(COLOR_SPACE)
+        } else {
+            dbg.read_armed(RAM_SPACE) || dbg.read_armed(COLOR_SPACE)
+        }
+    }
+}
+
+impl Bus for HookedC64Bus<'_, '_> {
+    #[inline]
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        let mut v = self.bus.read(addr, size);
+        let Some(dbg) = self.dbg.as_deref_mut() else {
+            return v;
+        };
+        if Self::physical_armed(dbg, false) {
+            if let Some((space, pa)) = physical_read(self.bus.mem, addr as u16) {
+                if dbg.read_armed(space) {
+                    v = dbg.on_read(space, pa, size, v);
+                    dbg.trace_read(space, pa, size, v, self.beam);
+                }
+            }
+        }
+        if dbg.read_armed(CPU_SPACE) {
+            v = dbg.on_read(CPU_SPACE, addr, size, v);
+            dbg.trace_read(CPU_SPACE, addr, size, v, self.beam);
+        }
+        v
+    }
+
+    fn peek(&self, addr: u32, size: Size) -> u32 {
+        self.bus.peek(addr, size)
+    }
+
+    #[inline]
+    fn write(&mut self, addr: u32, size: Size, v: u32) {
+        if let Some(dbg) = self.dbg.as_deref_mut() {
+            let v = v & size.mask();
+            if dbg.write_armed(CPU_SPACE) {
+                dbg.trace_write(CPU_SPACE, addr, size, v, self.beam);
+                if !dbg.on_write(CPU_SPACE, addr, size, v) {
+                    return;
+                }
+            }
+            if Self::physical_armed(dbg, true) {
+                if let Some((space, pa)) = physical_write(self.bus.mem, addr as u16) {
+                    if dbg.write_armed(space) {
+                        dbg.trace_write(space, pa, size, v, self.beam);
+                        if !dbg.on_write(space, pa, size, v) {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        self.bus.write(addr, size, v);
     }
 
     fn addr_bits(&self) -> u8 {
@@ -337,10 +433,9 @@ impl C64 {
                 mem: &mut self.mem,
                 io: &mut self.io,
             };
-            let mut hooked = HookedBus {
-                inner: &mut bus,
+            let mut hooked = HookedC64Bus {
+                bus: &mut bus,
                 dbg: dbg.as_deref_mut(),
-                space: CPU_SPACE,
                 beam,
             };
             self.cpu.tick(&mut hooked)

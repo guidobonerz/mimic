@@ -24,6 +24,7 @@
   <label>Filter <select id="filter"><option value="raw">raw</option><option value="crt">CRT</option></select></label>
   <label>Scale <select id="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
   <label>FPS <select id="fps"><option>10</option><option selected>25</option><option>50</option></select></label>
+  <label title="Keys and gamepads go to the emulated machine (C64: Esc = RUN/STOP, numeric keypad = joystick)"><input type="checkbox" id="input" checked> Input</label>
 </header>
 <main><canvas id="screen" width="384" height="272"></canvas></main>
 <div id="status">connecting…</div>
@@ -62,6 +63,48 @@ async function draw(buffer) {
 
 controls.forEach((c) => c.addEventListener("change", connect));
 connect();
+
+// Input: physical keys (KeyboardEvent.code) and standard-mapping gamepads,
+// mapped to the machine by the emulator like local host input.
+const inputOn = document.getElementById("input");
+function send(msg) {
+  if (inputOn.checked && socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+}
+function onKey(ev, down) {
+  if (!inputOn.checked || ev.target.tagName === "SELECT" || ev.ctrlKey && ev.code === "KeyR") return;
+  ev.preventDefault();
+  if (down && ev.repeat) return;
+  send({ type: "key", code: ev.code, down });
+}
+window.addEventListener("keydown", (ev) => onKey(ev, true));
+window.addEventListener("keyup", (ev) => onKey(ev, false));
+window.addEventListener("blur", () => held.forEach((code) => send({ type: "key", code, down: false })));
+const held = new Set();
+window.addEventListener("keydown", (ev) => held.add(ev.code));
+window.addEventListener("keyup", (ev) => held.delete(ev.code));
+
+const BUTTONS = { 0: "South", 1: "East", 2: "West", 3: "North", 4: "LeftShoulder", 5: "RightShoulder",
+  8: "Select", 9: "Start", 12: "DPadUp", 13: "DPadDown", 14: "DPadLeft", 15: "DPadRight" };
+const pads = new Map();
+function pollPads() {
+  for (const pad of navigator.getGamepads ? navigator.getGamepads() : []) {
+    if (!pad || pad.mapping !== "standard") continue;
+    const last = pads.get(pad.index) || { buttons: {}, axes: [0, 0] };
+    for (const [i, name] of Object.entries(BUTTONS)) {
+      const down = !!pad.buttons[i] && pad.buttons[i].pressed;
+      if (down !== !!last.buttons[i]) send({ type: "button", pad: pad.index, button: name, down });
+      last.buttons[i] = down;
+    }
+    ["LeftX", "LeftY"].forEach((axis, i) => {
+      const value = Math.abs(pad.axes[i]) < 0.2 ? 0 : Math.round(pad.axes[i] * 100) / 100;
+      if (value !== last.axes[i]) send({ type: "axis", pad: pad.index, axis, value });
+      last.axes[i] = value;
+    });
+    pads.set(pad.index, last);
+  }
+  requestAnimationFrame(pollPads);
+}
+requestAnimationFrame(pollPads);
 </script>
 </body>
 </html>

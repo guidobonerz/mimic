@@ -7,6 +7,19 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+mod names_tests {
+    use super::*;
+
+    #[test]
+    fn buttons_and_axes_by_name() {
+        assert_eq!(Button::from_name("South"), Some(Button::South));
+        assert_eq!(Button::from_name("DPadLeft"), Some(Button::DPadLeft));
+        assert_eq!(Button::from_name("Turbo"), None);
+        assert_eq!(Axis::from_name("LeftY"), Some(Axis::LeftY));
+    }
+}
+
 pub mod keymap;
 pub mod mapper;
 pub mod profile;
@@ -38,6 +51,38 @@ pub enum Axis {
     LeftX,
     /// Positive values point down.
     LeftY,
+}
+
+impl Button {
+    pub const ALL: [Button; 12] = [
+        Button::South,
+        Button::East,
+        Button::West,
+        Button::North,
+        Button::LeftShoulder,
+        Button::RightShoulder,
+        Button::Select,
+        Button::Start,
+        Button::DPadUp,
+        Button::DPadDown,
+        Button::DPadLeft,
+        Button::DPadRight,
+    ];
+
+    /// By its name as written here (`"South"`, `"DPadUp"` …).
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|b| format!("{b:?}") == name)
+    }
+}
+
+impl Axis {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "LeftX" => Some(Axis::LeftX),
+            "LeftY" => Some(Axis::LeftY),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

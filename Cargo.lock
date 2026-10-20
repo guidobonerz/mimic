@@ -737,6 +737,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml",
 ]
 
 [[package]]
@@ -763,6 +764,7 @@ version = "0.1.0"
 dependencies = [
  "emu-core",
  "emu-debug",
+ "emu-input",
  "emu-machines",
  "emu-preview",
  "media-backends",
@@ -782,6 +784,7 @@ dependencies = [
 name = "emu-machines"
 version = "0.1.0"
 dependencies = [
+ "devices-input",
  "emu-core",
  "machine-amiga",
  "machine-atari8",
@@ -802,6 +805,7 @@ dependencies = [
  "futures-util",
  "png",
  "qoi",
+ "serde_json",
  "tokio",
  "tokio-tungstenite",
  "video-crt",

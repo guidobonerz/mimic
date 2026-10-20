@@ -9,11 +9,12 @@
 #![forbid(unsafe_code)]
 
 pub mod expr;
+pub mod host;
 pub mod protocol;
 pub mod server;
 pub mod session;
 pub mod symbols;
 pub mod vice;
 
-pub use server::{DebugServer, Endpoint, ServerConfig, Service};
+pub use server::{Control, DebugServer, Endpoint, ServerConfig, Service};
 pub use session::{FrameHook, Session};

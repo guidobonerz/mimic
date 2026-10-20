@@ -47,6 +47,20 @@ pub(crate) enum Msg {
     Shutdown,
 }
 
+/// Runs code against the session on the emulation thread, e.g. remote
+/// input from the preview page. Never blocks.
+#[derive(Clone)]
+pub struct Control {
+    tx: mpsc::Sender<Msg>,
+}
+
+impl Control {
+    /// Queue `f`; false if the emulation thread is gone.
+    pub fn exec(&self, f: impl FnOnce(&mut Session) + Send + 'static) -> bool {
+        self.tx.send(Msg::Exec(Box::new(f))).is_ok()
+    }
+}
+
 /// The emulation side of a debug server: owned by whichever thread runs
 /// the session.
 pub struct Endpoint {
@@ -207,6 +221,13 @@ impl DebugServer {
         self.addr
     }
 
+    /// A handle for running code on the emulation thread.
+    pub fn control(&self) -> Control {
+        Control {
+            tx: self.msg_tx.clone(),
+        }
+    }
+
     /// The bound VICE binary monitor address, if enabled.
     pub fn vice_addr(&self) -> Option<SocketAddr> {
         self.vice_addr
@@ -295,12 +316,14 @@ const MAX_LINE: usize = 16 * 1024 * 1024;
 /// Per-connection event filter.
 #[derive(Default)]
 struct Subscriptions {
-    frame_ready: bool,
+    /// Optional events this connection asked for.
+    events: Vec<String>,
 }
 
 impl Subscriptions {
     fn wants(&self, ev: &Value) -> bool {
-        ev["event"] != "frame_ready" || self.frame_ready
+        let name = ev["event"].as_str().unwrap_or_default();
+        !protocol::OPTIONAL_EVENTS.contains(&name) || self.events.iter().any(|e| e == name)
     }
 }
 
@@ -357,8 +380,8 @@ async fn client(
             }
         }
     }
-    if subs.frame_ready {
-        let _ = msg_tx.send(Msg::Exec(Box::new(|s| s.frame_subscriber(false))));
+    for event in subs.events {
+        let _ = msg_tx.send(Msg::Exec(Box::new(move |s| s.subscriber(&event, false))));
     }
 }
 
@@ -375,13 +398,18 @@ fn subscribe(
     {
         return protocol::err(Some(id), format!("unknown optional event '{bad}'"));
     }
-    let frame_ready = events.iter().any(|e| e == "frame_ready");
-    if frame_ready != subs.frame_ready {
-        subs.frame_ready = frame_ready;
-        let _ = msg_tx.send(Msg::Exec(Box::new(move |s| {
-            s.frame_subscriber(frame_ready)
-        })));
+    let mut wanted: Vec<String> = events.clone();
+    wanted.sort();
+    wanted.dedup();
+    for e in subs.events.iter().filter(|e| !wanted.contains(e)) {
+        let e = e.clone();
+        let _ = msg_tx.send(Msg::Exec(Box::new(move |s| s.subscriber(&e, false))));
     }
+    for e in wanted.iter().filter(|e| !subs.events.contains(e)) {
+        let e = e.clone();
+        let _ = msg_tx.send(Msg::Exec(Box::new(move |s| s.subscriber(&e, true))));
+    }
+    subs.events = wanted;
     protocol::ok(id, serde_json::json!({"events": events}))
 }
 

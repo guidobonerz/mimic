@@ -15,3 +15,4 @@ emu-debug.workspace = true
 emu-preview.workspace = true
 video-crt.workspace = true
 media-backends.workspace = true
+emu-input.workspace = true

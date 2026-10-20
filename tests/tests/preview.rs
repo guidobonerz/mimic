@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use emu_core::registry::MachineConfig;
 use emu_debug::{DebugServer, ServerConfig, Session};
-use emu_preview::server::{FrameTap, PreviewConfig, PreviewServer};
+use std::sync::{Arc, Mutex};
+
+use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer, RemoteInput};
 use emu_preview::{HEADER_LEN, MAGIC};
 use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_tungstenite::tungstenite::{Message, WebSocket};
@@ -16,6 +18,8 @@ use tokio_tungstenite::tungstenite::{Message, WebSocket};
 struct Setup {
     debug: DebugServer,
     preview: PreviewServer,
+    /// Viewer input received by the preview server.
+    inputs: Arc<Mutex<Vec<RemoteInput>>>,
 }
 
 fn start() -> Setup {
@@ -27,12 +31,16 @@ fn start() -> Setup {
     tap.publish(session.machine(), true);
     let hook = tap.clone();
     session.set_frame_hook(Box::new(move |m, running| hook.publish(m, running)));
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let seen = inputs.clone();
+    let sink: InputSink = Arc::new(move |ev| seen.lock().unwrap().push(ev));
     let preview = PreviewServer::start(
         PreviewConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
         },
         "sim6502",
         tap,
+        Some(sink),
     )
     .unwrap();
     let debug = DebugServer::start(
@@ -45,7 +53,11 @@ fn start() -> Setup {
         },
     )
     .unwrap();
-    Setup { debug, preview }
+    Setup {
+        debug,
+        preview,
+        inputs,
+    }
 }
 
 /// Raw HTTP GET: status line, headers (lower-case names), body.
@@ -232,6 +244,39 @@ fn stream_sends_key_frame_then_deltas_and_the_paused_state() {
     let px = |x: usize, y: usize| &picture[(y * 384 + x) * 3..(y * 384 + x) * 3 + 3];
     assert_eq!(px(32, 36), px(39, 36));
     assert_ne!(px(32, 36), px(40, 36));
+
+    // Viewer input travels back over the same socket.
+    ws.send(Message::text(
+        r#"{"type":"key","code":"Space","down":true}"#,
+    ))
+    .unwrap();
+    ws.send(Message::text(r#"{"type":"bogus"}"#)).unwrap();
+    ws.send(Message::text(
+        r#"{"type":"button","pad":0,"button":"South","down":false}"#,
+    ))
+    .unwrap();
+    let mut got = Vec::new();
+    for _ in 0..200 {
+        got = s.inputs.lock().unwrap().clone();
+        if got.len() >= 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        got,
+        [
+            RemoteInput::Key {
+                code: "Space".into(),
+                down: true
+            },
+            RemoteInput::Button {
+                pad: 0,
+                button: "South".into(),
+                down: false
+            }
+        ]
+    );
     s.preview.shutdown();
     s.debug.shutdown();
 }

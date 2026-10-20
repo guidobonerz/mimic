@@ -185,6 +185,7 @@ pub fn spawn(
         };
         let mut session = Session::new(machine, machine_id);
         session.set_running(true);
+        session.set_host(Box::new(crate::host::FrontendHost));
         if let Some(tap) = preview {
             session.set_frame_hook(Box::new(move |m, running| tap.publish(m, running)));
         }
@@ -199,10 +200,9 @@ pub fn spawn(
             loop {
                 match input.try_recv() {
                     Ok(ev) => {
-                        let m = session.machine_mut();
-                        let now = m.now();
+                        let now = session.machine().now();
                         for e in mapper.handle(&ev, now) {
-                            m.input(e);
+                            session.input(e);
                         }
                     }
                     Err(TryRecvError::Empty) => break,

@@ -3,15 +3,19 @@
 
 #![forbid(unsafe_code)]
 
+mod host;
+
 use std::fs;
 use std::net::SocketAddr;
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 
 use emu_core::media::{MediaKind, SlotId};
 use emu_core::registry::MachineConfig;
 use emu_core::{DebugHooks, Machine, StopReason};
 use emu_debug::{DebugServer, ServerConfig, Session};
-use emu_preview::server::{FrameTap, PreviewConfig, PreviewServer};
+use emu_input::{Mapper, Profile as InputProfile};
+use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer};
 
 const USAGE: &str = "\
 usage: emu-headless [options]
@@ -267,18 +271,14 @@ fn run(args: Args) -> Result<ExitCode, String> {
 
     if let Some(bind) = args.debug {
         let mut session = Session::new(machine, args.machine.clone());
-        let preview = match args.preview {
-            Some(bind) => {
-                let tap = FrameTap::new();
-                tap.publish(session.machine(), args.run);
-                let hook_tap = tap.clone();
-                session.set_frame_hook(Box::new(move |m, running| hook_tap.publish(m, running)));
-                let server = PreviewServer::start(PreviewConfig { bind }, &args.machine, tap)
-                    .map_err(|e| format!("preview server: {e}"))?;
-                Some(server)
-            }
-            None => None,
-        };
+        session.set_host(Box::new(host::FrontendHost));
+        let tap = args.preview.map(|_| {
+            let tap = FrameTap::new();
+            tap.publish(session.machine(), args.run);
+            let hook_tap = tap.clone();
+            session.set_frame_hook(Box::new(move |m, running| hook_tap.publish(m, running)));
+            tap
+        });
         let server = DebugServer::start(
             session,
             ServerConfig {
@@ -289,6 +289,34 @@ fn run(args: Args) -> Result<ExitCode, String> {
             },
         )
         .map_err(|e| format!("debug server: {e}"))?;
+        let preview = match (args.preview, tap) {
+            (Some(bind), Some(tap)) => {
+                // Viewer input is mapped like local keys and gamepads, on the
+                // emulation thread.
+                let mapper = Arc::new(Mutex::new(Mapper::new(InputProfile::default_for(
+                    &args.machine,
+                ))));
+                let control = server.control();
+                let sink: InputSink = Arc::new(move |input| {
+                    let Some(ev) = host::host_event(input) else {
+                        return;
+                    };
+                    let mapper = mapper.clone();
+                    control.exec(move |s| {
+                        let now = s.machine().now();
+                        let events = mapper.lock().map(|mut m| m.handle(&ev, now));
+                        for e in events.unwrap_or_default() {
+                            s.input(e);
+                        }
+                    });
+                });
+                let p =
+                    PreviewServer::start(PreviewConfig { bind }, &args.machine, tap, Some(sink))
+                        .map_err(|e| format!("preview server: {e}"))?;
+                Some(p)
+            }
+            _ => None,
+        };
         eprintln!(
             "debug server for '{}' listening on {} ({})",
             args.machine,

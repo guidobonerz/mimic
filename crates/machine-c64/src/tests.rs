@@ -620,3 +620,118 @@ fn soft_reset_keeps_ram_hard_reset_clears_it() {
     assert_eq!(m.mem.color[0], 0);
     assert_eq!(m.io.vic.beam().frame, 0, "VIC-II restarts on power-up only");
 }
+
+/// Run a test program from $E000 for two frames with `freezes` armed.
+fn run_frozen(code: &[u8], freezes: Vec<emu_core::Freeze>) -> (C64, DebugHooks) {
+    let mut m = machine(code, &[0x40], &[0x40]);
+    let mut dbg = DebugHooks::new();
+    for f in freezes {
+        dbg.add_freeze(f);
+    }
+    m.run_frame(&mut dbg);
+    m.run_frame(&mut dbg);
+    (m, dbg)
+}
+
+fn freeze(
+    space: MemSpaceId,
+    addr: u32,
+    value: u32,
+    mode: emu_core::FreezeMode,
+) -> emu_core::Freeze {
+    emu_core::Freeze {
+        mode,
+        ..emu_core::Freeze::new(space, addr, Size::Byte, value)
+    }
+}
+
+#[test]
+fn freeze_block_writes_on_the_cpu_view() {
+    // LDA #$11; STA $0400; LDA $0400; STA $0401; JMP *
+    let code = [
+        0xa9, 0x11, 0x8d, 0x00, 0x04, 0xad, 0x00, 0x04, 0x8d, 0x01, 0x04, 0x4c, 0x0b, 0xe0,
+    ];
+    let (m, mut dbg) = run_frozen(
+        &code,
+        vec![freeze(
+            CPU_SPACE,
+            0x0400,
+            0x42,
+            emu_core::FreezeMode::BlockWrites,
+        )],
+    );
+    assert_eq!(m.mem.ram[0x0400], 0, "write suppressed");
+    assert_eq!(m.mem.ram[0x0401], 0x42, "read returns the frozen value");
+    let blocked = dbg.take_blocked_write().expect("blocked write recorded");
+    assert_eq!(
+        (blocked.space, blocked.addr, blocked.value),
+        (CPU_SPACE, 0x0400, 0x11)
+    );
+}
+
+#[test]
+fn freeze_reapply_per_frame_on_physical_ram() {
+    // LDA #$11; STA $0400; JMP * (the guest changes the value once)
+    let code = [0xa9, 0x11, 0x8d, 0x00, 0x04, 0x4c, 0x05, 0xe0];
+    let (m, _) = run_frozen(
+        &code,
+        vec![freeze(
+            RAM_SPACE,
+            0x0400,
+            0x77,
+            emu_core::FreezeMode::ReapplyPerFrame,
+        )],
+    );
+    assert_eq!(
+        m.mem.ram[0x0400], 0x77,
+        "rewritten at the start of the frame"
+    );
+}
+
+#[test]
+fn freeze_reapply_on_read_leaves_memory_alone() {
+    // LDA $0400; STA $0401; JMP *
+    let code = [0xad, 0x00, 0x04, 0x8d, 0x01, 0x04, 0x4c, 0x06, 0xe0];
+    let (m, _) = run_frozen(
+        &code,
+        vec![freeze(
+            CPU_SPACE,
+            0x0400,
+            0x99,
+            emu_core::FreezeMode::ReapplyOnRead,
+        )],
+    );
+    assert_eq!(m.mem.ram[0x0400], 0, "memory unchanged");
+    assert_eq!(m.mem.ram[0x0401], 0x99);
+}
+
+#[test]
+fn freeze_on_ram_under_rom_respects_banking() {
+    let code = [
+        0xa9, 0x37, 0x85, 0x01, // LDA #$37; STA $01 (latch before DDR)
+        0xa9, 0x2f, 0x85, 0x00, // LDA #$2F; STA $00: BASIC ROM at $A000
+        0xad, 0x00, 0xa0, 0x8d, 0x02, 0x04, // LDA $A000; STA $0402 (sees ROM)
+        0xa9, 0x11, 0x8d, 0x00, 0xa0, // LDA #$11; STA $A000 (goes to RAM below)
+        0xa9, 0x36, 0x85, 0x01, // LDA #$36; STA $01: RAM at $A000
+        0xad, 0x00, 0xa0, 0x8d, 0x00, 0x04, // LDA $A000; STA $0400
+        0x4c, 0x1d, 0xe0, // JMP *
+    ];
+    let (m, _) = run_frozen(
+        &code,
+        vec![freeze(
+            RAM_SPACE,
+            0xa000,
+            0x55,
+            emu_core::FreezeMode::BlockWrites,
+        )],
+    );
+    assert_eq!(
+        m.mem.ram[0x0402], 0xb0,
+        "with ROM banked in, the CPU reads ROM"
+    );
+    assert_eq!(m.mem.ram[0xa000], 0, "the write under the ROM was blocked");
+    assert_eq!(
+        m.mem.ram[0x0400], 0x55,
+        "with RAM banked in, the frozen value"
+    );
+}

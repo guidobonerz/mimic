@@ -21,6 +21,9 @@
 //! | `resumed`     | emulation starts running (`resume`, `step_over`, `step_out`, `run_to`) |
 //! | `stopped`     | a run ends: breakpoint, watchpoint, finished step, jam, `pause` |
 //! | `frame_ready` | after every emulated frame while running; only to clients that `subscribe` to it |
+//! | `media_changed` | media inserted or ejected through the protocol      |
+//! | `device_connected` | a device plugged into or pulled from a port (`device: null`) |
+//! | `freeze_blocked_write` | a guest write to a frozen address was suppressed (at most one per frame; to subscribers). A write watchpoint on the address stops at the code |
 //!
 //! Execution commands come in two flavours. `step_instr`, `step_cycle`,
 //! `step_line`, `step_frame`, `pause` and `reset` are synchronous: the
@@ -34,7 +37,15 @@
 //! `chips`, savestates, the trace, `capabilities` and event subscriptions.
 //! 3 adds `break_condition` and symbols (`symbols_load`, `symbols_list`,
 //! `symbols_clear`, labels in `disasm`, `symbol` in `break_add`/`run_to`)
-//! and the PC in `resumed`.
+//! and the PC in `resumed`. 4 adds remote control of devices: ports
+//! (`list_ports`, `connect_device`, `disconnect_device`), media
+//! (`list_media_slots`, `insert_media`, `eject_media`, `flush_media`,
+//! `set_drive_mode`), `input`, `record_start`/`record_stop`/`replay_input`
+//! and the `media_changed` and `device_connected` events. 5 adds the
+//! freezer (`freeze_add`/`remove`/`toggle`/`list`, frozen offsets in
+//! `peek`, freezes in `save_state`/`load_state` and recordings), the cheat
+//! search (`search_start`/`next`/`results`), cheat files
+//! (`cheats_load`/`save`) and the optional `freeze_blocked_write` event.
 //!
 //! Every change to this message set needs a contract test and a bump of
 //! [`PROTOCOL_VERSION`].
@@ -45,7 +56,7 @@ use serde_json::{json, Value};
 use emu_core::{BeamPos, StopReason};
 
 pub const PROTOCOL_NAME: &str = "polytrace-debug";
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Request {
@@ -137,10 +148,62 @@ pub enum Command {
         condition: Option<String>,
     },
     BreakList,
-    /// Machine state as base64.
+    /// Machine state (`data`) and the freezes (`freezes`) as base64.
     SaveState,
+    /// Restore `data`; `freezes`, if given, replaces the freeze list.
     LoadState {
         data: String,
+        freezes: Option<String>,
+    },
+    /// Freeze `size` bytes (1, 2, 4) at `addr` or `symbol` to `value`
+    /// (default: what is there now). `mode`: `block_writes` (default),
+    /// `reapply_per_frame` or `reapply_on_read`.
+    FreezeAdd {
+        space: Option<u16>,
+        addr: Option<u32>,
+        symbol: Option<String>,
+        size: Option<u8>,
+        value: Option<u32>,
+        mode: Option<String>,
+        label: Option<String>,
+        enabled: Option<bool>,
+    },
+    FreezeRemove {
+        freeze: u32,
+    },
+    /// Switch on or off; toggles without `enabled`.
+    FreezeToggle {
+        freeze: u32,
+        enabled: Option<bool>,
+    },
+    FreezeList,
+    /// Snapshot candidate addresses: `len` bytes from `addr` (default the
+    /// whole space, at most 16 MB), values of `size` bytes.
+    SearchStart {
+        space: Option<u16>,
+        size: Option<u8>,
+        addr: Option<u32>,
+        len: Option<u32>,
+    },
+    /// Keep the candidates for which `op` holds: `eq`, `ne`, `lt`, `gt`
+    /// (against `value`), `increased`, `decreased`, `unchanged`, `changed`
+    /// (against the last snapshot), `increased_by`, `decreased_by` (`value`).
+    SearchNext {
+        op: String,
+        value: Option<u32>,
+    },
+    /// The first `max` candidates (default 100) with current and last value.
+    SearchResults {
+        max: Option<u32>,
+    },
+    /// Add the freezes of a TOML cheat file (`path` on this host, or `text`).
+    CheatsLoad {
+        path: Option<String>,
+        text: Option<String>,
+    },
+    /// The freezes as a TOML cheat file; written to `path` if given.
+    CheatsSave {
+        path: Option<String>,
     },
     TraceStart {
         #[serde(default)]
@@ -166,6 +229,47 @@ pub enum Command {
     },
     SymbolsList,
     SymbolsClear,
+    /// Ports with their kind, connection state and the devices the
+    /// frontend can plug in.
+    ListPorts,
+    ConnectDevice {
+        port: u8,
+        device: String,
+    },
+    DisconnectDevice {
+        port: u8,
+    },
+    ListMediaSlots,
+    /// Insert an image file from this host (copy-on-write).
+    InsertMedia {
+        slot: u8,
+        path: String,
+    },
+    EjectMedia {
+        slot: u8,
+    },
+    /// Write changes back through the slot's backend.
+    FlushMedia {
+        slot: u8,
+    },
+    /// `"true"` (true drive emulation) or `"virtual"`.
+    SetDriveMode {
+        slot: u8,
+        mode: String,
+    },
+    /// Queue input events: `[{"target": "keyboard" | {"port": n},
+    /// "event": {...}, "delay": cycles}]` (see [`crate::host::event_json`]).
+    Input {
+        events: Vec<Value>,
+    },
+    /// Start recording input (from a savestate taken now).
+    RecordStart,
+    /// Stop recording; the result is the recording.
+    RecordStop,
+    /// Restore a recording's start state and queue its events.
+    ReplayInput {
+        replay: Value,
+    },
 }
 
 /// `break_add` arguments. `kind` is `exec` (default), `read`, `write`,
@@ -237,12 +341,41 @@ pub const COMMANDS: &[&str] = &[
     "symbols_load",
     "symbols_list",
     "symbols_clear",
+    "list_ports",
+    "connect_device",
+    "disconnect_device",
+    "list_media_slots",
+    "insert_media",
+    "eject_media",
+    "flush_media",
+    "set_drive_mode",
+    "input",
+    "record_start",
+    "record_stop",
+    "replay_input",
+    "freeze_add",
+    "freeze_remove",
+    "freeze_toggle",
+    "freeze_list",
+    "search_start",
+    "search_next",
+    "search_results",
+    "cheats_load",
+    "cheats_save",
 ];
 
 pub const BREAK_KINDS: &[&str] = &["exec", "read", "write", "raster", "irq", "nmi"];
-pub const EVENTS: &[&str] = &["hello", "resumed", "stopped", "frame_ready"];
+pub const EVENTS: &[&str] = &[
+    "hello",
+    "resumed",
+    "stopped",
+    "frame_ready",
+    "media_changed",
+    "device_connected",
+    "freeze_blocked_write",
+];
 /// Events a client must ask for with `subscribe`.
-pub const OPTIONAL_EVENTS: &[&str] = &["frame_ready"];
+pub const OPTIONAL_EVENTS: &[&str] = &["frame_ready", "freeze_blocked_write"];
 
 pub fn ok(id: u64, result: Value) -> Value {
     json!({"id": id, "ok": true, "result": result})

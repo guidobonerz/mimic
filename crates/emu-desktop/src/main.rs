@@ -12,6 +12,7 @@
 mod audio;
 mod emu;
 mod gfx;
+mod host;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -25,7 +26,7 @@ use emu_core::registry::MachineConfig;
 use emu_core::Machine;
 use emu_debug::{DebugServer, ServerConfig};
 use emu_input::{Axis, Button, HostEvent, Mapper, Profile as InputProfile};
-use emu_preview::server::{FrameTap, PreviewConfig, PreviewServer};
+use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer};
 use video_crt::Profile;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -475,8 +476,20 @@ fn run() -> Result<(), String> {
     let tap = match args.preview {
         Some(bind) => {
             let tap = FrameTap::new();
-            let p = PreviewServer::start(PreviewConfig { bind }, &args.machine, tap.clone())
-                .map_err(|e| format!("preview server: {e}"))?;
+            // Viewer input joins the window's own keys and gamepads.
+            let input = tx.clone();
+            let sink: InputSink = Arc::new(move |ev| {
+                if let Some(ev) = host::host_event(ev) {
+                    let _ = input.send(ev);
+                }
+            });
+            let p = PreviewServer::start(
+                PreviewConfig { bind },
+                &args.machine,
+                tap.clone(),
+                Some(sink),
+            )
+            .map_err(|e| format!("preview server: {e}"))?;
             eprintln!("live preview on http://{}/", p.addr());
             preview = Some(p);
             Some(tap)

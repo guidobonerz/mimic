@@ -14,6 +14,13 @@
 //! snapshot also takes `machine=<id>` (404 if it is not this machine) and
 //! reports the beam in `X-Beam-Frame/Line/Cycle` and `X-Paused` headers.
 //!
+//! Viewers may send input back over the stream as JSON text messages
+//! (`{"type": "key", "code": "KeyA", "down": true}`, `{"type": "button",
+//! "pad": 0, "button": "South", "down": true}`, `{"type": "axis", "pad": 0,
+//! "axis": "LeftX", "value": -0.5}`). With an [`InputSink`] they reach the
+//! frontend as [`RemoteInput`], which maps them like local host input;
+//! without one they are ignored.
+//!
 //! Frames reach the server through a [`FrameTap`]: the emulation thread
 //! publishes copies into a watch channel and never waits. Each connection
 //! renders and encodes the newest frame on the blocking pool, at its own
@@ -82,6 +89,65 @@ pub struct PreviewConfig {
     pub bind: SocketAddr,
 }
 
+/// Input from a viewer, in host terms: W3C `KeyboardEvent.code` key names
+/// and layout-neutral gamepad buttons and axes (`South`, `LeftX` …).
+#[derive(Clone, Debug, PartialEq)]
+pub enum RemoteInput {
+    Key {
+        code: String,
+        down: bool,
+    },
+    Button {
+        pad: u8,
+        button: String,
+        down: bool,
+    },
+    /// -1.0 ..= 1.0; positive is right or down.
+    Axis {
+        pad: u8,
+        axis: String,
+        value: f32,
+    },
+}
+
+/// Where viewer input goes (the frontend's host input mapping).
+pub type InputSink = Arc<dyn Fn(RemoteInput) + Send + Sync>;
+
+/// Longest accepted input message.
+const MAX_INPUT_MESSAGE: usize = 1024;
+
+fn short_name(v: &serde_json::Value, field: &str) -> Option<String> {
+    let s = v[field].as_str()?;
+    (!s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .then(|| s.to_string())
+}
+
+/// Parse one viewer input message; `None` if malformed.
+pub fn parse_remote_input(text: &str) -> Option<RemoteInput> {
+    if text.len() > MAX_INPUT_MESSAGE {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let pad = || v["pad"].as_u64().and_then(|p| u8::try_from(p).ok());
+    Some(match v["type"].as_str()? {
+        "key" => RemoteInput::Key {
+            code: short_name(&v, "code")?,
+            down: v["down"].as_bool()?,
+        },
+        "button" => RemoteInput::Button {
+            pad: pad()?,
+            button: short_name(&v, "button")?,
+            down: v["down"].as_bool()?,
+        },
+        "axis" => RemoteInput::Axis {
+            pad: pad()?,
+            axis: short_name(&v, "axis")?,
+            value: (v["value"].as_f64()? as f32).clamp(-1.0, 1.0),
+        },
+        _ => return None,
+    })
+}
+
 pub struct PreviewServer {
     addr: SocketAddr,
     stop: watch::Sender<bool>,
@@ -90,7 +156,14 @@ pub struct PreviewServer {
 
 impl PreviewServer {
     /// Bind (loopback only) and serve frames from `tap` on a thread of its own.
-    pub fn start(config: PreviewConfig, machine: &str, tap: FrameTap) -> io::Result<Self> {
+    /// Bind (loopback only) and serve frames from `tap` on a thread of its
+    /// own; viewer input goes to `input`, if given.
+    pub fn start(
+        config: PreviewConfig,
+        machine: &str,
+        tap: FrameTap,
+        input: Option<InputSink>,
+    ) -> io::Result<Self> {
         if !config.bind.ip().is_loopback() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -107,6 +180,7 @@ impl PreviewServer {
         let ctx = Arc::new(Context {
             machine: machine.to_string(),
             tap,
+            input,
         });
         let thread = thread::Builder::new()
             .name("preview".into())
@@ -134,6 +208,7 @@ impl PreviewServer {
 struct Context {
     machine: String,
     tap: FrameTap,
+    input: Option<InputSink>,
 }
 
 async fn accept_loop(listener: TcpListener, ctx: Arc<Context>, mut stop: watch::Receiver<bool>) {
@@ -438,6 +513,11 @@ async fn stream_frames(mut ws: WebSocketStream<TcpStream>, ctx: &Context, s: Set
                 }
                 msg = ws.next() => match msg {
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                    Some(Ok(Message::Text(text))) => {
+                        if let (Some(sink), Some(ev)) = (&ctx.input, parse_remote_input(&text)) {
+                            sink(ev);
+                        }
+                    }
                     Some(Ok(_)) => {}
                 },
             }
@@ -461,6 +541,34 @@ mod tests {
         let h = parse_head("GET /snapshot.png HTTP/1.1\r\nSec-WebSocket-Key: abc==").unwrap();
         assert_eq!(h.ws_key, None, "a key without upgrade is no WebSocket");
         assert!(parse_head("").is_none());
+    }
+
+    #[test]
+    fn viewer_input_messages() {
+        assert_eq!(
+            parse_remote_input(r#"{"type":"key","code":"KeyA","down":true}"#),
+            Some(RemoteInput::Key {
+                code: "KeyA".into(),
+                down: true
+            })
+        );
+        assert_eq!(
+            parse_remote_input(r#"{"type":"axis","pad":1,"axis":"LeftY","value":3}"#),
+            Some(RemoteInput::Axis {
+                pad: 1,
+                axis: "LeftY".into(),
+                value: 1.0
+            })
+        );
+        for bad in [
+            r#"{"type":"key","code":"","down":true}"#,
+            r#"{"type":"key","code":"a b","down":true}"#,
+            r#"{"type":"button","pad":999,"button":"South","down":true}"#,
+            r#"{"type":"jump"}"#,
+            "not json",
+        ] {
+            assert_eq!(parse_remote_input(bad), None, "{bad}");
+        }
     }
 
     #[test]

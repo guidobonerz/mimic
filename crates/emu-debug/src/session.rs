@@ -19,6 +19,7 @@ use emu_core::{
 };
 
 use crate::expr::{self, Expr};
+use crate::host::HostServices;
 use crate::protocol::{
     self, BreakSpec, Command, RangeSpec, Request, MAX_DISASM, MAX_PEEK, MAX_STEP_COUNT,
     MAX_TRACE_CAPACITY,
@@ -107,12 +108,15 @@ pub struct Session {
     bp_meta: BTreeMap<BpId, BpMeta>,
     /// Events produced since the last [`Session::take_events`].
     events: Vec<Value>,
-    /// Connections that want `frame_ready`.
-    frame_subscribers: u32,
+    /// Connections that want each optional event (`frame_ready` …).
+    subscribers: BTreeMap<String, u32>,
     /// Why the last run ended (`None` while running or never run).
     last_stop: Option<StopReason>,
     symbols: SymbolTable,
     frame_hook: Option<FrameHook>,
+    host: Option<Box<dyn HostServices>>,
+    recording: Option<devices::Recording>,
+    search: Option<freezer::Search>,
 }
 
 /// Called with the machine whenever its picture may have changed: after
@@ -131,11 +135,43 @@ impl Session {
             mode: RunMode::Free,
             bp_meta: BTreeMap::new(),
             events: Vec::new(),
-            frame_subscribers: 0,
+            subscribers: BTreeMap::new(),
             last_stop: None,
             symbols: SymbolTable::default(),
             frame_hook: None,
+            host: None,
+            recording: None,
+            search: None,
         }
+    }
+
+    /// The freeze list in savestate form.
+    fn freeze_state(&self) -> Vec<u8> {
+        let mut w = emu_core::StateWriter::new();
+        self.hooks.save_freezes(&mut w);
+        w.into_bytes()
+    }
+
+    fn load_freeze_state(&mut self, data: &[u8]) -> Result<(), String> {
+        self.hooks
+            .load_freezes(&mut emu_core::StateReader::new(data))
+            .map_err(|e| format!("freezes rejected: {e:?}"))
+    }
+
+    /// Lend device and media services from the frontend.
+    pub fn set_host(&mut self, host: Box<dyn HostServices>) {
+        self.host = Some(host);
+    }
+
+    /// Queue an input event for the machine; recorded while
+    /// `record_start` is active. Frontends route all input through here.
+    pub fn input(&mut self, ev: emu_core::input::TimedInput) {
+        if let Some(rec) = &mut self.recording {
+            if rec.events.len() < crate::host::MAX_EVENTS {
+                rec.events.push(ev);
+            }
+        }
+        self.machine.input(ev);
     }
 
     pub fn set_frame_hook(&mut self, hook: FrameHook) {
@@ -182,13 +218,23 @@ impl Session {
         self.running = running;
     }
 
-    /// A connection subscribed to (`true`) or left (`false`) `frame_ready`.
-    pub fn frame_subscriber(&mut self, added: bool) {
+    /// A connection subscribed to (`true`) or left (`false`) an optional
+    /// event.
+    pub fn subscriber(&mut self, event: &str, added: bool) {
+        let n = self.subscribers.entry(event.to_string()).or_default();
         if added {
-            self.frame_subscribers += 1;
+            *n += 1;
         } else {
-            self.frame_subscribers = self.frame_subscribers.saturating_sub(1);
+            *n = n.saturating_sub(1);
         }
+    }
+
+    pub fn frame_subscriber(&mut self, added: bool) {
+        self.subscriber("frame_ready", added);
+    }
+
+    fn wanted(&self, event: &str) -> bool {
+        self.subscribers.get(event).is_some_and(|&n| n > 0)
     }
 
     /// Events produced by commands and [`Session::run_slice`] since the last call.
@@ -221,9 +267,18 @@ impl Session {
             }
             RunMode::StepOut { .. } => self.run_step_out(),
         };
+        if let Some(w) = self.hooks.take_blocked_write() {
+            if self.wanted("freeze_blocked_write") {
+                self.events.push(json!({
+                    "event": "freeze_blocked_write", "space": w.space.0, "addr": w.addr,
+                    "size": w.size.bytes(), "value": w.value,
+                    "beam": protocol::beam_json(self.machine.beam()),
+                }));
+            }
+        }
         match reason {
             StopReason::FrameDone => {
-                if self.frame_subscribers > 0 {
+                if self.wanted("frame_ready") {
                     self.events.push(json!({
                         "event": "frame_ready",
                         "beam": protocol::beam_json(self.machine.beam()),
@@ -517,7 +572,8 @@ impl Session {
                     .map(|i| target.peek(space, addr.wrapping_add(i), Size::Byte))
                     .collect::<Option<Vec<u32>>>()
                     .ok_or("address space not readable")?;
-                Ok(json!({"space": space.0, "addr": addr, "bytes": bytes}))
+                let frozen = self.frozen_offsets(space, addr, len);
+                Ok(json!({"space": space.0, "addr": addr, "bytes": bytes, "frozen": frozen}))
             }
             Command::Poke { space, addr, bytes } => {
                 if bytes.len() > MAX_PEEK as usize {
@@ -633,15 +689,54 @@ impl Session {
             Command::BreakList => Ok(self.break_list()),
             Command::SaveState => Ok(json!({
                 "data": protocol::base64_encode(&self.machine.save_state()),
+                "freezes": protocol::base64_encode(&self.freeze_state()),
             })),
-            Command::LoadState { data } => {
+            Command::LoadState { data, freezes } => {
                 let bytes = protocol::base64_decode(&data)?;
+                let freezes = freezes.map(|f| protocol::base64_decode(&f)).transpose()?;
                 self.stop_for_sync();
                 self.machine
                     .load_state(&bytes)
                     .map_err(|e| format!("savestate rejected: {e:?}"))?;
+                if let Some(f) = freezes {
+                    self.load_freeze_state(&f)?;
+                }
                 Ok(self.state_json(&StopReason::StepDone))
             }
+            Command::FreezeAdd {
+                space,
+                addr,
+                symbol,
+                size,
+                value,
+                mode,
+                label,
+                enabled,
+            } => {
+                let (space, addr) = self.resolve(space, addr, symbol.as_deref())?;
+                self.freeze_add(freezer::FreezeSpec {
+                    space: Some(space.0),
+                    addr,
+                    size,
+                    value,
+                    mode,
+                    label,
+                    enabled,
+                })
+            }
+            Command::FreezeRemove { freeze } => self.freeze_remove(freeze),
+            Command::FreezeToggle { freeze, enabled } => self.freeze_toggle(freeze, enabled),
+            Command::FreezeList => Ok(self.freeze_list()),
+            Command::SearchStart {
+                space,
+                size,
+                addr,
+                len,
+            } => self.search_start(space, size, addr, len),
+            Command::SearchNext { op, value } => self.search_next(&op, value),
+            Command::SearchResults { max } => self.search_results(max),
+            Command::CheatsLoad { path, text } => self.cheats_load(path.as_deref(), text),
+            Command::CheatsSave { path } => self.cheats_save(path.as_deref()),
             Command::TraceStart {
                 instructions,
                 reads,
@@ -726,6 +821,18 @@ impl Session {
                 self.symbols.clear();
                 Ok(json!({}))
             }
+            Command::ListPorts => Ok(self.list_ports()),
+            Command::ConnectDevice { port, device } => self.connect_device(port, &device),
+            Command::DisconnectDevice { port } => self.disconnect_device(port),
+            Command::ListMediaSlots => Ok(self.list_media_slots()),
+            Command::InsertMedia { slot, path } => self.insert_media(slot, &path),
+            Command::EjectMedia { slot } => self.eject_media(slot),
+            Command::FlushMedia { slot } => self.flush_media(slot),
+            Command::SetDriveMode { slot, mode } => self.set_drive_mode(slot, &mode),
+            Command::Input { events } => self.input_command(&events),
+            Command::RecordStart => Ok(self.record_start()),
+            Command::RecordStop => self.record_stop(),
+            Command::ReplayInput { replay } => self.replay_input(&replay),
             Command::TraceStop => {
                 self.hooks.set_trace(TraceConfig::default());
                 Ok(json!({}))
@@ -1027,6 +1134,9 @@ impl Session {
         })
     }
 }
+
+mod devices;
+mod freezer;
 
 #[cfg(test)]
 mod tests;

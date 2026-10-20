@@ -418,3 +418,220 @@ fn symbols_label_disassembly_and_breakpoints() {
     assert_eq!(c.ok(json!({"cmd": "symbols_list"})), json!([]));
     server.shutdown();
 }
+
+/// Devices from the `emu-machines` catalogue, images from files: what a
+/// frontend lends the session.
+struct TestHost;
+
+impl emu_debug::host::HostServices for TestHost {
+    fn device_names(&self, kind: emu_core::port::PortKind) -> Vec<&'static str> {
+        emu_machines::device_names(kind)
+    }
+
+    fn create_device(
+        &self,
+        name: &str,
+        kind: emu_core::port::PortKind,
+    ) -> Option<Box<dyn emu_core::port::PortDevice>> {
+        emu_machines::create_device(name, kind)
+    }
+
+    fn open_media(&self, path: &str) -> Result<emu_core::media::Media, String> {
+        media_backends::image::open(std::path::Path::new(path)).map_err(|e| e.to_string())
+    }
+}
+
+fn c64_server() -> DebugServer {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    let machine = emu_machines::registry().create("c64", &config).unwrap();
+    let mut session = Session::new(machine, "c64");
+    session.set_host(Box::new(TestHost));
+    DebugServer::start(
+        session,
+        ServerConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            vice: None,
+            run: false,
+            realtime: false,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn ports_devices_and_media() {
+    let server = c64_server();
+    let mut c = Client::connect(&server);
+    c.recv();
+    let ports = c.ok(json!({"cmd": "list_ports"}));
+    assert_eq!(ports[1]["name"], "control port 2");
+    assert_eq!(ports[1]["connected"], true, "default joystick");
+    assert_eq!(ports[0]["devices"], json!(["joystick"]));
+
+    c.ok(json!({"cmd": "connect_device", "port": 0, "device": "joystick"}));
+    assert_eq!(c.event("device_connected")["port"], 0);
+    let e = c.call(json!({"cmd": "connect_device", "port": 0, "device": "joystick"}));
+    assert_eq!(e["ok"], false, "occupied");
+    let e = c.call(json!({"cmd": "connect_device", "port": 1, "device": "lightgun"}));
+    assert_eq!(e["ok"], false);
+    let r = c.ok(json!({"cmd": "disconnect_device", "port": 1}));
+    assert_eq!(r["disconnected"], true);
+    assert!(c.event("device_connected")["device"].is_null());
+    assert_eq!(c.ok(json!({"cmd": "list_ports"}))[1]["connected"], false);
+
+    let slots = c.ok(json!({"cmd": "list_media_slots"}));
+    let program = slots
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "Program")
+        .unwrap()["id"]
+        .clone();
+    let dir = std::env::temp_dir().join(format!("polytrace-media-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let prg = dir.join("t.prg");
+    std::fs::write(&prg, [0x00, 0xc0, 0x60]).unwrap();
+    let r = c.ok(json!({"cmd": "insert_media", "slot": program, "path": prg.to_str().unwrap()}));
+    assert_eq!(r["media"], "t.prg");
+    let ev = c.event("media_changed");
+    assert_eq!(ev["media"], "t.prg");
+    assert_eq!(ev["name"], "program");
+    let e = c.call(json!({"cmd": "insert_media", "slot": program, "path": "nope.prg"}));
+    assert_eq!(e["ok"], false);
+    c.ok(json!({"cmd": "eject_media", "slot": program}));
+    assert!(c.event("media_changed")["media"].is_null());
+    let e = c.call(json!({"cmd": "set_drive_mode", "slot": program, "mode": "virtual"}));
+    assert_eq!(e["ok"], false, "virtual drives come with Phase 4");
+    let _ = std::fs::remove_dir_all(&dir);
+    server.shutdown();
+}
+
+#[test]
+fn recorded_input_replays_bit_exactly() {
+    let server = c64_server();
+    let mut c = Client::connect(&server);
+    c.recv();
+    c.ok(json!({"cmd": "step_frame"}));
+    c.ok(json!({"cmd": "record_start"}));
+    let r = c.ok(json!({"cmd": "input", "events": [
+        {"target": {"port": 1}, "delay": 5000,
+         "event": {"type": "joystick", "dirs": ["up", "left"], "buttons": 1}},
+        {"target": "keyboard", "delay": 9000, "event": {"type": "key", "key": 7, "down": true}},
+    ]}));
+    assert_eq!(r["queued"], 2);
+    for _ in 0..5 {
+        c.ok(json!({"cmd": "step_frame"}));
+    }
+    let replay = c.ok(json!({"cmd": "record_stop"}));
+    assert_eq!(replay["format"], "polytrace-replay");
+    assert_eq!(replay["events"].as_array().unwrap().len(), 2);
+    let recorded_state = c.ok(json!({"cmd": "save_state"}))["data"].clone();
+
+    // Replaying from the start state ends in exactly the same state.
+    let r = c.ok(json!({"cmd": "replay_input", "replay": replay}));
+    assert_eq!(r["events"], 2);
+    for _ in 0..5 {
+        c.ok(json!({"cmd": "step_frame"}));
+    }
+    assert_eq!(c.ok(json!({"cmd": "save_state"}))["data"], recorded_state);
+
+    // Without its events the run differs: the input had an effect.
+    let mut silent = replay.clone();
+    silent["events"] = json!([]);
+    c.ok(json!({"cmd": "replay_input", "replay": silent}));
+    for _ in 0..5 {
+        c.ok(json!({"cmd": "step_frame"}));
+    }
+    assert_ne!(c.ok(json!({"cmd": "save_state"}))["data"], recorded_state);
+
+    let e = c.call(json!({"cmd": "record_stop"}));
+    assert_eq!(e["ok"], false, "not recording");
+    let e = c.call(json!({"cmd": "input", "events": [{"target": "mouse", "event": {}}]}));
+    assert_eq!(e["ok"], false);
+    server.shutdown();
+}
+
+#[test]
+fn cheat_search_finds_the_counter_and_a_freeze_pins_it() {
+    let server = server_with(subroutines());
+    let mut c = Client::connect(&server);
+    c.recv();
+    // One loop iteration of the program increments $0401 once.
+    let iterate = |c: &mut Client| {
+        c.ok(json!({"cmd": "run_to", "addr": 0x0812}));
+        c.event("stopped");
+    };
+    iterate(&mut c);
+    let r = c.ok(json!({"cmd": "search_start", "size": 1}));
+    assert_eq!(r["candidates"], 0x10000);
+    let mut left = 0x10000;
+    for _ in 0..4 {
+        iterate(&mut c);
+        left = c.ok(json!({"cmd": "search_next", "op": "increased_by", "value": 1}))["candidates"]
+            .as_u64()
+            .unwrap();
+    }
+    assert!((1..10).contains(&left), "{left} candidates");
+    let found = c.ok(json!({"cmd": "search_results"}));
+    let hit = found["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["addr"] == 0x0401)
+        .expect("counter found")
+        .clone();
+    assert_eq!(hit["value"], hit["last"]);
+    let e = c.call(json!({"cmd": "search_next", "op": "eq"}));
+    assert_eq!(e["ok"], false, "eq needs a value");
+    assert_eq!(
+        c.ok(json!({"cmd": "search_results", "max": 1}))["total"],
+        left,
+        "a bad request keeps the search"
+    );
+
+    // Freeze it: the program keeps incrementing, the value stays.
+    let f = c.ok(json!({"cmd": "freeze_add", "addr": 0x0401, "value": 7, "label": "Lives"}));
+    c.ok(json!({"cmd": "subscribe", "events": ["freeze_blocked_write"]}));
+    c.ok(json!({"cmd": "resume"}));
+    let ev = c.event("freeze_blocked_write");
+    assert_eq!(
+        (ev["addr"].clone(), ev["value"].clone()),
+        (json!(0x0401), json!(8))
+    );
+    c.ok(json!({"cmd": "pause"}));
+    let p = c.ok(json!({"cmd": "peek", "addr": 0x0400, "len": 3}));
+    assert_eq!(p["bytes"][1], 7);
+    assert_eq!(p["frozen"], json!([1]), "peek marks frozen bytes");
+
+    let list = c.ok(json!({"cmd": "freeze_list"}));
+    assert_eq!(list[0]["label"], "Lives");
+    assert_eq!(list[0]["mode"], "block_writes");
+    let state = c.ok(json!({"cmd": "save_state"}));
+
+    // Cheat file round trip.
+    let saved = c.ok(json!({"cmd": "cheats_save"}));
+    let text = saved["text"].as_str().unwrap().to_string();
+    assert!(
+        text.contains("[[freeze]]") && text.contains("addr = 1025"),
+        "{text}"
+    );
+    c.ok(json!({"cmd": "freeze_remove", "freeze": f["freeze"]}));
+    assert_eq!(c.ok(json!({"cmd": "freeze_list"})), json!([]));
+    let r = c.ok(json!({"cmd": "cheats_load", "text": text}));
+    assert_eq!(r["freezes"].as_array().unwrap().len(), 1);
+    let id = c.ok(json!({"cmd": "freeze_list"}))[0]["freeze"].clone();
+    assert_eq!(
+        c.ok(json!({"cmd": "freeze_toggle", "freeze": id}))["enabled"],
+        false
+    );
+    let e = c.call(json!({"cmd": "cheats_load", "text": "[[freeze]]\nspace = \"nowhere\"\naddr = 1\nvalue = 1\n"}));
+    assert_eq!(e["ok"], false);
+
+    // A savestate brings its freezes back.
+    c.ok(json!({"cmd": "load_state", "data": state["data"], "freezes": state["freezes"]}));
+    let list = c.ok(json!({"cmd": "freeze_list"}));
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["enabled"], true);
+    server.shutdown();
+}
