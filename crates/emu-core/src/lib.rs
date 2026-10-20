@@ -29,7 +29,7 @@ pub use bus::{Bus, Size};
 pub use cpu::{Cpu, CycleResult, Flow, Instr, Register, RegisterSet};
 pub use cycle::Cycle;
 pub use debug::{BpId, Breakpoint, BreakpointKind, DebugHooks, FreezeId, InterruptKind};
-pub use frame::FrameRef;
+pub use frame::{FrameRef, ScreenId, ScreenInfo};
 pub use freeze::{Freeze, FreezeMode};
 pub use hooked::HookedBus;
 pub use machine::{

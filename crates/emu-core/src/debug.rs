@@ -738,6 +738,12 @@ impl DebugHooks {
         self.pending.take()
     }
 
+    /// A stop is pending (machines that run several CPU steps per cycle
+    /// stop between them).
+    pub fn stop_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// The most recent write blocked by a freeze (for `freeze_blocked_write`).
     pub fn take_blocked_write(&mut self) -> Option<BlockedWrite> {
         self.blocked_write.take()

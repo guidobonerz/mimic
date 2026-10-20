@@ -821,6 +821,7 @@ dependencies = [
  "emu-debug",
  "emu-machines",
  "emu-preview",
+ "machine-c128",
  "machine-c64",
  "machine-pet",
  "machine-ted",

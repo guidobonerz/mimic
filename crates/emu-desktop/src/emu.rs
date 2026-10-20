@@ -16,7 +16,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use emu_core::frame::SignalInfo;
-use emu_core::{Machine, StopReason};
+use emu_core::{Machine, ScreenId, StopReason};
 use emu_debug::{Endpoint, Service, Session};
 use emu_input::{HostEvent, Mapper};
 use emu_preview::server::FrameTap;
@@ -60,6 +60,9 @@ pub struct Shared {
     pub rate_ppm: AtomicI64,
     /// Last stop that was not a frame end (jam, fault), for the title bar.
     pub status: Mutex<Option<String>>,
+    /// Set by the window (F12): show the machine's next screen (C128: VIC
+    /// and VDC).
+    pub next_screen: AtomicBool,
 }
 
 impl Shared {
@@ -78,6 +81,7 @@ impl Shared {
             underruns: AtomicU64::new(0),
             rate_ppm: AtomicI64::new(0),
             status: Mutex::default(),
+            next_screen: AtomicBool::new(false),
         }
     }
 }
@@ -127,8 +131,27 @@ fn phase_lock(deadline: Instant, period: u64, shared: &Shared) -> Instant {
 /// Upper bound if nobody consumes audio.
 const AUDIO_MAX: usize = 48_000;
 
-fn to_frame(m: &dyn Machine) -> Frame {
-    let f = m.framebuffer();
+/// The screen the window shows: the one chosen with F12, else the one the
+/// machine marks active (C128: the 40/80 key).
+fn shown_screen(m: &dyn Machine, chosen: Option<ScreenId>) -> ScreenId {
+    let screens = m.screens();
+    chosen
+        .filter(|c| screens.iter().any(|s| s.id == *c))
+        .or_else(|| screens.iter().find(|s| s.active).map(|s| s.id))
+        .unwrap_or(ScreenId::MAIN)
+}
+
+/// The screen after `current` in the machine's list (wrapping).
+fn next_screen(m: &dyn Machine, current: ScreenId) -> ScreenId {
+    let screens = m.screens();
+    let i = screens.iter().position(|s| s.id == current).unwrap_or(0);
+    screens[(i + 1) % screens.len()].id
+}
+
+fn to_frame(m: &dyn Machine, screen: ScreenId) -> Frame {
+    let Some(f) = m.screen(screen) else {
+        return to_frame(m, ScreenId::MAIN);
+    };
     let mut rgba = Vec::with_capacity(f.width as usize * f.height as usize * 4);
     for y in 0..f.height {
         for x in 0..f.width {
@@ -195,6 +218,7 @@ pub fn spawn(
         let mut shown_at = None;
         let debug_stats = std::env::var_os("EMU_DESKTOP_DEBUG").is_some();
         let mut report = Instant::now();
+        let mut chosen: Option<ScreenId> = None;
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
             loop {
@@ -210,6 +234,13 @@ pub fn spawn(
                 }
             }
 
+            if shared.next_screen.swap(false, Ordering::Relaxed) {
+                let current = shown_screen(session.machine(), chosen);
+                chosen = Some(next_screen(session.machine(), current));
+                shown_at = None;
+            }
+            let screen = shown_screen(session.machine(), chosen);
+
             let was_running = session.is_running();
             if let Some(ep) = &endpoint {
                 let wait = (!was_running).then_some(Duration::from_millis(10));
@@ -223,7 +254,7 @@ pub fn spawn(
                 let now = session.machine().now();
                 if shown_at != Some(now) {
                     shown_at = Some(now);
-                    push_frame(&shared, session.machine());
+                    push_frame(&shared, session.machine(), screen);
                     let pc = main_pc(session.machine_mut());
                     let reason = session.last_stop().unwrap_or(StopReason::StepDone);
                     if let Ok(mut s) = shared.status.lock() {
@@ -284,13 +315,13 @@ pub fn spawn(
                 report = Instant::now();
                 (min_fill, max_fill, frames) = (usize::MAX, 0, 0);
             }
-            push_frame(&shared, session.machine());
+            push_frame(&shared, session.machine(), screen);
         }
     })
 }
 
-fn push_frame(shared: &Shared, machine: &dyn Machine) {
-    let frame = to_frame(machine);
+fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {
+    let frame = to_frame(machine, screen);
     if let Ok(mut q) = shared.frames.lock() {
         q.push_back(frame);
         while q.len() > MAX_QUEUED_FRAMES {

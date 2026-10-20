@@ -113,6 +113,98 @@ pub static C64: Keymap = Keymap {
     entries: C64_POSITIONAL,
 };
 
+/// C128 keyboard: the C64 layout ([`C64_POSITIONAL`], same matrix codes)
+/// with the C128's own cursor keys on the arrows and its extra keys on F9
+/// (ESC), F10 (HELP), F11 (TAB), End (LINE FEED), left Alt (ALT), Scroll
+/// Lock (NO SCROLL), Num Lock (40/80 DISPLAY) and Caps Lock (CAPS LOCK).
+/// The numeric keypad stays the joystick; the C128 keypad is not mapped.
+const C128_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Backquote", &[k(7, 1)]), // ←
+    ("Digit1", &[k(7, 0)]),
+    ("Digit2", &[k(7, 3)]),
+    ("Digit3", &[k(1, 0)]),
+    ("Digit4", &[k(1, 3)]),
+    ("Digit5", &[k(2, 0)]),
+    ("Digit6", &[k(2, 3)]),
+    ("Digit7", &[k(3, 0)]),
+    ("Digit8", &[k(3, 3)]),
+    ("Digit9", &[k(4, 0)]),
+    ("Digit0", &[k(4, 3)]),
+    ("Minus", &[k(5, 0)]),  // +
+    ("Equal", &[k(5, 3)]),  // -
+    ("Insert", &[k(6, 0)]), // £
+    ("Home", &[k(6, 3)]),
+    ("Backspace", &[k(0, 0)]), // INST/DEL
+    ("Tab", &[k(7, 2)]),       // CTRL
+    ("KeyQ", &[k(7, 6)]),
+    ("KeyW", &[k(1, 1)]),
+    ("KeyE", &[k(1, 6)]),
+    ("KeyR", &[k(2, 1)]),
+    ("KeyT", &[k(2, 6)]),
+    ("KeyY", &[k(3, 1)]),
+    ("KeyU", &[k(3, 6)]),
+    ("KeyI", &[k(4, 1)]),
+    ("KeyO", &[k(4, 6)]),
+    ("KeyP", &[k(5, 1)]),
+    ("BracketLeft", &[k(5, 6)]),  // @
+    ("BracketRight", &[k(6, 1)]), // *
+    ("Delete", &[k(6, 6)]),       // ↑
+    ("PageUp", &[88]),            // RESTORE
+    ("Escape", &[k(7, 7)]),       // RUN/STOP
+    ("CapsLock", &[90]),          // CAPS LOCK
+    ("KeyA", &[k(1, 2)]),
+    ("KeyS", &[k(1, 5)]),
+    ("KeyD", &[k(2, 2)]),
+    ("KeyF", &[k(2, 5)]),
+    ("KeyG", &[k(3, 2)]),
+    ("KeyH", &[k(3, 5)]),
+    ("KeyJ", &[k(4, 2)]),
+    ("KeyK", &[k(4, 5)]),
+    ("KeyL", &[k(5, 2)]),
+    ("Semicolon", &[k(5, 5)]), // :
+    ("Quote", &[k(6, 2)]),     // ;
+    ("Backslash", &[k(6, 5)]), // =
+    ("Enter", &[k(0, 1)]),
+    ("ControlLeft", &[k(7, 5)]), // C=
+    ("ShiftLeft", &[C64_LSHIFT]),
+    ("KeyZ", &[k(1, 4)]),
+    ("KeyX", &[k(2, 7)]),
+    ("KeyC", &[k(2, 4)]),
+    ("KeyV", &[k(3, 7)]),
+    ("KeyB", &[k(3, 4)]),
+    ("KeyN", &[k(4, 7)]),
+    ("KeyM", &[k(4, 4)]),
+    ("Comma", &[k(5, 7)]),
+    ("Period", &[k(5, 4)]),
+    ("Slash", &[k(6, 7)]),
+    ("ShiftRight", &[C64_RSHIFT]),
+    ("ArrowDown", &[k(10, 4)]),
+    ("ArrowRight", &[k(10, 6)]),
+    ("ArrowUp", &[k(10, 3)]),
+    ("ArrowLeft", &[k(10, 5)]),
+    ("Space", &[k(7, 4)]),
+    ("F1", &[k(0, 4)]),
+    ("F2", &[C64_LSHIFT, k(0, 4)]),
+    ("F3", &[k(0, 5)]),
+    ("F4", &[C64_LSHIFT, k(0, 5)]),
+    ("F5", &[k(0, 6)]),
+    ("F6", &[C64_LSHIFT, k(0, 6)]),
+    ("F7", &[k(0, 3)]),
+    ("F8", &[C64_LSHIFT, k(0, 3)]),
+    ("F9", &[k(9, 0)]),          // ESC
+    ("F10", &[k(8, 0)]),         // HELP
+    ("F11", &[k(8, 3)]),         // TAB
+    ("End", &[k(9, 3)]),         // LINE FEED
+    ("AltLeft", &[k(10, 0)]),    // ALT
+    ("ScrollLock", &[k(10, 7)]), // NO SCROLL
+    ("NumLock", &[89]),          // 40/80 DISPLAY
+];
+
+pub static C128: Keymap = Keymap {
+    machine: "c128",
+    entries: C128_POSITIONAL,
+};
+
 const VIC20_LSHIFT: u16 = k(3, 1);
 const VIC20_RSHIFT: u16 = k(4, 6);
 
@@ -388,6 +480,7 @@ pub static PET: Keymap = Keymap {
 pub fn positional(machine: &str) -> Option<&'static Keymap> {
     match machine {
         "c64" => Some(&C64),
+        "c128" => Some(&C128),
         "vic20" => Some(&VIC20),
         "pet" => Some(&PET),
         "plus4" | "c16" => Some(&TED),
@@ -435,6 +528,25 @@ mod tests {
             names.sort_unstable();
             names.dedup();
             assert_eq!(names.len(), map.len());
+        }
+    }
+
+    #[test]
+    fn c128_adds_its_own_keys() {
+        let mut names: Vec<_> = C128_POSITIONAL.iter().map(|(n, _)| *n).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), C128_POSITIONAL.len());
+        let up: Vec<_> = C128.lookup("ArrowUp").unwrap().collect();
+        assert_eq!(up, [MachineKey(k(10, 3))], "no SHIFT needed");
+        assert_eq!(C128.lookup("NumLock").unwrap().next(), Some(MachineKey(89)));
+        // Every C64 matrix key is still reachable on its own, except the
+        // matrix cursor keys (CRSR → and ↓): the arrows use the dedicated ones.
+        for code in (0..64u16).filter(|&c| c != k(0, 2) && c != k(0, 7)) {
+            assert!(
+                C128_POSITIONAL.iter().any(|(_, keys)| keys == &[code]),
+                "matrix key {code}"
+            );
         }
     }
 

@@ -31,7 +31,7 @@ use video_crt::Profile;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use emu::Shared;
@@ -61,6 +61,9 @@ C64 keys by position on a PC keyboard: Esc = RUN/STOP, Tab = CTRL,
 left Ctrl = C=, Insert = £, Delete = ↑, Page Up = RESTORE, Home = CLR/HOME,
 F2/F4/F6/F8 = shifted F1/F3/F5/F7. Joystick (port 2): numeric keypad
 8/2/4/6 + 0 or right Ctrl, or the first gamepad.
+
+F12 switches between a machine's screens (C128: 40-column VIC and
+80-column VDC; the window starts on the one the 40/80 key selects).
 
 EMU_DESKTOP_DEBUG=1 prints frame and audio statistics every 5 s.";
 
@@ -380,6 +383,13 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // F12 switches between the machine's screens (C128 VIC/VDC).
+                if event.physical_key == PhysicalKey::Code(KeyCode::F12) {
+                    if event.state == ElementState::Pressed && !event.repeat {
+                        self.shared.next_screen.store(true, Ordering::Relaxed);
+                    }
+                    return;
+                }
                 if let PhysicalKey::Code(code) = event.physical_key {
                     // winit names its key codes after W3C KeyboardEvent.code.
                     let _ = self.input.send(HostEvent::Key {

@@ -54,10 +54,25 @@ const MAX_HEAD: usize = 8 * 1024;
 /// frame instead.
 const KEY_THRESHOLD: u64 = 2;
 
+/// Copies of every video output of one moment, by screen name; the first
+/// is the main output.
+#[derive(Debug)]
+pub struct Screens(Vec<(&'static str, OwnedFrame)>);
+
+impl Screens {
+    /// The named output, or the main one for `None`.
+    pub fn get(&self, name: Option<&str>) -> Option<&OwnedFrame> {
+        match name {
+            None => self.0.first().map(|(_, f)| f),
+            Some(n) => self.0.iter().find(|(s, _)| *s == n).map(|(_, f)| f),
+        }
+    }
+}
+
 /// The emulation side: publish frame copies here.
 #[derive(Clone)]
 pub struct FrameTap {
-    tx: Arc<watch::Sender<Option<Arc<OwnedFrame>>>>,
+    tx: Arc<watch::Sender<Option<Arc<Screens>>>>,
 }
 
 impl Default for FrameTap {
@@ -73,13 +88,18 @@ impl FrameTap {
         }
     }
 
-    /// Copy the machine's current frame for the preview. Never blocks.
+    /// Copy the machine's current frames (every output) for the preview.
+    /// Never blocks.
     pub fn publish(&self, m: &dyn Machine, running: bool) {
-        let frame = Arc::new(OwnedFrame::from_machine(m, running));
-        self.tx.send_replace(Some(frame));
+        let screens = m
+            .screens()
+            .into_iter()
+            .filter_map(|s| Some((s.name, OwnedFrame::from_screen(m, s.id, running)?)))
+            .collect();
+        self.tx.send_replace(Some(Arc::new(Screens(screens))));
     }
 
-    fn latest(&self) -> Option<Arc<OwnedFrame>> {
+    fn latest(&self) -> Option<Arc<Screens>> {
         self.tx.borrow().clone()
     }
 }
@@ -320,6 +340,8 @@ async fn error(stream: &mut TcpStream, status: &str, msg: &str) {
 
 /// Stream and snapshot settings from the query string.
 struct Settings {
+    /// `screen=`: which output (C128: "vic" or "vdc"); the main one if absent.
+    screen: Option<String>,
     filter: Filter,
     fps: u32,
     format: Format,
@@ -370,6 +392,7 @@ fn settings(head: &Head, machine: &str) -> Result<Settings, String> {
         other => return Err(format!("delta must be 0 or 1, not '{other}'")),
     };
     Ok(Settings {
+        screen: head.param("screen").map(str::to_string),
         filter,
         fps,
         format,
@@ -398,8 +421,11 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
             if head.param("machine").is_some_and(|m| m != ctx.machine) {
                 return error(&mut stream, "404 Not Found", "no such machine\n").await;
             }
-            let Some(frame) = ctx.tap.latest() else {
+            let Some(screens) = ctx.tap.latest() else {
                 return error(&mut stream, "503 Service Unavailable", "no frame yet\n").await;
+            };
+            let Some(frame) = screens.get(settings.screen.as_deref()).cloned() else {
+                return error(&mut stream, "404 Not Found", "no such screen\n").await;
             };
             let filter = settings.filter;
             let f = frame.clone();
@@ -442,16 +468,20 @@ async fn stream_frames(mut ws: WebSocketStream<TcpStream>, ctx: &Context, s: Set
     let mut rx = ctx.tap.tx.subscribe();
     let period = Duration::from_secs(1) / s.fps;
     let mut prev: Option<RgbImage> = None;
-    let mut last_sent: Option<Arc<OwnedFrame>> = None;
+    let mut last_sent: Option<Arc<Screens>> = None;
     loop {
         let started = tokio::time::Instant::now();
-        let frame = rx.borrow_and_update().clone();
-        if let Some(frame) = frame {
-            if !last_sent.as_ref().is_some_and(|l| Arc::ptr_eq(l, &frame)) {
+        let screens = rx.borrow_and_update().clone();
+        if let Some(screens) = screens {
+            if !last_sent.as_ref().is_some_and(|l| Arc::ptr_eq(l, &screens)) {
+                let Some(f) = screens.get(s.screen.as_deref()).cloned() else {
+                    return;
+                };
                 let filter = s.filter.clone();
                 let (format, delta, old) = (s.format, s.delta, prev.take());
-                let f = frame.clone();
-                let before = last_sent.clone();
+                let before = last_sent
+                    .as_ref()
+                    .and_then(|l| l.get(s.screen.as_deref()).map(|b| b.running));
                 let job = tokio::task::spawn_blocking(move || {
                     let img = filter.render(&f);
                     let full = Rect {
@@ -476,9 +506,7 @@ async fn stream_frames(mut ws: WebSocketStream<TcpStream>, ctx: &Context, s: Set
                             }
                             // Same picture: tell paused viewers about the
                             // beam, and everyone about pause/run changes.
-                            None if !f.running
-                                || before.is_some_and(|b| b.running != f.running) =>
-                            {
+                            None if !f.running || before.is_some_and(|b| b != f.running) => {
                                 let none = Rect { w: 0, h: 0, ..full };
                                 Some(stream_message(&f, &img, none, false, format))
                             }
@@ -489,7 +517,7 @@ async fn stream_frames(mut ws: WebSocketStream<TcpStream>, ctx: &Context, s: Set
                 });
                 let Ok((img, msg)) = job.await else { return };
                 prev = Some(img);
-                last_sent = Some(frame);
+                last_sent = Some(screens);
                 if let Some(msg) = msg {
                     if ws.send(Message::binary(msg)).await.is_err() {
                         return;

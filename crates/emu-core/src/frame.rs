@@ -70,6 +70,26 @@ pub enum PixelData<'a> {
     Rgb(&'a [Rgb8]),
 }
 
+/// One video output of a machine. Most machines have one; the C128 has the
+/// VIC-IIe (40 columns) and the VDC (80 columns) side by side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ScreenId(pub u8);
+
+impl ScreenId {
+    /// The output [`crate::Machine::framebuffer`] shows.
+    pub const MAIN: ScreenId = ScreenId(0);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenInfo {
+    pub id: ScreenId,
+    /// Short name for URLs and options ("main", "vic", "vdc").
+    pub name: &'static str,
+    /// The output the machine currently uses for its console (C128: the
+    /// 40/80 DISPLAY key). Frontends with one window start on it.
+    pub active: bool,
+}
+
 /// A borrowed view of one field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameRef<'a> {

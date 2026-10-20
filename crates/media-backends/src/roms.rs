@@ -140,8 +140,41 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         DOS1541,
     ];
     const C16: &[RomSpec] = &[PLUS4[0], PLUS4[1], PLUS4[2], DOS1541];
+    // C128: KERNAL 318020, BASIC 318018 (low) / 318019 (high), character
+    // ROM 390059; the C64-mode ROM as one 16 KB 251913 or as the C64's two
+    // 8 KB ROMs (VICE names them basic64/kernal64).
+    const C128: &[RomSpec] = &[
+        rom(
+            "kernal",
+            &["kernal-318020", "kernal-c128", "kernal"],
+            0x4000,
+        ),
+        rom("basic-lo", &["basiclo", "basic-lo", "basic-318018"], 0x4000),
+        rom("basic-hi", &["basichi", "basic-hi", "basic-318019"], 0x4000),
+        rom(
+            "chargen",
+            &["chargen-390059", "chargen", "characters"],
+            0x2000,
+        ),
+        optional("c64", &["251913", "c64"], 0x4000),
+        optional("basic64", &["basic64", "basic-901226"], 0x2000),
+        // 901227-03 is the standard KERNAL; 325179/325182 are national ones.
+        optional(
+            "kernal64",
+            &[
+                "kernal64-901227-03",
+                "kernal64-901227",
+                "kernal64",
+                "kernal-901227",
+            ],
+            0x2000,
+        ),
+        optional("function", &["function", "funcrom"], 0x8000),
+        DOS1541,
+    ];
     match machine {
         "c64" => C64,
+        "c128" => C128,
         "vic20" => VIC20,
         "pet" => PET,
         "plus4" => PLUS4,
@@ -156,6 +189,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "c64" => &["c64"],
         "vic20" => &["vic20"],
         "pet" => &["pet"],
+        "c128" => &["c128"],
         "plus4" => &["plus4"],
         "c16" => &["c16", "plus4"],
         _ => &[],

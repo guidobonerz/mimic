@@ -90,7 +90,7 @@ impl Profile {
         // The C64's game port is control port 2; the VIC-20 has one port; the
         // C16/Plus/4 joystick comes plugged into port 1.
         let port = match machine {
-            "c64" => Some(1),
+            "c64" | "c128" => Some(1),
             "vic20" | "c16" | "plus4" => Some(0),
             _ => None,
         };

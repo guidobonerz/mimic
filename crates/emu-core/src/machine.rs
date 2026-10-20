@@ -6,7 +6,7 @@ use crate::bus::Size;
 use crate::cpu::{Instr, RegisterSet};
 use crate::cycle::Cycle;
 use crate::debug::{BpId, DebugHooks};
-use crate::frame::FrameRef;
+use crate::frame::{FrameRef, ScreenId, ScreenInfo};
 use crate::input::TimedInput;
 use crate::media::{MediaSlot, MediaSlotInfo, SlotId};
 use crate::port::{PortDevice, PortError, PortId, PortInfo};
@@ -125,6 +125,23 @@ pub trait Machine: Send {
     /// lines above [`Machine::beam`] are new, lines below are from the
     /// previous field.
     fn framebuffer(&self) -> FrameRef<'_>;
+
+    /// The machine's video outputs; the first is the one
+    /// [`Machine::framebuffer`] shows. Machines with one output keep the
+    /// default.
+    fn screens(&self) -> Vec<ScreenInfo> {
+        vec![ScreenInfo {
+            id: ScreenId::MAIN,
+            name: "main",
+            active: true,
+        }]
+    }
+
+    /// The current field of one output (see [`Machine::framebuffer`]);
+    /// `None` for an unknown id.
+    fn screen(&self, id: ScreenId) -> Option<FrameRef<'_>> {
+        (id == ScreenId::MAIN).then(|| self.framebuffer())
+    }
 
     /// Append the audio samples produced since the last call to `out`.
     /// Machines without sound append nothing.

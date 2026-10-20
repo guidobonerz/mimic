@@ -15,6 +15,7 @@ machine-c64.workspace = true
 machine-vic20.workspace = true
 machine-pet.workspace = true
 machine-ted.workspace = true
+machine-c128.workspace = true
 
 [dev-dependencies]
 emu-debug.workspace = true

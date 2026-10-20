@@ -12,7 +12,7 @@
 pub mod server;
 
 use emu_core::frame::{PixelData, Rgb8, SignalInfo};
-use emu_core::{BeamPos, FrameRef, Machine};
+use emu_core::{BeamPos, FrameRef, Machine, ScreenId};
 use video_crt::Profile;
 
 /// Encode the raw frame (no CRT processing) as an 8-bit RGB PNG.
@@ -62,8 +62,17 @@ pub struct OwnedFrame {
 }
 
 impl OwnedFrame {
+    /// A copy of the machine's main output.
     pub fn from_machine(m: &dyn Machine, running: bool) -> Self {
-        let f = m.framebuffer();
+        Self::from_frame(&m.framebuffer(), m.beam(), running)
+    }
+
+    /// A copy of one output; `None` if the machine has no such screen.
+    pub fn from_screen(m: &dyn Machine, id: ScreenId, running: bool) -> Option<Self> {
+        Some(Self::from_frame(&m.screen(id)?, m.beam(), running))
+    }
+
+    fn from_frame(f: &FrameRef<'_>, beam: Option<BeamPos>, running: bool) -> Self {
         let mut pixels = Vec::with_capacity(f.width as usize * f.height as usize);
         match f.pixels {
             PixelData::Indexed { pixels: p, palette } => pixels.extend(
@@ -78,7 +87,7 @@ impl OwnedFrame {
             height: f.height,
             pixels,
             signal: f.signal,
-            beam: m.beam(),
+            beam,
             running,
         }
     }

@@ -33,6 +33,7 @@ usage: emu-headless [options]
   --snapshot FILE.png   write the last frame as PNG
   --snapshot-every N    with --snapshot: also write FILE-<frame>.png every N frames
   --wav FILE.wav        write the audio of the run (16-bit PCM)
+  --screen NAME         snapshot this screen (C128: vic or vdc; default: main)
   --crt PROFILE[:N]     snapshot through a monitor profile (raw, 1702, 1084s,
                         pal-tv or a .toml file) at N rows per line (default 2)
   --load-state FILE     restore a savestate before running
@@ -61,6 +62,7 @@ struct Args {
     snapshot_every: u64,
     wav: Option<String>,
     crt: Option<(String, u32)>,
+    screen: Option<String>,
     load_state: Option<String>,
     save_state: Option<String>,
     debug: Option<SocketAddr>,
@@ -123,6 +125,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 args.snapshot_every = n.parse().map_err(|_| format!("bad frame count '{n}'"))?;
             }
             "--wav" => args.wav = Some(value("--wav")?),
+            "--screen" => args.screen = Some(value("--screen")?),
             "--crt" => {
                 let v = value("--crt")?;
                 let (name, scale) = match v.rsplit_once(':') {
@@ -194,12 +197,23 @@ fn with_rom_dir(args: &Args) -> Result<MachineConfig, String> {
 }
 
 fn snapshot_png(machine: &dyn Machine, args: &Args) -> Result<Vec<u8>, String> {
+    let frame = match &args.screen {
+        None => machine.framebuffer(),
+        Some(name) => {
+            let screens = machine.screens();
+            let id = screens.iter().find(|s| s.name == name).map(|s| s.id);
+            id.and_then(|id| machine.screen(id)).ok_or_else(|| {
+                let names: Vec<_> = screens.iter().map(|s| s.name).collect();
+                format!("no screen '{name}' (this machine has {})", names.join(", "))
+            })?
+        }
+    };
     Ok(match &args.crt {
         Some((name, scale)) => {
             let profile = load_profile(name)?;
-            emu_preview::encode_png_crt(&machine.framebuffer(), &profile, *scale)
+            emu_preview::encode_png_crt(&frame, &profile, *scale)
         }
-        None => emu_preview::encode_png(&machine.framebuffer()),
+        None => emu_preview::encode_png(&frame),
     })
 }
 

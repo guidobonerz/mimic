@@ -118,7 +118,7 @@ impl Profile {
     /// The monitor a machine shipped with (desktop default).
     pub fn default_for(machine: &str) -> Self {
         let name = match machine {
-            "c64" | "vic20" | "c16" | "plus4" => "1702",
+            "c64" | "c128" | "vic20" | "c16" | "plus4" => "1702",
             _ => "raw",
         };
         Self::preset(name).unwrap_or_default()
