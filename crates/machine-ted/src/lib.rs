@@ -6,7 +6,8 @@
 //! 1 773 447 Hz double clock, 312 lines) and "ntsc" (TED 7360,
 //! 1 789 772 Hz, 262 lines); the NTSC model uses `roms["kernal-ntsc"]` if
 //! given. Time ([`Machine::now`]) counts TED double clocks; the CPU runs in
-//! the slots the TED leaves it (see `chips_cbm::ted`).
+//! the slots the TED leaves it (see `chips_cbm::ted`). The "cartridge"
+//! slot holds the expansion port's C1/C2 ROMs (ROM banks 2 and 3).
 //!
 //! I/O at `$FD00–$FF3F`:
 //!
@@ -53,6 +54,8 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
+use devices_cartridge::slot::CartSlot;
+use devices_cartridge::ted::TedCart;
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms};
 use drives_other::Datasette;
@@ -356,6 +359,7 @@ impl Bus for PeekBus<'_> {
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(1);
 pub const SLOT_TAPE: SlotId = SlotId(2);
+pub const SLOT_CARTRIDGE: SlotId = SlotId(3);
 const PORT_NAMES: [&str; 2] = ["joystick 1", "joystick 2"];
 
 pub struct TedMachine {
@@ -371,6 +375,8 @@ pub struct TedMachine {
     program: ProgramSlot,
     /// The datasette (1531) on the cassette port.
     tape: Datasette,
+    /// The expansion port's ROM cartridges (a copy in `mem` maps them).
+    cart: CartSlot<TedCart>,
     autostart: Autostart,
     palette: [Rgb8; 128],
     field_done_pending: bool,
@@ -462,6 +468,7 @@ impl TedMachine {
             drive,
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C16, double_hz),
+            cart: devices_cartridge::ted::slot(),
             autostart,
             palette: ted::palette::palette(),
             field_done_pending: false,
@@ -490,6 +497,11 @@ impl TedMachine {
 
     /// One TED double clock. Returns `Some` if emulation must stop.
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        // A cartridge went in or out: the machine powers up again.
+        if self.cart.take_changed() {
+            self.mem.cart = self.cart.cart().cloned();
+            self.reset(ResetKind::Hard);
+        }
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
         }
@@ -896,6 +908,12 @@ impl Machine for TedMachine {
             kind: MediaKind::Tape,
             inserted: self.tape.has_tape(),
         });
+        slots.push(MediaSlotInfo {
+            id: SLOT_CARTRIDGE,
+            name: "cartridge",
+            kind: MediaKind::Cartridge,
+            inserted: self.cart.is_inserted(),
+        });
         slots
     }
 
@@ -904,6 +922,7 @@ impl Machine for TedMachine {
             SLOT_DRIVE8 => self.drive.as_mut().map(|d| d.media_slot()),
             SLOT_PROGRAM => Some(&mut self.program),
             SLOT_TAPE => Some(&mut self.tape),
+            SLOT_CARTRIDGE => Some(&mut self.cart),
             _ => None,
         }
     }

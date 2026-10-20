@@ -10,9 +10,9 @@
 //! map); C64-Wiki "Bank Switching" table. The table below is derived from
 //! those documents, not from another emulator.
 //!
-//! This is the CPU view only. The VIC-II has its own view (16 KB banks
-//! selected by CIA2, character ROM at `$1000`/`$9000`); that arrives with
-//! the VIC-II.
+//! This is the CPU view only; the VIC-II has its own (16 KB banks selected
+//! by CIA2, character ROM at `$1000`/`$9000`). The C128's 8721 PLA
+//! reproduces this map in C64 mode, so both machines use the table.
 
 /// What a 4 KB page of the CPU address space maps to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

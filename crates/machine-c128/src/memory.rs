@@ -4,8 +4,10 @@
 //! - **8502, C128 mode:** through the MMU (`chips_cbm::mmu`). `$FF00–$FF04`
 //!   is always the MMU; writes to ROM areas go to the RAM underneath.
 //! - **8502, C64 mode** (MCR bit 6): the C64 PLA's map from the port bits
-//!   LORAM/HIRAM/CHAREN, RAM bank 0, the C64 ROM (BASIC `$A000`, KERNAL
-//!   `$E000`) and the C64 half of the character ROM.
+//!   LORAM/HIRAM/CHAREN and the cartridge lines GAME/EXROM
+//!   (`chips_cbm::pla`), RAM bank 0, the C64 ROM (BASIC `$A000`, KERNAL
+//!   `$E000`), the C64 half of the character ROM and the cartridge's
+//!   ROML/ROMH (which the machine reads).
 //! - **Z80:** the MMU's RAM and ROM map, except that `$0000–$0FFF` shows
 //!   the Z80 BIOS (KERNAL ROM `$D000–$DFFF`) in RAM bank 0, and
 //!   `$D000–$DFFF` is always RAM (the Z80 reaches I/O through its I/O
@@ -18,8 +20,10 @@
 //! Programmer's Reference Guide, chapter 13 (memory map, `$01`).
 
 use chips_cbm::mmu::{Mmu, Target};
+use chips_cbm::pla::{self, Bank, Lines};
 use chips_cbm::vic2::VicMemory;
 use cpu_6502::IoPort;
+use devices_cartridge::ExpansionCart;
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const ROM_16K: usize = 0x4000;
@@ -43,8 +47,26 @@ pub struct Roms {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Read {
     Value(u8),
-    /// The I/O area: the machine's chips decide.
+    /// The I/O area: the machine's chips (and the cartridge at
+    /// `$DE00–$DFFF`) decide.
     Io(u16),
+    /// C64 mode: the cartridge's ROML or ROMH.
+    RomL(u16),
+    RomH(u16),
+    /// C64 Ultimax mode: nothing drives the bus.
+    Open,
+}
+
+/// Where a CPU write goes besides memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Write {
+    /// Done (RAM, MMU, or nowhere).
+    Done,
+    /// The I/O area.
+    Io,
+    /// C64 mode: under cartridge ROML/ROMH (also seen by the cartridge).
+    RomL,
+    RomH,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,6 +82,9 @@ pub struct Memory {
     pub caps_lock: bool,
     /// A datasette key is down (port bit 4 reads low).
     pub cassette_sense: bool,
+    /// Cartridge line levels (true = high = not pulled), from the machine.
+    pub game: bool,
+    pub exrom: bool,
 }
 
 impl Memory {
@@ -72,6 +97,8 @@ impl Memory {
             port: IoPort::new(0x7f),
             caps_lock: false,
             cassette_sense: false,
+            game: true,
+            exrom: true,
         }
     }
 
@@ -151,49 +178,65 @@ impl Memory {
         })
     }
 
+    /// The C64-mode PLA page `a` falls in.
+    fn c64_bank(&self, a: u16) -> Bank {
+        let lines = Lines::new(self.port_out(), self.game, self.exrom);
+        pla::TABLE[usize::from(lines.mode())][usize::from(a >> 12)]
+    }
+
+    /// C64 mode with GAME low and EXROM high.
+    pub fn ultimax(&self) -> bool {
+        self.mmu.c64_mode() && !self.game && self.exrom
+    }
+
     fn c64_read(&self, a: u16) -> Read {
-        let p = self.port_out();
-        let (lo, hi, charen) = (p & 1 != 0, p & 2 != 0, p & 4 != 0);
-        Read::Value(match a {
-            0xa000..=0xbfff if lo && hi => self.roms.c64[usize::from(a - 0xa000)],
-            0xd000..=0xdfff if lo || hi => {
-                if charen {
-                    return Read::Io(a);
-                }
-                self.roms.chargen[usize::from(a & 0x0fff)]
-            }
-            0xe000..=0xffff if hi => self.roms.c64[0x2000 + usize::from(a - 0xe000)],
-            _ => self.ram_at(0, a),
+        let o = usize::from(a & 0x1fff);
+        Read::Value(match self.c64_bank(a) {
+            Bank::Ram => self.ram_at(0, a),
+            Bank::Basic => self.roms.c64[o],
+            Bank::Kernal => self.roms.c64[0x2000 + o],
+            Bank::Char => self.roms.chargen[o & 0x0fff],
+            Bank::Io => return Read::Io(a),
+            Bank::RomL => return Read::RomL(a),
+            Bank::RomH => return Read::RomH(a),
+            Bank::Open => return Read::Open,
         })
     }
 
-    /// 8502 write; returns false if it goes to I/O (the machine's chips).
-    pub fn cpu_write(&mut self, a: u16, v: u8) -> bool {
+    /// 8502 write. Writes under ROM land in RAM; in C64 mode also under
+    /// cartridge ROM, except in Ultimax mode (no RAM there), whose open
+    /// areas ignore them. I/O and the cartridge are the machine's.
+    pub fn cpu_write(&mut self, a: u16, v: u8) -> Write {
         if a < 2 {
             self.port.write(a as u8, v);
             // The written cell of RAM gets the value too (as on the C64).
             self.set_ram(0, a, v);
-            return true;
+            return Write::Done;
         }
         if self.mmu.c64_mode() {
-            let p = self.port_out();
-            let io = (p & 3 != 0) && p & 4 != 0;
-            if (0xd000..=0xdfff).contains(&a) && io {
-                return false;
+            let bank = self.c64_bank(a);
+            match bank {
+                Bank::Io => return Write::Io,
+                Bank::Open => return Write::Done,
+                Bank::RomL | Bank::RomH if self.ultimax() => {}
+                _ => self.set_ram(0, a, v),
             }
-            self.set_ram(0, a, v);
-            return true;
+            return match bank {
+                Bank::RomL => Write::RomL,
+                Bank::RomH => Write::RomH,
+                _ => Write::Done,
+            };
         }
         match self.mmu.translate(a) {
-            Target::Io(_) => false,
+            Target::Io(_) => Write::Io,
             Target::Mmu(r) => {
                 self.mmu.write_lcr(r as u8, v);
-                true
+                Write::Done
             }
             _ => {
                 let (bank, addr) = self.mmu.ram(a);
                 self.set_ram(bank, addr, v);
-                true
+                Write::Done
             }
         }
     }
@@ -216,7 +259,7 @@ impl Memory {
             }
             _ => match self.cpu_read_c128(a) {
                 Read::Value(v) => v,
-                Read::Io(_) => 0xff,
+                _ => 0xff,
             },
         }
     }
@@ -246,12 +289,21 @@ impl Memory {
 pub struct VicView<'a> {
     pub mem: &'a Memory,
     pub base: u16,
+    /// The cartridge: in C64 Ultimax mode the VIC-II sees its ROMH at
+    /// `$3000` of every bank (and no character ROM).
+    pub cart: Option<&'a dyn ExpansionCart>,
 }
 
 impl VicMemory for VicView<'_> {
     fn read(&self, addr: u16) -> u8 {
         let m = self.mem;
         let addr = addr & 0x3fff;
+        if m.ultimax() && addr & 0x3000 == 0x3000 {
+            return self
+                .cart
+                .and_then(|c| c.peek_romh(0xf000 | (addr & 0x0fff)))
+                .unwrap_or(0xff);
+        }
         let c64 = m.mmu.c64_mode();
         let rom_visible = c64 || m.port_out() & 4 == 0;
         if self.base & 0x4000 == 0 && addr & 0x3000 == 0x1000 && rom_visible {
@@ -274,7 +326,7 @@ impl VicMemory for VicView<'_> {
 }
 
 const TAG: [u8; 4] = *b"C8MM";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Memory {
     fn save(&self, w: &mut StateWriter) {
@@ -282,13 +334,15 @@ impl Savestate for Memory {
             w.raw(&self.ram);
             w.raw(&self.color);
             w.bool(self.caps_lock);
+            w.bool(self.game);
+            w.bool(self.exrom);
         });
         self.mmu.save(w);
         self.port.save(w);
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut ram = vec![0; self.ram.len()];
         c.raw_into(&mut ram)?;
         let mut color = vec![0; self.color.len()];
@@ -297,6 +351,11 @@ impl Savestate for Memory {
             *v &= 0x0f;
         }
         let caps_lock = c.bool()?;
+        let (game, exrom) = if version >= 2 {
+            (c.bool()?, c.bool()?)
+        } else {
+            (true, true)
+        };
         let mut mmu = self.mmu.clone();
         mmu.load(r)?;
         let mut port = self.port;
@@ -304,6 +363,8 @@ impl Savestate for Memory {
         self.ram = ram;
         self.color = color;
         self.caps_lock = caps_lock;
+        self.game = game;
+        self.exrom = exrom;
         self.mmu = mmu;
         self.port = port;
         Ok(())

@@ -4,7 +4,9 @@
 //! port, PLA banking, RAM, ROMs, colour RAM, VIC-II, both CIAs
 //! the IRQ/NMI/RDY wiring, keyboard, control ports, a true-emulated 1541 as
 //! drive 8, a "program" slot for PRG/T64 and the SID (`options["sid"]` =
-//! "6581" or "8580"), producing 48 kHz mono audio.
+//! "6581" or "8580"), producing 48 kHz mono audio, the datasette and the
+//! expansion port's "cartridge" slot (CRT images, `devices_cartridge`;
+//! inserting or removing one powers the machine up again).
 //!
 //! Drive 8 (`options["drive8"]`): "1541" (true drive, `roms["dos1541"]`,
 //! 16 KB; the default when given), "1571" (`roms["dos1571"]`, 32 KB; in its
@@ -32,7 +34,7 @@ pub mod io;
 pub mod keyboard;
 pub mod loader;
 pub mod memory;
-pub mod pla;
+pub use chips_cbm::pla;
 pub mod stub;
 
 use chips_cbm::cia::CiaModel;
@@ -52,6 +54,8 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
+use devices_cartridge::slot::ExpansionSlot;
+use devices_cartridge::{CartLines, ExpansionCart};
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms};
 use drives_other::Datasette;
@@ -124,39 +128,76 @@ impl Interrupts {
     }
 }
 
+/// I/O1 and I/O2 (`$DE00–$DFFF`) belong to the cartridge port.
+fn is_cart_io(addr: u16) -> bool {
+    (0xde00..=0xdfff).contains(&addr)
+}
+
 /// Side-effect-free CPU-view read.
-fn cpu_peek(mem: &Memory, io: &Io, addr: u16) -> u8 {
+fn cpu_peek(mem: &Memory, io: &Io, cart: Option<&dyn ExpansionCart>, addr: u16) -> u8 {
+    let from_cart = match mem.bank(addr) {
+        Bank::RomL => cart.and_then(|c| c.peek_roml(addr)),
+        Bank::RomH => cart.and_then(|c| c.peek_romh(addr)),
+        Bank::Io if is_cart_io(addr) => cart.and_then(|c| c.peek_io(addr)),
+        _ => None,
+    };
     match mem.read(addr) {
         Some(v) => v,
-        None if mem.bank(addr) == Bank::Io => io.peek(mem, addr),
-        None => io.open_bus(),
+        None => from_cart.unwrap_or_else(|| match mem.bank(addr) {
+            Bank::Io if !is_cart_io(addr) => io.peek(mem, addr),
+            _ => io.open_bus(),
+        }),
     }
 }
 
-/// The CPU's bus: PLA-resolved memory plus I/O.
+/// The CPU's bus: PLA-resolved memory, I/O and the cartridge.
 struct C64Bus<'a> {
     mem: &'a mut Memory,
     io: &'a mut Io,
+    cart: Option<&'a mut (dyn ExpansionCart + 'static)>,
 }
 
 impl Bus for C64Bus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
         let a = addr as u16;
-        u32::from(match self.mem.read(a) {
-            Some(v) => v,
-            None if self.mem.bank(a) == Bank::Io => self.io.read(self.mem, a),
-            None => self.io.open_bus(),
-        })
+        if let Some(v) = self.mem.read(a) {
+            return u32::from(v);
+        }
+        let bank = self.mem.bank(a);
+        let from_cart = match (&mut self.cart, bank) {
+            (Some(c), Bank::RomL) => c.read_roml(a),
+            (Some(c), Bank::RomH) => c.read_romh(a),
+            (Some(c), Bank::Io) if is_cart_io(a) => c.read_io(a),
+            _ => None,
+        };
+        u32::from(from_cart.unwrap_or_else(|| match bank {
+            Bank::Io if !is_cart_io(a) => self.io.read(self.mem, a),
+            _ => self.io.open_bus(),
+        }))
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(cpu_peek(self.mem, self.io, addr as u16))
+        u32::from(cpu_peek(
+            self.mem,
+            self.io,
+            self.cart.as_deref(),
+            addr as u16,
+        ))
     }
 
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
-        let a = addr as u16;
-        if !self.mem.write(a, v as u8) {
-            self.io.write(self.mem, a, v as u8);
+        let (a, v) = (addr as u16, v as u8);
+        let bank = self.mem.bank(a);
+        if let Some(c) = &mut self.cart {
+            match bank {
+                Bank::RomL => c.write_roml(a, v),
+                Bank::RomH => c.write_romh(a, v),
+                Bank::Io if is_cart_io(a) => c.write_io(a, v),
+                _ => {}
+            }
+        }
+        if !self.mem.write(a, v) {
+            self.io.write(self.mem, a, v);
         }
     }
 
@@ -262,7 +303,7 @@ impl Bus for HookedC64Bus<'_, '_> {
 }
 
 /// Read-only view for disassembly and debugger peeks.
-struct PeekBus<'a>(&'a Memory, &'a Io);
+struct PeekBus<'a>(&'a Memory, &'a Io, Option<&'a dyn ExpansionCart>);
 
 impl Bus for PeekBus<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
@@ -270,7 +311,7 @@ impl Bus for PeekBus<'_> {
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(cpu_peek(self.0, self.1, addr as u16))
+        u32::from(cpu_peek(self.0, self.1, self.2, addr as u16))
     }
 
     fn write(&mut self, _addr: u32, _size: Size, _v: u32) {}
@@ -315,6 +356,8 @@ const PORT_NAMES: [&str; 2] = ["control port 1", "control port 2"];
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(1);
 pub const SLOT_TAPE: SlotId = SlotId(2);
+/// The expansion port (C64 CRT images).
+pub const SLOT_CARTRIDGE: SlotId = SlotId(3);
 
 pub struct C64 {
     cpu: Cpu6502,
@@ -328,6 +371,8 @@ pub struct C64 {
     program: ProgramSlot,
     /// The datasette on the cassette port.
     tape: Datasette,
+    /// The expansion port.
+    cart: ExpansionSlot,
     autostart: Autostart,
     palette: [Rgb8; 16],
     field_done_pending: bool,
@@ -411,6 +456,7 @@ impl C64 {
             drive,
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C64, cpu_hz),
+            cart: devices_cartridge::slot::expansion_slot(),
             autostart,
             palette: vic2::palette::palette(),
             field_done_pending: false,
@@ -430,8 +476,30 @@ impl C64 {
         self.io.vic.beam()
     }
 
+    /// The cartridge after the CPU access: it ticks, and its lines reach
+    /// the PLA and the interrupt inputs.
+    fn cartridge_cycle(&mut self) {
+        let lines = match self.cart.cart_mut() {
+            Some(c) => {
+                c.tick();
+                c.lines()
+            }
+            None => CartLines::default(),
+        };
+        // Line levels: true = high (not pulled).
+        if (self.mem.game, self.mem.exrom) != (!lines.game, !lines.exrom) {
+            self.mem.set_cartridge_lines(!lines.game, !lines.exrom);
+        }
+        self.ints.set_irq(irq::CARTRIDGE, lines.irq);
+        self.ints.set_nmi(nmi::CARTRIDGE, lines.nmi);
+    }
+
     /// One CPU cycle (φ2). Returns `Some` if emulation must stop.
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        // A cartridge went in or out: the machine powers up again.
+        if self.cart.take_changed() {
+            self.reset(ResetKind::Hard);
+        }
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
         }
@@ -440,6 +508,7 @@ impl C64 {
         self.io.vic.phi1(&VicView {
             mem: &self.mem,
             bank,
+            cart: self.cart.cart().map(|c| c.as_ref()),
         });
         self.cpu.set_rdy(self.io.vic.ba());
         // CIAs clock before the CPU access: a read sees this cycle's state.
@@ -458,6 +527,7 @@ impl C64 {
             let mut bus = C64Bus {
                 mem: &mut self.mem,
                 io: &mut self.io,
+                cart: self.cart.cart_mut().map(|c| c.as_mut()),
             };
             let mut hooked = HookedC64Bus {
                 bus: &mut bus,
@@ -472,7 +542,9 @@ impl C64 {
         let new_field = self.io.vic.phi2(&VicView {
             mem: &self.mem,
             bank,
+            cart: self.cart.cart().map(|c| c.as_ref()),
         });
+        self.cartridge_cycle();
         // Serial bus: the drive sees what the C64 drives now.
         let c64 = drive::c64_lines(self.io.cia2.port_a_out());
         let mut drive_stop = None;
@@ -631,6 +703,7 @@ impl C64 {
                     CPU_SPACE => C64Bus {
                         mem: &mut self.mem,
                         io: &mut self.io,
+                        cart: self.cart.cart_mut().map(|c| c.as_mut()),
                     }
                     .write(addr & 0xffff, Size::Byte, u32::from(v)),
                     RAM_SPACE => self.mem.ram[(addr & 0xffff) as usize] = v,
@@ -676,6 +749,10 @@ impl Machine for C64 {
             d.reset(hard);
         }
         self.ints = Interrupts::default();
+        if let Some(c) = self.cart.cart_mut() {
+            c.reset();
+        }
+        self.cartridge_cycle();
         self.input.clear();
         if self.autostart == Autostart::Loading {
             self.autostart = Autostart::Done;
@@ -882,6 +959,12 @@ impl Machine for C64 {
             kind: MediaKind::Tape,
             inserted: self.tape.has_tape(),
         });
+        slots.push(MediaSlotInfo {
+            id: SLOT_CARTRIDGE,
+            name: "cartridge",
+            kind: MediaKind::Cartridge,
+            inserted: self.cart.is_inserted(),
+        });
         slots
     }
 
@@ -890,13 +973,14 @@ impl Machine for C64 {
             SLOT_DRIVE8 => self.drive.as_mut().map(|d| d.media_slot()),
             SLOT_PROGRAM => Some(&mut self.program),
             SLOT_TAPE => Some(&mut self.tape),
+            SLOT_CARTRIDGE => Some(&mut self.cart),
             _ => None,
         }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"C64S", 5, |w| {
+        w.chunk(*b"C64S", 6, |w| {
             w.u8(self.ints.irq);
             w.u8(self.ints.nmi);
             w.bool(self.field_done_pending);
@@ -909,6 +993,10 @@ impl Machine for C64 {
         self.sched.save(&mut w);
         self.input.save(&mut w);
         self.tape.save(&mut w);
+        w.chunk(*b"CART", 1, |w| w.bool(self.cart.is_inserted()));
+        if let Some(c) = self.cart.cart() {
+            c.save(&mut w);
+        }
         w.chunk(*b"DRV8", 1, |w| w.bool(self.drive.is_some()));
         if let Some(d) = &self.drive {
             d.save(&mut w);
@@ -934,7 +1022,7 @@ impl Machine for C64 {
             field_done_pending: self.field_done_pending,
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"C64S", 5)?;
+        let (version, mut c) = r.chunk(*b"C64S", 6)?;
         if version < 3 {
             return Err(StateError::UnsupportedVersion {
                 tag: *b"C64S",
@@ -965,14 +1053,36 @@ impl Machine for C64 {
         if version >= 5 {
             self.tape.load(&mut r)?;
         }
-        let restore_tape = |tape: &mut Datasette| {
+        // The cartridge likewise, from version 6.
+        let cart_backup = self.cart.cart().map(|c| {
+            let mut w = StateWriter::new();
+            c.save(&mut w);
+            w.into_bytes()
+        });
+        let restore_tape = |tape: &mut Datasette, cart: &mut ExpansionSlot| {
             let _ = tape.load(&mut StateReader::new(&tape_backup));
+            if let (Some(c), Some(b)) = (cart.cart_mut(), &cart_backup) {
+                let _ = c.load(&mut StateReader::new(b));
+            }
         };
+        if version >= 6 {
+            let present = r.chunk(*b"CART", 1).and_then(|(_, mut c)| c.bool());
+            let loaded = match (present, self.cart.cart_mut()) {
+                (Ok(true), Some(c)) => c.load(&mut r),
+                (Ok(false), None) => Ok(()),
+                (Err(e), _) => Err(e),
+                _ => Err(StateError::Invalid("cartridge differs")),
+            };
+            if let Err(e) = loaded {
+                restore_tape(&mut self.tape, &mut self.cart);
+                return Err(e);
+            }
+        }
 
         // Drive 8 (not clonable): keep a backup in case a later part fails.
         let drive_chunk = r.chunk(*b"DRV8", 1).and_then(|(_, mut c)| c.bool());
         if drive_chunk != Ok(self.drive.is_some()) {
-            restore_tape(&mut self.tape);
+            restore_tape(&mut self.tape, &mut self.cart);
             return Err(drive_chunk
                 .err()
                 .unwrap_or(StateError::Invalid("drive 8 configuration differs")));
@@ -984,7 +1094,7 @@ impl Machine for C64 {
         });
         if let Some(d) = &mut self.drive {
             if let Err(e) = d.load(&mut r) {
-                restore_tape(&mut self.tape);
+                restore_tape(&mut self.tape, &mut self.cart);
                 return Err(e);
             }
         }
@@ -996,14 +1106,14 @@ impl Machine for C64 {
 
         let Ok((_, mut c)) = r.chunk(*b"PORT", 1) else {
             restore_drive(&mut self.drive);
-            restore_tape(&mut self.tape);
+            restore_tape(&mut self.tape, &mut self.cart);
             return Err(StateError::Missing(*b"PORT"));
         };
         let port_states = match (c.bytes(), c.bytes()) {
             (Ok(a), Ok(b)) => [a, b],
             (Err(e), _) | (_, Err(e)) => {
                 restore_drive(&mut self.drive);
-                restore_tape(&mut self.tape);
+                restore_tape(&mut self.tape, &mut self.cart);
                 return Err(e);
             }
         };
@@ -1029,7 +1139,7 @@ impl Machine for C64 {
                 }
             }
             restore_drive(&mut self.drive);
-            restore_tape(&mut self.tape);
+            restore_tape(&mut self.tape, &mut self.cart);
             return Err(e);
         }
         self.cpu = next.cpu;
@@ -1058,7 +1168,10 @@ impl DebugTarget for C64 {
     fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
         let byte = |a: u32| -> Option<u32> {
             match space {
-                CPU_SPACE => Some(PeekBus(&self.mem, &self.io).peek(a & 0xffff, Size::Byte)),
+                CPU_SPACE => Some(
+                    PeekBus(&self.mem, &self.io, self.cart.cart().map(|c| c.as_ref()))
+                        .peek(a & 0xffff, Size::Byte),
+                ),
                 RAM_SPACE => Some(u32::from(self.mem.ram[(a & 0xffff) as usize])),
                 COLOR_SPACE => Some(u32::from(self.mem.color[(a & 0x3ff) as usize])),
                 _ => None,
@@ -1085,6 +1198,7 @@ impl DebugTarget for C64 {
                         _ => C64Bus {
                             mem: &mut self.mem,
                             io: &mut self.io,
+                            cart: self.cart.cart_mut().map(|c| c.as_mut()),
                         }
                         .write(u32::from(a), Size::Byte, u32::from(b)),
                     }
@@ -1098,7 +1212,10 @@ impl DebugTarget for C64 {
     }
 
     fn disassemble(&self, addr: u32) -> Instr {
-        self.cpu.disassemble(&PeekBus(&self.mem, &self.io), addr)
+        self.cpu.disassemble(
+            &PeekBus(&self.mem, &self.io, self.cart.cart().map(|c| c.as_ref())),
+            addr,
+        )
     }
 }
 

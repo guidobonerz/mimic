@@ -43,6 +43,7 @@ crates/
   drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU)
   drives-other/    Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, datasettes
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX), light pens, keypads
+  devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts
   media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT
   media-backends/  Where media bytes come from: image file, copy-on-write overlay, host directory, real hardware
   emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
@@ -361,6 +362,7 @@ python -m unittest discover -s tools         # its unit tests
 cargo run --release -p emu-desktop -- --machine c64 --disk game.d64 --autostart   # window, sound, keyboard, gamepad
 cargo run --release -p emu-desktop -- --machine c64 --option drive8=virtual --disk ./myprgs --autostart   # virtual drive; a folder of PRGs as disk
 cargo run --release -p emu-desktop -- --machine vic20 --tape game.tap   # datasette (PLAY pressed; a .prg is recorded as a tape); F9 play, Shift+F9 record, F10 stop, F11 rewind
+cargo run --release -p emu-desktop -- --machine c64 --cart game.crt   # cartridge: CRT (C64/C128), raw VIC-20 (load address + ROM) or C16/Plus/4 (16/32 KB) dump; also emu-headless
 # Linux build deps for emu-desktop: libasound2-dev libudev-dev
 ```
 

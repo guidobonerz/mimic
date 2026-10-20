@@ -7,7 +7,7 @@
 use cpu_6502::IoPort;
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
-use crate::pla::{self, Bank, Lines, Map};
+use chips_cbm::pla::{self, Bank, Lines, Map};
 
 pub const KERNAL_SIZE: usize = 0x2000;
 pub const BASIC_SIZE: usize = 0x2000;
@@ -90,6 +90,11 @@ impl Memory {
         self.map[usize::from(addr >> 12)]
     }
 
+    /// Ultimax mode: /GAME low, /EXROM high.
+    pub fn ultimax(&self) -> bool {
+        !self.game && self.exrom
+    }
+
     pub fn set_cartridge_lines(&mut self, game: bool, exrom: bool) {
         self.game = game;
         self.exrom = exrom;
@@ -129,19 +134,26 @@ impl Memory {
             Bank::Basic => Some(self.roms.basic[a & 0x1fff]),
             Bank::Kernal => Some(self.roms.kernal[a & 0x1fff]),
             Bank::Char => Some(self.roms.chargen[a & 0x0fff]),
-            // No cartridge emulation yet: ROML/ROMH read as open bus.
+            // The machine asks the cartridge (or leaves the bus open).
             Bank::Io | Bank::RomL | Bank::RomH | Bank::Open => None,
         }
     }
 
-    /// CPU-view write of a non-I/O address. Writes "under" ROM land in RAM;
-    /// Ultimax open areas and cartridge ROM ignore them. Returns false for
-    /// I/O, which the machine handles.
+    /// CPU-view write of a non-I/O address. Writes "under" ROM land in RAM,
+    /// also under cartridge ROM except in Ultimax mode (no RAM there);
+    /// Ultimax open areas ignore them. Returns false for I/O, which the
+    /// machine handles. The cartridge sees ROML/ROMH writes through the
+    /// machine.
     #[inline]
     pub fn write(&mut self, addr: u16, v: u8) -> bool {
         match self.bank(addr) {
             Bank::Io => false,
-            Bank::Open | Bank::RomL | Bank::RomH => true,
+            Bank::Open => true,
+            Bank::RomL | Bank::RomH if self.ultimax() => true,
+            Bank::RomL | Bank::RomH => {
+                self.ram[usize::from(addr)] = v;
+                true
+            }
             Bank::Ram | Bank::Basic | Bank::Kernal | Bank::Char => {
                 if addr < 2 {
                     self.port_write(addr, v);

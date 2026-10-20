@@ -1,0 +1,18 @@
+//! Cartridges: the C64/C128 expansion port with its bank-switching types
+//! and EasyFlash ([`expansion`]), and the plain ROM cartridges of the
+//! VIC-20 ([`vic20`]) and the C16/Plus/4 ([`ted`]). Machines plug a
+//! [`slot::CartSlot`] into their memory map; the images come from CRT files
+//! (or raw ROM dumps) through the media layer.
+
+#![forbid(unsafe_code)]
+
+pub mod banked;
+pub mod easyflash;
+pub mod expansion;
+pub mod flash;
+pub mod slot;
+pub mod ted;
+pub mod vic20;
+
+pub use expansion::{CartLines, ExpansionCart};
+pub use slot::CartSlot;

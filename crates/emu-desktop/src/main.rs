@@ -46,6 +46,8 @@ usage: emu-desktop [options]
   --disk FILE           disk image for drive 8
   --tape FILE           TAP image for the datasette (a PRG is recorded in the
                         machine's tape format)
+  --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
+                        + ROM) or C16/Plus/4 (16/32 KB) dump
   --autostart           load and run the disk after boot
   --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
@@ -79,6 +81,7 @@ struct Args {
     prg: Option<String>,
     disk: Option<String>,
     tape: Option<String>,
+    cart: Option<String>,
     crt: Option<String>,
     scale: u32,
     debug: Option<SocketAddr>,
@@ -98,6 +101,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         prg: None,
         disk: None,
         tape: None,
+        cart: None,
         crt: None,
         scale: 2,
         debug: None,
@@ -113,6 +117,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--prg" => a.prg = Some(value("--prg")?),
             "--disk" => a.disk = Some(value("--disk")?),
             "--tape" => a.tape = Some(value("--tape")?),
+            "--cart" => a.cart = Some(value("--cart")?),
             "--autostart" => {
                 a.config.options.insert("autostart".into(), "on".into());
             }
@@ -214,6 +219,20 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             .ok_or("no such slot")?
             .insert(media)
             .map_err(|e| format!("{t}: {e}"))?;
+    }
+    if let Some(c) = &args.cart {
+        let slot = m
+            .media_slots()
+            .into_iter()
+            .find(|s| s.kind == MediaKind::Cartridge)
+            .map(|s| s.id)
+            .ok_or_else(|| format!("{} has no expansion port", args.machine))?;
+        let media =
+            media_backends::image::open_cart(Path::new(c)).map_err(|e| format!("{c}: {e}"))?;
+        m.media_slot(slot)
+            .ok_or("no such slot")?
+            .insert(media)
+            .map_err(|e| format!("{c}: {e}"))?;
     }
     Ok(m)
 }

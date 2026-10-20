@@ -1,0 +1,13 @@
+[package]
+name = "devices-cartridge"
+description = "Cartridges: C64/C128 expansion port types, freezers, VIC-20 and C16/Plus/4 cartridges"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+media.workspace = true

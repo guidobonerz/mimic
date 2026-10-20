@@ -17,6 +17,7 @@
 use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::sid::{Sid, SidModel};
 use chips_cbm::vic2::{self, Vic2, VicMemory};
+use devices_cartridge::ExpansionCart;
 use emu_core::{
     ClockDivider, Decimator, Savestate, StateError, StateReader, StateWriter, SAMPLE_RATE,
 };
@@ -63,11 +64,20 @@ pub struct VicView<'a> {
     pub mem: &'a Memory,
     /// Bank base address: `$0000`, `$4000`, `$8000` or `$C000`.
     pub bank: u16,
+    /// The cartridge: in Ultimax mode the VIC-II sees its ROMH at `$3000`
+    /// of every bank.
+    pub cart: Option<&'a dyn ExpansionCart>,
 }
 
 impl VicMemory for VicView<'_> {
     fn read(&self, addr: u16) -> u8 {
         let addr = addr & 0x3fff;
+        if self.mem.ultimax() && addr & 0x3000 == 0x3000 {
+            return self
+                .cart
+                .and_then(|c| c.peek_romh(0xf000 | (addr & 0x0fff)))
+                .unwrap_or(0xff);
+        }
         if self.bank & 0x4000 == 0 && addr & 0x3000 == 0x1000 {
             self.mem.roms.chargen[usize::from(addr & 0x0fff)]
         } else {

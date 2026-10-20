@@ -3,8 +3,9 @@
 //! 8502 (1 or 2 MHz) and Z80 sharing the bus under the MMU 8722, VIC-IIe
 //! (40 columns) and VDC 8563 (80 columns, its own 16 or 64 KB RAM), SID,
 //! two CIAs, 128 KB RAM, C64 mode, drive 8 (a true-emulated 1571 or 1581
-//! with fast serial transfers, a 1541, or the virtual drive) and a
-//! "program" slot.
+//! with fast serial transfers, a 1541, or the virtual drive), a "program"
+//! slot, the datasette and a "cartridge" slot for C64 cartridges (the
+//! KERNAL sees GAME/EXROM in the MMU and starts C64 mode).
 //!
 //! At power-on the Z80 runs its BIOS (KERNAL ROM `$D000–$DFFF`), which
 //! hands over to the 8502 through MCR bit 0 (or enters C64 mode when C= is
@@ -56,13 +57,15 @@ use emu_core::{
     Size, StateError, StateReader, StateWriter, StopReason,
 };
 
+use devices_cartridge::slot::ExpansionSlot;
+use devices_cartridge::{CartLines, ExpansionCart};
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms, IecLines};
 use drives_other::Datasette;
 use io::Io;
 use loader::{Autostart, ProgramSlot, BOOT_FRAMES};
 use media::tap::TapMachine;
-use memory::{Memory, Read, Roms, VicView, CHARGEN_SIZE, ROM_16K};
+use memory::{Memory, Read, Roms, VicView, Write, CHARGEN_SIZE, ROM_16K};
 
 pub const CPU: DeviceId = DeviceId("cpu");
 pub const Z80_DEV: DeviceId = DeviceId("z80");
@@ -103,35 +106,60 @@ pub fn entry() -> MachineEntry {
 mod irq {
     pub const VIC: u8 = 1 << 0;
     pub const CIA1: u8 = 1 << 1;
+    pub const CARTRIDGE: u8 = 1 << 2;
 }
 
 mod nmi {
     pub const CIA2: u8 = 1 << 0;
     pub const RESTORE: u8 = 1 << 1;
+    pub const CARTRIDGE: u8 = 1 << 2;
 }
 
-/// The 8502's bus.
+/// I/O1 and I/O2, the expansion port's I/O pages.
+fn is_cart_io(addr: u16) -> bool {
+    (0xde00..=0xdfff).contains(&addr)
+}
+
+/// The 8502's bus: MMU/PLA-resolved memory, I/O and the cartridge.
 struct CpuBus<'a> {
     mem: &'a mut Memory,
     io: &'a mut Io,
+    cart: Option<&'a mut (dyn ExpansionCart + 'static)>,
 }
 
 impl Bus for CpuBus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
-        u32::from(match self.mem.cpu_read(addr as u16) {
-            Read::Value(v) => v,
-            Read::Io(a) => self.io.read(self.mem, a),
-        })
+        let r = self.mem.cpu_read(addr as u16);
+        let from_cart = match (r, self.cart.as_deref_mut()) {
+            (Read::Value(v), _) => return u32::from(v),
+            (Read::RomL(a), Some(c)) => c.read_roml(a),
+            (Read::RomH(a), Some(c)) => c.read_romh(a),
+            (Read::Io(a), Some(c)) if is_cart_io(a) => c.read_io(a),
+            _ => None,
+        };
+        u32::from(from_cart.unwrap_or_else(|| match r {
+            Read::Io(a) if !is_cart_io(a) => self.io.read(self.mem, a),
+            _ => self.io.open_bus(),
+        }))
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(cpu_peek(self.mem, self.io, addr as u16))
+        u32::from(cpu_peek(
+            self.mem,
+            self.io,
+            self.cart.as_deref(),
+            addr as u16,
+        ))
     }
 
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
-        let a = addr as u16;
-        if !self.mem.cpu_write(a, v as u8) {
-            self.io.write(self.mem, a, v as u8);
+        let (a, v) = (addr as u16, v as u8);
+        match (self.mem.cpu_write(a, v), self.cart.as_deref_mut()) {
+            (Write::Io, Some(c)) if is_cart_io(a) => c.write_io(a, v),
+            (Write::Io, _) => self.io.write(self.mem, a, v),
+            (Write::RomL, Some(c)) => c.write_roml(a, v),
+            (Write::RomH, Some(c)) => c.write_romh(a, v),
+            _ => {}
         }
     }
 
@@ -140,11 +168,20 @@ impl Bus for CpuBus<'_> {
     }
 }
 
-fn cpu_peek(mem: &Memory, io: &Io, a: u16) -> u8 {
-    match mem.cpu_read(a) {
-        Read::Value(v) => v,
-        Read::Io(a) => io.peek(mem, a),
-    }
+/// Side-effect-free 8502-view read.
+fn cpu_peek(mem: &Memory, io: &Io, cart: Option<&dyn ExpansionCart>, a: u16) -> u8 {
+    let r = mem.cpu_read(a);
+    let from_cart = match (r, cart) {
+        (Read::Value(v), _) => return v,
+        (Read::RomL(a), Some(c)) => c.peek_roml(a),
+        (Read::RomH(a), Some(c)) => c.peek_romh(a),
+        (Read::Io(a), Some(c)) if is_cart_io(a) => c.peek_io(a),
+        _ => None,
+    };
+    from_cart.unwrap_or_else(|| match r {
+        Read::Io(a) if !is_cart_io(a) => io.peek(mem, a),
+        _ => io.open_bus(),
+    })
 }
 
 /// The Z80's bus: memory, and I/O ports `$D000–$DFFF` at [`IO_BASE`].
@@ -191,6 +228,7 @@ fn z80_peek(mem: &Memory, io: &Io, addr: u32) -> u8 {
 struct PeekBus<'a> {
     mem: &'a Memory,
     io: &'a Io,
+    cart: Option<&'a dyn ExpansionCart>,
     z80: bool,
 }
 
@@ -203,7 +241,7 @@ impl Bus for PeekBus<'_> {
         u32::from(if self.z80 {
             z80_peek(self.mem, self.io, addr)
         } else {
-            cpu_peek(self.mem, self.io, addr as u16)
+            cpu_peek(self.mem, self.io, self.cart, addr as u16)
         })
     }
 
@@ -270,6 +308,7 @@ const PORT_NAMES: [&str; 2] = ["control port 1", "control port 2"];
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(1);
 pub const SLOT_TAPE: SlotId = SlotId(2);
+pub const SLOT_CARTRIDGE: SlotId = SlotId(3);
 
 pub struct C128 {
     cpu: Cpu6502,
@@ -284,6 +323,9 @@ pub struct C128 {
     program: ProgramSlot,
     /// The datasette on the cassette port.
     tape: Datasette,
+    /// The expansion port (C64 cartridges: the KERNAL starts C64 mode when
+    /// one pulls GAME or EXROM).
+    cart: ExpansionSlot,
     autostart: Autostart,
     vic_palette: [Rgb8; 16],
     vdc_palette: [Rgb8; 16],
@@ -377,6 +419,7 @@ impl C128 {
             drive,
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C64, cpu_hz),
+            cart: devices_cartridge::slot::expansion_slot(),
             autostart,
             vic_palette: vic2::palette::palette(),
             vdc_palette: vdc::palette(),
@@ -409,7 +452,28 @@ impl C128 {
         if self.io.keyboard.restore {
             nmi_lines |= nmi::RESTORE;
         }
+        let cart = self.cart.cart().map_or(CartLines::default(), |c| c.lines());
+        if cart.irq {
+            irq_lines |= irq::CARTRIDGE;
+        }
+        if cart.nmi {
+            nmi_lines |= nmi::CARTRIDGE;
+        }
         self.ints = (irq_lines, nmi_lines);
+    }
+
+    /// The cartridge's clock and its GAME/EXROM lines into the PLA.
+    fn cartridge_cycle(&mut self) {
+        let lines = match self.cart.cart_mut() {
+            Some(c) => {
+                c.tick();
+                c.lines()
+            }
+            None => CartLines::default(),
+        };
+        // Line levels: true = high (not pulled).
+        self.mem.game = !lines.game;
+        self.mem.exrom = !lines.exrom;
     }
 
     /// One 8502 cycle on the hooked bus.
@@ -418,6 +482,7 @@ impl C128 {
         let mut bus = CpuBus {
             mem: &mut self.mem,
             io: &mut self.io,
+            cart: self.cart.cart_mut().map(|c| c.as_mut()),
         };
         let mut hooked = HookedBus {
             inner: &mut bus,
@@ -448,6 +513,10 @@ impl C128 {
 
     /// One system (VIC) cycle. Returns `Some` if emulation must stop.
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        // A cartridge went in or out: the machine powers up again.
+        if self.cart.take_changed() {
+            self.reset(ResetKind::Hard);
+        }
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
         }
@@ -455,6 +524,7 @@ impl C128 {
         self.io.vic.phi1(&VicView {
             mem: &self.mem,
             base,
+            cart: self.cart.cart().map(|c| c.as_ref()),
         });
         let ba = self.io.vic.ba();
         self.io.tick_chips();
@@ -522,7 +592,9 @@ impl C128 {
         let new_field = self.io.vic.phi2(&VicView {
             mem: &self.mem,
             base,
+            cart: self.cart.cart().map(|c| c.as_ref()),
         });
+        self.cartridge_cycle();
         // Serial bus: the drive sees what CIA2 (and CIA1 as fast serial
         // sender) drives now.
         let fsdir = self.mem.mmu.mcr & 0x08 != 0;
@@ -705,6 +777,7 @@ impl C128 {
                     CPU_SPACE => CpuBus {
                         mem: &mut self.mem,
                         io: &mut self.io,
+                        cart: self.cart.cart_mut().map(|c| c.as_mut()),
                     }
                     .write(addr & 0xffff, Size::Byte, u32::from(v)),
                     RAM_SPACE => self.mem.ram[(addr & 0x1ffff) as usize] = v,
@@ -785,7 +858,11 @@ impl Machine for C128 {
         if let Some(d) = &mut self.drive {
             d.reset(hard);
         }
+        if let Some(c) = self.cart.cart_mut() {
+            c.reset();
+        }
         self.ints = (0, 0);
+        self.cartridge_cycle();
         self.input.clear();
         if self.autostart == Autostart::Loading {
             self.autostart = Autostart::Done;
@@ -902,7 +979,12 @@ impl Machine for C128 {
                     .iter()
                     .enumerate()
                     .map(|(i, &name)| {
-                        let v = mmu.peek(i as u8, self.io.keyboard.display_80, false, false);
+                        let v = mmu.peek(
+                            i as u8,
+                            self.io.keyboard.display_80,
+                            !self.mem.game,
+                            !self.mem.exrom,
+                        );
                         r8(name, 0xd500 + i as u32, v)
                     })
                     .collect(),
@@ -1006,6 +1088,12 @@ impl Machine for C128 {
             kind: MediaKind::Tape,
             inserted: self.tape.has_tape(),
         });
+        slots.push(MediaSlotInfo {
+            id: SLOT_CARTRIDGE,
+            name: "cartridge",
+            kind: MediaKind::Cartridge,
+            inserted: self.cart.is_inserted(),
+        });
         slots
     }
 
@@ -1014,13 +1102,14 @@ impl Machine for C128 {
             SLOT_DRIVE8 => self.drive.as_mut().map(|d| d.media_slot()),
             SLOT_PROGRAM => Some(&mut self.program),
             SLOT_TAPE => Some(&mut self.tape),
+            SLOT_CARTRIDGE => Some(&mut self.cart),
             _ => None,
         }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"C128", 2, |w| {
+        w.chunk(*b"C128", 3, |w| {
             w.u8(self.ints.0);
             w.u8(self.ints.1);
             w.bool(self.field_done_pending);
@@ -1035,6 +1124,10 @@ impl Machine for C128 {
         self.sched.save(&mut w);
         self.input.save(&mut w);
         self.tape.save(&mut w);
+        w.chunk(*b"CART", 1, |w| w.bool(self.cart.is_inserted()));
+        if let Some(c) = self.cart.cart() {
+            c.save(&mut w);
+        }
         w.chunk(*b"DRV8", 1, |w| w.bool(self.drive.is_some()));
         if let Some(d) = &self.drive {
             d.save(&mut w);
@@ -1059,7 +1152,7 @@ impl Machine for C128 {
             input: self.input.clone(),
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"C128", 2)?;
+        let (version, mut c) = r.chunk(*b"C128", 3)?;
         let ints = (c.u8()?, c.u8()?);
         let field_done_pending = c.bool()?;
         let autostart =
@@ -1082,13 +1175,35 @@ impl Machine for C128 {
         if version >= 2 {
             self.tape.load(&mut r)?;
         }
-        let restore_tape = |tape: &mut Datasette| {
+        // The cartridge (version 3 on), likewise.
+        let cart_backup = self.cart.cart().map(|c| {
+            let mut w = StateWriter::new();
+            c.save(&mut w);
+            w.into_bytes()
+        });
+        let restore_tape = |tape: &mut Datasette, cart: &mut ExpansionSlot| {
             let _ = tape.load(&mut StateReader::new(&tape_backup));
+            if let (Some(c), Some(b)) = (cart.cart_mut(), &cart_backup) {
+                let _ = c.load(&mut StateReader::new(b));
+            }
         };
+        if version >= 3 {
+            let present = r.chunk(*b"CART", 1).and_then(|(_, mut c)| c.bool());
+            let loaded = match (present, self.cart.cart_mut()) {
+                (Ok(true), Some(c)) => c.load(&mut r),
+                (Ok(false), None) => Ok(()),
+                (Err(e), _) => Err(e),
+                _ => Err(StateError::Invalid("cartridge differs")),
+            };
+            if let Err(e) = loaded {
+                restore_tape(&mut self.tape, &mut self.cart);
+                return Err(e);
+            }
+        }
 
         let drive_chunk = r.chunk(*b"DRV8", 1).and_then(|(_, mut c)| c.bool());
         if drive_chunk != Ok(self.drive.is_some()) {
-            restore_tape(&mut self.tape);
+            restore_tape(&mut self.tape, &mut self.cart);
             return Err(drive_chunk
                 .err()
                 .unwrap_or(StateError::Invalid("drive 8 configuration differs")));
@@ -1100,7 +1215,7 @@ impl Machine for C128 {
         });
         if let Some(d) = &mut self.drive {
             if let Err(e) = d.load(&mut r) {
-                restore_tape(&mut self.tape);
+                restore_tape(&mut self.tape, &mut self.cart);
                 return Err(e);
             }
         }
@@ -1116,7 +1231,7 @@ impl Machine for C128 {
             Ok(p) => p,
             Err(e) => {
                 restore_drive(&mut self.drive);
-                restore_tape(&mut self.tape);
+                restore_tape(&mut self.tape, &mut self.cart);
                 return Err(e);
             }
         };
@@ -1134,7 +1249,7 @@ impl Machine for C128 {
                         }
                     }
                     restore_drive(&mut self.drive);
-                    restore_tape(&mut self.tape);
+                    restore_tape(&mut self.tape, &mut self.cart);
                     return Err(e);
                 }
             }
@@ -1184,7 +1299,12 @@ impl DebugTarget for C128 {
     fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
         let byte = |a: u32| -> Option<u32> {
             Some(u32::from(match space {
-                CPU_SPACE => cpu_peek(&self.mem, &self.io, (a & 0xffff) as u16),
+                CPU_SPACE => cpu_peek(
+                    &self.mem,
+                    &self.io,
+                    self.cart.cart().map(|c| c.as_ref()),
+                    (a & 0xffff) as u16,
+                ),
                 RAM_SPACE => self.mem.ram[(a & 0x1ffff) as usize],
                 Z80_SPACE => z80_peek(&self.mem, &self.io, a & 0xffff),
                 VDC_SPACE => {
@@ -1209,6 +1329,7 @@ impl DebugTarget for C128 {
                 CPU_SPACE => CpuBus {
                     mem: &mut self.mem,
                     io: &mut self.io,
+                    cart: self.cart.cart_mut().map(|c| c.as_mut()),
                 }
                 .write(a & 0xffff, Size::Byte, u32::from(b)),
                 RAM_SPACE => self.mem.ram[(a & 0x1ffff) as usize] = b,
@@ -1224,6 +1345,7 @@ impl DebugTarget for C128 {
         let bus = PeekBus {
             mem: &self.mem,
             io: &self.io,
+            cart: self.cart.cart().map(|c| c.as_ref()),
             z80: self.debug_dev == Z80_DEV,
         };
         if self.debug_dev == Z80_DEV {

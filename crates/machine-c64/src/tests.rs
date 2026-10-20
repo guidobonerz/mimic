@@ -159,14 +159,16 @@ fn irq_is_level_triggered() {
     // the CPU re-enters as soon as RTI restores I = 0).
     let code = [0x58, 0x4c, 0x01, 0xe0];
     let irq = [0xe6, 0x10, 0x40];
+    // A source nothing else drives (the cartridge sets its own each cycle).
+    const TEST_SOURCE: u8 = 1 << 7;
     let mut m = machine(&code, &irq, &[0x40]);
     run_cycles(&mut m, 20);
     assert_eq!(m.mem.ram[0x10], 0);
-    m.interrupts_mut().set_irq(irq::CARTRIDGE, true);
+    m.interrupts_mut().set_irq(TEST_SOURCE, true);
     run_cycles(&mut m, 40);
     let count = m.mem.ram[0x10];
     assert!(count >= 2, "IRQ taken repeatedly while held: {count}");
-    m.interrupts_mut().set_irq(irq::CARTRIDGE, false);
+    m.interrupts_mut().set_irq(TEST_SOURCE, false);
     run_cycles(&mut m, 20);
     let settled = m.mem.ram[0x10];
     run_cycles(&mut m, 40);
@@ -176,21 +178,23 @@ fn irq_is_level_triggered() {
 fn nmi_is_edge_triggered() {
     let code = [0x4c, 0x00, 0xe0];
     let nmi = [0xe6, 0x11, 0x40];
+    // A source nothing else drives (the cartridge sets its own each cycle).
+    const TEST_SOURCE: u8 = 1 << 7;
     let mut m = machine(&code, &[0x40], &nmi);
     run_cycles(&mut m, 20);
     m.io.keyboard.restore = true;
     run_cycles(&mut m, 60);
     assert_eq!(m.mem.ram[0x11], 1, "held low: one NMI only");
-    m.interrupts_mut().set_nmi(nmi::CARTRIDGE, true);
+    m.interrupts_mut().set_nmi(TEST_SOURCE, true);
     run_cycles(&mut m, 60);
     assert_eq!(
         m.mem.ram[0x11], 1,
         "second source on an active line: no edge"
     );
     m.io.keyboard.restore = false;
-    m.interrupts_mut().set_nmi(nmi::CARTRIDGE, false);
+    m.interrupts_mut().set_nmi(TEST_SOURCE, false);
     run_cycles(&mut m, 2);
-    m.interrupts_mut().set_nmi(nmi::CARTRIDGE, true);
+    m.interrupts_mut().set_nmi(TEST_SOURCE, true);
     run_cycles(&mut m, 60);
     assert_eq!(m.mem.ram[0x11], 2);
 }

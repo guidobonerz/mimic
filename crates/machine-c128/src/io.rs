@@ -164,7 +164,8 @@ impl Io {
             },
             0xd400..=0xd4ff => self.sid.peek(reg),
             0xd500..=0xd5ff if !mem.mmu.c64_mode() => {
-                mem.mmu.peek(reg, self.keyboard.display_80, false, false)
+                mem.mmu
+                    .peek(reg, self.keyboard.display_80, !mem.game, !mem.exrom)
             }
             0xd600..=0xd6ff => self.vdc.peek(reg),
             0xd800..=0xdbff => (self.open_bus() & 0xf0) | mem.color[mem.color_index(addr)],

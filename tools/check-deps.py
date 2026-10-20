@@ -22,11 +22,12 @@ RULES = [
     ("chips-*", ["emu-core"]),
     ("media", ["emu-core"]),
     ("devices-input", ["emu-core"]),
+    ("devices-cartridge", ["emu-core", "media"]),
     ("video-crt", ["emu-core"]),
     ("emu-input", ["emu-core"]),
     ("media-backends", ["emu-core", "media"]),  # host folders as D64 images
     ("drives-*", ["emu-core", "cpu-*", "chips-*", "media"]),
-    ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-input", "media"]),
+    ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media"]),
     # Also the catalogue of pluggable port devices for the frontends.
     ("emu-machines", ["emu-core", "machine-*", "devices-input"]),
     ("emu-debug", ["emu-core"]),                   # golden rule 1

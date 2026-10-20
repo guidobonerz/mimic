@@ -27,6 +27,8 @@ usage: emu-headless [options]
   --disk FILE           disk image into the first disk drive (drive 8)
   --tape FILE           TAP image into the datasette (PLAY pressed); a PRG
                         is recorded in the machine's tape format first
+  --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
+                        + ROM) or C16/Plus/4 (16/32 KB) dump
   --autostart           load and run the disk after boot (C64)
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
   --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR)
@@ -60,6 +62,7 @@ struct Args {
     prg: Option<String>,
     disk: Option<String>,
     tape: Option<String>,
+    cart: Option<String>,
     frames: u64,
     snapshot: Option<String>,
     snapshot_every: u64,
@@ -107,6 +110,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--prg" => args.prg = Some(value("--prg")?),
             "--disk" => args.disk = Some(value("--disk")?),
             "--tape" => args.tape = Some(value("--tape")?),
+            "--cart" => args.cart = Some(value("--cart")?),
             "--autostart" => {
                 args.config.options.insert("autostart".into(), "on".into());
             }
@@ -285,6 +289,17 @@ fn run(args: Args) -> Result<ExitCode, String> {
         let slot = slot_of(machine.as_ref(), MediaKind::Tape)
             .ok_or_else(|| format!("{} has no datasette", args.machine))?;
         let media = media_backends::image::open_tape(std::path::Path::new(path), &args.machine)
+            .map_err(|e| format!("{path}: {e}"))?;
+        machine
+            .media_slot(slot)
+            .ok_or("no such slot")?
+            .insert(media)
+            .map_err(|e| format!("{path}: {e}"))?;
+    }
+    if let Some(path) = &args.cart {
+        let slot = slot_of(machine.as_ref(), MediaKind::Cartridge)
+            .ok_or_else(|| format!("{} has no expansion port", args.machine))?;
+        let media = media_backends::image::open_cart(std::path::Path::new(path))
             .map_err(|e| format!("{path}: {e}"))?;
         machine
             .media_slot(slot)
@@ -513,6 +528,10 @@ mod tests {
         assert!(parse("--bogus").is_err());
         assert!(parse("--disk").is_err());
         assert!(parse("--tape").is_err());
+        assert_eq!(
+            parse("--cart c.crt").unwrap().cart.as_deref(),
+            Some("c.crt")
+        );
         assert_eq!(
             parse("--tape t.tap").unwrap().tape.as_deref(),
             Some("t.tap")

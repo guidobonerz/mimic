@@ -6,6 +6,7 @@ pub mod cia;
 pub mod crtc;
 pub mod mmu;
 pub mod pia;
+pub mod pla;
 pub mod sid;
 pub mod ted;
 pub mod vdc;

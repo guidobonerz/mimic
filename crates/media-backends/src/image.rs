@@ -233,6 +233,20 @@ pub fn open_tape(path: &Path, machine_id: &str) -> Result<Media, MediaError> {
     })
 }
 
+/// A cartridge image behind a copy-on-write overlay: a CRT file, or a raw
+/// dump in whatever form the machine's expansion port takes (VIC-20 ROM
+/// with load address, C16/Plus/4 16/32 KB ROM), which its slot checks.
+pub fn open_cart(path: &Path) -> Result<Media, MediaError> {
+    let file = FileBackend::open(path)?;
+    Ok(Media {
+        name: path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+        kind: MediaKind::Cartridge,
+        backend: Box::new(CowOverlay::new(Box::new(file))),
+    })
+}
+
 /// Open an image file as media behind a copy-on-write overlay; a folder
 /// opens as a disk of its PRG files (see [`crate::host_dir`]).
 pub fn open(path: &Path) -> Result<Media, MediaError> {

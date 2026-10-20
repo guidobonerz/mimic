@@ -2,8 +2,9 @@
 //!
 //! 6502, VIC 6561 (PAL) or 6560 (NTSC) for video and sound, two 6522 VIAs
 //! (keyboard, joystick, serial bus, RESTORE), 5 KB RAM plus expansions, the
-//! control port, a true-emulated 1541 as drive 8 and a "program" slot for
-//! PRG/T64.
+//! control port, a true-emulated 1541 as drive 8, a "program" slot for
+//! PRG/T64, the datasette and a "cartridge" slot (ROM in BLK1–3/BLK5;
+//! "A0CBM" at `$A004` autostarts).
 //!
 //! Models: "pal" (default; 1 108 404 Hz, 312 lines × 71 cycles) and "ntsc"
 //! (1 022 727 Hz, 261 lines × 65 cycles). The NTSC model uses
@@ -49,6 +50,8 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
+use devices_cartridge::slot::CartSlot;
+use devices_cartridge::vic20::VicCart;
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms};
 use drives_other::Datasette;
@@ -94,6 +97,7 @@ fn plain_read(mem: &Memory, io: &Io, addr: u16) -> u8 {
         Area::Color => (io.open_bus() & 0xf0) | mem.color[a & 0x3ff],
         Area::Basic => mem.roms.basic[a & 0x1fff],
         Area::Kernal => mem.roms.kernal[a & 0x1fff],
+        Area::Cart => mem.cart.as_ref().and_then(|c| c.peek(addr)).unwrap_or(0xff),
         Area::Io | Area::None => io.open_bus(),
     }
 }
@@ -192,6 +196,7 @@ pub const CONTROL_PORT: PortId = PortId(0);
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(1);
 pub const SLOT_TAPE: SlotId = SlotId(2);
+pub const SLOT_CARTRIDGE: SlotId = SlotId(3);
 
 pub struct Vic20 {
     cpu: Cpu6502,
@@ -204,6 +209,8 @@ pub struct Vic20 {
     program: ProgramSlot,
     /// The datasette on the cassette port.
     tape: Datasette,
+    /// The expansion port's ROM cartridge (a copy in `mem` maps it).
+    cart: CartSlot<VicCart>,
     autostart: Autostart,
     palette: [Rgb8; 16],
     field_done_pending: bool,
@@ -280,6 +287,7 @@ impl Vic20 {
             drive,
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::Vic20, cpu_hz),
+            cart: devices_cartridge::vic20::slot(),
             autostart,
             palette: vic::palette::palette(),
             field_done_pending: false,
@@ -296,6 +304,11 @@ impl Vic20 {
 
     /// One CPU cycle. Returns `Some` if emulation must stop.
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        // A cartridge went in or out: the machine powers up again.
+        if self.cart.take_changed() {
+            self.mem.cart = self.cart.cart().cloned();
+            self.reset(ResetKind::Hard);
+        }
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
         }
@@ -723,6 +736,12 @@ impl Machine for Vic20 {
             kind: MediaKind::Tape,
             inserted: self.tape.has_tape(),
         });
+        slots.push(MediaSlotInfo {
+            id: SLOT_CARTRIDGE,
+            name: "cartridge",
+            kind: MediaKind::Cartridge,
+            inserted: self.cart.is_inserted(),
+        });
         slots
     }
 
@@ -731,6 +750,7 @@ impl Machine for Vic20 {
             SLOT_DRIVE8 => self.drive.as_mut().map(|d| d.media_slot()),
             SLOT_PROGRAM => Some(&mut self.program),
             SLOT_TAPE => Some(&mut self.tape),
+            SLOT_CARTRIDGE => Some(&mut self.cart),
             _ => None,
         }
     }

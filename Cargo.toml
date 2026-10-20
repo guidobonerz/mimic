@@ -23,6 +23,7 @@ chips-amstrad = { path = "crates/chips-amstrad" }
 drives-cbm = { path = "crates/drives-cbm" }
 drives-other = { path = "crates/drives-other" }
 devices-input = { path = "crates/devices-input" }
+devices-cartridge = { path = "crates/devices-cartridge" }
 media = { path = "crates/media" }
 media-backends = { path = "crates/media-backends" }
 emu-input = { path = "crates/emu-input" }

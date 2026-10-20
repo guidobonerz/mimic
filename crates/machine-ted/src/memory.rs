@@ -16,8 +16,13 @@
 //! KERNAL, 1 function ROM, 2 cartridge 1, 3 cartridge 2). The C16 has
 //! 16 KB of RAM mirrored over the whole 64 KB. Source: Plus/4
 //! Programmer's Reference, memory map. Empty ROM sockets read `$FF`.
+//!
+//! Banks 2 and 3 are the expansion port's cartridges C1 and C2; the KERNAL
+//! starts one whose low ROM holds "CBM" at `$8007` and module number 1 at
+//! `$8006` (`JSR $8000` during reset).
 
 use chips_cbm::ted::TedMemory;
+use devices_cartridge::ted::TedCart;
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const ROM_SIZE: usize = 0x4000;
@@ -44,6 +49,9 @@ pub struct Memory {
     pub rom_on: bool,
     /// Bank select: bits 0–1 low bank, bits 2–3 high bank.
     pub banks: u8,
+    /// The plugged-in cartridge (a copy of the slot's, set by the machine
+    /// on power-up; ROM only, so not part of savestates).
+    pub cart: Option<TedCart>,
 }
 
 /// What a CPU address selects.
@@ -63,6 +71,7 @@ impl Memory {
             roms,
             rom_on: true,
             banks: 0,
+            cart: None,
         }
     }
 
@@ -113,6 +122,11 @@ impl Memory {
                     lo[i]
                 }
             }
+            (2 | 3, _) => self
+                .cart
+                .as_ref()
+                .and_then(|c| c.peek(bank, addr))
+                .unwrap_or(0xff),
             _ => 0xff,
         }
     }

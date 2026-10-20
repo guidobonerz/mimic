@@ -14,10 +14,14 @@
 //! | `$C000–$DFFF` | BASIC ROM                                             |
 //! | `$E000–$FFFF` | KERNAL ROM                                            |
 //!
+//! A cartridge's ROM in blocks 1–3 or 5 takes the place of expansion RAM
+//! there (the VIC never sees it).
+//!
 //! Source: VIC-20 Programmer's Reference Guide, memory map. Unpopulated
 //! addresses read the last byte on the data bus (open bus).
 
 use chips_cbm::vic::VicMemory;
+use devices_cartridge::vic20::VicCart;
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const KERNAL_SIZE: usize = 0x2000;
@@ -62,6 +66,9 @@ pub struct Memory {
     pub color: Vec<u8>,
     pub roms: Roms,
     pub expansion: u8,
+    /// The plugged-in cartridge (a copy of the slot's, set by the machine
+    /// on power-up; ROM only, so not part of savestates).
+    pub cart: Option<VicCart>,
 }
 
 /// What a CPU address selects.
@@ -73,6 +80,8 @@ pub enum Area {
     Color,
     Basic,
     Kernal,
+    /// Cartridge ROM.
+    Cart,
     /// Nothing fitted: open bus.
     None,
 }
@@ -84,6 +93,7 @@ impl Memory {
             color: vec![0; 0x400],
             roms,
             expansion,
+            cart: None,
         }
     }
 
@@ -104,6 +114,11 @@ impl Memory {
                 Area::None
             }
         };
+        let cart_rom = matches!(addr, 0x2000..=0x7fff | 0xa000..=0xbfff)
+            && self.cart.as_ref().is_some_and(|c| c.peek(addr).is_some());
+        if cart_rom {
+            return Area::Cart;
+        }
         match addr {
             0x0000..=0x03ff | 0x1000..=0x1fff => Area::Ram,
             0x0400..=0x0fff => fitted(RAM123),
