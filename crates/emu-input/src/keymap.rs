@@ -3,8 +3,8 @@
 //!
 //! A host key may produce several machine keys (C64 cursor up = SHIFT +
 //! CRSR DOWN). Machine key codes follow each machine's documented encoding;
-//! for the C64 that is `column * 8 + row` of the keyboard matrix, RESTORE 64
-//! (see `machine-c64::keyboard`).
+//! for the C64 and VIC-20 that is `column * 8 + row` of the keyboard matrix,
+//! RESTORE 64 (see `machine-c64::keyboard`, `machine-vic20::keyboard`).
 
 use emu_core::input::MachineKey;
 
@@ -113,10 +113,96 @@ pub static C64: Keymap = Keymap {
     entries: C64_POSITIONAL,
 };
 
+const VIC20_LSHIFT: u16 = k(3, 1);
+const VIC20_RSHIFT: u16 = k(4, 6);
+
+/// VIC-20 keyboard (same layout as the C64, other matrix) on the same PC
+/// keys as [`C64_POSITIONAL`].
+const VIC20_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Backquote", &[k(1, 0)]), // ←
+    ("Digit1", &[k(0, 0)]),
+    ("Digit2", &[k(7, 0)]),
+    ("Digit3", &[k(0, 1)]),
+    ("Digit4", &[k(7, 1)]),
+    ("Digit5", &[k(0, 2)]),
+    ("Digit6", &[k(7, 2)]),
+    ("Digit7", &[k(0, 3)]),
+    ("Digit8", &[k(7, 3)]),
+    ("Digit9", &[k(0, 4)]),
+    ("Digit0", &[k(7, 4)]),
+    ("Minus", &[k(0, 5)]),  // +
+    ("Equal", &[k(7, 5)]),  // -
+    ("Insert", &[k(0, 6)]), // £
+    ("Home", &[k(7, 6)]),
+    ("Backspace", &[k(0, 7)]), // INST/DEL
+    ("Tab", &[k(2, 0)]),       // CTRL
+    ("KeyQ", &[k(6, 0)]),
+    ("KeyW", &[k(1, 1)]),
+    ("KeyE", &[k(6, 1)]),
+    ("KeyR", &[k(1, 2)]),
+    ("KeyT", &[k(6, 2)]),
+    ("KeyY", &[k(1, 3)]),
+    ("KeyU", &[k(6, 3)]),
+    ("KeyI", &[k(1, 4)]),
+    ("KeyO", &[k(6, 4)]),
+    ("KeyP", &[k(1, 5)]),
+    ("BracketLeft", &[k(6, 5)]),   // @
+    ("BracketRight", &[k(1, 6)]),  // *
+    ("Delete", &[k(6, 6)]),        // ↑
+    ("PageUp", &[64]),             // RESTORE
+    ("Escape", &[k(3, 0)]),        // RUN/STOP
+    ("CapsLock", &[VIC20_LSHIFT]), // SHIFT LOCK
+    ("KeyA", &[k(2, 1)]),
+    ("KeyS", &[k(5, 1)]),
+    ("KeyD", &[k(2, 2)]),
+    ("KeyF", &[k(5, 2)]),
+    ("KeyG", &[k(2, 3)]),
+    ("KeyH", &[k(5, 3)]),
+    ("KeyJ", &[k(2, 4)]),
+    ("KeyK", &[k(5, 4)]),
+    ("KeyL", &[k(2, 5)]),
+    ("Semicolon", &[k(5, 5)]), // :
+    ("Quote", &[k(2, 6)]),     // ;
+    ("Backslash", &[k(5, 6)]), // =
+    ("Enter", &[k(1, 7)]),
+    ("ControlLeft", &[k(5, 0)]), // C=
+    ("ShiftLeft", &[VIC20_LSHIFT]),
+    ("KeyZ", &[k(4, 1)]),
+    ("KeyX", &[k(3, 2)]),
+    ("KeyC", &[k(4, 2)]),
+    ("KeyV", &[k(3, 3)]),
+    ("KeyB", &[k(4, 3)]),
+    ("KeyN", &[k(3, 4)]),
+    ("KeyM", &[k(4, 4)]),
+    ("Comma", &[k(3, 5)]),
+    ("Period", &[k(4, 5)]),
+    ("Slash", &[k(3, 6)]),
+    ("ShiftRight", &[VIC20_RSHIFT]),
+    ("ArrowDown", &[k(3, 7)]),
+    ("ArrowRight", &[k(2, 7)]),
+    ("ArrowUp", &[VIC20_RSHIFT, k(3, 7)]),
+    ("ArrowLeft", &[VIC20_RSHIFT, k(2, 7)]),
+    ("Space", &[k(4, 0)]),
+    ("F1", &[k(4, 7)]),
+    ("F2", &[VIC20_LSHIFT, k(4, 7)]),
+    ("F3", &[k(5, 7)]),
+    ("F4", &[VIC20_LSHIFT, k(5, 7)]),
+    ("F5", &[k(6, 7)]),
+    ("F6", &[VIC20_LSHIFT, k(6, 7)]),
+    ("F7", &[k(7, 7)]),
+    ("F8", &[VIC20_LSHIFT, k(7, 7)]),
+];
+
+pub static VIC20: Keymap = Keymap {
+    machine: "vic20",
+    entries: VIC20_POSITIONAL,
+};
+
 /// The positional keymap for a machine id.
 pub fn positional(machine: &str) -> Option<&'static Keymap> {
     match machine {
         "c64" => Some(&C64),
+        "vic20" => Some(&VIC20),
         _ => None,
     }
 }
@@ -125,25 +211,46 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
 mod tests {
     use super::*;
 
+    type Entries = &'static [(&'static str, &'static [u16])];
+
+    const MAPS: [(Entries, u16); 2] = [
+        (C64_POSITIONAL, C64_LSHIFT),
+        (VIC20_POSITIONAL, VIC20_LSHIFT),
+    ];
+
     #[test]
     fn every_matrix_key_is_reachable_once_as_a_single_key() {
-        let mut seen = [0u8; 65];
-        for (_, keys) in C64_POSITIONAL {
-            if let [single] = keys {
-                seen[usize::from(*single)] += 1;
+        for (map, lshift) in MAPS {
+            let mut seen = [0u8; 65];
+            for (_, keys) in map {
+                if let [single] = keys {
+                    seen[usize::from(*single)] += 1;
+                }
             }
+            // LSHIFT is on both ShiftLeft and CapsLock (SHIFT LOCK).
+            seen[usize::from(lshift)] -= 1;
+            assert!(seen.iter().all(|&n| n == 1), "{seen:?}");
         }
-        // LSHIFT is on both ShiftLeft and CapsLock (SHIFT LOCK).
-        seen[usize::from(C64_LSHIFT)] -= 1;
-        assert!(seen.iter().all(|&n| n == 1), "{seen:?}");
     }
 
     #[test]
     fn host_names_are_unique() {
-        let mut names: Vec<_> = C64_POSITIONAL.iter().map(|(n, _)| *n).collect();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), C64_POSITIONAL.len());
+        for (map, _) in MAPS {
+            let mut names: Vec<_> = map.iter().map(|(n, _)| *n).collect();
+            names.sort_unstable();
+            names.dedup();
+            assert_eq!(names.len(), map.len());
+        }
+    }
+
+    #[test]
+    fn both_layouts_use_the_same_host_keys() {
+        let names = |map: Entries| {
+            let mut n: Vec<_> = map.iter().map(|(n, _)| *n).collect();
+            n.sort_unstable();
+            n
+        };
+        assert_eq!(names(C64_POSITIONAL), names(VIC20_POSITIONAL));
     }
 
     #[test]

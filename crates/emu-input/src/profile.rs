@@ -87,10 +87,16 @@ impl Profile {
     /// Built-in default: positional keyboard; for the C64 a joystick in
     /// control port 2 on the numeric keypad and on the first gamepad.
     pub fn default_for(machine: &str) -> Self {
-        let joystick = match machine {
-            "c64" => vec![
+        // The C64's game port is control port 2; the VIC-20 has one port.
+        let port = match machine {
+            "c64" => Some(1),
+            "vic20" => Some(0),
+            _ => None,
+        };
+        let joystick = match port {
+            Some(port) => vec![
                 JoystickMap {
-                    port: 1,
+                    port,
                     source: JoystickSource::Keys {
                         up: "Numpad8".into(),
                         down: "Numpad2".into(),
@@ -100,7 +106,7 @@ impl Profile {
                     },
                 },
                 JoystickMap {
-                    port: 1,
+                    port,
                     source: JoystickSource::Gamepad {
                         pad: 0,
                         fire: default_fire(),
@@ -108,7 +114,7 @@ impl Profile {
                     },
                 },
             ],
-            _ => Vec::new(),
+            None => Vec::new(),
         };
         Self {
             machine: machine.into(),

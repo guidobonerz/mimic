@@ -39,6 +39,7 @@ pub fn registry() -> Registry {
     let mut r = Registry::new();
     r.register(machine_sim6502::entry());
     r.register(machine_c64::entry());
+    r.register(machine_vic20::entry());
     r
 }
 

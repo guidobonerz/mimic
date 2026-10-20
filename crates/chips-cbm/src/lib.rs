@@ -5,4 +5,5 @@
 pub mod cia;
 pub mod sid;
 pub mod via;
+pub mod vic;
 pub mod vic2;
