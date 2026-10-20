@@ -23,6 +23,7 @@ use crate::protocol::{
     self, BreakSpec, Command, RangeSpec, Request, MAX_DISASM, MAX_PEEK, MAX_STEP_COUNT,
     MAX_TRACE_CAPACITY,
 };
+use crate::symbols::{self, SymbolTable};
 
 /// Frames a synchronous step may run before giving up (e.g. `step_instr` on
 /// a CPU held off the bus). Bounded so a command can never hang the session.
@@ -108,6 +109,9 @@ pub struct Session {
     events: Vec<Value>,
     /// Connections that want `frame_ready`.
     frame_subscribers: u32,
+    /// Why the last run ended (`None` while running or never run).
+    last_stop: Option<StopReason>,
+    symbols: SymbolTable,
 }
 
 impl Session {
@@ -121,6 +125,8 @@ impl Session {
             bp_meta: BTreeMap::new(),
             events: Vec::new(),
             frame_subscribers: 0,
+            last_stop: None,
+            symbols: SymbolTable::default(),
         }
     }
 
@@ -134,6 +140,16 @@ impl Session {
 
     pub fn machine_mut(&mut self) -> &mut dyn Machine {
         self.machine.as_mut()
+    }
+
+    /// Why the session is paused: the end of the last run, `StepDone` for
+    /// `pause` and synchronous steps. `None` while running.
+    pub fn last_stop(&self) -> Option<StopReason> {
+        if self.running {
+            None
+        } else {
+            self.last_stop
+        }
     }
 
     pub fn is_running(&self) -> bool {
@@ -197,6 +213,7 @@ impl Session {
             reason => {
                 self.cancel_mode();
                 self.running = false;
+                self.last_stop = Some(reason);
                 let mut ev = self.state_json(&reason);
                 ev["event"] = json!("stopped");
                 self.events.push(ev);
@@ -344,6 +361,9 @@ impl Session {
                 let was_running = self.running;
                 self.cancel_mode();
                 self.running = false;
+                if was_running {
+                    self.last_stop = Some(StopReason::StepDone);
+                }
                 let state = self.state_json(&StopReason::StepDone);
                 if was_running {
                     // Clients of asynchronous runs wait for `stopped`.
@@ -395,9 +415,13 @@ impl Session {
                 let sp0 = stack_pointer(&regs).ok_or("main CPU has no stack pointer")?;
                 Ok(self.start(RunMode::StepOut { sp0, current: None }))
             }
-            Command::RunTo { space, addr } => {
+            Command::RunTo {
+                space,
+                addr,
+                symbol,
+            } => {
+                let (space, addr) = self.resolve(space, addr, symbol.as_deref())?;
                 self.stop_for_sync();
-                let space = self.space(space)?;
                 let bp = self
                     .hooks
                     .add_breakpoint(BreakpointKind::Exec { space, addr });
@@ -492,6 +516,13 @@ impl Session {
             } => {
                 let count = count.unwrap_or(10).min(MAX_DISASM);
                 let dev = self.device(device.as_deref())?;
+                // Labels of the device's own view of memory.
+                let space = self
+                    .machine
+                    .memory_spaces()
+                    .iter()
+                    .find(|s| s.device == dev)
+                    .map(|s| s.id);
                 let target = self.machine.debug_target(dev).ok_or("no debug target")?;
                 let mut addr = match addr {
                     Some(a) => a,
@@ -500,12 +531,21 @@ impl Session {
                 let mut lines = Vec::new();
                 for _ in 0..count {
                     let ins = target.disassemble(addr);
-                    lines.push(json!({
+                    let mut line = json!({
                         "addr": ins.addr,
                         "bytes": ins.bytes,
                         "text": ins.to_string(),
                         "flow": format!("{:?}", ins.flow).to_ascii_lowercase(),
-                    }));
+                    });
+                    if let Some(space) = space {
+                        if let Some(l) = self.symbols.name_at(space, ins.addr) {
+                            line["label"] = json!(l);
+                        }
+                        if let Some(l) = ins.target.and_then(|t| self.symbols.name_at(space, t)) {
+                            line["target_label"] = json!(l);
+                        }
+                    }
+                    lines.push(line);
                     addr = addr.wrapping_add(ins.bytes.len().max(1) as u32);
                 }
                 Ok(json!({"device": dev.0, "lines": lines}))
@@ -613,6 +653,54 @@ impl Session {
                 self.hooks.set_trace(config);
                 Ok(json!({}))
             }
+            Command::SymbolsLoad {
+                path,
+                text,
+                format,
+                space,
+            } => {
+                let space = self.space(space)?;
+                let text = match (path, text) {
+                    (Some(path), None) => {
+                        let meta = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?;
+                        if meta.len() > symbols::MAX_FILE as u64 {
+                            return Err(format!("{path}: larger than {} bytes", symbols::MAX_FILE));
+                        }
+                        let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+                        String::from_utf8_lossy(&bytes).into_owned()
+                    }
+                    (None, Some(text)) => text,
+                    _ => return Err("give either path or text".into()),
+                };
+                let format = match format.as_deref() {
+                    Some(f) => symbols::Format::from_name(f)
+                        .ok_or_else(|| format!("unknown format '{f}'"))?,
+                    None => symbols::Format::detect(&text).ok_or("unknown symbol file format")?,
+                };
+                let (syms, bad) = symbols::parse(&text, format);
+                let count = syms.len();
+                for (name, addr) in syms {
+                    self.symbols.insert(space, name, addr);
+                }
+                Ok(json!({
+                    "format": format.name(), "loaded": count, "skipped": bad,
+                    "total": self.symbols.len(),
+                }))
+            }
+            Command::SymbolsList => {
+                let list: Vec<Value> = self
+                    .symbols
+                    .iter()
+                    .map(
+                        |(name, space, addr)| json!({"name": name, "space": space.0, "addr": addr}),
+                    )
+                    .collect();
+                Ok(json!(list))
+            }
+            Command::SymbolsClear => {
+                self.symbols.clear();
+                Ok(json!({}))
+            }
             Command::TraceStop => {
                 self.hooks.set_trace(TraceConfig::default());
                 Ok(json!({}))
@@ -652,12 +740,45 @@ impl Session {
     fn stop_for_sync(&mut self) {
         self.cancel_mode();
         self.running = false;
+        self.last_stop = Some(StopReason::StepDone);
+    }
+
+    /// Space and address from either `addr` or `symbol`.
+    fn resolve(
+        &self,
+        space: Option<u16>,
+        addr: Option<u32>,
+        symbol: Option<&str>,
+    ) -> Result<(MemSpaceId, u32), String> {
+        match (addr, symbol) {
+            (Some(addr), None) => Ok((self.space(space)?, addr)),
+            (None, Some(name)) => {
+                let (sym_space, addr) = self
+                    .symbols
+                    .lookup(name)
+                    .ok_or_else(|| format!("unknown symbol '{name}'"))?;
+                let space = match space {
+                    Some(_) => self.space(space)?,
+                    None => sym_space,
+                };
+                Ok((space, addr))
+            }
+            (Some(_), Some(_)) => Err("give either addr or symbol".into()),
+            (None, None) => Err("addr missing".into()),
+        }
     }
 
     fn break_add(&mut self, spec: BreakSpec) -> Result<Value, String> {
-        let space = self.space(spec.space)?;
+        let located = match (spec.addr, spec.symbol.as_deref()) {
+            (None, None) => None,
+            (addr, symbol) => Some(self.resolve(spec.space, addr, symbol)?),
+        };
+        let space = match located {
+            Some((space, _)) => space,
+            None => self.space(spec.space)?,
+        };
         let device = self.space_owner(space)?;
-        let addr = || spec.addr.ok_or("addr missing");
+        let addr = || located.map(|(_, a)| a).ok_or("addr missing");
         let len = spec.len.unwrap_or(1);
         if len == 0 || len > emu_core::debug::MAX_RANGE {
             return Err(format!("len must be 1–{:#x}", emu_core::debug::MAX_RANGE));

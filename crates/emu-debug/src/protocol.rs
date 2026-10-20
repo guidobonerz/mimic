@@ -32,6 +32,9 @@
 //! disassembly and exec breakpoints. 2 adds asynchronous steps, `run_to`,
 //! `reset`, all breakpoint kinds with conditions and ignore counts, `poke`,
 //! `chips`, savestates, the trace, `capabilities` and event subscriptions.
+//! 3 adds `break_condition` and symbols (`symbols_load`, `symbols_list`,
+//! `symbols_clear`, labels in `disasm`, `symbol` in `break_add`/`run_to`)
+//! and the PC in `resumed`.
 //!
 //! Every change to this message set needs a contract test and a bump of
 //! [`PROTOCOL_VERSION`].
@@ -42,7 +45,7 @@ use serde_json::{json, Value};
 use emu_core::{BeamPos, StopReason};
 
 pub const PROTOCOL_NAME: &str = "polytrace-debug";
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Request {
@@ -80,10 +83,12 @@ pub enum Command {
     StepLine,
     /// Run to the end of the current frame.
     StepFrame,
-    /// Run until the main CPU fetches the instruction at `addr`.
+    /// Run until the main CPU fetches the instruction at `addr` (or at
+    /// the address of `symbol`).
     RunTo {
         space: Option<u16>,
-        addr: u32,
+        addr: Option<u32>,
+        symbol: Option<String>,
     },
     /// `"soft"` (default, RESET line) or `"hard"` (power cycle).
     Reset {
@@ -149,6 +154,18 @@ pub enum Command {
     TraceStop,
     /// Take the recorded entries (oldest first) and clear the buffer.
     TraceRead,
+    /// Load labels from a file on this host (`path`) or from `text`.
+    /// `format`: `vice` or `kickass`; detected from the content if absent.
+    /// They belong to `space` (default: the main CPU's) and add to the
+    /// symbols already loaded.
+    SymbolsLoad {
+        path: Option<String>,
+        text: Option<String>,
+        format: Option<String>,
+        space: Option<u16>,
+    },
+    SymbolsList,
+    SymbolsClear,
 }
 
 /// `break_add` arguments. `kind` is `exec` (default), `read`, `write`,
@@ -159,6 +176,8 @@ pub struct BreakSpec {
     pub kind: Option<String>,
     pub space: Option<u16>,
     pub addr: Option<u32>,
+    /// A loaded symbol instead of `addr` (its space unless `space` is given).
+    pub symbol: Option<String>,
     /// Watchpoint length in bytes (default 1).
     pub len: Option<u32>,
     pub line: Option<u16>,
@@ -215,6 +234,9 @@ pub const COMMANDS: &[&str] = &[
     "trace_start",
     "trace_stop",
     "trace_read",
+    "symbols_load",
+    "symbols_list",
+    "symbols_clear",
 ];
 
 pub const BREAK_KINDS: &[&str] = &["exec", "read", "write", "raster", "irq", "nmi"];

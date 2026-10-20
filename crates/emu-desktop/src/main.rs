@@ -13,6 +13,7 @@ mod audio;
 mod emu;
 mod gfx;
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::Ordering;
@@ -22,6 +23,7 @@ use std::sync::Arc;
 use emu_core::media::{MediaKind, SlotId};
 use emu_core::registry::MachineConfig;
 use emu_core::Machine;
+use emu_debug::{DebugServer, ServerConfig};
 use emu_input::{Axis, Button, HostEvent, Mapper, Profile as InputProfile};
 use video_crt::Profile;
 use winit::application::ApplicationHandler;
@@ -46,6 +48,9 @@ usage: emu-desktop [options]
   --crt PROFILE         monitor: raw, 1702, 1084s, pal-tv or a .toml file
                         (default: the machine's own monitor)
   --scale N             initial window size in rows per line (default 2)
+  --debug [ADDR]        serve the debug protocol (default 127.0.0.1:6510)
+  --vice [ADDR]         serve the VICE binary monitor protocol for VS64 & co.
+                        (default 127.0.0.1:6502); implies --debug
   --help
 
 C64 keys by position on a PC keyboard: Esc = RUN/STOP, Tab = CTRL,
@@ -63,7 +68,12 @@ struct Args {
     disk: Option<String>,
     crt: Option<String>,
     scale: u32,
+    debug: Option<SocketAddr>,
+    vice: Option<SocketAddr>,
 }
+
+const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
+const DEFAULT_VICE_ADDR: &str = "127.0.0.1:6502";
 
 fn parse_args() -> Result<Option<Args>, String> {
     let mut a = Args {
@@ -74,8 +84,10 @@ fn parse_args() -> Result<Option<Args>, String> {
         disk: None,
         crt: None,
         scale: 2,
+        debug: None,
+        vice: None,
     };
-    let mut it = std::env::args().skip(1);
+    let mut it = std::env::args().skip(1).peekable();
     while let Some(flag) = it.next() {
         let mut value = |n: &str| it.next().ok_or_else(|| format!("{n} needs a value"));
         match flag.as_str() {
@@ -99,9 +111,31 @@ fn parse_args() -> Result<Option<Args>, String> {
                 let v = value("--scale")?;
                 a.scale = v.parse().map_err(|_| format!("bad scale '{v}'"))?;
             }
+            flag @ ("--debug" | "--vice") => {
+                let default = if flag == "--debug" {
+                    DEFAULT_DEBUG_ADDR
+                } else {
+                    DEFAULT_VICE_ADDR
+                };
+                let addr = match it.peek() {
+                    Some(v) if !v.starts_with("--") => it.next().unwrap_or_default(),
+                    _ => default.to_string(),
+                };
+                let addr: SocketAddr = addr
+                    .parse()
+                    .map_err(|_| format!("bad {flag} address '{addr}'"))?;
+                if flag == "--debug" {
+                    a.debug = Some(addr);
+                } else {
+                    a.vice = Some(addr);
+                }
+            }
             "--help" | "-h" => return Ok(None),
             other => return Err(format!("unknown option '{other}'")),
         }
+    }
+    if a.vice.is_some() && a.debug.is_none() {
+        a.debug = DEFAULT_DEBUG_ADDR.parse().ok();
     }
     Ok(Some(a))
 }
@@ -173,6 +207,8 @@ fn gamepad_button(b: gilrs::Button) -> Option<Button> {
 
 struct App {
     title: String,
+    /// What the title bar shows now (title plus stop status).
+    shown_title: String,
     profile: Profile,
     scale: u32,
     shared: Arc<Shared>,
@@ -369,8 +405,13 @@ impl ApplicationHandler for App {
                     g.render();
                 }
                 if let (Some(w), Ok(status)) = (&self.window, self.shared.status.lock()) {
-                    if let Some(s) = status.as_ref() {
-                        w.set_title(&format!("{} — stopped: {s}", self.title));
+                    let title = match status.as_ref() {
+                        Some(s) => format!("{} — {s}", self.title),
+                        None => self.title.clone(),
+                    };
+                    if title != self.shown_title {
+                        w.set_title(&title);
+                        self.shown_title = title;
                     }
                 }
             }
@@ -404,7 +445,27 @@ fn run() -> Result<(), String> {
     if _stream.is_none() {
         eprintln!("no audio device: running silent, paced by the clock");
     }
-    let emu = emu::spawn(machine, mapper, rx, shared.clone());
+    let mut server = None;
+    let debug = match args.debug {
+        Some(bind) => {
+            let config = ServerConfig {
+                bind,
+                vice: args.vice,
+                run: true,
+                realtime: true,
+            };
+            let (s, endpoint) = DebugServer::start_attached(config, &args.machine)
+                .map_err(|e| format!("debug server: {e}"))?;
+            eprintln!("debug server listening on {}", s.addr());
+            if let Some(vice) = s.vice_addr() {
+                eprintln!("VICE binary monitor listening on {vice}");
+            }
+            server = Some(s);
+            Some((endpoint, args.machine.clone()))
+        }
+        None => None,
+    };
+    let emu = emu::spawn(machine, mapper, rx, shared.clone(), debug);
 
     // Wait briefly for the first frame so the window opens at the right size.
     for _ in 0..100 {
@@ -417,6 +478,7 @@ fn run() -> Result<(), String> {
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     let mut app = App {
         title: format!("polytrace — {}", args.machine),
+        shown_title: String::new(),
         profile,
         scale: args.scale,
         shared: shared.clone(),
@@ -431,6 +493,9 @@ fn run() -> Result<(), String> {
     let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
     shared.quit.store(true, Ordering::Relaxed);
     let _ = emu.join();
+    if let Some(s) = server {
+        s.shutdown();
+    }
     result?;
     app.error.map_or(Ok(()), Err)
 }

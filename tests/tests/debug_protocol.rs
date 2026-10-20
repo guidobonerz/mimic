@@ -382,3 +382,39 @@ fn capabilities_subscriptions_and_trace() {
     c.ok(json!({"cmd": "subscribe", "events": []}));
     server.shutdown();
 }
+
+#[test]
+fn symbols_label_disassembly_and_breakpoints() {
+    let server = server_with(subroutines());
+    let mut c = Client::connect(&server);
+    c.recv();
+    let kick = ".label main=$0800\n.namespace sub {\n  .label inner=$0820\n}\n.const N=3\n";
+    let r = c.ok(json!({"cmd": "symbols_load", "text": kick}));
+    assert_eq!(
+        r,
+        json!({"format": "kickass", "loaded": 2, "skipped": 0, "total": 2})
+    );
+    let r = c.ok(json!({"cmd": "symbols_load", "text": "al C:0810 .outer\n", "format": "vice"}));
+    assert_eq!(r["total"], 3);
+
+    let d = c.ok(json!({"cmd": "disasm", "addr": 0x0800, "count": 1}));
+    assert_eq!(d["lines"][0]["label"], "main");
+    assert_eq!(d["lines"][0]["target_label"], "outer", "JSR $0810");
+
+    let bp = c.ok(json!({"cmd": "break_add", "symbol": "sub.inner"}))["bp"].clone();
+    assert_eq!(c.ok(json!({"cmd": "break_list"}))[0]["addr"], 0x0820);
+    c.ok(json!({"cmd": "resume"}));
+    let ev = c.event("stopped");
+    assert_eq!(ev["reason"]["bp"], bp);
+    assert_eq!(ev["pc"], 0x0820);
+
+    let list = c.ok(json!({"cmd": "symbols_list"}));
+    assert_eq!(list[0], json!({"name": "main", "space": 0, "addr": 0x0800}));
+    let e = c.call(json!({"cmd": "break_add", "symbol": "nowhere"}));
+    assert_eq!(e["ok"], false);
+    let e = c.call(json!({"cmd": "symbols_load", "text": "garbage"}));
+    assert_eq!(e["ok"], false);
+    c.ok(json!({"cmd": "symbols_clear"}));
+    assert_eq!(c.ok(json!({"cmd": "symbols_list"})), json!([]));
+    server.shutdown();
+}

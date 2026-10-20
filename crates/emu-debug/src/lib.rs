@@ -12,6 +12,7 @@ pub mod expr;
 pub mod protocol;
 pub mod server;
 pub mod session;
+pub mod symbols;
 pub mod vice;
 
 pub use server::{DebugServer, Endpoint, ServerConfig, Service};

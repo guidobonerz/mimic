@@ -16,7 +16,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use emu_core::frame::SignalInfo;
-use emu_core::{DebugHooks, Machine, StopReason};
+use emu_core::{Machine, StopReason};
+use emu_debug::{Endpoint, Service, Session};
 use emu_input::{HostEvent, Mapper};
 
 /// A frame converted to RGBA for upload.
@@ -142,34 +143,61 @@ fn to_frame(m: &dyn Machine) -> Frame {
     }
 }
 
+/// Status line for the title bar while the machine is stopped.
+fn stop_status(reason: StopReason, pc: Option<u32>) -> String {
+    let at = pc.map(|pc| format!(" at ${pc:04X}")).unwrap_or_default();
+    match reason {
+        StopReason::Breakpoint(id) => format!("breakpoint {}{at}", id.0),
+        StopReason::Watchpoint {
+            id, addr, write, ..
+        } => {
+            let kind = if write { "write" } else { "read" };
+            format!("watchpoint {} ({kind} ${addr:04X}){at}", id.0)
+        }
+        StopReason::CpuJam { device, pc } => format!("{} jammed at ${pc:04X}", device.0),
+        StopReason::Fault { device, reason } => format!("{} fault: {reason}", device.0),
+        StopReason::FrameDone | StopReason::StepDone => format!("paused{at}"),
+    }
+}
+
+fn main_pc(m: &mut dyn Machine) -> Option<u32> {
+    let dev = *m.devices().first()?;
+    m.debug_target(dev)?.regs().get("PC")
+}
+
+/// Run the emulation thread. With `debug`, the debug server's endpoint is
+/// served from here: debugger commands run between frames, and while the
+/// debugger holds the machine the window shows the current (partial) frame
+/// after every change.
 pub fn spawn(
-    mut machine: Box<dyn Machine>,
+    machine: Box<dyn Machine>,
     mut mapper: Mapper,
     input: Receiver<HostEvent>,
     shared: Arc<Shared>,
+    debug: Option<(Endpoint, String)>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let mut dbg = DebugHooks::new();
-        let mut samples = Vec::new();
-        let frame_time = {
-            let s = machine.framebuffer().signal;
-            let pixels = u64::from(s.lines_per_field) * u64::from(s.total_pixels);
-            Duration::from_nanos(
-                pixels.saturating_mul(1_000_000_000) / u64::from(s.pixel_clock_hz.max(1)),
-            )
+        let (mut endpoint, machine_id) = match debug {
+            Some((e, id)) => (Some(e), id),
+            None => (None, String::new()),
         };
+        let mut session = Session::new(machine, machine_id);
+        session.set_running(true);
+        let mut samples = Vec::new();
+        let frame_time = session.frame_duration();
         let mut deadline = Instant::now();
-        let mut stopped = false;
-        let debug = std::env::var_os("EMU_DESKTOP_DEBUG").is_some();
+        let mut shown_at = None;
+        let debug_stats = std::env::var_os("EMU_DESKTOP_DEBUG").is_some();
         let mut report = Instant::now();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
             loop {
                 match input.try_recv() {
                     Ok(ev) => {
-                        let now = machine.now();
+                        let m = session.machine_mut();
+                        let now = m.now();
                         for e in mapper.handle(&ev, now) {
-                            machine.input(e);
+                            m.input(e);
                         }
                     }
                     Err(TryRecvError::Empty) => break,
@@ -177,10 +205,40 @@ pub fn spawn(
                 }
             }
 
-            if stopped {
-                thread::sleep(Duration::from_millis(10));
+            let was_running = session.is_running();
+            if let Some(ep) = &endpoint {
+                let wait = (!was_running).then_some(Duration::from_millis(10));
+                if ep.service(&mut session, wait) == Service::Shutdown {
+                    endpoint = None;
+                }
+            }
+            if !session.is_running() {
+                // Held by the debugger or stopped by a jam: show what the
+                // machine looks like now, once per change.
+                let now = session.machine().now();
+                if shown_at != Some(now) {
+                    shown_at = Some(now);
+                    push_frame(&shared, session.machine());
+                    let pc = main_pc(session.machine_mut());
+                    let reason = session.last_stop().unwrap_or(StopReason::StepDone);
+                    if let Ok(mut s) = shared.status.lock() {
+                        *s = Some(stop_status(reason, pc));
+                    }
+                }
+                if endpoint.is_none() {
+                    thread::sleep(Duration::from_millis(10));
+                }
                 continue;
             }
+            if !was_running {
+                // Resumed: start pacing afresh.
+                deadline = Instant::now();
+                shown_at = None;
+                if let Ok(mut s) = shared.status.lock() {
+                    *s = None;
+                }
+            }
+
             wait_until(deadline);
             let period = shared.display_period_ns.load(Ordering::Relaxed);
             if period == 0 {
@@ -194,19 +252,13 @@ pub fn spawn(
                 deadline = Instant::now();
             }
 
-            match machine.run_frame(&mut dbg) {
-                StopReason::FrameDone => {}
-                other => {
-                    // A jammed or faulted machine stays frozen; the window
-                    // keeps showing the last frame.
-                    stopped = true;
-                    if let Ok(mut s) = shared.status.lock() {
-                        *s = Some(format!("{other:?}"));
-                    }
-                }
+            session.run_slice();
+            match &endpoint {
+                Some(ep) => ep.publish(&mut session),
+                None => drop(session.take_events()),
             }
             samples.clear();
-            machine.audio(&mut samples);
+            session.machine_mut().audio(&mut samples);
             if let Ok(mut a) = shared.audio.lock() {
                 min_fill = min_fill.min(a.len());
                 a.extend(samples.iter().copied());
@@ -215,7 +267,7 @@ pub fn spawn(
                 max_fill = max_fill.max(a.len());
             }
             frames += 1;
-            if debug && report.elapsed() >= Duration::from_secs(5) {
+            if debug_stats && report.elapsed() >= Duration::from_secs(5) {
                 eprintln!(
                     "5 s: emulated {frames}, window refreshes {}, presented {}, dropped {}, audio buffer {min_fill}..{max_fill} samples, underruns {}, rate {:+} ppm",
                     shared.redraws.swap(0, Ordering::Relaxed),
@@ -227,16 +279,20 @@ pub fn spawn(
                 report = Instant::now();
                 (min_fill, max_fill, frames) = (usize::MAX, 0, 0);
             }
-            let frame = to_frame(machine.as_ref());
-            if let Ok(mut q) = shared.frames.lock() {
-                q.push_back(frame);
-                while q.len() > MAX_QUEUED_FRAMES {
-                    q.pop_front();
-                    shared.dropped.fetch_add(1, Ordering::Relaxed);
-                }
-            }
+            push_frame(&shared, session.machine());
         }
     })
+}
+
+fn push_frame(shared: &Shared, machine: &dyn Machine) {
+    let frame = to_frame(machine);
+    if let Ok(mut q) = shared.frames.lock() {
+        q.push_back(frame);
+        while q.len() > MAX_QUEUED_FRAMES {
+            q.pop_front();
+            shared.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -252,7 +308,7 @@ mod tests {
         let mapper = Mapper::new(emu_input::Profile::default_for("c64"));
         let (tx, rx) = std::sync::mpsc::channel();
         let shared = Arc::new(Shared::new());
-        let handle = spawn(machine, mapper, rx, shared.clone());
+        let handle = spawn(machine, mapper, rx, shared.clone(), None);
         tx.send(HostEvent::Key {
             code: "KeyA".into(),
             down: true,
@@ -271,5 +327,86 @@ mod tests {
         assert!(!shared.audio.lock().unwrap().is_empty(), "audio produced");
         shared.quit.store(true, Ordering::Relaxed);
         handle.join().unwrap();
+    }
+
+    /// Poll `f` for up to 5 s.
+    fn eventually(mut f: impl FnMut() -> bool) -> bool {
+        for _ in 0..500 {
+            if f() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn debugger_pauses_the_thread_and_the_title_shows_it() {
+        use std::io::{BufRead, BufReader, Write};
+
+        let mut config = MachineConfig::default();
+        config.options.insert("roms".into(), "stub".into());
+        let machine = emu_machines::registry().create("c64", &config).unwrap();
+        let (server, endpoint) = emu_debug::DebugServer::start_attached(
+            emu_debug::ServerConfig {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                vice: None,
+                run: true,
+                realtime: true,
+            },
+            "c64",
+        )
+        .unwrap();
+        let mapper = Mapper::new(emu_input::Profile::default_for("c64"));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let shared = Arc::new(Shared::new());
+        let handle = spawn(
+            machine,
+            mapper,
+            rx,
+            shared.clone(),
+            Some((endpoint, "c64".into())),
+        );
+
+        let stream = std::net::TcpStream::connect(server.addr()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = stream;
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(line.contains("\"hello\""), "{line}");
+        let mut call = |req: &str| {
+            writer.write_all(req.as_bytes()).unwrap();
+            writer.write_all(b"\n").unwrap();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line.contains("\"id\"") {
+                    assert!(line.contains("\"ok\":true"), "{line}");
+                    return line;
+                }
+            }
+        };
+
+        assert!(eventually(|| !shared.frames.lock().unwrap().is_empty()));
+        call(r#"{"id":1,"cmd":"pause"}"#);
+        let status = || shared.status.lock().unwrap().clone();
+        assert!(
+            eventually(|| status().is_some_and(|s| s.starts_with("paused at $"))),
+            "{:?}",
+            status()
+        );
+        // Stepping while paused updates the window.
+        shared.frames.lock().unwrap().clear();
+        call(r#"{"id":2,"cmd":"step_line"}"#);
+        assert!(eventually(|| !shared.frames.lock().unwrap().is_empty()));
+        call(r#"{"id":3,"cmd":"resume"}"#);
+        assert!(eventually(|| status().is_none()), "{:?}", status());
+
+        shared.quit.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+        server.shutdown();
     }
 }

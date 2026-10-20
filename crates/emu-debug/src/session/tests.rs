@@ -525,14 +525,30 @@ fn step_over_a_plain_instruction_and_run_to_are_asynchronous() {
 
     result(
         &mut s,
+        Command::SymbolsLoad {
+            path: None,
+            text: Some("al C:0009 .nine\n".into()),
+            format: None,
+            space: None,
+        },
+    );
+    result(
+        &mut s,
         Command::RunTo {
             space: None,
-            addr: 9,
+            addr: None,
+            symbol: Some("nine".into()),
         },
     );
     let ev = run_until_stopped(&mut s);
     assert_eq!(ev["reason"]["kind"], "step_done");
     assert_eq!(ev["pc"], 9);
+    let unknown = Command::RunTo {
+        space: None,
+        addr: None,
+        symbol: Some("ten".into()),
+    };
+    assert_eq!(call(&mut s, unknown)["ok"], false);
     assert_eq!(
         result(&mut s, Command::BreakList),
         json!([]),
