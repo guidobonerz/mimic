@@ -198,6 +198,89 @@ pub static VIC20: Keymap = Keymap {
     entries: VIC20_POSITIONAL,
 };
 
+const TED_SHIFT: u16 = k(1, 7);
+
+/// C16/Plus/4 keyboard (`column * 8 + row`, see `machine-ted::keyboard`)
+/// on the same PC keys as [`C64_POSITIONAL`]: ESC where the C64 has ←,
+/// separate cursor keys, F1–F3 with F4–F6 shifted, HELP on F7.
+const TED_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Backquote", &[k(6, 4)]), // ESC
+    ("Digit1", &[k(7, 0)]),
+    ("Digit2", &[k(7, 3)]),
+    ("Digit3", &[k(1, 0)]),
+    ("Digit4", &[k(1, 3)]),
+    ("Digit5", &[k(2, 0)]),
+    ("Digit6", &[k(2, 3)]),
+    ("Digit7", &[k(3, 0)]),
+    ("Digit8", &[k(3, 3)]),
+    ("Digit9", &[k(4, 0)]),
+    ("Digit0", &[k(4, 3)]),
+    ("Minus", &[k(6, 6)]),     // +
+    ("Equal", &[k(5, 6)]),     // -
+    ("Backslash", &[k(6, 5)]), // =
+    ("Insert", &[k(0, 2)]),    // £
+    ("Home", &[k(7, 1)]),
+    ("Backspace", &[k(0, 0)]), // INST/DEL
+    ("Tab", &[k(7, 2)]),       // CTRL
+    ("KeyQ", &[k(7, 6)]),
+    ("KeyW", &[k(1, 1)]),
+    ("KeyE", &[k(1, 6)]),
+    ("KeyR", &[k(2, 1)]),
+    ("KeyT", &[k(2, 6)]),
+    ("KeyY", &[k(3, 1)]),
+    ("KeyU", &[k(3, 6)]),
+    ("KeyI", &[k(4, 1)]),
+    ("KeyO", &[k(4, 6)]),
+    ("KeyP", &[k(5, 1)]),
+    ("BracketLeft", &[k(0, 7)]),  // @
+    ("BracketRight", &[k(6, 1)]), // *
+    ("Escape", &[k(7, 7)]),       // RUN/STOP
+    ("CapsLock", &[TED_SHIFT]),   // SHIFT LOCK
+    ("KeyA", &[k(1, 2)]),
+    ("KeyS", &[k(1, 5)]),
+    ("KeyD", &[k(2, 2)]),
+    ("KeyF", &[k(2, 5)]),
+    ("KeyG", &[k(3, 2)]),
+    ("KeyH", &[k(3, 5)]),
+    ("KeyJ", &[k(4, 2)]),
+    ("KeyK", &[k(4, 5)]),
+    ("KeyL", &[k(5, 2)]),
+    ("Semicolon", &[k(5, 5)]), // :
+    ("Quote", &[k(6, 2)]),     // ;
+    ("Enter", &[k(0, 1)]),
+    ("ControlLeft", &[k(7, 5)]), // C=
+    ("ShiftLeft", &[TED_SHIFT]),
+    ("KeyZ", &[k(1, 4)]),
+    ("KeyX", &[k(2, 7)]),
+    ("KeyC", &[k(2, 4)]),
+    ("KeyV", &[k(3, 7)]),
+    ("KeyB", &[k(3, 4)]),
+    ("KeyN", &[k(4, 7)]),
+    ("KeyM", &[k(4, 4)]),
+    ("Comma", &[k(5, 7)]),
+    ("Period", &[k(5, 4)]),
+    ("Slash", &[k(6, 7)]),
+    ("ShiftRight", &[TED_SHIFT]),
+    ("ArrowUp", &[k(5, 3)]),
+    ("ArrowDown", &[k(5, 0)]),
+    ("ArrowLeft", &[k(6, 0)]),
+    ("ArrowRight", &[k(6, 3)]),
+    ("Space", &[k(7, 4)]),
+    ("F1", &[k(0, 4)]),
+    ("F2", &[k(0, 5)]),
+    ("F3", &[k(0, 6)]),
+    ("F4", &[TED_SHIFT, k(0, 4)]),
+    ("F5", &[TED_SHIFT, k(0, 5)]),
+    ("F6", &[TED_SHIFT, k(0, 6)]),
+    ("F7", &[k(0, 3)]), // HELP
+    ("F8", &[TED_SHIFT, k(0, 3)]),
+];
+
+pub static TED: Keymap = Keymap {
+    machine: "plus4",
+    entries: TED_POSITIONAL,
+};
+
 /// PET graphics keyboard code (`row * 8 + column`).
 const fn g(row: u16, col: u16) -> u16 {
     row * 8 + col
@@ -307,6 +390,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "c64" => Some(&C64),
         "vic20" => Some(&VIC20),
         "pet" => Some(&PET),
+        "plus4" | "c16" => Some(&TED),
         _ => None,
     }
 }
@@ -317,9 +401,11 @@ mod tests {
 
     type Entries = &'static [(&'static str, &'static [u16])];
 
-    const MAPS: [(Entries, u16); 2] = [
+    /// Each layout with its SHIFT key, which several host keys may name.
+    const MAPS: [(Entries, u16); 3] = [
         (C64_POSITIONAL, C64_LSHIFT),
         (VIC20_POSITIONAL, VIC20_LSHIFT),
+        (TED_POSITIONAL, TED_SHIFT),
     ];
 
     #[test]
@@ -331,8 +417,13 @@ mod tests {
                     seen[usize::from(*single)] += 1;
                 }
             }
-            // LSHIFT is on both ShiftLeft and CapsLock (SHIFT LOCK).
-            seen[usize::from(lshift)] -= 1;
+            // SHIFT is also on CapsLock (SHIFT LOCK), and on the Plus/4 on
+            // both shift keys.
+            seen[usize::from(lshift)] = seen[usize::from(lshift)].min(1);
+            // The C16/Plus/4 has no RESTORE.
+            if map == TED_POSITIONAL {
+                seen[64] = 1;
+            }
             assert!(seen.iter().all(|&n| n == 1), "{seen:?}");
         }
     }
@@ -368,6 +459,8 @@ mod tests {
             n
         };
         assert_eq!(names(C64_POSITIONAL), names(VIC20_POSITIONAL));
+        let ted = names(TED_POSITIONAL);
+        assert!(ted.iter().all(|n| names(C64_POSITIONAL).contains(n)));
     }
 
     #[test]

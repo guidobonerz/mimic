@@ -6,6 +6,7 @@ pub mod cia;
 pub mod crtc;
 pub mod pia;
 pub mod sid;
+pub mod ted;
 pub mod via;
 pub mod vic;
 pub mod vic2;

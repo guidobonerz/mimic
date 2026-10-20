@@ -87,10 +87,11 @@ impl Profile {
     /// Built-in default: positional keyboard; for the C64 a joystick in
     /// control port 2 on the numeric keypad and on the first gamepad.
     pub fn default_for(machine: &str) -> Self {
-        // The C64's game port is control port 2; the VIC-20 has one port.
+        // The C64's game port is control port 2; the VIC-20 has one port; the
+        // C16/Plus/4 joystick comes plugged into port 1.
         let port = match machine {
             "c64" => Some(1),
-            "vic20" => Some(0),
+            "vic20" | "c16" | "plus4" => Some(0),
             _ => None,
         };
         let joystick = match port {

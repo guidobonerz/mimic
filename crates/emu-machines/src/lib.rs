@@ -41,6 +41,8 @@ pub fn registry() -> Registry {
     r.register(machine_c64::entry());
     r.register(machine_vic20::entry());
     r.register(machine_pet::entry());
+    r.register(machine_ted::c16_entry());
+    r.register(machine_ted::plus4_entry());
     r
 }
 

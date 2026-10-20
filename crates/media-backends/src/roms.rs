@@ -113,10 +113,39 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("chargen1", &["characters-1-", "chargen1"], 0x800),
         optional("chargen2", &["characters-2-", "chargen2"], 0x800),
     ];
+    // C16 and Plus/4: kernal 318004 is PAL, 318005 NTSC; BASIC 3.5 is
+    // 318006; the Plus/4's 3-plus-1 ROM is 317053 (low) and 317054 (high).
+    const PLUS4: &[RomSpec] = &[
+        rom(
+            "kernal",
+            &["kernal-318004-05", "kernal-318004", "kernal"],
+            0x4000,
+        ),
+        optional(
+            "kernal-ntsc",
+            &["kernal-318005-05", "kernal-318005"],
+            0x4000,
+        ),
+        rom("basic", &["basic-318006", "basic"], 0x4000),
+        rom(
+            "function-lo",
+            &["3plus1-317053", "3plus1-lo", "function-lo"],
+            0x4000,
+        ),
+        rom(
+            "function-hi",
+            &["3plus1-317054", "3plus1-hi", "function-hi"],
+            0x4000,
+        ),
+        DOS1541,
+    ];
+    const C16: &[RomSpec] = &[PLUS4[0], PLUS4[1], PLUS4[2], DOS1541];
     match machine {
         "c64" => C64,
         "vic20" => VIC20,
         "pet" => PET,
+        "plus4" => PLUS4,
+        "c16" => C16,
         _ => &[],
     }
 }
@@ -127,6 +156,8 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "c64" => &["c64"],
         "vic20" => &["vic20"],
         "pet" => &["pet"],
+        "plus4" => &["plus4"],
+        "c16" => &["c16", "plus4"],
         _ => &[],
     }
 }

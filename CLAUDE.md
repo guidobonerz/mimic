@@ -350,6 +350,7 @@ cargo build -p emu-web --target wasm32-unknown-unknown
 cargo run -p emu-headless -- --machine c64 --prg demo.prg --frames 300 --snapshot out.png
 cargo run -p emu-headless -- --machine vic20 --model ntsc --option ram=8k --rom-dir roms --frames 200 --snapshot vic.png   # ROMs in roms/<machine>/, roms/drives/
 cargo run -p emu-headless -- --machine pet --model 8032 --option hz=50 --rom-dir roms --frames 200 --snapshot pet.png   # 2001, 3032, 4032, 8032
+cargo run -p emu-headless -- --machine plus4 --rom-dir roms --frames 200 --snapshot plus4.png   # also --machine c16, --model ntsc
 cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines debug protocol on 127.0.0.1:6510
 cargo run -p emu-headless -- --machine c64 --vice --preview --run   # + VICE binary monitor (6502), live preview http://127.0.0.1:6580/
 python tools/polydbg.py regs                 # Python debug client (stdlib only): --help, or `shell` for a prompt

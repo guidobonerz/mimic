@@ -821,6 +821,7 @@ dependencies = [
  "emu-preview",
  "machine-c64",
  "machine-pet",
+ "machine-ted",
  "machine-vic20",
  "media",
  "media-backends",
