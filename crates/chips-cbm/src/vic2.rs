@@ -377,6 +377,15 @@ impl Vic2 {
         self.ba
     }
 
+    /// AEC in this cycle's φ2: the CPU drives the address bus. Three cycles
+    /// after BA goes low the VIC-II takes the bus; a CPU halted on a read
+    /// then selects no chip (its repeated read of e.g. an ICR has no
+    /// effect). Source: Christian Bauer, "The MOS 6567/6569 video
+    /// controller", section 3.6.
+    pub fn aec(&self) -> bool {
+        self.ba_low_cycles <= 3
+    }
+
     /// IRQ output.
     pub fn irq(&self) -> bool {
         self.irq_flags & self.irq_mask & 0x0f != 0

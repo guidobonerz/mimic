@@ -222,7 +222,7 @@ impl Savestate for Io {
         w.chunk(*b"AUDR", 1, |w| self.resampler.save(w));
         self.tod.save(w);
         self.vdc_clock.save(w);
-        w.chunk(*b"C8IO", 1, |w| {
+        w.chunk(*b"C8IO", 2, |w| {
             w.u8(self.d02f);
             w.u8(self.d030);
             w.raw(&self.keyboard.columns);
@@ -234,6 +234,7 @@ impl Savestate for Io {
             w.bool(self.iec.atn);
             w.bool(self.iec.clk);
             w.bool(self.iec.data);
+            w.bool(self.iec.srq);
         });
     }
 
@@ -247,7 +248,7 @@ impl Savestate for Io {
         self.resampler.load(&mut c)?;
         self.tod.load(r)?;
         self.vdc_clock.load(r)?;
-        let (_, mut c) = r.chunk(*b"C8IO", 1)?;
+        let (version, mut c) = r.chunk(*b"C8IO", 2)?;
         self.d02f = c.u8()? | 0xf8;
         self.d030 = c.u8()? & 3;
         c.raw_into(&mut self.keyboard.columns)?;
@@ -259,6 +260,8 @@ impl Savestate for Io {
             atn: c.bool()?,
             clk: c.bool()?,
             data: c.bool()?,
+            // Version 1 predates fast serial.
+            srq: version >= 2 && c.bool()?,
         };
         Ok(())
     }

@@ -239,6 +239,7 @@ impl Savestate for Io {
             atn: c.bool()?,
             clk: c.bool()?,
             data: c.bool()?,
+            srq: false,
         };
         Ok(())
     }

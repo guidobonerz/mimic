@@ -8,7 +8,9 @@
 //! Track lengths follow the four speed zones (7692/7142/6666/6250 bytes per
 //! revolution at 300 rpm). Source: "Inside the 1541", chapter on GCR.
 
-use crate::d64::{sectors_per_track, speed_zone, D64};
+#[cfg(test)]
+use crate::d64::sectors_per_track;
+use crate::d64::D64;
 
 const GCR: [u8; 16] = [
     0b01010, 0b01011, 0b10010, 0b10011, 0b01110, 0b01111, 0b10110, 0b10111, 0b01001, 0b11001,
@@ -58,8 +60,8 @@ pub fn decode5(input: &[u8; 5]) -> Option<[u8; 4]> {
 
 /// The GCR bit stream of one track as bytes (MSB first), one revolution.
 pub fn encode_track(disk: &D64, track: u8) -> Vec<u8> {
-    let len = TRACK_BYTES[usize::from(speed_zone(track))];
-    let n = sectors_per_track(track);
+    let len = TRACK_BYTES[usize::from(disk.zone_of(track))];
+    let n = disk.sectors_in(track);
     let [id1, id2] = disk.id();
     let mut out = Vec::with_capacity(len);
     // Sector size on disk: 2 × SYNC, GCR header, header gap, GCR data block.

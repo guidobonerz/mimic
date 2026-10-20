@@ -13,7 +13,9 @@
 //! - `ram`: "none" (default), "3k", "8k", "16k", "24k" or "all" (3 KB plus
 //!   blocks 1, 2, 3 and 5) — see [`memory`].
 //! - `port1`: "joystick" (default) or "none".
-//! - `drive8`: "1541" (default when `roms["dos1541"]` is given) or "none".
+//! - `drive8`: "1541" (default when `roms["dos1541"]` is given), "1571"
+//!   (`roms["dos1571"]`), "virtual" or "none"; `drive8_ppm`: the drive
+//!   crystal's deviation in ppm.
 //! - `autostart`: "on" loads and runs the disk in drive 8 after boot.
 //! - `roms`: "stub" uses a tiny built-in KERNAL, for tests without ROMs.
 //!
@@ -48,6 +50,7 @@ use emu_core::{
 };
 
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
+use drives_cbm::{DriveModel, DriveRoms};
 use io::Io;
 use loader::{Autostart, ProgramSlot, BASIC_STARTS, BOOT_FRAMES};
 use memory::{Area, Memory, Roms, VicView, BASIC_SIZE, CHARGEN_SIZE};
@@ -237,19 +240,26 @@ impl Vic20 {
                 Some(other) => return Err(ConfigError::Invalid(format!("port1 option '{other}'"))),
             };
         let stub = config.options.get("roms").is_some_and(|r| r == "stub");
-        let dos1541 = if stub {
-            None
+        let drive_roms = if stub {
+            DriveRoms::default()
         } else {
-            config.roms.get("dos1541").map(Vec::as_slice)
+            DriveRoms::from_map(&config.roms)
         };
-        let drive = Drive8::from_option(
+        let mut drive = Drive8::from_option(
             config.options.get("drive8").map(String::as_str),
-            dos1541,
+            drive_roms,
+            DriveModel::C1541,
             8,
             DRIVE8,
             DRIVE_SPACE,
             cpu_hz,
         )?;
+        if let Some(d) = &mut drive {
+            let ppm = drives_cbm::serial::crystal_ppm(
+                config.options.get("drive8_ppm").map(String::as_str),
+            )?;
+            d.set_crystal_ppm(ppm, cpu_hz);
+        }
         let autostart = match config.options.get("autostart").map(String::as_str) {
             None | Some("off") => Autostart::Off,
             Some("on") => Autostart::Armed,

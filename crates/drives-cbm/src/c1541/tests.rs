@@ -28,14 +28,14 @@ fn disk() -> Media {
 }
 
 /// A ROM (not the Commodore DOS) with `code` at $C000 as reset entry.
-fn drive_with(code: &[u8]) -> Drive1541 {
+fn drive_with(code: &[u8]) -> CbmDrive {
     let mut rom = Box::new([0xea; ROM_SIZE]);
     rom[..code.len()].copy_from_slice(code);
     rom[0x3ffc..].copy_from_slice(&[0x00, 0xc0, 0x00, 0xc0]);
-    Drive1541::new(rom, 8, MemSpaceId(3))
+    CbmDrive::new(DriveModel::C1541, rom, 8, MemSpaceId(3))
 }
 
-fn run(d: &mut Drive1541, bus: IecLines, n: usize) {
+fn run(d: &mut CbmDrive, bus: IecLines, n: usize) {
     for _ in 0..n {
         d.tick(bus, None);
     }
@@ -218,7 +218,7 @@ fn atn_raises_ca1_interrupt() {
 
 #[test]
 fn device_number_jumpers() {
-    let d = Drive1541::new(Box::new([0; ROM_SIZE]), 9, MemSpaceId(3));
+    let d = CbmDrive::new(DriveModel::C1541, Box::new([0; ROM_SIZE]), 9, MemSpaceId(3));
     let (_, pb) = d.via1_pins(IecLines::default());
     assert_eq!((pb >> 5) & 3, 1);
 }
@@ -255,4 +255,122 @@ fn savestate_round_trip() {
     assert_eq!(a.ram[..], b.ram[..]);
     assert_eq!(a.pc(), b.pc());
     assert!(b.load(&mut StateReader::new(&data[..50])).is_err());
+}
+
+/// A 1571 ROM (not the Commodore DOS) with `code` at $8000 as reset entry.
+fn c1571_with(code: &[u8]) -> CbmDrive {
+    let mut rom = vec![0xea; 0x8000];
+    rom[..code.len()].copy_from_slice(code);
+    rom[0x7ffc..].copy_from_slice(&[0x00, 0x80, 0x00, 0x80]);
+    CbmDrive::new(DriveModel::C1571, rom.into(), 8, MemSpaceId(3))
+}
+
+#[test]
+fn c1571_runs_at_2_mhz_when_pa5_is_set() {
+    // DDRA = $66, PA5 per the low bit of $10; then count in $11.
+    let code = [
+        0xa9, 0x66, 0x8d, 0x03, 0x18, // LDA #$66; STA $1803
+        0xa5, 0x10, 0x8d, 0x01, 0x18, // LDA $10; STA $1801
+        0xe6, 0x11, // 800A: INC $11
+        0x4c, 0x0a, 0x80, // JMP $800A
+    ];
+    let mut slow = c1571_with(&code);
+    let mut fast = c1571_with(&code);
+    fast.ram[0x10] = 0x20;
+    run(&mut slow, IecLines::default(), 800);
+    run(&mut fast, IecLines::default(), 800);
+    assert!(!slow.fast_clock() && fast.fast_clock());
+    let (s, f) = (slow.ram[0x11], fast.ram[0x11]);
+    assert!(f > 2 * s - 4 && f < 2 * s + 4, "{s} vs {f} loops");
+}
+
+#[test]
+fn c1571_track_0_sensor_and_side_select() {
+    let mut d = c1571_with(&[0x4c, 0x00, 0x80]);
+    d.via1.write(0x3, 0x66);
+    let pa = |d: &CbmDrive| d.peek(MemSpaceId(3), 0x180f, Size::Byte).unwrap();
+    assert_eq!(pa(&d) & 0x01, 0x01, "track 18");
+    d.mech.half_track = 0;
+    assert_eq!(pa(&d) & 0x01, 0x00, "track 1");
+    // Outputs read back as driven.
+    d.via1.write(0x1, 0x24);
+    assert_eq!(pa(&d) & 0x66, 0x24);
+    assert_eq!(d.side(), 1);
+    d.via1.write(0x1, 0x00);
+    assert_eq!(d.side(), 0);
+}
+
+#[test]
+fn c1571_reads_side_1_of_a_d71() {
+    let mut image = D64::blank_d71(b"SIDES", *b"DS");
+    image.sector_mut(53, 1).unwrap()[..4].copy_from_slice(b"SIDE");
+    let mut d = c1571_with(&[0x4c, 0x00, 0x80]);
+    d.insert(Media {
+        name: "t.d71".into(),
+        kind: MediaKind::Disk,
+        backend: Box::new(Mem(image.to_bytes())),
+    })
+    .unwrap();
+    // Head on track 18 of side 1 = image track 53.
+    let side1 = &d.disk.as_ref().unwrap().tracks[track_index(1, 34)];
+    assert_eq!(side1.as_ref(), Some(&gcr::encode_track(&image, 53)));
+    let sectors = gcr::decode_track(side1.as_ref().unwrap());
+    assert!(sectors
+        .iter()
+        .any(|s| s.track == 53 && s.sector == 1 && s.data.starts_with(b"SIDE")));
+}
+
+#[test]
+fn c1571_fast_serial_drives_data_and_srq() {
+    let mut d = c1571_with(&[0x4c, 0x00, 0x80]);
+    d.via1.write(0x3, 0x66);
+    // Port B as the DOS sets it up, nothing pulled (no ATN acknowledge).
+    d.via1.write(0x2, 0x1a);
+    // CIA serial port out, timer A 2 cycles, FSDIR clear: lines untouched.
+    d.cia.write(0x4, 2);
+    d.cia.write(0x5, 0);
+    d.cia.write(0xe, 0x51);
+    d.cia.write(0xc, 0x00);
+    let mut pulled = IecLines::default();
+    for _ in 0..40 {
+        d.tick(IecLines::default(), None);
+        let out = d.iec_out(false);
+        pulled.data |= out.data;
+        pulled.srq |= out.srq;
+    }
+    assert!(!pulled.data && !pulled.srq, "FSDIR clear");
+    // FSDIR set: the byte $00 pulls DATA, the clock toggles SRQ.
+    d.via1.write(0x1, 0x02);
+    d.cia.write(0xc, 0x00);
+    let mut srq_edges = 0;
+    let mut last = false;
+    for _ in 0..60 {
+        d.tick(IecLines::default(), None);
+        let out = d.iec_out(false);
+        pulled.data |= out.data;
+        srq_edges += usize::from(out.srq != last);
+        last = out.srq;
+    }
+    assert!(pulled.data);
+    assert!(srq_edges >= 16, "{srq_edges} SRQ edges");
+}
+
+#[test]
+fn c1571_savestate_round_trip() {
+    let code = [0xe6, 0x10, 0x4c, 0x00, 0x80]; // INC $10; JMP $8000
+    let mut a = c1571_with(&code);
+    a.cia.write(0x4, 0x34);
+    run(&mut a, IecLines::default(), 333);
+    let mut w = StateWriter::new();
+    a.save(&mut w);
+    let data = w.into_bytes();
+    let mut b = c1571_with(&code);
+    b.load(&mut StateReader::new(&data)).unwrap();
+    let mut w2 = StateWriter::new();
+    b.save(&mut w2);
+    assert_eq!(w2.into_bytes(), data);
+    // A 1541 state does not load into a 1571.
+    let mut w3 = StateWriter::new();
+    drive_with(&[0x4c, 0x00, 0xc0]).save(&mut w3);
+    assert!(b.load(&mut StateReader::new(&w3.into_bytes())).is_err());
 }

@@ -109,6 +109,7 @@ impl Io {
             atn: self.via1.port_a_out() & 0x80 != 0,
             clk: self.via2.ca2_out(),
             data: self.via2.cb2_out(),
+            srq: false,
         }
     }
 
@@ -216,6 +217,7 @@ impl Savestate for Io {
             atn: c.bool()?,
             clk: c.bool()?,
             data: c.bool()?,
+            srq: false,
         };
         Ok(())
     }

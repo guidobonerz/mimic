@@ -1,6 +1,6 @@
 //! C128 with real ROMs (user-supplied via `EMU_ROM_DIR`, e.g. a `c128/`
 //! subfolder): boot to BASIC 7.0 on the 40- and 80-column screens, typing,
-//! GO64 into C64 mode, and loading from a true-emulated 1541.
+//! GO64 into C64 mode, and loading from true-emulated 1541/1571 drives.
 //!
 //!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test c128_boot -- --ignored
 
@@ -185,6 +185,12 @@ const PROGRAM: [u8; 15] = [
 #[ignore = "needs C128 ROMs and the 1541 DOS ROM in EMU_ROM_DIR"]
 fn autostart_loads_and_runs_from_drive_8() {
     autostart_with("1541");
+}
+
+#[test]
+#[ignore = "needs C128 ROMs and the 1571 DOS ROM in EMU_ROM_DIR"]
+fn autostart_from_a_1571() {
+    autostart_with("1571");
 }
 
 #[test]

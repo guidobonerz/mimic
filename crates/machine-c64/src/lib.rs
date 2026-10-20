@@ -6,7 +6,10 @@
 //! drive 8, a "program" slot for PRG/T64 and the SID (`options["sid"]` =
 //! "6581" or "8580"), producing 48 kHz mono audio.
 //!
-//! Drive 8 needs `roms["dos1541"]` (16 KB); without it there is no drive.
+//! Drive 8 (`options["drive8"]`): "1541" (true drive, `roms["dos1541"]`,
+//! 16 KB; the default when given), "1571" (`roms["dos1571"]`, 32 KB; in its
+//! 1541 mode, a C64 has no fast serial port), "virtual" (the default without
+//! DOS ROMs) or "none"; `drive8_ppm` sets the drive crystal's deviation.
 //! `options["autostart"] = "on"` loads and runs the disk in drive 8 after boot.
 //!
 //! Models: "pal" (default; 6569, 985 248 Hz, 312 lines × 63 cycles, TOD 50 Hz)
@@ -50,6 +53,7 @@ use emu_core::{
 };
 
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
+use drives_cbm::{DriveModel, DriveRoms};
 use io::{Io, VicView};
 use loader::{Autostart, ProgramSlot, BOOT_FRAMES};
 use memory::{Memory, Roms, BASIC_SIZE, CHARGEN_SIZE};
@@ -369,19 +373,26 @@ impl C64 {
             Some(other) => return Err(ConfigError::Invalid(format!("sid option '{other}'"))),
         };
         let stub = config.options.get("roms").is_some_and(|r| r == "stub");
-        let dos1541 = if stub {
-            None
+        let drive_roms = if stub {
+            DriveRoms::default()
         } else {
-            config.roms.get("dos1541").map(Vec::as_slice)
+            DriveRoms::from_map(&config.roms)
         };
-        let drive = Drive8::from_option(
+        let mut drive = Drive8::from_option(
             config.options.get("drive8").map(String::as_str),
-            dos1541,
+            drive_roms,
+            DriveModel::C1541,
             8,
             DRIVE8,
             DRIVE_SPACE,
             cpu_hz,
         )?;
+        if let Some(d) = &mut drive {
+            let ppm = drives_cbm::serial::crystal_ppm(
+                config.options.get("drive8_ppm").map(String::as_str),
+            )?;
+            d.set_crystal_ppm(ppm, cpu_hz);
+        }
         let autostart = match config.options.get("autostart").map(String::as_str) {
             None | Some("off") => Autostart::Off,
             Some("on") => Autostart::Armed,
@@ -433,7 +444,10 @@ impl C64 {
         self.cpu.set_irq(self.ints.irq != 0);
         self.cpu.set_nmi(self.ints.nmi != 0);
         let beam = self.beam_pos();
-        let result = {
+        // Without AEC the halted CPU does not reach the bus at all.
+        let result = if !self.io.vic.aec() {
+            CycleResult::Busy
+        } else {
             let mut bus = C64Bus {
                 mem: &mut self.mem,
                 io: &mut self.io,

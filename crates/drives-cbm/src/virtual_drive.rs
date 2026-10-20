@@ -186,6 +186,7 @@ impl VirtualDrive {
                 atn: false,
                 clk: false,
                 data: true,
+                srq: false,
             };
             self.enter(State::AtnWaitClk);
         } else if !bus.atn && self.prev_atn {

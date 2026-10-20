@@ -7,7 +7,7 @@ pub mod iec;
 pub mod serial;
 pub mod virtual_drive;
 
-pub use c1541::Drive1541;
+pub use c1541::{CbmDrive, DriveModel};
 pub use iec::IecLines;
-pub use serial::{DriveKind, SerialDrive};
+pub use serial::{DriveKind, DriveRoms, SerialDrive};
 pub use virtual_drive::VirtualDrive;

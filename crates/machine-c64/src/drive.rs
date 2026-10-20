@@ -1,4 +1,4 @@
-//! Drive 8 on the serial bus: a [`Drive8`] (true 1541 or virtual
+//! Drive 8 on the serial bus: a [`Drive8`] (true 1541 or 1571, or virtual
 //! drive) clocked next to the C64's 985 248 Hz (PAL) or 1 022 727 Hz (NTSC).
 //!
 //! C64 side (schematic 251469): CIA2 PA3 ATN out, PA4 CLK out, PA5 DATA
@@ -10,7 +10,7 @@ pub use drives_cbm::SerialDrive as Drive8;
 use emu_core::{DeviceId, MemSpaceId};
 
 pub const DRIVE8: DeviceId = DeviceId("drive8");
-/// The 1541's CPU address space.
+/// The drive CPU's address space.
 pub const DRIVE_SPACE: MemSpaceId = MemSpaceId(3);
 
 /// What the computer pulls on the bus, from CIA2 port A.
@@ -19,5 +19,6 @@ pub fn c64_lines(cia2_pa: u8) -> IecLines {
         atn: cia2_pa & 0x08 != 0,
         clk: cia2_pa & 0x10 != 0,
         data: cia2_pa & 0x20 != 0,
+        srq: false,
     }
 }

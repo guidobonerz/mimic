@@ -7,6 +7,12 @@
 //! file starts with the track/sector of the next one; a next track of 0
 //! means the last sector, with the last used byte in the second byte.
 //! Source: Commodore 1541 User's Guide, "Inside the 1541" (Immers/Neufeld).
+//!
+//! D71 (1571, double-sided) is the same layout for 70 tracks: tracks 36–70
+//! are side 1 with the sector counts and speed zones of tracks 1–35. The
+//! BAM keeps their free counts in track 18 sector 0 at `$DD–$FF` and their
+//! bitmaps (3 bytes per track) in track 53 sector 0, which the 1571 keeps
+//! reserved; BAM byte 3 is `$80`. Source: Commodore 1571 User's Guide.
 
 use emu_core::media::MediaError;
 
@@ -36,6 +42,8 @@ pub fn speed_zone(track: u8) -> u8 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct D64 {
     pub tracks: u8,
+    /// A D71: tracks 36–70 are side 1.
+    pub double_sided: bool,
     data: Vec<u8>,
     /// One code per sector; 1 = no error (absent in most images).
     errors: Option<Vec<u8>>,
@@ -58,13 +66,27 @@ fn total_sectors(tracks: u8) -> usize {
         .sum()
 }
 
+/// A byte in the BAM: track, sector, offset.
+type BamByte = (u8, u8, usize);
+
+/// Sectors of a D71 (both sides).
+const D71_SECTORS: usize = 2 * 683;
+
 impl D64 {
+    /// A D64 (35, 40 or 42 tracks) or D71 image, with or without error
+    /// bytes.
     pub fn parse(bytes: &[u8]) -> Result<Self, MediaError> {
-        for tracks in [35u8, 40, 42] {
-            let n = total_sectors(tracks);
+        let layouts = [
+            (35u8, false, total_sectors(35)),
+            (40, false, total_sectors(40)),
+            (42, false, total_sectors(42)),
+            (70, true, D71_SECTORS),
+        ];
+        for (tracks, double_sided, n) in layouts {
             if bytes.len() == n * SECTOR_SIZE {
                 return Ok(Self {
                     tracks,
+                    double_sided,
                     data: bytes.to_vec(),
                     errors: None,
                 });
@@ -73,6 +95,7 @@ impl D64 {
                 let split = n * SECTOR_SIZE;
                 return Ok(Self {
                     tracks,
+                    double_sided,
                     data: bytes[..split].to_vec(),
                     errors: Some(bytes[split..].to_vec()),
                 });
@@ -89,6 +112,7 @@ impl D64 {
     pub fn blank(name: &[u8], id: [u8; 2]) -> Self {
         let mut d = Self {
             tracks: 35,
+            double_sided: false,
             data: vec![0; total_sectors(35) * SECTOR_SIZE],
             errors: None,
         };
@@ -116,28 +140,97 @@ impl D64 {
         d
     }
 
+    /// An empty double-sided 1571 disk (D71): side 1 free except track 53,
+    /// which holds the second half of the BAM.
+    pub fn blank_d71(name: &[u8], id: [u8; 2]) -> Self {
+        let single = Self::blank(name, id);
+        let mut data = single.data;
+        data.resize(D71_SECTORS * SECTOR_SIZE, 0);
+        let mut d = Self {
+            tracks: 70,
+            double_sided: true,
+            data,
+            errors: None,
+        };
+        let mut bitmaps = [0u8; 105];
+        for t in 36..=70u8 {
+            let n = u32::from(d.sectors_in(t));
+            let i = usize::from(t - 36);
+            if let Some(bam) = d.sector_mut(18, 0) {
+                bam[0xdd + i] = n as u8;
+            }
+            bitmaps[i * 3..i * 3 + 3].copy_from_slice(&((1u32 << n) - 1).to_le_bytes()[..3]);
+        }
+        if let Some(bam) = d.sector_mut(18, 0) {
+            bam[3] = 0x80;
+        }
+        if let Some(b) = d.sector_mut(53, 0) {
+            b[..105].copy_from_slice(&bitmaps);
+        }
+        for s in 0..d.sectors_in(53) {
+            d.allocate(53, s);
+        }
+        d
+    }
+
+    /// Sectors on a track (side 1 of a D71 repeats tracks 1–35).
+    pub fn sectors_in(&self, track: u8) -> u8 {
+        if self.double_sided && track > 35 {
+            sectors_per_track(track - 35)
+        } else {
+            sectors_per_track(track)
+        }
+    }
+
+    /// Speed zone of a track (see [`speed_zone`]).
+    pub fn zone_of(&self, track: u8) -> u8 {
+        if self.double_sided && track > 35 {
+            speed_zone(track - 35)
+        } else {
+            speed_zone(track)
+        }
+    }
+
+    fn total(&self, tracks: u8) -> usize {
+        (1..=tracks).map(|t| usize::from(self.sectors_in(t))).sum()
+    }
+
+    /// Where the BAM keeps a track: the free count and the 3-byte bitmap.
+    fn bam_slot(&self, track: u8) -> Option<(BamByte, BamByte)> {
+        match track {
+            1..=35 => {
+                let e = 4 * usize::from(track);
+                Some(((18, 0, e), (18, 0, e + 1)))
+            }
+            36..=70 if self.double_sided => {
+                let i = usize::from(track - 36);
+                Some(((18, 0, 0xdd + i), (53, 0, i * 3)))
+            }
+            _ => None,
+        }
+    }
+
     /// Mark a block used in the BAM (no-op if it already is).
     fn allocate(&mut self, track: u8, sector: u8) {
-        let Some(bam) = self.sector_mut(18, 0) else {
-            return;
-        };
-        let e = 4 * usize::from(track);
-        if e + 3 >= bam.len() {
+        if !self.is_free(track, sector) {
             return;
         }
-        let byte = e + 1 + usize::from(sector / 8);
-        let bit = 1 << (sector % 8);
-        if bam[byte] & bit != 0 {
-            bam[byte] &= !bit;
-            bam[e] = bam[e].saturating_sub(1);
+        let Some(((ct, cs, co), (bt, bs, bo))) = self.bam_slot(track) else {
+            return;
+        };
+        if let Some(b) = self.sector_mut(bt, bs) {
+            b[bo + usize::from(sector / 8)] &= !(1 << (sector % 8));
+        }
+        if let Some(b) = self.sector_mut(ct, cs) {
+            b[co] = b[co].saturating_sub(1);
         }
     }
 
     fn index(&self, track: u8, sector: u8) -> Option<usize> {
-        if track == 0 || track > self.tracks || sector >= sectors_per_track(track) {
+        if track == 0 || track > self.tracks || sector >= self.sectors_in(track) {
             return None;
         }
-        Some(total_sectors(track - 1) + usize::from(sector))
+        Some(self.total(track - 1) + usize::from(sector))
     }
 
     pub fn sector(&self, track: u8, sector: u8) -> Option<&[u8]> {
@@ -175,7 +268,7 @@ impl D64 {
     fn chain(&self, track: u8, sector: u8) -> Result<Vec<u8>, MediaError> {
         let mut out = Vec::new();
         let (mut t, mut s) = (track, sector);
-        let mut seen = vec![false; total_sectors(self.tracks)];
+        let mut seen = vec![false; self.total(self.tracks)];
         loop {
             let i = self
                 .index(t, s)
@@ -235,7 +328,7 @@ impl D64 {
         let used = self.used_sectors()?;
         let order = (1..=17u8).rev().chain(19..=self.tracks);
         let free: Vec<(u8, u8)> = order
-            .flat_map(|t| (0..sectors_per_track(t)).map(move |s| (t, s)))
+            .flat_map(|t| (0..self.sectors_in(t)).map(move |s| (t, s)))
             .filter(|ts| !used.contains(ts))
             .collect();
         let chunks: Vec<&[u8]> = prg.chunks(254).collect();
@@ -305,65 +398,92 @@ impl D64 {
 impl D64 {
     /// Whether a block is free in the BAM.
     fn is_free(&self, track: u8, sector: u8) -> bool {
-        let Some(bam) = self.sector(18, 0) else {
-            return false;
-        };
-        if track == 0 || track > 35 || sector >= sectors_per_track(track) {
+        if track == 0 || track > self.tracks || sector >= self.sectors_in(track) {
             return false;
         }
-        bam[4 * usize::from(track) + 1 + usize::from(sector / 8)] & (1 << (sector % 8)) != 0
+        let Some((_, (bt, bs, bo))) = self.bam_slot(track) else {
+            return false;
+        };
+        self.sector(bt, bs)
+            .is_some_and(|b| b[bo + usize::from(sector / 8)] & (1 << (sector % 8)) != 0)
     }
 
     fn release(&mut self, track: u8, sector: u8) {
-        if self.is_free(track, sector) || track == 0 || track > 35 {
+        if track == 0 || track > self.tracks || sector >= self.sectors_in(track) {
             return;
         }
-        let Some(bam) = self.sector_mut(18, 0) else {
+        if self.is_free(track, sector) {
+            return;
+        }
+        let Some(((ct, cs, co), (bt, bs, bo))) = self.bam_slot(track) else {
             return;
         };
-        let e = 4 * usize::from(track);
-        bam[e + 1 + usize::from(sector / 8)] |= 1 << (sector % 8);
-        bam[e] = bam[e].saturating_add(1);
+        if let Some(b) = self.sector_mut(bt, bs) {
+            b[bo + usize::from(sector / 8)] |= 1 << (sector % 8);
+        }
+        if let Some(b) = self.sector_mut(ct, cs) {
+            b[co] = b[co].saturating_add(1);
+        }
     }
 
-    /// Free blocks as the directory reports them (track 18 not counted).
-    pub fn blocks_free(&self) -> u16 {
-        let Some(bam) = self.sector(18, 0) else {
-            return 0;
+    /// The tracks the DOS keeps files on: all but the directory (18) and,
+    /// on a D71, the second BAM (53).
+    fn data_tracks(&self) -> impl Iterator<Item = u8> + '_ {
+        let last = if self.double_sided {
+            70
+        } else {
+            self.tracks.min(35)
         };
-        (1..=35u8)
-            .filter(|&t| t != 18 && usize::from(t) <= usize::from(self.tracks))
-            .map(|t| u16::from(bam[4 * usize::from(t)]))
+        (1..=last).filter(move |&t| t != 18 && !(self.double_sided && t == 53))
+    }
+
+    /// Free blocks as the directory reports them (track 18, and track 53 of
+    /// a D71, not counted).
+    pub fn blocks_free(&self) -> u16 {
+        self.data_tracks()
+            .filter_map(|t| {
+                let ((ct, cs, co), _) = self.bam_slot(t)?;
+                self.sector(ct, cs).map(|b| u16::from(b[co]))
+            })
             .sum()
     }
 
     /// The next block for a file like the DOS picks it: on the same track
     /// 10 sectors on (interleave), else on the next track away from the
-    /// directory; the first block on the free track nearest track 18.
+    /// directory; the first block on the free track nearest track 18 (then,
+    /// on a D71, nearest track 53).
     fn next_free(&self, prev: Option<(u8, u8)>) -> Option<(u8, u8)> {
         let in_track = |t: u8, from: u8| {
-            let n = sectors_per_track(t);
+            let n = self.sectors_in(t);
             (0..n)
                 .map(|i| (from + i) % n)
                 .find(|&s| self.is_free(t, s))
                 .map(|s| (t, s))
         };
+        let usable = |t: u8| self.data_tracks().any(|d| d == t);
         if let Some((t, s)) = prev {
             if let Some(b) = in_track(t, s + 10) {
                 return Some(b);
             }
-            let away: Vec<u8> = if t < 18 {
-                (1..t).rev().collect()
-            } else {
-                (t + 1..=self.tracks.min(35)).collect()
+            let away: Vec<u8> = match t {
+                1..=17 => (1..t).rev().collect(),
+                19..=35 => (t + 1..=35).collect(),
+                36..=52 => (36..t).rev().collect(),
+                _ => (t + 1..=70).collect(),
             };
-            if let Some(b) = away.into_iter().find_map(|t| in_track(t, 0)) {
+            if let Some(b) = away
+                .into_iter()
+                .filter(|&t| usable(t))
+                .find_map(|t| in_track(t, 0))
+            {
                 return Some(b);
             }
         }
-        (1..18u8)
-            .flat_map(|d| [18 - d, 18 + d])
-            .filter(|&t| t >= 1 && t <= self.tracks.min(35))
+        let side0 = (1..18u8).flat_map(|d| [18 - d, 18 + d]);
+        let side1 = (1..18u8).flat_map(|d| [53 - d, 53 + d]);
+        side0
+            .chain(side1)
+            .filter(|&t| usable(t))
             .find_map(|t| in_track(t, 0))
     }
 
@@ -436,7 +556,7 @@ impl D64 {
                 return Ok((t, s, i * 32));
             }
             if b[0] == 0 {
-                let n = sectors_per_track(18);
+                let n = self.sectors_in(18);
                 let new = (0..n)
                     .map(|i| (s + 3 + i) % n)
                     .find(|&x| self.is_free(18, x))
@@ -706,5 +826,26 @@ mod tests {
         assert!(l.windows(5).any(|w| w == b"\"BIG\""));
         assert!(l.windows(11).any(|w| w == b"BLOCKS FREE"));
         assert_eq!(&l[l.len() - 2..], &[0, 0]);
+    }
+
+    #[test]
+    fn d71_is_double_sided() {
+        let mut d = D64::blank_d71(b"SIDES", *b"DS");
+        assert!(d.double_sided);
+        assert_eq!(d.to_bytes().len(), 349_696);
+        assert_eq!(d.blocks_free(), 1328);
+        assert_eq!(d.sectors_in(36), 21);
+        assert_eq!(d.zone_of(53), 2);
+        // Fill side 0, then a file goes to side 1 near track 53.
+        let big = vec![0x55u8; 664 * 254];
+        d.write_file(b"SIDE0", 2, &big).unwrap();
+        assert_eq!(d.blocks_free(), 664);
+        d.write_file(b"SIDE1", 2, &[0x01, 0x08, 1]).unwrap();
+        let (e, data) = d.read_file(b"SIDE1").unwrap();
+        assert_eq!(e.track, 52);
+        assert_eq!(data, [0x01, 0x08, 1]);
+        let back = D64::parse(&d.to_bytes()).unwrap();
+        assert_eq!(back, d);
+        assert_eq!(back.read_file(b"SIDE0").unwrap().1, big);
     }
 }

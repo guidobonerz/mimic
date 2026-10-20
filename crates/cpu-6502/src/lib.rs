@@ -154,7 +154,12 @@ impl Default for Cpu6502 {
     }
 }
 
-/// Forwards to the real bus and records whether the cycle wrote.
+/// The bus of a cycle with RDY low: writes go through (the 6502 does not
+/// stop on writes) and are recorded; the read the CPU will repeat is a
+/// `peek`, without side effects. Only the access once RDY is high again
+/// counts, so a halted `LDA $DC0D` acknowledges the CIA's interrupts once.
+/// (C128 fast serial transfers lose bytes otherwise, which real machines
+/// do not.)
 struct WriteProbe<'a> {
     bus: &'a mut dyn Bus,
     wrote: bool,
@@ -162,7 +167,7 @@ struct WriteProbe<'a> {
 
 impl Bus for WriteProbe<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
-        self.bus.read(addr, size)
+        self.bus.peek(addr, size)
     }
 
     fn peek(&self, addr: u32, size: Size) -> u32 {
@@ -184,8 +189,8 @@ impl Cpu for Cpu6502 {
         if self.rdy {
             return self.core.cycle(bus);
         }
-        // RDY low: the read happens on the bus but the CPU repeats the cycle,
-        // so roll the state back unless the cycle was a write.
+        // RDY low: the CPU repeats a read cycle, so roll the state back
+        // unless the cycle was a write.
         let saved = self.core;
         let mut probe = WriteProbe { bus, wrote: false };
         let result = self.core.cycle(&mut probe);
@@ -534,6 +539,42 @@ mod tests {
         cpu.tick(&mut bus); // the write cycle proceeds
         assert_eq!(bus.mem[0x2000], 0x42);
         assert!(cpu.at_instruction_boundary());
+    }
+
+    /// A bus counting reads with side effects.
+    struct CountingBus {
+        inner: FlatBus,
+        reads: u32,
+    }
+
+    impl Bus for CountingBus {
+        fn read(&mut self, addr: u32, size: Size) -> u32 {
+            self.reads += 1;
+            self.inner.read(addr, size)
+        }
+        fn peek(&self, addr: u32, size: Size) -> u32 {
+            self.inner.peek(addr, size)
+        }
+        fn write(&mut self, addr: u32, size: Size, v: u32) {
+            self.inner.write(addr, size, v);
+        }
+        fn addr_bits(&self) -> u8 {
+            16
+        }
+    }
+
+    #[test]
+    fn stalled_reads_have_no_side_effects() {
+        let (mut cpu, inner) = cpu_at(0x0400, &[0xea]); // NOP
+        let mut bus = CountingBus { inner, reads: 0 };
+        cpu.set_rdy(false);
+        for _ in 0..5 {
+            cpu.tick(&mut bus);
+        }
+        assert_eq!(bus.reads, 0, "repeated reads are peeks");
+        cpu.set_rdy(true);
+        cpu.tick(&mut bus);
+        assert_eq!(bus.reads, 1, "the opcode fetch happens once");
     }
 
     #[test]

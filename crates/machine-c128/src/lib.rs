@@ -2,8 +2,8 @@
 //!
 //! 8502 (1 or 2 MHz) and Z80 sharing the bus under the MMU 8722, VIC-IIe
 //! (40 columns) and VDC 8563 (80 columns, its own 16 or 64 KB RAM), SID,
-//! two CIAs, 128 KB RAM, C64 mode, a true-emulated 1541 as drive 8 and a
-//! "program" slot.
+//! two CIAs, 128 KB RAM, C64 mode, drive 8 (a true-emulated 1571 with fast
+//! serial transfers, a 1541, or the virtual drive) and a "program" slot.
 //!
 //! At power-on the Z80 runs its BIOS (KERNAL ROM `$D000–$DFFF`), which
 //! hands over to the 8502 through MCR bit 0 (or enters C64 mode when C= is
@@ -18,7 +18,9 @@
 //! Models: "pal" (8566, 985 248 Hz) and "ntsc" (8564, 1 022 727 Hz).
 //! Options: `display` ("40" default, "80": the 40/80 key down at power-on),
 //! `vdc_ram` ("16k" default, "64k"), `sid` ("6581"/"8580"), `drive8`
-//! ("1541" with `roms["dos1541"]`, or "none"), `autostart` ("on"), `port2`
+//! ("1571" with `roms["dos1571"]`, the default when given; "1541" with
+//! `roms["dos1541"]`; "virtual"; "none"), `drive8_ppm` (drive crystal
+//! deviation, see [`drives_cbm::serial`]), `autostart` ("on"), `port2`
 //! ("joystick"/"none"), `roms` = "stub".
 //!
 //! ROMs (`MachineConfig::roms`, user-supplied): "kernal" (16 KB, with the
@@ -55,6 +57,7 @@ use emu_core::{
 };
 
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
+use drives_cbm::{DriveModel, DriveRoms, IecLines};
 use io::Io;
 use loader::{Autostart, ProgramSlot, BOOT_FRAMES};
 use memory::{Memory, Read, Roms, VicView, CHARGEN_SIZE, ROM_16K};
@@ -328,19 +331,26 @@ impl C128 {
             Some(other) => return Err(ConfigError::Invalid(format!("port2 option '{other}'"))),
         };
         let stub = option("roms") == Some("stub");
-        let dos1541 = if stub {
-            None
+        let drive_roms = if stub {
+            DriveRoms::default()
         } else {
-            config.roms.get("dos1541").map(Vec::as_slice)
+            DriveRoms::from_map(&config.roms)
         };
-        let drive = Drive8::from_option(
+        let mut drive = Drive8::from_option(
             config.options.get("drive8").map(String::as_str),
-            dos1541,
+            drive_roms,
+            DriveModel::C1571,
             8,
             DRIVE8,
             DRIVE_SPACE,
             cpu_hz,
         )?;
+        if let Some(d) = &mut drive {
+            let ppm = drives_cbm::serial::crystal_ppm(
+                config.options.get("drive8_ppm").map(String::as_str),
+            )?;
+            d.set_crystal_ppm(ppm, cpu_hz);
+        }
         let autostart = match option("autostart") {
             None | Some("off") => Autostart::Off,
             Some("on") => Autostart::Armed,
@@ -461,7 +471,13 @@ impl C128 {
                 self.cpu.set_rdy(ba || step > 0);
                 self.cpu.set_irq(irq_on);
                 self.cpu.set_nmi(nmi_on);
-                (CPU, CPU_SPACE, self.cpu_cycle(dbg.as_deref_mut()))
+                // Without AEC the halted CPU does not reach the bus at all.
+                let result = if step == 0 && !self.io.vic.aec() {
+                    (CycleResult::Busy, None)
+                } else {
+                    self.cpu_cycle(dbg.as_deref_mut())
+                };
+                (CPU, CPU_SPACE, result)
             } else {
                 self.z80.set_int(irq_on);
                 self.z80.set_nmi(nmi_on);
@@ -501,8 +517,13 @@ impl C128 {
             mem: &self.mem,
             base,
         });
-        // Serial bus: the drive sees what CIA2 drives now.
-        let host = drive::c64_lines(self.io.cia2.port_a_out());
+        // Serial bus: the drive sees what CIA2 (and CIA1 as fast serial
+        // sender) drives now.
+        let fsdir = self.mem.mmu.mcr & 0x08 != 0;
+        let host = IecLines::combine(&[
+            drive::c64_lines(self.io.cia2.port_a_out()),
+            drive::fast_serial_lines(&self.io.cia1, fsdir),
+        ]);
         let mut drive_stop = None;
         self.io.iec = match &mut self.drive {
             Some(d) => {
@@ -512,6 +533,11 @@ impl C128 {
             }
             None => host,
         };
+        // FSDIR clear: CIA1 receives on DATA/SRQ.
+        let iec = self.io.iec;
+        self.io.cia1.set_sp(fsdir || !iec.data);
+        self.io.cia1.set_cnt(fsdir || !iec.srq);
+        self.io.cia1.set_flag(!iec.srq);
         self.update_interrupts();
         self.sched.tick();
         if new_field {

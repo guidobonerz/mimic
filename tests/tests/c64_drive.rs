@@ -20,15 +20,16 @@ fn c64(autostart: bool) -> Box<dyn Machine> {
     c64_with(autostart, "1541")
 }
 
-/// A C64 with drive 8 as "1541" (true drive) or "virtual".
+/// A C64 with drive 8 as "1541", "1571" (true drives) or "virtual".
 fn c64_with(autostart: bool, drive: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, "c64").expect("ROMs"),
         ..MachineConfig::default()
     };
-    if drive == "1541" {
-        assert!(config.roms.contains_key("dos1541"), "1541 DOS ROM missing");
+    if drive != "virtual" {
+        let role = format!("dos{drive}");
+        assert!(config.roms.contains_key(&role), "{role} ROM missing");
     }
     config.options.insert("drive8".into(), drive.into());
     if autostart {
@@ -66,7 +67,18 @@ fn screen(m: &mut dyn Machine) -> Vec<u8> {
 #[test]
 #[ignore = "needs C64 ROMs and the 1541 DOS ROM in EMU_ROM_DIR"]
 fn load_and_run_from_drive_8() {
-    let mut m = c64(true);
+    load_and_run_with("1541");
+}
+
+/// The 1571 in its 1541 mode (a C64 has no fast serial port).
+#[test]
+#[ignore = "needs C64 ROMs and the 1571 DOS ROM in EMU_ROM_DIR"]
+fn load_and_run_from_a_1571() {
+    load_and_run_with("1571");
+}
+
+fn load_and_run_with(drive: &str) {
+    let mut m = c64_with(true, drive);
     let slot = m
         .media_slots()
         .into_iter()
@@ -92,7 +104,7 @@ fn load_and_run_from_drive_8() {
         m.run_frame(&mut dbg);
     }
     let png = emu_preview::encode_png(&m.framebuffer());
-    let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("c64_drive.png");
+    let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("c64_{drive}.png"));
     std::fs::write(&out, png).unwrap();
     assert!(found, "program did not run; snapshot at {}", out.display());
 }

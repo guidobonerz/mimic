@@ -1,6 +1,6 @@
-//! Commodore 1541 disk drive, true drive emulation.
+//! Commodore 1541 and 1571 disk drives, true drive emulation.
 //!
-//! Its own NMOS 6502 at 1 MHz, 2 KB RAM, 16 KB DOS ROM and two VIAs.
+//! 1541: its own NMOS 6502 at 1 MHz, 2 KB RAM, 16 KB DOS ROM and two VIAs.
 //! Memory map: `$0000–$07FF` RAM (mirrored up to `$17FF`), `$1800` VIA1
 //! (IEC), `$1C00` VIA2 (drive mechanics), `$C000–$FFFF` ROM (mirrored at
 //! `$8000`).
@@ -14,14 +14,27 @@
 //! sync mark); port A = byte from the read head; CA2 = byte-ready enable
 //! (byte ready drives the CPU's SO pin), CB2 = read/write mode.
 //!
-//! Sources: 1541 service manual schematic (251854); "Inside the 1541".
+//! 1571: the same plus a second head, a 32 KB ROM at `$8000–$FFFF`, a
+//! WD1770 at `$2000` (MFM disks; not emulated, reads 0) and a 6526 CIA at
+//! `$4000` for fast serial transfers. VIA1 port A: PA0 track-0 sensor
+//! (0 = head on track 1), PA1 FSDIR (1 = the drive sends), PA2 side
+//! select (1 = side 1), PA5 clock (1 = 2 MHz), PA7 BYTE READY (0 = a byte
+//! is latched, cleared by accessing VIA2 port A). At 2 MHz the CPU, VIAs
+//! and CIA run two cycles per microsecond; the disk keeps its speed. Fast
+//! serial: the CIA's SP drives DATA and CNT drives SRQ while FSDIR is
+//! set, and reads them otherwise. The CIA's IRQ goes to the CPU.
+//!
+//! Sources: 1541 service manual schematic (251854); "Inside the 1541";
+//! 1571 User's Guide; the port bits as the 1571 DOS (310654-05) uses them.
 //! The disk spins at the bit rate of the track's own speed zone (26–32 µs
 //! per byte). In write mode (CB2 low) the head writes the byte on port A
-//! each byte time; written tracks are decoded back into the D64 image when
-//! the motor stops, on [`MediaSlot::flush`] and on eject, and written to the
-//! media backend (a copy-on-write overlay for user images: the original
-//! file changes only when the overlay is committed).
+//! each byte time; written tracks are decoded back into the D64/D71 image
+//! when the motor stops, on [`MediaSlot::flush`] and on eject, and written
+//! to the media backend (a copy-on-write overlay for user images: the
+//! original file changes only when the overlay is committed). Side 1 of a
+//! single-sided image (D64) reads as unformatted and keeps no writes.
 
+use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::via::Via;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
@@ -34,37 +47,95 @@ use media::{d64::speed_zone, gcr, D64};
 
 use crate::iec::IecLines;
 
+/// Size of the 1541 DOS ROM.
 pub const ROM_SIZE: usize = 0x4000;
 const HALF_TRACKS: u8 = 84;
+/// Tracks per side of a double-sided image.
+const SIDE_TRACKS: u8 = 35;
 
 /// Drive cycles per GCR byte for speed zones 0..=3.
 const CYCLES_PER_BYTE: [u16; 4] = [32, 30, 28, 26];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriveModel {
+    C1541,
+    C1571,
+}
+
+impl DriveModel {
+    pub fn rom_size(self) -> usize {
+        match self {
+            Self::C1541 => ROM_SIZE,
+            Self::C1571 => 0x8000,
+        }
+    }
+
+    /// The ROM role in a machine configuration.
+    pub fn rom_role(self) -> &'static str {
+        match self {
+            Self::C1541 => "dos1541",
+            Self::C1571 => "dos1571",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::C1541 => "1541",
+            Self::C1571 => "1571",
+        }
+    }
+
+    fn sides(self) -> u8 {
+        match self {
+            Self::C1541 => 1,
+            Self::C1571 => 2,
+        }
+    }
+}
+
 struct Disk {
     media: Media,
     image: D64,
-    /// GCR stream per half track (only full tracks carry data).
+    /// GCR stream per side and half track (only full tracks carry data).
     tracks: Vec<Option<Vec<u8>>>,
     /// Half tracks written since the last flush.
     dirty: Vec<bool>,
     protected: bool,
 }
 
+/// Index into [`Disk::tracks`].
+fn track_index(side: u8, half_track: u8) -> usize {
+    usize::from(side) * usize::from(HALF_TRACKS) + usize::from(half_track & !1)
+}
+
 impl Disk {
+    /// The image track a head position reads, if the image has it.
+    fn image_track(&self, side: u8, half_track: u8) -> Option<u8> {
+        let t = half_track / 2 + 1;
+        match side {
+            0 if self.image.double_sided && t > SIDE_TRACKS => None,
+            0 => Some(t),
+            _ if self.image.double_sided && t <= SIDE_TRACKS => Some(t + SIDE_TRACKS),
+            _ => None,
+        }
+        .filter(|&t| t <= self.image.tracks)
+    }
+
     /// Decode the written tracks back into the image and write the image
     /// to the media backend.
     fn flush(&mut self) -> Result<(), MediaError> {
         if !self.dirty.iter().any(|&d| d) {
             return Ok(());
         }
-        for (half, dirty) in self.dirty.iter_mut().enumerate() {
-            if !std::mem::take(dirty) {
+        for i in 0..self.dirty.len() {
+            if !std::mem::take(&mut self.dirty[i]) {
                 continue;
             }
-            let Some(gcr) = &self.tracks[half] else {
+            let side = (i / usize::from(HALF_TRACKS)) as u8;
+            let half = (i % usize::from(HALF_TRACKS)) as u8;
+            let (Some(track), Some(gcr)) = (self.image_track(side, half), &self.tracks[i]) else {
                 continue;
             };
-            let track = (half / 2 + 1) as u8;
             for s in gcr::decode_track(gcr) {
                 if s.track != track {
                     continue;
@@ -91,13 +162,18 @@ struct Mechanism {
     sync: bool,
 }
 
-pub struct Drive1541 {
+pub struct CbmDrive {
+    model: DriveModel,
     cpu: Cpu6502,
     ram: Box<[u8; 0x800]>,
-    rom: Box<[u8; ROM_SIZE]>,
+    rom: Box<[u8]>,
     pub via1: Via,
     pub via2: Via,
+    /// Fast serial port (1571 only).
+    pub cia: Cia,
     mech: Mechanism,
+    /// The 1571's BYTE READY latch (VIA1 PA7).
+    byte_ready: bool,
     disk: Option<Disk>,
     /// Device number (8–11), set by the PB5/6 jumpers.
     device: u8,
@@ -107,47 +183,80 @@ pub struct Drive1541 {
     open_bus: u8,
 }
 
+/// Input levels of the chips' ports for one cycle.
+#[derive(Clone, Copy)]
+struct Pins {
+    via1: (u8, u8),
+    via2: (u8, u8),
+}
+
 /// The drive CPU's bus.
 struct DriveBus<'a> {
+    model: DriveModel,
     ram: &'a mut [u8; 0x800],
-    rom: &'a [u8; ROM_SIZE],
+    rom: &'a [u8],
     via1: &'a mut Via,
     via2: &'a mut Via,
-    via1_pins: (u8, u8),
-    via2_pins: (u8, u8),
+    cia: &'a mut Cia,
+    pins: Pins,
+    byte_ready: &'a mut bool,
     open_bus: &'a mut u8,
 }
 
-impl DriveBus<'_> {
-    fn peek8(&self, addr: u16) -> u8 {
-        match addr {
-            0x0000..=0x17ff => self.ram[usize::from(addr & 0x7ff)],
-            0x1800..=0x1bff => self
-                .via1
-                .peek(addr as u8, self.via1_pins.0, self.via1_pins.1),
-            0x1c00..=0x1fff => self
-                .via2
-                .peek(addr as u8, self.via2_pins.0, self.via2_pins.1),
-            0x8000..=0xffff => self.rom[usize::from(addr & 0x3fff)],
-            _ => *self.open_bus,
-        }
+/// A side-effect-free read of the drive's address space.
+fn peek8(
+    model: DriveModel,
+    ram: &[u8; 0x800],
+    rom: &[u8],
+    (via1, via2, cia): (&Via, &Via, &Cia),
+    pins: Pins,
+    open_bus: u8,
+    addr: u16,
+) -> u8 {
+    let c1571 = model == DriveModel::C1571;
+    match addr {
+        0x0000..=0x17ff => ram[usize::from(addr & 0x7ff)],
+        0x1800..=0x1bff => via1.peek(addr as u8, pins.via1.0, pins.via1.1),
+        0x1c00..=0x1fff => via2.peek(addr as u8, pins.via2.0, pins.via2.1),
+        0x2000..=0x3fff if c1571 => 0,
+        0x4000..=0x7fff if c1571 => cia.peek(addr as u8 & 0x0f, 0xff, 0xff),
+        0x8000..=0xffff => rom
+            .get(usize::from(addr) & (model.rom_size() - 1))
+            .copied()
+            .unwrap_or(0xff),
+        _ => open_bus,
     }
 }
 
 impl Bus for DriveBus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
         let a = addr as u16;
+        let c1571 = self.model == DriveModel::C1571;
         let v = match a {
-            0x1800..=0x1bff => self.via1.read(a as u8, self.via1_pins.0, self.via1_pins.1),
-            0x1c00..=0x1fff => self.via2.read(a as u8, self.via2_pins.0, self.via2_pins.1),
-            _ => self.peek8(a),
+            0x1800..=0x1bff => self.via1.read(a as u8, self.pins.via1.0, self.pins.via1.1),
+            0x1c00..=0x1fff => {
+                if matches!(a & 0x0f, 0x01 | 0x0f) {
+                    *self.byte_ready = false;
+                }
+                self.via2.read(a as u8, self.pins.via2.0, self.pins.via2.1)
+            }
+            0x4000..=0x7fff if c1571 => self.cia.read(a as u8 & 0x0f, 0xff, 0xff),
+            _ => self.peek(addr, Size::Byte) as u8,
         };
         *self.open_bus = v;
         u32::from(v)
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(self.peek8(addr as u16))
+        u32::from(peek8(
+            self.model,
+            self.ram,
+            self.rom,
+            (self.via1, self.via2, self.cia),
+            self.pins,
+            *self.open_bus,
+            addr as u16,
+        ))
     }
 
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
@@ -156,7 +265,15 @@ impl Bus for DriveBus<'_> {
         match a {
             0x0000..=0x17ff => self.ram[usize::from(a & 0x7ff)] = v,
             0x1800..=0x1bff => self.via1.write(a as u8, v),
-            0x1c00..=0x1fff => self.via2.write(a as u8, v),
+            0x1c00..=0x1fff => {
+                if matches!(a & 0x0f, 0x01 | 0x0f) {
+                    *self.byte_ready = false;
+                }
+                self.via2.write(a as u8, v);
+            }
+            0x4000..=0x7fff if self.model == DriveModel::C1571 => {
+                self.cia.write(a as u8 & 0x0f, v);
+            }
             _ => {}
         }
     }
@@ -166,24 +283,29 @@ impl Bus for DriveBus<'_> {
     }
 }
 
-impl Drive1541 {
-    /// A drive with device number 8–11 whose CPU memory is debug space `space`.
-    pub fn new(rom: Box<[u8; ROM_SIZE]>, device: u8, space: MemSpaceId) -> Self {
+impl CbmDrive {
+    /// A drive with device number 8–11 whose CPU memory is debug space
+    /// `space`. `rom` should be [`DriveModel::rom_size`] bytes; missing
+    /// bytes read as `$FF`.
+    pub fn new(model: DriveModel, rom: Box<[u8]>, device: u8, space: MemSpaceId) -> Self {
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Nmos6502,
             ..CpuConfig::default()
         });
         cpu.reset();
         Self {
+            model,
             cpu,
             ram: Box::new([0; 0x800]),
             rom,
             via1: Via::new(),
             via2: Via::new(),
+            cia: Cia::new(CiaModel::Mos6526),
             mech: Mechanism {
                 half_track: 34, // track 18
                 ..Mechanism::default()
             },
+            byte_ready: false,
             disk: None,
             device: device.clamp(8, 11),
             motor_was_on: false,
@@ -192,16 +314,21 @@ impl Drive1541 {
         }
     }
 
+    pub fn model(&self) -> DriveModel {
+        self.model
+    }
+
     pub fn space(&self) -> MemSpaceId {
         self.space
     }
 
-    /// RESET line (from the serial bus): CPU and both VIAs restart; `hard`
-    /// (power cycle) also clears the RAM. Disk and head position stay.
+    /// RESET line (from the serial bus): CPU and the I/O chips restart;
+    /// `hard` (power cycle) also clears the RAM. Disk and head position stay.
     pub fn reset(&mut self, hard: bool) {
         self.cpu.reset();
         self.via1.reset();
         self.via2.reset();
+        self.cia.reset();
         if hard {
             self.ram.fill(0);
         }
@@ -210,6 +337,16 @@ impl Drive1541 {
     /// Track under the head (1-based), as a half-track value / 2 + 1.
     pub fn track(&self) -> f32 {
         f32::from(self.mech.half_track) / 2.0 + 1.0
+    }
+
+    /// The head in use (1571: from VIA1 PA2; the 1541 has only side 0).
+    pub fn side(&self) -> u8 {
+        u8::from(self.model == DriveModel::C1571 && self.via1.port_a_out() & 0x04 != 0)
+    }
+
+    /// The 1571 runs at 2 MHz (VIA1 PA5).
+    pub fn fast_clock(&self) -> bool {
+        self.model == DriveModel::C1571 && self.via1.port_a_out() & 0x20 != 0
     }
 
     pub fn has_disk(&self) -> bool {
@@ -224,15 +361,28 @@ impl Drive1541 {
         self.via2.port_b_out() & 0x08 != 0
     }
 
+    /// The 1571 sends on the fast serial lines (FSDIR set, CIA shifting out).
+    fn fast_serial_out(&self) -> bool {
+        self.model == DriveModel::C1571
+            && self.via1.port_a_out() & 0x02 != 0
+            && self.cia.ta.cr & 0x40 != 0
+    }
+
     /// Lines this drive pulls on the IEC bus, given the bus ATN level.
     pub fn iec_out(&self, atn_low: bool) -> IecLines {
         let pb = self.via1.port_b_out();
         let data_out = pb & 0x02 != 0;
         let atna = pb & 0x10 != 0;
+        let (cnt, sp) = if self.fast_serial_out() {
+            self.cia.serial_out()
+        } else {
+            (true, true)
+        };
         IecLines {
             atn: false,
             clk: pb & 0x08 != 0,
-            data: data_out || (atn_low != atna),
+            data: data_out || (atn_low != atna) || !sp,
+            srq: !cnt,
         }
     }
 
@@ -243,7 +393,16 @@ impl Drive1541 {
             | u8::from(bus.data)
             | (u8::from(bus.clk) << 2)
             | (u8::from(bus.atn) << 7);
-        (0xff, pb)
+        let pa = match self.model {
+            DriveModel::C1541 => 0xff,
+            // Port A reads the pins: outputs as driven, PA0/PA7 inputs.
+            DriveModel::C1571 => {
+                self.via1.port_a_out()
+                    & !u8::from(self.mech.half_track == 0)
+                    & !(u8::from(self.byte_ready) << 7)
+            }
+        };
+        (pa, pb)
     }
 
     fn via2_pins(&self) -> (u8, u8) {
@@ -253,7 +412,25 @@ impl Drive1541 {
         (self.mech.last_byte, pb)
     }
 
-    /// Advance the disk under the head by one drive cycle.
+    fn pins(&self, bus: IecLines) -> Pins {
+        Pins {
+            via1: self.via1_pins(bus),
+            via2: self.via2_pins(),
+        }
+    }
+
+    /// A byte passed the head: SO pin of the CPU (if enabled by CA2), CA1
+    /// pulse and the 1571's BYTE READY latch.
+    fn byte_ready_pulse(&mut self, byte: u8) {
+        if self.via2.ca2_out() {
+            self.cpu.set_overflow();
+        }
+        self.via2.set_ca1(false, byte);
+        self.via2.set_ca1(true, byte);
+        self.byte_ready = true;
+    }
+
+    /// Advance the disk under the head by one microsecond.
     fn rotate(&mut self) {
         let motor = self.motor_on();
         if self.motor_was_on && !motor {
@@ -278,10 +455,11 @@ impl Drive1541 {
             self.write_byte(zone);
             return;
         }
+        let index = track_index(self.side(), self.mech.half_track);
         let data = self
             .disk
             .as_ref()
-            .and_then(|d| d.tracks.get(usize::from(self.mech.half_track & !1)))
+            .and_then(|d| d.tracks.get(index))
             .and_then(Option::as_ref);
         let Some(data) = data else {
             self.mech.sync = false;
@@ -297,35 +475,31 @@ impl Drive1541 {
             return;
         }
         self.mech.last_byte = byte;
-        // Byte ready: SO pin of the CPU (if enabled by CA2) and CA1 pulse.
-        if self.via2.ca2_out() {
-            self.cpu.set_overflow();
-        }
-        let pa = self.mech.last_byte;
-        self.via2.set_ca1(false, pa);
-        self.via2.set_ca1(true, pa);
+        self.byte_ready_pulse(byte);
     }
 
     /// Write mode: the byte on port A goes onto the track under the head.
     fn write_byte(&mut self, zone: usize) {
         self.mech.sync = false;
-        let half = usize::from(self.mech.half_track & !1);
+        let side = self.side();
+        let half = self.mech.half_track;
         let byte = self.via2.port_a_out();
-        if let Some(d) = self.disk.as_mut().filter(|d| !d.protected) {
-            let track = d.tracks[half].get_or_insert_with(|| vec![0x55; TRACK_BYTES[zone]]);
+        let disk = self
+            .disk
+            .as_mut()
+            .filter(|d| !d.protected && d.image_track(side, half).is_some());
+        if let Some(d) = disk {
+            let index = track_index(side, half);
+            let track = d.tracks[index].get_or_insert_with(|| vec![0x55; TRACK_BYTES[zone]]);
             let pos = self.mech.position % track.len();
             track[pos] = byte;
             self.mech.position = pos + 1;
-            d.dirty[half] = true;
+            d.dirty[index] = true;
         } else {
             self.mech.position += 1;
         }
         // Byte ready asks for the next byte as when reading.
-        if self.via2.ca2_out() {
-            self.cpu.set_overflow();
-        }
-        self.via2.set_ca1(false, byte);
-        self.via2.set_ca1(true, byte);
+        self.byte_ready_pulse(byte);
     }
 
     fn step_head(&mut self) {
@@ -338,37 +512,76 @@ impl Drive1541 {
         self.mech.phase = phase;
     }
 
-    /// One drive cycle with the IEC bus levels as they are now.
-    pub fn tick(&mut self, bus: IecLines, dbg: Option<&mut DebugHooks>) -> CycleResult {
+    /// One CPU cycle; the disk turns when `rotate` is set.
+    fn cycle(
+        &mut self,
+        host: IecLines,
+        rotate: bool,
+        mut dbg: Option<&mut DebugHooks>,
+    ) -> CycleResult {
+        let bus = IecLines::combine(&[host, self.iec_out(host.atn)]);
         self.via1.tick();
         self.via2.tick();
-        let pins1 = self.via1_pins(bus);
-        self.via1.set_ca1(bus.atn, pins1.0);
-        self.rotate();
-        self.cpu.set_irq(self.via1.irq() || self.via2.irq());
+        if self.model == DriveModel::C1571 {
+            // FSDIR clear: the CIA listens to the bus.
+            let listening = self.via1.port_a_out() & 0x02 == 0;
+            self.cia.set_sp(!(listening && bus.data));
+            self.cia.set_cnt(!(listening && bus.srq));
+            self.cia.tick();
+        }
+        let pins = self.pins(bus);
+        self.via1.set_ca1(bus.atn, pins.via1.0);
+        if rotate {
+            self.rotate();
+        }
+        let cia_irq = self.model == DriveModel::C1571 && self.cia.irq();
+        self.cpu
+            .set_irq(self.via1.irq() || self.via2.irq() || cia_irq);
 
-        let pins2 = self.via2_pins();
+        let pins = Pins {
+            via2: self.via2_pins(),
+            ..pins
+        };
         let space = self.space;
         let mut b = DriveBus {
+            model: self.model,
             ram: &mut self.ram,
             rom: &self.rom,
             via1: &mut self.via1,
             via2: &mut self.via2,
-            via1_pins: pins1,
-            via2_pins: pins2,
+            cia: &mut self.cia,
+            pins,
+            byte_ready: &mut self.byte_ready,
             open_bus: &mut self.open_bus,
         };
         let mut hooked = HookedBus {
             inner: &mut b,
-            dbg,
+            dbg: dbg.as_deref_mut(),
             space,
             beam: emu_core::BeamPos::default(),
         };
         let r = self.cpu.tick(&mut hooked);
         // Interrupt breakpoints are for the main CPU only.
         let _ = self.cpu.take_interrupt();
+        if let (CycleResult::InstrDone { next_pc }, Some(dbg)) = (r, dbg) {
+            if dbg.exec_armed(space) {
+                dbg.check_exec(space, next_pc);
+            }
+        }
         self.step_head();
         r
+    }
+
+    /// One microsecond (two CPU cycles on a 1571 at 2 MHz) with the lines
+    /// the host pulls. Exec breakpoints are checked here; the result is
+    /// that of the last CPU cycle, or `Jammed`.
+    pub fn tick(&mut self, host: IecLines, mut dbg: Option<&mut DebugHooks>) -> CycleResult {
+        let fast = self.fast_clock();
+        let r = self.cycle(host, true, dbg.as_deref_mut());
+        if !fast || matches!(r, CycleResult::Jammed) {
+            return r;
+        }
+        self.cycle(host, false, dbg)
     }
 
     pub fn pc(&self) -> u16 {
@@ -380,7 +593,7 @@ impl Drive1541 {
     }
 }
 
-struct PeekBus<'a>(&'a Drive1541);
+struct PeekBus<'a>(&'a CbmDrive);
 
 impl Bus for PeekBus<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
@@ -389,20 +602,15 @@ impl Bus for PeekBus<'_> {
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
         let d = self.0;
-        let a = addr as u16;
-        u32::from(match a {
-            0x0000..=0x17ff => d.ram[usize::from(a & 0x7ff)],
-            0x1800..=0x1bff => {
-                let (pa, pb) = d.via1_pins(IecLines::default());
-                d.via1.peek(a as u8, pa, pb)
-            }
-            0x1c00..=0x1fff => {
-                let (pa, pb) = d.via2_pins();
-                d.via2.peek(a as u8, pa, pb)
-            }
-            0x8000..=0xffff => d.rom[usize::from(a & 0x3fff)],
-            _ => d.open_bus,
-        })
+        u32::from(peek8(
+            d.model,
+            &d.ram,
+            &d.rom,
+            (&d.via1, &d.via2, &d.cia),
+            d.pins(IecLines::default()),
+            d.open_bus,
+            addr as u16,
+        ))
     }
 
     fn write(&mut self, _addr: u32, _size: Size, _v: u32) {}
@@ -412,7 +620,7 @@ impl Bus for PeekBus<'_> {
     }
 }
 
-impl DebugTarget for Drive1541 {
+impl DebugTarget for CbmDrive {
     fn regs(&self) -> RegisterSet {
         self.cpu.regs()
     }
@@ -444,6 +652,9 @@ impl DebugTarget for Drive1541 {
                 0x0000..=0x17ff => self.ram[usize::from(a & 0x7ff)] = b,
                 0x1800..=0x1bff => self.via1.write(a as u8, b),
                 0x1c00..=0x1fff => self.via2.write(a as u8, b),
+                0x4000..=0x7fff if self.model == DriveModel::C1571 => {
+                    self.cia.write(a as u8 & 0x0f, b);
+                }
                 _ => return false,
             }
         }
@@ -455,7 +666,7 @@ impl DebugTarget for Drive1541 {
     }
 }
 
-impl MediaSlot for Drive1541 {
+impl MediaSlot for CbmDrive {
     fn insert(&mut self, mut media: Media) -> Result<(), MediaError> {
         if media.kind != MediaKind::Disk {
             return Err(MediaError::Unsupported(media.kind));
@@ -463,17 +674,22 @@ impl MediaSlot for Drive1541 {
         let mut bytes = vec![0; media.backend.len() as usize];
         media.backend.read(0, &mut bytes)?;
         let image = D64::parse(&bytes)?;
-        let mut tracks = vec![None; usize::from(HALF_TRACKS)];
-        for t in 1..=image.tracks.min(HALF_TRACKS / 2) {
-            tracks[usize::from(t - 1) * 2] = Some(gcr::encode_track(&image, t));
-        }
-        self.disk = Some(Disk {
+        let slots = usize::from(self.model.sides()) * usize::from(HALF_TRACKS);
+        let mut disk = Disk {
             media,
             image,
-            tracks,
-            dirty: vec![false; usize::from(HALF_TRACKS)],
+            tracks: vec![None; slots],
+            dirty: vec![false; slots],
             protected: false,
-        });
+        };
+        for side in 0..self.model.sides() {
+            for half in (0..HALF_TRACKS).step_by(2) {
+                if let Some(t) = disk.image_track(side, half) {
+                    disk.tracks[track_index(side, half)] = Some(gcr::encode_track(&disk.image, t));
+                }
+            }
+        }
+        self.disk = Some(disk);
         Ok(())
     }
 
@@ -500,14 +716,17 @@ impl MediaSlot for Drive1541 {
     }
 }
 
-const TAG: [u8; 4] = *b"1541";
 const VERSION: u16 = 2;
 
-impl Savestate for Drive1541 {
+impl Savestate for CbmDrive {
     /// The disk itself is media, not state: a savestate restores the drive
     /// with whatever disk is inserted.
     fn save(&self, w: &mut StateWriter) {
-        w.chunk(TAG, VERSION, |w| {
+        let tag = match self.model {
+            DriveModel::C1541 => *b"1541",
+            DriveModel::C1571 => *b"1571",
+        };
+        w.chunk(tag, VERSION, |w| {
             w.raw(&self.ram[..]);
             w.u8(self.mech.half_track);
             w.u8(self.mech.phase);
@@ -517,14 +736,22 @@ impl Savestate for Drive1541 {
             w.bool(self.mech.sync);
             w.u8(self.open_bus);
             w.bool(self.motor_was_on);
+            if self.model == DriveModel::C1571 {
+                w.bool(self.byte_ready);
+            }
         });
         self.cpu.save(w);
         self.via1.save(w);
         self.via2.save(w);
+        if self.model == DriveModel::C1571 {
+            self.cia.save(w);
+        }
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (version, mut c) = r.chunk(TAG, VERSION)?;
+        let c1571 = self.model == DriveModel::C1571;
+        let tag = if c1571 { *b"1571" } else { *b"1541" };
+        let (version, mut c) = r.chunk(tag, VERSION)?;
         let mut ram = Box::new([0u8; 0x800]);
         c.raw_into(&mut ram[..])?;
         let mech = Mechanism {
@@ -536,24 +763,31 @@ impl Savestate for Drive1541 {
             sync: c.bool()?,
         };
         if mech.half_track >= HALF_TRACKS || mech.byte_cycles > 32 {
-            return Err(StateError::Invalid("1541 mechanism"));
+            return Err(StateError::Invalid("drive mechanism"));
         }
         let open_bus = c.u8()?;
-        // Version 1 states predate writing.
+        // Version 1 states (1541 only) predate writing.
         let motor_was_on = version >= 2 && c.bool()?;
+        let byte_ready = c1571 && c.bool()?;
         let mut cpu = self.cpu.clone();
         let mut via1 = self.via1.clone();
         let mut via2 = self.via2.clone();
+        let mut cia = self.cia.clone();
         cpu.load(r)?;
         via1.load(r)?;
         via2.load(r)?;
+        if c1571 {
+            cia.load(r)?;
+        }
         self.ram = ram;
         self.mech = mech;
         self.open_bus = open_bus;
         self.motor_was_on = motor_was_on;
+        self.byte_ready = byte_ready;
         self.cpu = cpu;
         self.via1 = via1;
         self.via2 = via2;
+        self.cia = cia;
         Ok(())
     }
 }

@@ -23,8 +23,9 @@
 //! motor, 4 cassette read, 6 serial CLK in, 7 serial DATA in (line level).
 //!
 //! Options: `ram` ("16k", "64k"; defaults per machine), `drive8` ("1541"
-//! when `roms["dos1541"]` is given, or "none"), `autostart` ("on"), `port1`
-//! ("joystick" default, "none"), `roms` = "stub".
+//! when `roms["dos1541"]` is given, "1571" with `roms["dos1571"]`,
+//! "virtual" or "none"), `drive8_ppm` (drive crystal deviation),
+//! `autostart` ("on"), `port1` ("joystick" default, "none"), `roms` = "stub".
 
 #![forbid(unsafe_code)]
 
@@ -53,6 +54,7 @@ use emu_core::{
 };
 
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
+use drives_cbm::{DriveModel, DriveRoms};
 use keyboard::Keyboard;
 use loader::{Autostart, ProgramSlot, BASIC_START, BOOT_FRAMES};
 use memory::{Area, Memory, Roms, TedView, ROM_SIZE};
@@ -389,19 +391,26 @@ impl TedMachine {
                 Some(other) => return Err(ConfigError::Invalid(format!("port1 option '{other}'"))),
             };
         let stub = config.options.get("roms").is_some_and(|r| r == "stub");
-        let dos1541 = if stub {
-            None
+        let drive_roms = if stub {
+            DriveRoms::default()
         } else {
-            config.roms.get("dos1541").map(Vec::as_slice)
+            DriveRoms::from_map(&config.roms)
         };
-        let drive = Drive8::from_option(
+        let mut drive = Drive8::from_option(
             config.options.get("drive8").map(String::as_str),
-            dos1541,
+            drive_roms,
+            DriveModel::C1541,
             8,
             DRIVE8,
             DRIVE_SPACE,
             double_hz,
         )?;
+        if let Some(d) = &mut drive {
+            let ppm = drives_cbm::serial::crystal_ppm(
+                config.options.get("drive8_ppm").map(String::as_str),
+            )?;
+            d.set_crystal_ppm(ppm, double_hz);
+        }
         let autostart = match config.options.get("autostart").map(String::as_str) {
             None | Some("off") => Autostart::Off,
             Some("on") => Autostart::Armed,
@@ -454,6 +463,7 @@ impl TedMachine {
             atn: o & 0x04 != 0,
             clk: o & 0x02 != 0,
             data: o & 0x01 != 0,
+            srq: false,
         }
     }
 
@@ -921,6 +931,7 @@ impl Machine for TedMachine {
             atn: c.bool()?,
             clk: c.bool()?,
             data: c.bool()?,
+            srq: false,
         };
         c.raw_into(&mut next.io.acia.regs)?;
         next.io.user_port = c.u8()?;
