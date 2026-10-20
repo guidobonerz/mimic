@@ -27,6 +27,17 @@ fetch() { # url file
   fi
 }
 
+# Like fetch, but a missing file (HTTP 404) is remembered and skipped.
+fetch_if_present() { # url file
+  if [ -s "$2" ] || [ -e "$2.missing" ]; then return; fi
+  code="$(curl -sSL --retry 3 -o "$2.part" -w '%{http_code}' "$1")"
+  case "$code" in
+    200) mv "$2.part" "$2" ;;
+    404) rm -f "$2.part"; touch "$2.missing" ;;
+    *) rm -f "$2.part"; echo "error: $1: HTTP $code" >&2; exit 1 ;;
+  esac
+}
+
 sha256() {
   if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1
   else shasum -a 256 "$1" | cut -d' ' -f1; fi
@@ -49,6 +60,42 @@ for i in $(seq 0 255); do
   fetch "$HARTE_URL/$name" "$DEST/65x02/6502/v1/$name"
 done
 echo "$HARTE_COMMIT" > "$DEST/65x02/COMMIT"
+
+# Tom Harte SingleStepTests Z80 (MIT), ~1.4 GB: 1604 instruction files of
+# 1000 tests each, named by their opcode bytes ("ed b0.json", "dd cb __ 46.json").
+Z80_COMMIT=ebe1875d48f374bcfd4b505d8eb8ee751568b5f7
+Z80_URL="https://raw.githubusercontent.com/SingleStepTests/z80/$Z80_COMMIT/v1"
+
+echo "Tom Harte Z80 tests -> $DEST/z80/v1"
+mkdir -p "$DEST/z80/v1"
+for prefix in "" "cb " "dd " "ed " "fd " "dd cb __ " "fd cb __ "; do
+  for i in $(seq 0 255); do
+    name="$prefix$(printf '%02x' "$i").json"
+    fetch_if_present "$Z80_URL/${name// /%20}" "$DEST/z80/v1/$name"
+  done
+done
+echo "$Z80_COMMIT" > "$DEST/z80/COMMIT"
+
+# ZEXDOC/ZEXALL Z80 instruction exercisers (Frank Cringle, GPL-2.0 test
+# programs; run, never committed), CP/M .COM files, checked by SHA-256.
+ZEX_COMMIT=8f71d418bae69a476a5a0e5c6e122c8801b8d9f4
+ZEX_URL="https://raw.githubusercontent.com/agn453/ZEXALL/$ZEX_COMMIT"
+ZEXDOC_SHA256=34923a7ed82285d3038b2d54bd64899e12173eebb61f9d07b4fc72e78af2ae8f
+ZEXALL_SHA256=6e2da55147a04f28d303d5da6a1e6b771557ac244653590a0f24a2d39c8537e8
+
+echo "ZEXDOC/ZEXALL -> $DEST/zex"
+mkdir -p "$DEST/zex"
+for f in zexdoc zexall; do
+  fetch "$ZEX_URL/$f.com" "$DEST/zex/$f.com"
+done
+for pair in "zexdoc $ZEXDOC_SHA256" "zexall $ZEXALL_SHA256"; do
+  set -- $pair
+  actual="$(sha256 "$DEST/zex/$1.com")"
+  if [ "$actual" != "$2" ]; then
+    echo "error: $1.com checksum mismatch ($actual)" >&2
+    exit 1
+  fi
+done
 
 # Wolfgang Lorenz C64 Emulator Test Suite 2.15 (public domain), as kept in the
 # VICE test programs, pinned to an SVN revision. Only the plain C64 builds;

@@ -553,6 +553,8 @@ name = "cpu-z80"
 version = "0.1.0"
 dependencies = [
  "emu-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

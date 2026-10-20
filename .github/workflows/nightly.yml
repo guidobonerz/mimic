@@ -22,8 +22,10 @@ jobs:
           path: testdata
           key: testdata-${{ hashFiles('tools/fetch-testdata.sh') }}
       - run: bash tools/fetch-testdata.sh
-      - name: Full Tom Harte suite + Dormann
+      - name: Full Tom Harte suites + Dormann + ZEXDOC/ZEXALL
         env:
           EMU_TESTDATA_DIR: ${{ github.workspace }}/testdata
           EMU_HARTE_FULL: "1"
-        run: cargo test -p cpu-6502 --release -- --ignored
+        run: |
+          cargo test -p cpu-6502 --release -- --ignored
+          cargo test -p cpu-z80 --release -- --ignored
