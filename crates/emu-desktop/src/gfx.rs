@@ -57,6 +57,10 @@ impl Gfx {
             config.format = *f;
         }
         config.present_mode = wgpu::PresentMode::AutoVsync;
+        // One frame in flight: every redraw waits for the next vertical
+        // blank, so redraws come evenly instead of in bursts that would
+        // find the frame queue empty or overfull.
+        config.desired_maximum_frame_latency = 1;
         surface.configure(&device, &config);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

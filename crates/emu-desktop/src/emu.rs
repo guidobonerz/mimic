@@ -2,13 +2,14 @@
 //! latest frame and feeds the audio buffer. The UI thread never touches the
 //! machine.
 //!
-//! Pacing: with an audio device the thread keeps ~100 ms of sound buffered
-//! (the sound card is the clock); without one it follows the machine's frame
-//! duration on the wall clock. Wall-clock time only decides *when* frames
-//! run, never what happens in them (golden rule 3).
+//! Pacing: frames run at the machine's exact rate on the wall clock (PAL C64:
+//! 50.12 Hz), so they arrive evenly; the audio side follows by adjusting its
+//! resampling rate slightly to the buffer level (see `audio`). Wall-clock
+//! time only decides *when* frames run, never what happens in them (golden
+//! rule 3).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -27,19 +28,100 @@ pub struct Frame {
 }
 
 /// State shared between the threads.
-#[derive(Default)]
 pub struct Shared {
-    pub frame: Mutex<Option<Frame>>,
+    /// Time base for the timestamps below.
+    pub epoch: Instant,
+    /// When the window last presented (ns since `epoch`): the display's
+    /// vertical blank, for phase-locking the emulation to it.
+    pub last_vsync_ns: AtomicU64,
+    /// Finished frames in order; the window shows each once.
+    pub frames: Mutex<VecDeque<Frame>>,
     pub audio: Mutex<VecDeque<i16>>,
     /// Set by the audio thread when a device is running.
     pub audio_live: AtomicBool,
     pub quit: AtomicBool,
+    /// When the display refresh is within 1 % of the machine's frame rate,
+    /// the window stores its measured refresh period here (ns). Emulation then
+    /// runs at that rate on the wall clock and nudges its phase so a frame is
+    /// ready half a refresh before the next vertical blank. 0 = the machine's
+    /// own rate. Emulation never waits for the window itself.
+    pub display_period_ns: AtomicU64,
+    /// Frames the window presented (diagnostics).
+    pub presented: AtomicU64,
+    /// Window refreshes (diagnostics).
+    pub redraws: AtomicU64,
+    /// Frames discarded by a backlog (diagnostics).
+    pub dropped: AtomicU64,
+    /// Audio diagnostics: input samples missing when the device asked, and
+    /// the current playback rate correction in parts per million.
+    pub underruns: AtomicU64,
+    pub rate_ppm: AtomicI64,
     /// Last stop that was not a frame end (jam, fault), for the title bar.
     pub status: Mutex<Option<String>>,
 }
 
-/// Audio kept buffered ahead of the device (48 kHz samples).
-const AUDIO_TARGET: usize = 4_800;
+impl Shared {
+    pub fn new() -> Self {
+        Self {
+            epoch: Instant::now(),
+            last_vsync_ns: AtomicU64::new(0),
+            frames: Mutex::default(),
+            audio: Mutex::default(),
+            audio_live: AtomicBool::new(false),
+            quit: AtomicBool::new(false),
+            display_period_ns: AtomicU64::new(0),
+            presented: AtomicU64::new(0),
+            redraws: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
+            underruns: AtomicU64::new(0),
+            rate_ppm: AtomicI64::new(0),
+            status: Mutex::default(),
+        }
+    }
+}
+
+/// Audio kept buffered ahead of the device (48 kHz samples, 100 ms).
+pub const AUDIO_TARGET: usize = 4_800;
+/// Frames waiting for the window before old ones are dropped.
+const MAX_QUEUED_FRAMES: usize = 4;
+
+/// Sleep until `deadline`: the OS sleep for the bulk (its granularity can
+/// be coarse), the last stretch by yielding.
+fn wait_until(deadline: Instant) {
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return;
+        }
+        let left = deadline - now;
+        if left > Duration::from_millis(2) {
+            thread::sleep(left - Duration::from_millis(1));
+        } else {
+            thread::yield_now();
+        }
+    }
+}
+/// Shift `deadline` a little towards the middle between two vertical
+/// blanks (a frame takes a few ms to emulate and must be queued before the
+/// next blank). Small steps (1/8 of the error per frame) keep the frame
+/// rate itself steady.
+fn phase_lock(deadline: Instant, period: u64, shared: &Shared) -> Instant {
+    let vsync = shared.last_vsync_ns.load(Ordering::Relaxed);
+    if vsync == 0 || deadline < shared.epoch {
+        return deadline;
+    }
+    let at = (deadline - shared.epoch).as_nanos() as i128;
+    let p = i128::from(period);
+    let phase = (at - i128::from(vsync)).rem_euclid(p);
+    let error = phase - p / 2; // −p/2 … p/2
+    let nudge = (error / 8).unsigned_abs() as u64;
+    if error > 0 {
+        deadline - Duration::from_nanos(nudge)
+    } else {
+        deadline + Duration::from_nanos(nudge)
+    }
+}
+
 /// Upper bound if nobody consumes audio.
 const AUDIO_MAX: usize = 48_000;
 
@@ -78,6 +160,9 @@ pub fn spawn(
         };
         let mut deadline = Instant::now();
         let mut stopped = false;
+        let debug = std::env::var_os("EMU_DESKTOP_DEBUG").is_some();
+        let mut report = Instant::now();
+        let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
             loop {
                 match input.try_recv() {
@@ -92,17 +177,19 @@ pub fn spawn(
                 }
             }
 
-            // Run a frame when the audio buffer or the clock asks for one.
-            let due = if shared.audio_live.load(Ordering::Relaxed) {
-                shared.audio.lock().is_ok_and(|a| a.len() < AUDIO_TARGET)
-            } else {
-                Instant::now() >= deadline
-            };
-            if !due || stopped {
-                thread::sleep(Duration::from_millis(1));
+            if stopped {
+                thread::sleep(Duration::from_millis(10));
                 continue;
             }
-            deadline += frame_time;
+            wait_until(deadline);
+            let period = shared.display_period_ns.load(Ordering::Relaxed);
+            if period == 0 {
+                deadline += frame_time;
+            } else {
+                deadline += Duration::from_nanos(period);
+                deadline = phase_lock(deadline, period, &shared);
+            }
+            // Fell far behind (slow host, debugger): do not catch up in a burst.
             if Instant::now() > deadline + frame_time * 5 {
                 deadline = Instant::now();
             }
@@ -121,12 +208,32 @@ pub fn spawn(
             samples.clear();
             machine.audio(&mut samples);
             if let Ok(mut a) = shared.audio.lock() {
+                min_fill = min_fill.min(a.len());
                 a.extend(samples.iter().copied());
                 let excess = a.len().saturating_sub(AUDIO_MAX);
                 a.drain(..excess);
+                max_fill = max_fill.max(a.len());
             }
-            if let Ok(mut f) = shared.frame.lock() {
-                *f = Some(to_frame(machine.as_ref()));
+            frames += 1;
+            if debug && report.elapsed() >= Duration::from_secs(5) {
+                eprintln!(
+                    "5 s: emulated {frames}, window refreshes {}, presented {}, dropped {}, audio buffer {min_fill}..{max_fill} samples, underruns {}, rate {:+} ppm",
+                    shared.redraws.swap(0, Ordering::Relaxed),
+                    shared.presented.swap(0, Ordering::Relaxed),
+                    shared.dropped.swap(0, Ordering::Relaxed),
+                    shared.underruns.swap(0, Ordering::Relaxed),
+                    shared.rate_ppm.load(Ordering::Relaxed),
+                );
+                report = Instant::now();
+                (min_fill, max_fill, frames) = (usize::MAX, 0, 0);
+            }
+            let frame = to_frame(machine.as_ref());
+            if let Ok(mut q) = shared.frames.lock() {
+                q.push_back(frame);
+                while q.len() > MAX_QUEUED_FRAMES {
+                    q.pop_front();
+                    shared.dropped.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     })
@@ -144,7 +251,7 @@ mod tests {
         let machine = emu_machines::registry().create("c64", &config).unwrap();
         let mapper = Mapper::new(emu_input::Profile::default_for("c64"));
         let (tx, rx) = std::sync::mpsc::channel();
-        let shared = Arc::new(Shared::default());
+        let shared = Arc::new(Shared::new());
         let handle = spawn(machine, mapper, rx, shared.clone());
         tx.send(HostEvent::Key {
             code: "KeyA".into(),
@@ -153,7 +260,7 @@ mod tests {
         .unwrap();
         let mut got = None;
         for _ in 0..400 {
-            if let Some(f) = shared.frame.lock().unwrap().take() {
+            if let Some(f) = shared.frames.lock().unwrap().pop_front() {
                 got = Some(f);
                 break;
             }

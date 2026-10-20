@@ -50,7 +50,9 @@ usage: emu-desktop [options]
 C64 keys by position on a PC keyboard: Esc = RUN/STOP, Tab = CTRL,
 left Ctrl = C=, Insert = £, Delete = ↑, Page Up = RESTORE, Home = CLR/HOME,
 F2/F4/F6/F8 = shifted F1/F3/F5/F7. Joystick (port 2): numeric keypad
-8/2/4/6 + 0 or right Ctrl, or the first gamepad.";
+8/2/4/6 + 0 or right Ctrl, or the first gamepad.
+
+EMU_DESKTOP_DEBUG=1 prints frame and audio statistics every 5 s.";
 
 struct Args {
     machine: String,
@@ -177,9 +179,32 @@ struct App {
     window: Option<Arc<Window>>,
     gfx: Option<Gfx>,
     error: Option<String>,
+    /// Display refresh period from the monitor (0 = not locked) and the
+    /// measured average, in ns.
+    nominal_period_ns: u64,
+    period_ns: f64,
 }
 
 impl App {
+    /// Record a vertical blank (redraws return from a blocking present) and
+    /// refine the measured refresh period for the emulation's phase lock.
+    fn track_vsync(&mut self) {
+        let now = self.shared.epoch.elapsed().as_nanos() as u64;
+        let last = self.shared.last_vsync_ns.swap(now, Ordering::Relaxed);
+        if self.nominal_period_ns == 0 || last == 0 {
+            return;
+        }
+        let interval = (now - last) as f64;
+        let nominal = self.nominal_period_ns as f64;
+        // Ignore hiccups (window hidden, dropped refresh).
+        if (interval / nominal - 1.0).abs() < 0.1 {
+            self.period_ns += (interval - self.period_ns) * 0.02;
+            self.shared
+                .display_period_ns
+                .store(self.period_ns as u64, Ordering::Relaxed);
+        }
+    }
+
     fn poll_gamepads(&mut self) {
         let Some(g) = &mut self.gilrs else { return };
         while let Some(ev) = g.next_event() {
@@ -231,11 +256,11 @@ impl ApplicationHandler for App {
         // Size from the machine's first frame through the monitor profile.
         let size = self
             .shared
-            .frame
+            .frames
             .lock()
             .ok()
-            .and_then(|f| {
-                f.as_ref().map(|f| {
+            .and_then(|q| {
+                q.front().map(|f| {
                     let r = emu_core::FrameRef {
                         width: f.width,
                         height: f.height,
@@ -266,6 +291,38 @@ impl ApplicationHandler for App {
                 return;
             }
         }
+        // Lock emulation to the display when its refresh matches the
+        // machine's frame rate within 1 % (the audio rate control absorbs
+        // the difference); otherwise run on the wall clock.
+        let machine_hz = self.shared.frames.lock().ok().and_then(|q| {
+            q.front().map(|f| {
+                let s = f.signal;
+                f64::from(s.pixel_clock_hz)
+                    / (f64::from(s.lines_per_field) * f64::from(s.total_pixels)).max(1.0)
+            })
+        });
+        let display_hz = window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz())
+            .map(|mhz| f64::from(mhz) / 1000.0);
+        if let (Some(machine), Some(display)) = (machine_hz, display_hz) {
+            let locked = (display / machine - 1.0).abs() < 0.01;
+            if locked {
+                self.nominal_period_ns = (1e9 / display) as u64;
+                self.period_ns = self.nominal_period_ns as f64;
+                self.shared
+                    .display_period_ns
+                    .store(self.nominal_period_ns, Ordering::Relaxed);
+            }
+            eprintln!(
+                "display {display:.2} Hz, machine {machine:.2} Hz: {}",
+                if locked {
+                    "emulating at the display rate (smooth)"
+                } else {
+                    "wall clock (rates differ: motion is uneven unless the display runs at the machine's rate)"
+                }
+            );
+        }
         self.window = Some(window);
     }
 
@@ -287,10 +344,25 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let frame = self.shared.frame.lock().ok().and_then(|mut f| f.take());
+                self.shared.redraws.fetch_add(1, Ordering::Relaxed);
+                self.track_vsync();
+                // One frame per display refresh, in order. The emulation is
+                // phase-locked to the refresh (frames are ready half a
+                // refresh ahead), so normally exactly one frame waits here. A
+                // backlog beyond two frames (window hidden, slow GPU) is
+                // skipped, not replayed.
+                let shared = &self.shared;
+                let frame = self.shared.frames.lock().ok().and_then(|mut q| {
+                    while q.len() > 2 {
+                        q.pop_front();
+                        shared.dropped.fetch_add(1, Ordering::Relaxed);
+                    }
+                    q.pop_front()
+                });
                 if let Some(g) = &mut self.gfx {
                     if let Some(f) = frame {
                         g.upload(&f, self.scale);
+                        self.shared.presented.fetch_add(1, Ordering::Relaxed);
                     }
                     g.render();
                 }
@@ -324,7 +396,7 @@ fn run() -> Result<(), String> {
     };
     let mapper = Mapper::new(InputProfile::default_for(&args.machine));
 
-    let shared = Arc::new(Shared::default());
+    let shared = Arc::new(Shared::new());
     let (tx, rx) = mpsc::channel();
     let _stream = audio::start(shared.clone());
     if _stream.is_none() {
@@ -334,7 +406,7 @@ fn run() -> Result<(), String> {
 
     // Wait briefly for the first frame so the window opens at the right size.
     for _ in 0..100 {
-        if shared.frame.lock().is_ok_and(|f| f.is_some()) {
+        if shared.frames.lock().is_ok_and(|q| !q.is_empty()) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -351,6 +423,8 @@ fn run() -> Result<(), String> {
         window: None,
         gfx: None,
         error: None,
+        nominal_period_ns: 0,
+        period_ns: 0.0,
     };
     let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
     shared.quit.store(true, Ordering::Relaxed);

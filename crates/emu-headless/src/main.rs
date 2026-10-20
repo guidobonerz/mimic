@@ -26,6 +26,7 @@ usage: emu-headless [options]
   --option KEY=VALUE    machine option (repeatable)
   --frames N            frames to run (default: 1)
   --snapshot FILE.png   write the last frame as PNG
+  --snapshot-every N    with --snapshot: also write FILE-<frame>.png every N frames
   --wav FILE.wav        write the audio of the run (16-bit PCM)
   --crt PROFILE[:N]     snapshot through a monitor profile (raw, 1702, 1084s,
                         pal-tv or a .toml file) at N rows per line (default 2)
@@ -47,6 +48,7 @@ struct Args {
     disk: Option<String>,
     frames: u64,
     snapshot: Option<String>,
+    snapshot_every: u64,
     wav: Option<String>,
     crt: Option<(String, u32)>,
     load_state: Option<String>,
@@ -102,6 +104,10 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 args.frames = n.parse().map_err(|_| format!("bad frame count '{n}'"))?;
             }
             "--snapshot" => args.snapshot = Some(value("--snapshot")?),
+            "--snapshot-every" => {
+                let n = value("--snapshot-every")?;
+                args.snapshot_every = n.parse().map_err(|_| format!("bad frame count '{n}'"))?;
+            }
             "--wav" => args.wav = Some(value("--wav")?),
             "--crt" => {
                 let v = value("--crt")?;
@@ -155,6 +161,16 @@ fn with_rom_dir(args: &Args) -> Result<MachineConfig, String> {
         config.roms.entry(role).or_insert(data);
     }
     Ok(config)
+}
+
+fn snapshot_png(machine: &dyn Machine, args: &Args) -> Result<Vec<u8>, String> {
+    Ok(match &args.crt {
+        Some((name, scale)) => {
+            let profile = load_profile(name)?;
+            emu_preview::encode_png_crt(&machine.framebuffer(), &profile, *scale)
+        }
+        None => emu_preview::encode_png(&machine.framebuffer()),
+    })
 }
 
 /// A built-in monitor profile by name, or a TOML profile file.
@@ -255,7 +271,21 @@ fn run(args: Args) -> Result<ExitCode, String> {
             format = Some(machine.audio(&mut audio));
         }
         match stop {
-            StopReason::FrameDone => frames += 1,
+            StopReason::FrameDone => {
+                frames += 1;
+                if let (Some(path), true) = (&args.snapshot, args.snapshot_every > 0) {
+                    if frames % args.snapshot_every == 0 {
+                        let p = std::path::Path::new(path);
+                        let stem = p
+                            .file_stem()
+                            .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+                        let file = p.with_file_name(format!("{stem}-{frames:05}.png"));
+                        let png = snapshot_png(machine.as_ref(), &args)?;
+                        fs::write(&file, png)
+                            .map_err(|e| format!("cannot write {}: {e}", file.display()))?;
+                    }
+                }
+            }
             other => {
                 eprintln!("stopped after {frames} frame(s): {other:?}");
                 code = ExitCode::from(2);
@@ -265,13 +295,7 @@ fn run(args: Args) -> Result<ExitCode, String> {
     }
 
     if let Some(path) = &args.snapshot {
-        let png = match &args.crt {
-            Some((name, scale)) => {
-                let profile = load_profile(name)?;
-                emu_preview::encode_png_crt(&machine.framebuffer(), &profile, *scale)
-            }
-            None => emu_preview::encode_png(&machine.framebuffer()),
-        };
+        let png = snapshot_png(machine.as_ref(), &args)?;
         fs::write(path, png).map_err(|e| format!("cannot write {path}: {e}"))?;
     }
     if let (Some(path), Some(format)) = (&args.wav, format) {
