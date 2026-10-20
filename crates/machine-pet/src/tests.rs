@@ -163,15 +163,18 @@ fn keyboard_rows_through_pia1() {
 #[test]
 fn ieee_bus_reads_back_the_pets_own_lines() {
     let mut m = stub();
-    // PIA2 port B (data out) = $5A; port A (data in) reads it.
+    // PIA2 port B (data out) = $5A; port A (data in) reads it once the bus
+    // is updated (every cycle).
     assert!(m.poke(CPU_SPACE, 0xe823, Size::Byte, 0x00));
     assert!(m.poke(CPU_SPACE, 0xe822, Size::Byte, 0xff));
     assert!(m.poke(CPU_SPACE, 0xe823, Size::Byte, 0x04));
     assert!(m.poke(CPU_SPACE, 0xe822, Size::Byte, 0x5a));
     assert!(m.poke(CPU_SPACE, 0xe821, Size::Byte, 0x04));
+    m.step_cycle();
     assert_eq!(m.peek(CPU_SPACE, 0xe820, Size::Byte), Some(0x5a));
     // NDAC out low (PIA2 CA2 manual low) shows on VIA PB0.
     assert!(m.poke(CPU_SPACE, 0xe821, Size::Byte, 0x34));
+    m.step_cycle();
     assert_eq!(m.peek(CPU_SPACE, 0xe840, Size::Byte).unwrap() & 1, 0);
 }
 

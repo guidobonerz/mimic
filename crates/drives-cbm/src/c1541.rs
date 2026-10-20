@@ -678,9 +678,10 @@ impl MediaSlot for CbmDrive {
         let mut bytes = vec![0; media.backend.len() as usize];
         media.backend.read(0, &mut bytes)?;
         let image = D64::parse(&bytes)?;
-        if image.format == media::Format::D81 {
+        if !matches!(image.format, media::Format::D64 | media::Format::D71) {
             return Err(MediaError::Format(format!(
-                "a 1581 disk (D81) does not fit a {}",
+                "a {:?} disk does not fit a {}",
+                image.format,
                 self.model.name()
             )));
         }

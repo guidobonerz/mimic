@@ -17,18 +17,14 @@
 //! answers with a 60 µs DATA pulse. After TALK the host hands the bus over
 //! ("turnaround"): it holds DATA, releases CLK, and the drive takes CLK.
 //!
-//! DOS subset: channel 0 loads (`$` = directory listing), channel 1 saves
-//! (`@0:` replaces), channels 2–14 open files (`,S`/`,P`, `,R`/`,W`),
-//! channel 15 reads the error message and runs `I`, `S:` (scratch), `N:`
-//! (new), `UJ`/`U:` (reset), `V` (validate: no-op). Written files go into
-//! the image and through the media backend when they are closed.
+//! The DOS (channels, files, commands) is [`VirtualDos`].
 //!
 //! [`VirtualDrive::tick`] is one microsecond.
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use emu_core::media::{Media, MediaError, MediaSlot};
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
-use media::{Format, D64};
 
+use crate::dos::VirtualDos;
 use crate::iec::IecLines;
 
 /// Bus timing in microseconds. The KERNAL polls the port with a debounce
@@ -79,31 +75,9 @@ enum State {
     TxWaitAck,
 }
 
-/// An open channel.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-enum Channel {
-    #[default]
-    Closed,
-    /// Bytes to send, next position.
-    Read { data: Vec<u8>, pos: usize },
-    /// A file being written.
-    Write {
-        name: Vec<u8>,
-        file_type: u8,
-        replace: bool,
-        data: Vec<u8>,
-    },
-}
-
-struct Disk {
-    media: Media,
-    image: D64,
-    protected: bool,
-}
-
 pub struct VirtualDrive {
-    device: u8,
-    disk: Option<Disk>,
+    /// Channels, files and commands.
+    pub dos: VirtualDos,
     /// Lines this drive pulls.
     out: IecLines,
     state: State,
@@ -113,30 +87,13 @@ pub struct VirtualDrive {
     phase: u8,
     byte: u8,
     eoi: bool,
-    under_atn: bool,
     prev_atn: bool,
-    listening: bool,
-    talking: bool,
-    channel: u8,
-    /// The secondary address of the current LISTEN was OPEN: data bytes
-    /// are the name.
-    opening: bool,
-    name: Vec<u8>,
-    channels: Vec<Channel>,
-    /// Command channel text being received.
-    command: Vec<u8>,
-    status: String,
-}
-
-fn status(code: u8, text: &str, track: u8, sector: u8) -> String {
-    format!("{code:02},{text},{track:02},{sector:02}\r")
 }
 
 impl VirtualDrive {
     pub fn new(device: u8) -> Self {
         Self {
-            device: device.clamp(8, 15),
-            disk: None,
+            dos: VirtualDos::new(device, "POLYTRACE VIRTUAL DRIVE"),
             out: IecLines::default(),
             state: State::Idle,
             timer: 0,
@@ -144,33 +101,26 @@ impl VirtualDrive {
             phase: 0,
             byte: 0,
             eoi: false,
-            under_atn: false,
             prev_atn: false,
-            listening: false,
-            talking: false,
-            channel: 0,
-            opening: false,
-            name: Vec::new(),
-            channels: vec![Channel::Closed; 16],
-            command: Vec::new(),
-            status: status(73, "POLYTRACE VIRTUAL DRIVE", 0, 0),
         }
     }
 
-    /// RESET: channels close, the status shows the DOS version.
+    /// RESET: the bus lines and channels are released, the status shows
+    /// the DOS version.
     pub fn reset(&mut self) {
-        let disk = self.disk.take();
-        *self = Self::new(self.device);
-        self.disk = disk;
+        let dos = std::mem::replace(&mut self.dos, VirtualDos::new(8, ""));
+        *self = Self::new(dos.device());
+        self.dos = dos;
+        self.dos.reset();
     }
 
     pub fn has_disk(&self) -> bool {
-        self.disk.is_some()
+        self.dos.has_disk()
     }
 
     /// The command channel's current message (for tests and tools).
     pub fn status_text(&self) -> &str {
-        &self.status
+        self.dos.status_text()
     }
 
     /// Lines this drive pulls on the bus.
@@ -182,7 +132,7 @@ impl VirtualDrive {
     pub fn tick(&mut self, bus: IecLines) {
         if bus.atn && !self.prev_atn {
             // ATN: every device answers by pulling DATA and listens.
-            self.under_atn = true;
+            self.dos.set_atn(true);
             self.out = IecLines {
                 atn: false,
                 clk: false,
@@ -204,10 +154,10 @@ impl VirtualDrive {
     }
 
     fn atn_released(&mut self) {
-        self.under_atn = false;
-        if self.talking {
+        self.dos.set_atn(false);
+        if self.dos.talking() {
             self.enter(State::TurnWaitClk);
-        } else if self.listening {
+        } else if self.dos.listening() {
             // Keep DATA pulled: ready when the host is.
             self.enter(State::RxWaitReady);
         } else {
@@ -263,7 +213,7 @@ impl VirtualDrive {
                         self.out.data = true;
                         let (byte, eoi) = (self.byte, self.eoi);
                         self.enter(State::RxWaitReady);
-                        self.received(byte, eoi);
+                        self.dos.received(byte, eoi);
                     } else {
                         self.enter(State::RxBitHigh);
                     }
@@ -279,7 +229,7 @@ impl VirtualDrive {
             }
             State::TxNextByte => {
                 if self.timer >= BYTE_GAP {
-                    match self.next_byte() {
+                    match self.dos.next_byte() {
                         Some((byte, last)) => {
                             self.byte = byte;
                             self.eoi = last;
@@ -290,7 +240,7 @@ impl VirtualDrive {
                         // the bus; the host times out.
                         None => {
                             self.out = IecLines::default();
-                            self.talking = false;
+                            self.dos.stop_talking();
                             self.enter(State::Idle);
                         }
                     }
@@ -318,7 +268,7 @@ impl VirtualDrive {
             State::TxBits => self.send_bits(),
             State::TxWaitAck => {
                 if bus.data {
-                    self.advance();
+                    self.dos.advance();
                     if self.eoi {
                         // Last byte sent: release CLK and wait for UNTALK.
                         self.out = IecLines::default();
@@ -369,304 +319,6 @@ impl VirtualDrive {
             _ => {}
         }
     }
-
-    /// The next byte of the talk channel, and whether it is the last.
-    fn next_byte(&mut self) -> Option<(u8, bool)> {
-        let ch = usize::from(self.channel);
-        if ch == 15 {
-            let text = self.status.as_bytes();
-            let pos = match &self.channels[15] {
-                Channel::Read { pos, .. } => *pos,
-                _ => 0,
-            };
-            return text.get(pos).map(|&b| (b, pos + 1 == text.len()));
-        }
-        match &self.channels[ch] {
-            Channel::Read { data, pos } => data.get(*pos).map(|&b| (b, pos + 1 == data.len())),
-            _ => None,
-        }
-    }
-
-    fn advance(&mut self) {
-        let ch = usize::from(self.channel);
-        if ch == 15 {
-            let pos = match &self.channels[15] {
-                Channel::Read { pos, .. } => *pos + 1,
-                _ => 1,
-            };
-            if pos >= self.status.len() {
-                // Read to the end: the message resets to OK.
-                self.channels[15] = Channel::Closed;
-                self.status = status(0, " OK", 0, 0);
-            } else {
-                self.channels[15] = Channel::Read {
-                    data: Vec::new(),
-                    pos,
-                };
-            }
-            return;
-        }
-        if let Channel::Read { pos, .. } = &mut self.channels[ch] {
-            *pos += 1;
-        }
-    }
-
-    /// A byte received as listener.
-    fn received(&mut self, byte: u8, _eoi: bool) {
-        if self.under_atn {
-            self.command_byte(byte);
-            return;
-        }
-        if !self.listening {
-            return;
-        }
-        if self.opening || self.channel == 15 {
-            if self.channel == 15 && !self.opening {
-                self.command.push(byte);
-            } else {
-                self.name.push(byte);
-            }
-            return;
-        }
-        if let Channel::Write { data, .. } = &mut self.channels[usize::from(self.channel)] {
-            data.push(byte);
-        }
-    }
-
-    fn command_byte(&mut self, byte: u8) {
-        let dev = byte & 0x1f;
-        match byte & 0xf0 {
-            0x20 | 0x30 => {
-                if byte == 0x3f {
-                    if self.listening {
-                        self.unlisten();
-                    }
-                    self.listening = false;
-                } else {
-                    self.listening = dev == self.device;
-                }
-            }
-            0x40 | 0x50 => {
-                if byte == 0x5f {
-                    self.talking = false;
-                } else {
-                    self.talking = dev == self.device;
-                }
-            }
-            0x60 if self.listening || self.talking => {
-                self.channel = byte & 0x0f;
-                self.opening = false;
-            }
-            0xe0 if self.listening => {
-                self.channel = byte & 0x0f;
-                self.close(self.channel);
-            }
-            0xf0 if self.listening => {
-                self.channel = byte & 0x0f;
-                self.opening = true;
-                self.name.clear();
-            }
-            _ => {}
-        }
-    }
-
-    fn unlisten(&mut self) {
-        if self.opening {
-            self.opening = false;
-            let name = std::mem::take(&mut self.name);
-            if self.channel == 15 {
-                if !name.is_empty() {
-                    self.run_command(&name);
-                }
-            } else {
-                self.open(self.channel, &name);
-            }
-        } else if self.channel == 15 && !self.command.is_empty() {
-            let cmd = std::mem::take(&mut self.command);
-            self.run_command(&cmd);
-        }
-    }
-
-    fn set_status(&mut self, code: u8, text: &str) {
-        self.status = status(code, text, 0, 0);
-        self.channels[15] = Channel::Closed;
-    }
-
-    /// OPEN: parse `[@][0:]name[,type][,mode]`.
-    fn open(&mut self, ch: u8, raw: &[u8]) {
-        let ch_i = usize::from(ch);
-        self.channels[ch_i] = Channel::Closed;
-        let raw: Vec<u8> = raw.iter().copied().filter(|&c| c != b'\r').collect();
-        let (replace, rest) = match raw.strip_prefix(b"@") {
-            Some(r) => (true, r),
-            None => (false, &raw[..]),
-        };
-        let rest = match rest.iter().position(|&c| c == b':') {
-            Some(i) => &rest[i + 1..],
-            None => rest,
-        };
-        let mut parts = rest.split(|&c| c == b',');
-        let name = parts.next().unwrap_or_default().to_vec();
-        let mut file_type = 2;
-        let mut write = ch == 1;
-        for p in parts {
-            match p.first() {
-                Some(b'S') => file_type = 1,
-                Some(b'P') => file_type = 2,
-                Some(b'U') => file_type = 3,
-                Some(b'W') => write = true,
-                Some(b'R') => write = false,
-                _ => {}
-            }
-        }
-        let Some(disk) = &self.disk else {
-            self.set_status(74, "DRIVE NOT READY");
-            return;
-        };
-        if write {
-            if disk.protected {
-                self.set_status(26, "WRITE PROTECT ON");
-                return;
-            }
-            if !replace && disk.image.read_file(&name).is_ok() {
-                self.set_status(63, "FILE EXISTS");
-                return;
-            }
-            self.channels[ch_i] = Channel::Write {
-                name,
-                file_type,
-                replace,
-                data: Vec::new(),
-            };
-            self.set_status(0, " OK");
-            return;
-        }
-        let data = if ch == 0 && name.first() == Some(&b'$') {
-            Ok(disk.image.listing())
-        } else {
-            disk.image.read_file(&name).map(|(_, d)| d)
-        };
-        match data {
-            Ok(data) if !data.is_empty() => {
-                self.channels[ch_i] = Channel::Read { data, pos: 0 };
-                self.set_status(0, " OK");
-            }
-            _ => self.set_status(62, "FILE NOT FOUND"),
-        }
-    }
-
-    /// CLOSE: a written file goes into the image and the backend.
-    fn close(&mut self, ch: u8) {
-        let channel = std::mem::take(&mut self.channels[usize::from(ch)]);
-        let Channel::Write {
-            name,
-            file_type,
-            replace,
-            data,
-        } = channel
-        else {
-            return;
-        };
-        let Some(disk) = &mut self.disk else {
-            return;
-        };
-        if replace {
-            let _ = disk.image.scratch(&name);
-        }
-        let result = disk.image.write_file(&name, file_type, &data);
-        match result.and_then(|()| Self::write_back(disk)) {
-            Ok(()) => self.set_status(0, " OK"),
-            Err(_) => self.set_status(72, "DISK FULL"),
-        }
-    }
-
-    fn write_back(disk: &mut Disk) -> Result<(), MediaError> {
-        let bytes = disk.image.to_bytes();
-        disk.media.backend.write(0, &bytes)
-    }
-
-    fn run_command(&mut self, raw: &[u8]) {
-        let cmd: Vec<u8> = raw.iter().copied().filter(|&c| c != b'\r').collect();
-        let arg = |cmd: &[u8]| -> Vec<u8> {
-            match cmd.iter().position(|&c| c == b':') {
-                Some(i) => cmd[i + 1..].to_vec(),
-                None => Vec::new(),
-            }
-        };
-        match cmd.first() {
-            Some(b'I') | Some(b'V') => self.set_status(0, " OK"),
-            Some(b'U') if matches!(cmd.get(1), Some(b'J') | Some(b':')) => self.reset(),
-            Some(b'S') => {
-                let Some(disk) = &mut self.disk else {
-                    return self.set_status(74, "DRIVE NOT READY");
-                };
-                let mut n = 0;
-                for pattern in arg(&cmd).split(|&c| c == b',') {
-                    n += disk.image.scratch(pattern).unwrap_or(0);
-                }
-                let _ = Self::write_back(disk);
-                self.status = status(1, " FILES SCRATCHED", n.min(99) as u8, 0);
-            }
-            Some(b'N') => {
-                let Some(disk) = &mut self.disk else {
-                    return self.set_status(74, "DRIVE NOT READY");
-                };
-                let a = arg(&cmd);
-                let mut parts = a.split(|&c| c == b',');
-                let name = parts.next().unwrap_or_default();
-                let id = parts
-                    .next()
-                    .map(|i| {
-                        [
-                            i.first().copied().unwrap_or(b' '),
-                            i.get(1).copied().unwrap_or(b' '),
-                        ]
-                    })
-                    .unwrap_or_else(|| disk.image.id());
-                // NEW keeps the disk type: D64, D71 or D81.
-                disk.image = match disk.image.format {
-                    Format::D64 => D64::blank(name, id),
-                    Format::D71 => D64::blank_d71(name, id),
-                    Format::D81 => D64::blank_d81(name, id),
-                };
-                let _ = Self::write_back(disk);
-                self.set_status(0, " OK");
-            }
-            _ => self.set_status(31, "SYNTAX ERROR"),
-        }
-    }
-}
-
-impl MediaSlot for VirtualDrive {
-    fn insert(&mut self, mut media: Media) -> Result<(), MediaError> {
-        if media.kind != MediaKind::Disk {
-            return Err(MediaError::Unsupported(media.kind));
-        }
-        let mut bytes = vec![0; media.backend.len() as usize];
-        media.backend.read(0, &mut bytes)?;
-        let image = D64::parse(&bytes)?;
-        self.disk = Some(Disk {
-            media,
-            image,
-            protected: false,
-        });
-        Ok(())
-    }
-
-    fn eject(&mut self) -> Option<Media> {
-        self.disk.take().map(|d| d.media)
-    }
-
-    fn write_protect(&mut self, on: bool) {
-        if let Some(d) = &mut self.disk {
-            d.protected = on;
-        }
-    }
-
-    /// Files are written back when they are closed; nothing is pending.
-    fn flush(&mut self) -> Result<(), MediaError> {
-        Ok(())
-    }
 }
 
 const TAG: [u8; 4] = *b"VDRV";
@@ -704,86 +356,51 @@ impl Savestate for VirtualDrive {
         w.chunk(TAG, VERSION, |w| {
             w.u8(state_code(self.state));
             w.u32(self.timer);
-            for v in [self.bit, self.phase, self.byte, self.channel] {
+            let dos = &self.dos;
+            for v in [self.bit, self.phase, self.byte, dos.channel] {
                 w.u8(v);
             }
             for b in [
                 self.out.clk,
                 self.out.data,
                 self.eoi,
-                self.under_atn,
+                dos.under_atn,
                 self.prev_atn,
-                self.listening,
-                self.talking,
-                self.opening,
+                dos.listening,
+                dos.talking,
+                dos.opening,
             ] {
                 w.bool(b);
             }
-            w.bytes(&self.name);
-            w.bytes(&self.command);
-            w.bytes(self.status.as_bytes());
-            for ch in &self.channels {
-                match ch {
-                    Channel::Closed => w.u8(0),
-                    Channel::Read { data, pos } => {
-                        w.u8(1);
-                        w.bytes(data);
-                        w.u32(*pos as u32);
-                    }
-                    Channel::Write {
-                        name,
-                        file_type,
-                        replace,
-                        data,
-                    } => {
-                        w.u8(2);
-                        w.bytes(name);
-                        w.u8(*file_type);
-                        w.bool(*replace);
-                        w.bytes(data);
-                    }
-                }
-            }
+            w.bytes(&dos.name);
+            w.bytes(&dos.command);
+            w.bytes(dos.status.as_bytes());
+            dos.save_channels(w);
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
         let (_, mut c) = r.chunk(TAG, VERSION)?;
-        let mut d = VirtualDrive::new(self.device);
+        let mut d = VirtualDrive::new(self.dos.device());
         d.state = state_from(c.u8()?).ok_or(StateError::Invalid("virtual drive state"))?;
         d.timer = c.u32()?;
         d.bit = c.u8()?.min(8);
         d.phase = c.u8()? % 2;
         d.byte = c.u8()?;
-        d.channel = c.u8()? & 0x0f;
+        d.dos.channel = c.u8()? & 0x0f;
         d.out.clk = c.bool()?;
         d.out.data = c.bool()?;
         d.eoi = c.bool()?;
-        d.under_atn = c.bool()?;
+        d.dos.under_atn = c.bool()?;
         d.prev_atn = c.bool()?;
-        d.listening = c.bool()?;
-        d.talking = c.bool()?;
-        d.opening = c.bool()?;
-        d.name = c.bytes()?.to_vec();
-        d.command = c.bytes()?.to_vec();
-        d.status = String::from_utf8_lossy(c.bytes()?).into_owned();
-        for ch in &mut d.channels {
-            *ch = match c.u8()? {
-                0 => Channel::Closed,
-                1 => Channel::Read {
-                    data: c.bytes()?.to_vec(),
-                    pos: c.u32()? as usize,
-                },
-                2 => Channel::Write {
-                    name: c.bytes()?.to_vec(),
-                    file_type: c.u8()? & 7,
-                    replace: c.bool()?,
-                    data: c.bytes()?.to_vec(),
-                },
-                _ => return Err(StateError::Invalid("virtual drive channel")),
-            };
-        }
-        d.disk = self.disk.take();
+        d.dos.listening = c.bool()?;
+        d.dos.talking = c.bool()?;
+        d.dos.opening = c.bool()?;
+        d.dos.name = c.bytes()?.to_vec();
+        d.dos.command = c.bytes()?.to_vec();
+        d.dos.status = String::from_utf8_lossy(c.bytes()?).into_owned();
+        d.dos.load_channels(&mut c)?;
+        d.dos.disk = self.dos.disk.take();
         *self = d;
         Ok(())
     }
@@ -791,3 +408,21 @@ impl Savestate for VirtualDrive {
 
 #[cfg(test)]
 mod tests;
+
+impl MediaSlot for VirtualDrive {
+    fn insert(&mut self, media: Media) -> Result<(), MediaError> {
+        self.dos.insert(media)
+    }
+
+    fn eject(&mut self) -> Option<Media> {
+        self.dos.eject()
+    }
+
+    fn write_protect(&mut self, on: bool) {
+        self.dos.write_protect(on);
+    }
+
+    fn flush(&mut self) -> Result<(), MediaError> {
+        self.dos.flush()
+    }
+}

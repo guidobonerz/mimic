@@ -16,7 +16,8 @@
 //! Options: `ram` ("8k", "16k", "32k"); `keyboard` ("graphics" or
 //! "business"; the 8032 and the editor ROMs decide what exists); `hz` ("50"
 //! default, or "60": which 4.0 editor, i.e. the CRTC refresh rate);
-//! `roms` = "stub" for tests without ROMs.
+//! `drive8` ("virtual" default, or "none"); `roms` = "stub" for tests
+//! without ROMs.
 //!
 //! ROM roles (`MachineConfig::roms`, user-supplied): `basic1`/`basic2`
 //! (8 KB at `$C000`), `basic4` (12 KB at `$B000`), `kernal1/2/4` (4 KB at
@@ -24,9 +25,10 @@
 //! `edit4-40n-50`/`-60`, `edit4-40b-50`/`-60`, `edit4-80b-50`/`-60`, and
 //! the character ROMs `chargen1` (2001) and `chargen2`.
 //!
-//! The IEEE-488 bus is wired (the PET reads back its own lines), but no
-//! drive is attached yet: disk access reports DEVICE NOT PRESENT. Programs
-//! come in through the "program" slot.
+//! The IEEE-488 bus carries the PET's lines and those of a virtual disk
+//! drive as device 8 (slot "drive 8": D64, D71, D81, D80 or D82 images;
+//! see [`drives_cbm::IeeeDrive`]). Programs also come in through the
+//! "program" slot and the datasette on cassette port 1.
 
 #![forbid(unsafe_code)]
 
@@ -38,6 +40,7 @@ pub mod video;
 use chips_cbm::pia::Pia;
 use chips_cbm::via::Via;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
+use drives_cbm::{IeeeDrive, IeeeLines};
 use drives_other::Datasette;
 use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
 use emu_core::hooked::HookedBus;
@@ -264,13 +267,15 @@ pub struct Io {
     pub retrace: bool,
     /// A key of the datasette on cassette port 1 is down (PIA1 PA4 low).
     pub cassette_sense: bool,
+    /// IEEE-488 bus levels after the last update (`true` = low).
+    pub ieee: IeeeLines,
 }
 
 impl Io {
     fn pia1_pins(&self) -> (u8, u8) {
         let mut ext_a = 0xff;
-        if !self.pia1.ca2_out() {
-            ext_a &= !0x40; // EOI: the PET's own EOI out
+        if self.ieee.eoi {
+            ext_a &= !0x40; // EOI in
         }
         if self.cassette_sense {
             ext_a &= !0x10;
@@ -280,26 +285,41 @@ impl Io {
         (pa, pb)
     }
 
-    /// The IEEE-488 data lines carry what the PET drives (no device).
+    /// PIA2 port A reads the IEEE-488 data lines (low = 1 bit, so a pulled
+    /// line reads 0), port B drives them.
     fn pia2_pins(&self) -> (u8, u8) {
-        let data = self.pia2.port_b_out();
-        (self.pia2.port_a_out() & data, data)
+        (self.pia2.port_a_out() & !self.ieee.data, 0xff)
+    }
+
+    /// What the PET pulls on the IEEE-488 bus: VIA PB2 ATN, PB1 NRFD,
+    /// PIA2 CA2 NDAC, CB2 DAV, PIA1 CA2 EOI (output low = line low), PIA2
+    /// port B the data lines (a 0 bit pulls the line).
+    fn ieee_out(&self) -> IeeeLines {
+        let pb = self.via.port_b_out();
+        IeeeLines {
+            atn: pb & 0x04 == 0,
+            nrfd: pb & 0x02 == 0,
+            ndac: !self.pia2.ca2_out(),
+            dav: !self.pia2.cb2_out(),
+            eoi: !self.pia1.ca2_out(),
+            data: !self.pia2.port_b_out(),
+        }
     }
 
     fn via_pins(&self) -> (u8, u8) {
         let pb_out = self.via.port_b_out();
         let mut ext = 0xff;
-        if !self.pia2.ca2_out() {
-            ext &= !0x01; // NDAC
+        if self.ieee.ndac {
+            ext &= !0x01;
         }
         if self.retrace {
             ext &= !0x20;
         }
-        if pb_out & 0x02 == 0 {
-            ext &= !0x40; // NRFD
+        if self.ieee.nrfd {
+            ext &= !0x40;
         }
-        if !self.pia2.cb2_out() {
-            ext &= !0x80; // DAV
+        if self.ieee.dav {
+            ext &= !0x80;
         }
         (self.via.port_a_out(), pb_out & ext)
     }
@@ -475,6 +495,8 @@ impl Bus for PeekBus<'_> {
 pub const SLOT_PROGRAM: SlotId = SlotId(0);
 /// The datasette on cassette port 1.
 pub const SLOT_TAPE: SlotId = SlotId(1);
+/// The virtual IEEE-488 drive, device 8.
+pub const SLOT_DRIVE8: SlotId = SlotId(2);
 
 /// Phosphor colours of the monochrome monitor: off, green.
 const PALETTE: [Rgb8; 2] = [
@@ -497,6 +519,8 @@ pub struct Pet {
     program: ProgramSlot,
     /// The datasette on cassette port 1.
     tape: Datasette,
+    /// The virtual disk drive on the IEEE-488 bus.
+    drive: Option<IeeeDrive>,
     resampler: Decimator,
     /// Audio produced but not yet taken (output, not machine state).
     samples: Vec<i16>,
@@ -543,6 +567,15 @@ impl Pet {
             Some("16k") => 0x4000,
             Some(other) => return Err(ConfigError::Invalid(format!("ram option '{other}'"))),
         };
+        let drive = match config.options.get("drive8").map(String::as_str) {
+            None | Some("virtual") => Some(IeeeDrive::new(8)),
+            Some("none") => None,
+            Some(other) => {
+                return Err(ConfigError::Invalid(format!(
+                    "drive8 option '{other}' (virtual or none)"
+                )))
+            }
+        };
         let roms = load_roms(config, model, layout, hz)?;
         let (regs, standard) = match (model.crtc(), model.columns(), hz) {
             (false, _, _) => (video::FIXED_TIMING, VideoStandard::Ntsc),
@@ -572,12 +605,14 @@ impl Pet {
                 keyboard: Keyboard::new(layout),
                 retrace: false,
                 cassette_sense: false,
+                ieee: IeeeLines::default(),
             },
             video: Video::new(regs, cpc, char_lines, standard),
             sched: Scheduler::new(),
             input: InputQueue::new(),
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::Pet, 1_000_000),
+            drive,
             resampler: Decimator::new(CPU_HZ, SAMPLE_RATE).expect("valid rates"),
             samples: Vec::new(),
             field_done_pending: false,
@@ -609,9 +644,17 @@ impl Pet {
         self.io.retrace = video.vsync;
         // CB1 sees the retrace; the editor interrupts on its falling edge.
         self.io.pia1.set_cb1(!video.vsync);
-        // ATN in follows the PET's own ATN out (VIA PB2).
-        let atn = self.io.via.port_b_out() & 0x04 != 0;
-        self.io.pia2.set_ca1(atn);
+        // IEEE-488: the drive sees what the PET drives now; ATN in on
+        // PIA2 CA1.
+        let pet = self.io.ieee_out();
+        self.io.ieee = match &mut self.drive {
+            Some(d) => {
+                d.tick(IeeeLines::combine(&[pet, d.ieee_out()]));
+                IeeeLines::combine(&[pet, d.ieee_out()])
+            }
+            None => pet,
+        };
+        self.io.pia2.set_ca1(!self.io.ieee.atn);
         let irq = self.io.pia1.irq() || self.io.pia2.irq() || self.io.via.irq();
         self.cpu.set_irq(irq);
 
@@ -812,6 +855,10 @@ impl Machine for Pet {
         self.io.pia1.reset();
         self.io.pia2.reset();
         self.io.via.reset();
+        // The reset line is IFC on the IEEE-488 bus: the drive starts over.
+        if let Some(d) = &mut self.drive {
+            d.reset();
+        }
         if kind == ResetKind::Hard {
             self.mem.ram.fill(0);
             self.mem.vram.fill(0);
@@ -924,7 +971,7 @@ impl Machine for Pet {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        vec![
+        let mut slots = vec![
             MediaSlotInfo {
                 id: SLOT_PROGRAM,
                 name: "program",
@@ -937,20 +984,30 @@ impl Machine for Pet {
                 kind: MediaKind::Tape,
                 inserted: self.tape.has_tape(),
             },
-        ]
+        ];
+        if let Some(d) = &self.drive {
+            slots.push(MediaSlotInfo {
+                id: SLOT_DRIVE8,
+                name: "drive 8",
+                kind: MediaKind::Disk,
+                inserted: d.has_disk(),
+            });
+        }
+        slots
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
         match slot {
             SLOT_PROGRAM => Some(&mut self.program),
             SLOT_TAPE => Some(&mut self.tape),
+            SLOT_DRIVE8 => self.drive.as_mut().map(|d| d as &mut dyn MediaSlot),
             _ => None,
         }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"PETS", 2, |w| {
+        w.chunk(*b"PETS", 3, |w| {
             w.bool(self.field_done_pending);
             w.u64(self.boot_cycle);
             w.u32(self.mem.ram.len() as u32);
@@ -961,6 +1018,11 @@ impl Machine for Pet {
                 w.u8(row);
             }
             w.bool(self.io.retrace);
+            let b = self.io.ieee;
+            for v in [b.atn, b.eoi, b.dav, b.nrfd, b.ndac] {
+                w.bool(v);
+            }
+            w.u8(b.data);
             self.resampler.save(w);
         });
         self.cpu.save(&mut w);
@@ -971,6 +1033,10 @@ impl Machine for Pet {
         self.sched.save(&mut w);
         self.input.save(&mut w);
         self.tape.save(&mut w);
+        w.chunk(*b"DRV8", 1, |w| w.bool(self.drive.is_some()));
+        if let Some(d) = &self.drive {
+            d.save(&mut w);
+        }
         w.into_bytes()
     }
 
@@ -986,7 +1052,7 @@ impl Machine for Pet {
             resampler: self.resampler,
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"PETS", 2)?;
+        let (version, mut c) = r.chunk(*b"PETS", 3)?;
         let field_done_pending = c.bool()?;
         let boot_cycle = c.u64()?;
         if c.u32()? as usize != next.mem.ram.len() {
@@ -1001,6 +1067,16 @@ impl Machine for Pet {
             *row = c.u8()?;
         }
         next.io.retrace = c.bool()?;
+        if version >= 3 {
+            next.io.ieee = IeeeLines {
+                atn: c.bool()?,
+                eoi: c.bool()?,
+                dav: c.bool()?,
+                nrfd: c.bool()?,
+                ndac: c.bool()?,
+                data: c.u8()?,
+            };
+        }
         next.resampler.load(&mut c)?;
         next.cpu.load(&mut r)?;
         next.io.pia1.load(&mut r)?;
@@ -1011,8 +1087,30 @@ impl Machine for Pet {
         next.input.load(&mut r)?;
         // The datasette last: its load is atomic, so a failure leaves all
         // as it was.
+        // The datasette and the drive load atomically; the drive comes back
+        // if the tape fails after it.
+        let tape_backup = {
+            let mut w = StateWriter::new();
+            self.tape.save(&mut w);
+            w.into_bytes()
+        };
         if version >= 2 {
             self.tape.load(&mut r)?;
+        }
+        if version >= 3 {
+            let drive_chunk = r.chunk(*b"DRV8", 1).and_then(|(_, mut c)| c.bool());
+            let loaded = match drive_chunk {
+                Ok(present) if present == self.drive.is_some() => match &mut self.drive {
+                    Some(d) => d.load(&mut r),
+                    None => Ok(()),
+                },
+                Ok(_) => Err(StateError::Invalid("drive 8 configuration differs")),
+                Err(e) => Err(e),
+            };
+            if let Err(e) = loaded {
+                let _ = self.tape.load(&mut StateReader::new(&tape_backup));
+                return Err(e);
+            }
         }
         next.io.cassette_sense = self.tape.sense();
         self.cpu = next.cpu;
