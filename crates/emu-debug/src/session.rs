@@ -112,7 +112,14 @@ pub struct Session {
     /// Why the last run ended (`None` while running or never run).
     last_stop: Option<StopReason>,
     symbols: SymbolTable,
+    frame_hook: Option<FrameHook>,
 }
+
+/// Called with the machine whenever its picture may have changed: after
+/// every frame while running (`true`), and after stops and commands while
+/// paused (`false`; the frame may be partial). The live preview feeds its
+/// frame copies from here.
+pub type FrameHook = Box<dyn FnMut(&dyn Machine, bool) + Send>;
 
 impl Session {
     pub fn new(machine: Box<dyn Machine>, machine_id: impl Into<String>) -> Self {
@@ -127,6 +134,19 @@ impl Session {
             frame_subscribers: 0,
             last_stop: None,
             symbols: SymbolTable::default(),
+            frame_hook: None,
+        }
+    }
+
+    pub fn set_frame_hook(&mut self, hook: FrameHook) {
+        self.frame_hook = Some(hook);
+    }
+
+    /// Run the frame hook now (adapters call this after commands that
+    /// bypass [`Session::handle`]).
+    pub fn notify_frame(&mut self) {
+        if let Some(hook) = &mut self.frame_hook {
+            hook(self.machine.as_ref(), self.running);
         }
     }
 
@@ -219,6 +239,7 @@ impl Session {
                 self.events.push(ev);
             }
         }
+        self.notify_frame();
     }
 
     /// Step out: instruction by instruction until the frame ends or a
@@ -331,10 +352,14 @@ impl Session {
     }
 
     pub fn handle(&mut self, req: Request) -> Value {
-        match self.execute(req.cmd) {
+        let response = match self.execute(req.cmd) {
             Ok(result) => protocol::ok(req.id, result),
             Err(msg) => protocol::err(Some(req.id), msg),
+        };
+        if !self.running {
+            self.notify_frame();
         }
+        response
     }
 
     /// Execute a command directly (adapters): the `result` of a response,

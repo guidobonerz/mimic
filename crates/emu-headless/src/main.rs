@@ -11,6 +11,7 @@ use emu_core::media::{MediaKind, SlotId};
 use emu_core::registry::MachineConfig;
 use emu_core::{DebugHooks, Machine, StopReason};
 use emu_debug::{DebugServer, ServerConfig, Session};
+use emu_preview::server::{FrameTap, PreviewConfig, PreviewServer};
 
 const USAGE: &str = "\
 usage: emu-headless [options]
@@ -34,6 +35,9 @@ usage: emu-headless [options]
   --save-state FILE     write a savestate after running
   --debug [ADDR]        serve the debug protocol instead of running frames
                         (default 127.0.0.1:6510; loopback only)
+  --preview [ADDR]      serve the live preview: viewer page, /snapshot.png and
+                        the /preview WebSocket stream (default 127.0.0.1:6580);
+                        implies --debug, and --run unless --debug is given
   --vice [ADDR]         also serve the VICE binary monitor protocol (VS64,
                         C64 Studio …; default 127.0.0.1:6502); implies --debug
   --run                 with --debug: start running instead of paused
@@ -57,6 +61,7 @@ struct Args {
     save_state: Option<String>,
     debug: Option<SocketAddr>,
     vice: Option<SocketAddr>,
+    preview: Option<SocketAddr>,
     run: bool,
     realtime: bool,
     list: bool,
@@ -65,6 +70,7 @@ struct Args {
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
 const DEFAULT_VICE_ADDR: &str = "127.0.0.1:6502";
+const DEFAULT_PREVIEW_ADDR: &str = "127.0.0.1:6580";
 
 fn key_value(s: &str, flag: &str) -> Result<(String, String), String> {
     s.split_once('=')
@@ -126,11 +132,11 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             }
             "--load-state" => args.load_state = Some(value("--load-state")?),
             "--save-state" => args.save_state = Some(value("--save-state")?),
-            flag @ ("--debug" | "--vice") => {
-                let default = if flag == "--debug" {
-                    DEFAULT_DEBUG_ADDR
-                } else {
-                    DEFAULT_VICE_ADDR
+            flag @ ("--debug" | "--vice" | "--preview") => {
+                let default = match flag {
+                    "--debug" => DEFAULT_DEBUG_ADDR,
+                    "--vice" => DEFAULT_VICE_ADDR,
+                    _ => DEFAULT_PREVIEW_ADDR,
                 };
                 let addr = match it.peek() {
                     Some(a) if !a.starts_with("--") => it.next().unwrap_or_default(),
@@ -139,10 +145,10 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 let addr: SocketAddr = addr
                     .parse()
                     .map_err(|_| format!("bad {flag} address '{addr}'"))?;
-                if flag == "--debug" {
-                    args.debug = Some(addr);
-                } else {
-                    args.vice = Some(addr);
+                match flag {
+                    "--debug" => args.debug = Some(addr),
+                    "--vice" => args.vice = Some(addr),
+                    _ => args.preview = Some(addr),
                 }
             }
             "--run" => args.run = true,
@@ -152,7 +158,11 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             other => return Err(format!("unknown option '{other}'")),
         }
     }
-    if args.vice.is_some() && args.debug.is_none() {
+    if args.preview.is_some() && args.debug.is_none() && args.vice.is_none() {
+        // Just watching: run instead of showing a paused machine.
+        args.run = true;
+    }
+    if (args.vice.is_some() || args.preview.is_some()) && args.debug.is_none() {
         args.debug = DEFAULT_DEBUG_ADDR.parse().ok();
     }
     Ok(args)
@@ -256,7 +266,19 @@ fn run(args: Args) -> Result<ExitCode, String> {
     }
 
     if let Some(bind) = args.debug {
-        let session = Session::new(machine, args.machine.clone());
+        let mut session = Session::new(machine, args.machine.clone());
+        let preview = match args.preview {
+            Some(bind) => {
+                let tap = FrameTap::new();
+                tap.publish(session.machine(), args.run);
+                let hook_tap = tap.clone();
+                session.set_frame_hook(Box::new(move |m, running| hook_tap.publish(m, running)));
+                let server = PreviewServer::start(PreviewConfig { bind }, &args.machine, tap)
+                    .map_err(|e| format!("preview server: {e}"))?;
+                Some(server)
+            }
+            None => None,
+        };
         let server = DebugServer::start(
             session,
             ServerConfig {
@@ -276,7 +298,13 @@ fn run(args: Args) -> Result<ExitCode, String> {
         if let Some(vice) = server.vice_addr() {
             eprintln!("VICE binary monitor listening on {vice}");
         }
+        if let Some(p) = &preview {
+            eprintln!("live preview on http://{}/", p.addr());
+        }
         server.wait();
+        if let Some(p) = preview {
+            p.shutdown();
+        }
         return Ok(ExitCode::SUCCESS);
     }
 

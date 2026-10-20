@@ -236,6 +236,9 @@ pub fn handle(st: &mut ViceState, s: &mut Session, req: &Request) -> Vec<u8> {
     let mut out = extra;
     out.extend(response(kind, reply.error, req.id, &reply.body));
     out.extend(reply.after);
+    if !s.is_running() {
+        s.notify_frame();
+    }
     out
 }
 

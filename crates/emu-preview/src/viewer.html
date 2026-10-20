@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>polytrace preview</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f4f4f2; --fg: #1d1d1b; --muted: #6b6b66; --panel: #e6e6e2; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecebe6; --muted: #9b9a94; --panel: #242422; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 10px 16px; background: var(--panel); }
+  header strong { margin-right: auto; }
+  label { color: var(--muted); }
+  select { font: inherit; }
+  main { display: flex; justify-content: center; padding: 16px; }
+  canvas { max-width: 100%; image-rendering: pixelated; background: #000; }
+  #status { font-variant-numeric: tabular-nums; color: var(--muted); padding: 0 16px 16px; text-align: center; }
+  .paused { color: #c2410c; font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <strong>polytrace preview</strong>
+  <label>Filter <select id="filter"><option value="raw">raw</option><option value="crt">CRT</option></select></label>
+  <label>Scale <select id="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+  <label>FPS <select id="fps"><option>10</option><option selected>25</option><option>50</option></select></label>
+</header>
+<main><canvas id="screen" width="384" height="272"></canvas></main>
+<div id="status">connecting…</div>
+<script>
+"use strict";
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d");
+const status = document.getElementById("status");
+const controls = ["filter", "scale", "fps"].map((id) => document.getElementById(id));
+let socket = null;
+let chain = Promise.resolve();
+
+function connect() {
+  if (socket) socket.close();
+  const q = controls.map((c) => `${c.id}=${c.value}`).join("&");
+  socket = new WebSocket(`ws://${location.host}/preview?format=png&${q}`);
+  socket.binaryType = "arraybuffer";
+  socket.onmessage = (ev) => { chain = chain.then(() => draw(ev.data)); };
+  socket.onclose = () => { status.textContent = "disconnected – retrying"; setTimeout(connect, 1000); };
+}
+
+async function draw(buffer) {
+  const v = new DataView(buffer);
+  if (String.fromCharCode(...new Uint8Array(buffer, 0, 4)) !== "PTPV") return;
+  const key = v.getUint8(5) === 0, paused = v.getUint8(7) & 1;
+  const frame = Number(v.getBigUint64(8, true)), line = v.getUint16(16, true), cycle = v.getUint16(18, true);
+  const [w, h, x, y] = [20, 22, 24, 26].map((o) => v.getUint16(o, true));
+  if (key && (canvas.width !== w || canvas.height !== h)) { canvas.width = w; canvas.height = h; }
+  if (buffer.byteLength > 32) {
+    const bitmap = await createImageBitmap(new Blob([buffer.slice(32)], { type: "image/png" }));
+    ctx.drawImage(bitmap, x, y);
+  }
+  const beam = line === 0xffff ? "" : ` · line ${line} cycle ${cycle}`;
+  status.innerHTML = `frame ${frame}${beam} ` + (paused ? '<span class="paused">· paused (partial frame)</span>' : "");
+}
+
+controls.forEach((c) => c.addEventListener("change", connect));
+connect();
+</script>
+</body>
+</html>

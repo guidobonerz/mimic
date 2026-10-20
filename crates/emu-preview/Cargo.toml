@@ -12,3 +12,10 @@ workspace = true
 emu-core.workspace = true
 video-crt.workspace = true
 png.workspace = true
+qoi.workspace = true
+
+# The preview server; the web frontend uses only the encoders.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true

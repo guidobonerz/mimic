@@ -25,6 +25,7 @@ use emu_core::registry::MachineConfig;
 use emu_core::Machine;
 use emu_debug::{DebugServer, ServerConfig};
 use emu_input::{Axis, Button, HostEvent, Mapper, Profile as InputProfile};
+use emu_preview::server::{FrameTap, PreviewConfig, PreviewServer};
 use video_crt::Profile;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -49,6 +50,8 @@ usage: emu-desktop [options]
                         (default: the machine's own monitor)
   --scale N             initial window size in rows per line (default 2)
   --debug [ADDR]        serve the debug protocol (default 127.0.0.1:6510)
+  --preview [ADDR]      serve the live preview in the browser
+                        (default 127.0.0.1:6580)
   --vice [ADDR]         serve the VICE binary monitor protocol for VS64 & co.
                         (default 127.0.0.1:6502); implies --debug
   --help
@@ -70,10 +73,12 @@ struct Args {
     scale: u32,
     debug: Option<SocketAddr>,
     vice: Option<SocketAddr>,
+    preview: Option<SocketAddr>,
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
 const DEFAULT_VICE_ADDR: &str = "127.0.0.1:6502";
+const DEFAULT_PREVIEW_ADDR: &str = "127.0.0.1:6580";
 
 fn parse_args() -> Result<Option<Args>, String> {
     let mut a = Args {
@@ -86,6 +91,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         scale: 2,
         debug: None,
         vice: None,
+        preview: None,
     };
     let mut it = std::env::args().skip(1).peekable();
     while let Some(flag) = it.next() {
@@ -111,11 +117,11 @@ fn parse_args() -> Result<Option<Args>, String> {
                 let v = value("--scale")?;
                 a.scale = v.parse().map_err(|_| format!("bad scale '{v}'"))?;
             }
-            flag @ ("--debug" | "--vice") => {
-                let default = if flag == "--debug" {
-                    DEFAULT_DEBUG_ADDR
-                } else {
-                    DEFAULT_VICE_ADDR
+            flag @ ("--debug" | "--vice" | "--preview") => {
+                let default = match flag {
+                    "--debug" => DEFAULT_DEBUG_ADDR,
+                    "--vice" => DEFAULT_VICE_ADDR,
+                    _ => DEFAULT_PREVIEW_ADDR,
                 };
                 let addr = match it.peek() {
                     Some(v) if !v.starts_with("--") => it.next().unwrap_or_default(),
@@ -124,10 +130,10 @@ fn parse_args() -> Result<Option<Args>, String> {
                 let addr: SocketAddr = addr
                     .parse()
                     .map_err(|_| format!("bad {flag} address '{addr}'"))?;
-                if flag == "--debug" {
-                    a.debug = Some(addr);
-                } else {
-                    a.vice = Some(addr);
+                match flag {
+                    "--debug" => a.debug = Some(addr),
+                    "--vice" => a.vice = Some(addr),
+                    _ => a.preview = Some(addr),
                 }
             }
             "--help" | "-h" => return Ok(None),
@@ -465,7 +471,19 @@ fn run() -> Result<(), String> {
         }
         None => None,
     };
-    let emu = emu::spawn(machine, mapper, rx, shared.clone(), debug);
+    let mut preview = None;
+    let tap = match args.preview {
+        Some(bind) => {
+            let tap = FrameTap::new();
+            let p = PreviewServer::start(PreviewConfig { bind }, &args.machine, tap.clone())
+                .map_err(|e| format!("preview server: {e}"))?;
+            eprintln!("live preview on http://{}/", p.addr());
+            preview = Some(p);
+            Some(tap)
+        }
+        None => None,
+    };
+    let emu = emu::spawn(machine, mapper, rx, shared.clone(), debug, tap);
 
     // Wait briefly for the first frame so the window opens at the right size.
     for _ in 0..100 {
@@ -495,6 +513,9 @@ fn run() -> Result<(), String> {
     let _ = emu.join();
     if let Some(s) = server {
         s.shutdown();
+    }
+    if let Some(p) = preview {
+        p.shutdown();
     }
     result?;
     app.error.map_or(Ok(()), Err)

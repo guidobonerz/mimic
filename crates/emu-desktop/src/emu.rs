@@ -19,6 +19,7 @@ use emu_core::frame::SignalInfo;
 use emu_core::{Machine, StopReason};
 use emu_debug::{Endpoint, Service, Session};
 use emu_input::{HostEvent, Mapper};
+use emu_preview::server::FrameTap;
 
 /// A frame converted to RGBA for upload.
 pub struct Frame {
@@ -175,6 +176,7 @@ pub fn spawn(
     input: Receiver<HostEvent>,
     shared: Arc<Shared>,
     debug: Option<(Endpoint, String)>,
+    preview: Option<FrameTap>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let (mut endpoint, machine_id) = match debug {
@@ -183,6 +185,9 @@ pub fn spawn(
         };
         let mut session = Session::new(machine, machine_id);
         session.set_running(true);
+        if let Some(tap) = preview {
+            session.set_frame_hook(Box::new(move |m, running| tap.publish(m, running)));
+        }
         let mut samples = Vec::new();
         let frame_time = session.frame_duration();
         let mut deadline = Instant::now();
@@ -308,7 +313,7 @@ mod tests {
         let mapper = Mapper::new(emu_input::Profile::default_for("c64"));
         let (tx, rx) = std::sync::mpsc::channel();
         let shared = Arc::new(Shared::new());
-        let handle = spawn(machine, mapper, rx, shared.clone(), None);
+        let handle = spawn(machine, mapper, rx, shared.clone(), None, None);
         tx.send(HostEvent::Key {
             code: "KeyA".into(),
             down: true,
@@ -366,6 +371,7 @@ mod tests {
             rx,
             shared.clone(),
             Some((endpoint, "c64".into())),
+            None,
         );
 
         let stream = std::net::TcpStream::connect(server.addr()).unwrap();
