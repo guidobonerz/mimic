@@ -184,7 +184,17 @@ const PROGRAM: [u8; 15] = [
 #[test]
 #[ignore = "needs C128 ROMs and the 1541 DOS ROM in EMU_ROM_DIR"]
 fn autostart_loads_and_runs_from_drive_8() {
-    let mut m = boot(&[("autostart", "on")]);
+    autostart_with("1541");
+}
+
+#[test]
+#[ignore = "needs C128 ROMs in EMU_ROM_DIR"]
+fn autostart_from_the_virtual_drive() {
+    autostart_with("virtual");
+}
+
+fn autostart_with(drive: &str) {
+    let mut m = boot(&[("autostart", "on"), ("drive8", drive)]);
     let slot = m
         .media_slots()
         .into_iter()

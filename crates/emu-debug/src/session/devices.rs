@@ -142,12 +142,31 @@ impl Session {
         Ok(json!({}))
     }
 
+    /// The drive mode is chosen when the machine is built (option
+    /// `drive8` = "1541" or "virtual"); this confirms the current one. A
+    /// true drive is a debug device named like its slot ("drive 8" →
+    /// "drive8"); a virtual drive is not.
     pub(super) fn set_drive_mode(&mut self, slot: u8, mode: &str) -> Result<Value, String> {
-        self.slot_name(slot)?;
+        let name = self.slot_name(slot)?;
+        let is_drive = self
+            .machine
+            .media_slots()
+            .iter()
+            .any(|s| s.id.0 == slot && s.kind == emu_core::media::MediaKind::Disk);
+        if !is_drive {
+            return Err(format!("{name} is not a drive"));
+        }
+        let device: String = name.chars().filter(|c| !c.is_whitespace()).collect();
+        let current = if self.machine.devices().iter().any(|d| d.0 == device) {
+            "true"
+        } else {
+            "virtual"
+        };
         match mode {
-            // The only mode so far; the virtual drive comes with Phase 4.
-            "true" => Ok(json!({"mode": "true"})),
-            "virtual" => Err("virtual drive mode is not available yet".into()),
+            "true" | "virtual" if mode == current => Ok(json!({"mode": current})),
+            "true" | "virtual" => Err(format!(
+                "{name} is in {current} mode; the mode is set when the machine starts (option {device}=1541 or virtual)"
+            )),
             other => Err(format!("unknown drive mode '{other}'")),
         }
     }

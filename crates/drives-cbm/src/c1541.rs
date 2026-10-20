@@ -1,4 +1,4 @@
-//! Commodore 1541 disk drive, true drive emulation, read-only.
+//! Commodore 1541 disk drive, true drive emulation.
 //!
 //! Its own NMOS 6502 at 1 MHz, 2 KB RAM, 16 KB DOS ROM and two VIAs.
 //! Memory map: `$0000–$07FF` RAM (mirrored up to `$17FF`), `$1800` VIA1
@@ -16,7 +16,11 @@
 //!
 //! Sources: 1541 service manual schematic (251854); "Inside the 1541".
 //! The disk spins at the bit rate of the track's own speed zone (26–32 µs
-//! per byte); writing is not supported yet (the disk reads as protected).
+//! per byte). In write mode (CB2 low) the head writes the byte on port A
+//! each byte time; written tracks are decoded back into the D64 image when
+//! the motor stops, on [`MediaSlot::flush`] and on eject, and written to the
+//! media backend (a copy-on-write overlay for user images: the original
+//! file changes only when the overlay is committed).
 
 use chips_cbm::via::Via;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
@@ -25,6 +29,7 @@ use emu_core::{
     Bus, Cpu, CycleResult, DebugHooks, DebugTarget, HookedBus, Instr, MemSpaceId, RegisterSet,
     Savestate, Size, StateError, StateReader, StateWriter,
 };
+use media::gcr::TRACK_BYTES;
 use media::{d64::speed_zone, gcr, D64};
 
 use crate::iec::IecLines;
@@ -37,8 +42,41 @@ const CYCLES_PER_BYTE: [u16; 4] = [32, 30, 28, 26];
 
 struct Disk {
     media: Media,
+    image: D64,
     /// GCR stream per half track (only full tracks carry data).
     tracks: Vec<Option<Vec<u8>>>,
+    /// Half tracks written since the last flush.
+    dirty: Vec<bool>,
+    protected: bool,
+}
+
+impl Disk {
+    /// Decode the written tracks back into the image and write the image
+    /// to the media backend.
+    fn flush(&mut self) -> Result<(), MediaError> {
+        if !self.dirty.iter().any(|&d| d) {
+            return Ok(());
+        }
+        for (half, dirty) in self.dirty.iter_mut().enumerate() {
+            if !std::mem::take(dirty) {
+                continue;
+            }
+            let Some(gcr) = &self.tracks[half] else {
+                continue;
+            };
+            let track = (half / 2 + 1) as u8;
+            for s in gcr::decode_track(gcr) {
+                if s.track != track {
+                    continue;
+                }
+                if let Some(sector) = self.image.sector_mut(track, s.sector) {
+                    sector.copy_from_slice(&s.data);
+                }
+            }
+        }
+        let bytes = self.image.to_bytes();
+        self.media.backend.write(0, &bytes)
+    }
 }
 
 /// Mechanism state: head, rotation, byte latch.
@@ -63,6 +101,8 @@ pub struct Drive1541 {
     disk: Option<Disk>,
     /// Device number (8–11), set by the PB5/6 jumpers.
     device: u8,
+    /// The motor ran in the previous cycle (a stop flushes written tracks).
+    motor_was_on: bool,
     space: MemSpaceId,
     open_bus: u8,
 }
@@ -146,6 +186,7 @@ impl Drive1541 {
             },
             disk: None,
             device: device.clamp(8, 11),
+            motor_was_on: false,
             space,
             open_bus: 0,
         }
@@ -206,14 +247,23 @@ impl Drive1541 {
     }
 
     fn via2_pins(&self) -> (u8, u8) {
-        let protected = self.disk.is_some();
+        // No disk lets the light through the write-protect notch sensor.
+        let protected = self.disk.as_ref().is_some_and(|d| d.protected);
         let pb = 0x6f | if protected { 0 } else { 0x10 } | if self.mech.sync { 0 } else { 0x80 };
         (self.mech.last_byte, pb)
     }
 
     /// Advance the disk under the head by one drive cycle.
     fn rotate(&mut self) {
-        if !self.motor_on() {
+        let motor = self.motor_on();
+        if self.motor_was_on && !motor {
+            // Errors writing back reach the user on the next flush.
+            if let Some(d) = &mut self.disk {
+                let _ = d.flush();
+            }
+        }
+        self.motor_was_on = motor;
+        if !motor {
             return;
         }
         let track_no = self.mech.half_track / 2 + 1;
@@ -223,6 +273,11 @@ impl Drive1541 {
             return;
         }
         self.mech.byte_cycles = 0;
+        // CB2 low: write mode.
+        if !self.via2.cb2_out() {
+            self.write_byte(zone);
+            return;
+        }
         let data = self
             .disk
             .as_ref()
@@ -249,6 +304,28 @@ impl Drive1541 {
         let pa = self.mech.last_byte;
         self.via2.set_ca1(false, pa);
         self.via2.set_ca1(true, pa);
+    }
+
+    /// Write mode: the byte on port A goes onto the track under the head.
+    fn write_byte(&mut self, zone: usize) {
+        self.mech.sync = false;
+        let half = usize::from(self.mech.half_track & !1);
+        let byte = self.via2.port_a_out();
+        if let Some(d) = self.disk.as_mut().filter(|d| !d.protected) {
+            let track = d.tracks[half].get_or_insert_with(|| vec![0x55; TRACK_BYTES[zone]]);
+            let pos = self.mech.position % track.len();
+            track[pos] = byte;
+            self.mech.position = pos + 1;
+            d.dirty[half] = true;
+        } else {
+            self.mech.position += 1;
+        }
+        // Byte ready asks for the next byte as when reading.
+        if self.via2.ca2_out() {
+            self.cpu.set_overflow();
+        }
+        self.via2.set_ca1(false, byte);
+        self.via2.set_ca1(true, byte);
     }
 
     fn step_head(&mut self) {
@@ -390,25 +467,41 @@ impl MediaSlot for Drive1541 {
         for t in 1..=image.tracks.min(HALF_TRACKS / 2) {
             tracks[usize::from(t - 1) * 2] = Some(gcr::encode_track(&image, t));
         }
-        self.disk = Some(Disk { media, tracks });
+        self.disk = Some(Disk {
+            media,
+            image,
+            tracks,
+            dirty: vec![false; usize::from(HALF_TRACKS)],
+            protected: false,
+        });
         Ok(())
     }
 
+    /// Writes back what was written, then hands the media out.
     fn eject(&mut self) -> Option<Media> {
         self.mech.sync = false;
-        self.disk.take().map(|d| d.media)
+        let mut d = self.disk.take()?;
+        let _ = d.flush();
+        Some(d.media)
     }
 
-    /// Writing is not supported yet: the disk always reads as protected.
-    fn write_protect(&mut self, _on: bool) {}
+    /// The write-protect notch: covered (`on`) the drive refuses to write.
+    fn write_protect(&mut self, on: bool) {
+        if let Some(d) = &mut self.disk {
+            d.protected = on;
+        }
+    }
 
     fn flush(&mut self) -> Result<(), MediaError> {
-        Ok(())
+        match &mut self.disk {
+            Some(d) => d.flush(),
+            None => Ok(()),
+        }
     }
 }
 
 const TAG: [u8; 4] = *b"1541";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Drive1541 {
     /// The disk itself is media, not state: a savestate restores the drive
@@ -423,6 +516,7 @@ impl Savestate for Drive1541 {
             w.u8(self.mech.last_byte);
             w.bool(self.mech.sync);
             w.u8(self.open_bus);
+            w.bool(self.motor_was_on);
         });
         self.cpu.save(w);
         self.via1.save(w);
@@ -430,7 +524,7 @@ impl Savestate for Drive1541 {
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut ram = Box::new([0u8; 0x800]);
         c.raw_into(&mut ram[..])?;
         let mech = Mechanism {
@@ -445,6 +539,8 @@ impl Savestate for Drive1541 {
             return Err(StateError::Invalid("1541 mechanism"));
         }
         let open_bus = c.u8()?;
+        // Version 1 states predate writing.
+        let motor_was_on = version >= 2 && c.bool()?;
         let mut cpu = self.cpu.clone();
         let mut via1 = self.via1.clone();
         let mut via2 = self.via2.clone();
@@ -454,6 +550,7 @@ impl Savestate for Drive1541 {
         self.ram = ram;
         self.mech = mech;
         self.open_bus = open_bus;
+        self.motor_was_on = motor_was_on;
         self.cpu = cpu;
         self.via1 = via1;
         self.via2 = via2;

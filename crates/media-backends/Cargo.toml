@@ -10,3 +10,4 @@ workspace = true
 
 [dependencies]
 emu-core.workspace = true
+media.workspace = true

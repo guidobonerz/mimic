@@ -187,8 +187,12 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
     }
 }
 
-/// Open an image file as media behind a copy-on-write overlay.
+/// Open an image file as media behind a copy-on-write overlay; a folder
+/// opens as a disk of its PRG files (see [`crate::host_dir`]).
 pub fn open(path: &Path) -> Result<Media, MediaError> {
+    if path.is_dir() {
+        return crate::host_dir::open(path);
+    }
     let kind = kind_for(path)
         .ok_or_else(|| MediaError::Format(format!("unknown image type: {}", path.display())))?;
     let file = FileBackend::open(path)?;

@@ -113,6 +113,82 @@ pub fn encode_track(disk: &D64, track: u8) -> Vec<u8> {
     out
 }
 
+/// One sector read back from a GCR track.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecodedSector {
+    pub track: u8,
+    pub sector: u8,
+    pub data: [u8; 256],
+}
+
+/// The sectors on one revolution of a GCR track (byte-aligned, as the 1541
+/// writes it): each SYNC followed by a header block (`$08`) whose next SYNC
+/// starts a data block (`$07`) with a valid checksum. The track is circular;
+/// a sector that wraps around its end is found too. Sectors with a damaged
+/// header or data block are left out.
+pub fn decode_track(track: &[u8]) -> Vec<DecodedSector> {
+    let n = track.len();
+    if n < 400 {
+        return Vec::new();
+    }
+    let at = |i: usize| track[i % n];
+    let group = |start: usize| -> [u8; 5] { std::array::from_fn(|k| at(start + k)) };
+    // The first byte after a SYNC (two or more $FF) at or after `from`,
+    // searching at most `within` bytes.
+    let after_sync = |from: usize, within: usize| -> Option<usize> {
+        let mut i = from;
+        while i < from + within {
+            if at(i) == 0xff && at(i + 1) == 0xff {
+                let mut j = i;
+                while at(j) == 0xff && j < i + n {
+                    j += 1;
+                }
+                return Some(j);
+            }
+            i += 1;
+        }
+        None
+    };
+    let mut out: Vec<DecodedSector> = Vec::new();
+    let mut i = 0;
+    while let Some(h) = after_sync(i, n.saturating_sub(i)) {
+        i = h + 1;
+        let Some(header) = decode5(&group(h)) else {
+            continue;
+        };
+        if header[0] != 0x08 {
+            continue;
+        }
+        let (sector, track_no) = (header[2], header[3]);
+        // The data block's SYNC follows within the header gap.
+        let Some(d) = after_sync(h + 10, 40) else {
+            continue;
+        };
+        let mut block = Vec::with_capacity(260);
+        for g in 0..65 {
+            match decode5(&group(d + g * 5)) {
+                Some(q) => block.extend_from_slice(&q),
+                None => break,
+            }
+        }
+        if block.len() < 258 || block[0] != 0x07 {
+            continue;
+        }
+        let data: [u8; 256] = block[1..257].try_into().unwrap_or([0; 256]);
+        if data.iter().fold(0u8, |a, &b| a ^ b) != block[257] {
+            continue;
+        }
+        if !out.iter().any(|s| s.sector == sector) {
+            out.push(DecodedSector {
+                track: track_no,
+                sector,
+                data,
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +229,31 @@ mod tests {
             }
             assert_eq!(found, usize::from(sectors_per_track(track)));
         }
+    }
+
+    #[test]
+    fn whole_tracks_decode_back() {
+        let mut d = D64::blank(b"X", *b"AB");
+        for s in 0..21 {
+            d.sector_mut(1, s).unwrap()[0] = s * 3;
+            d.sector_mut(1, s).unwrap()[255] = 0xa5;
+        }
+        let mut t = encode_track(&d, 1);
+        let sectors = decode_track(&t);
+        assert_eq!(sectors.len(), 21);
+        for s in &sectors {
+            assert_eq!(s.track, 1);
+            assert_eq!(s.data[0], s.sector * 3);
+            assert_eq!(s.data[255], 0xa5);
+        }
+        // Rotated so a sector wraps around the end: still all found.
+        t.rotate_left(100);
+        assert_eq!(decode_track(&t).len(), 21);
+        // A damaged data block drops that sector only (sector 0 now starts
+        // 100 bytes before the end).
+        let in_data = t.len() - 100 + 5 + 10 + 9 + 5 + 20;
+        t[in_data] ^= 0xff;
+        assert_eq!(decode_track(&t).len(), 20);
     }
 
     #[test]

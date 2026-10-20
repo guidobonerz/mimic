@@ -90,11 +90,77 @@ fn sync_flag_and_write_protect_on_via2() {
     for _ in 0..20_000 {
         d.tick(IecLines::default(), None);
         let pb = d.peek(MemSpaceId(3), 0x1c00, Size::Byte).unwrap();
-        assert_eq!(pb & 0x10, 0, "disk reads as write-protected");
+        assert_eq!(pb & 0x10, 0x10, "writable");
         saw_sync |= pb & 0x80 == 0;
     }
     assert!(saw_sync);
     assert!(d.motor_on());
+    d.write_protect(true);
+    let pb = d.peek(MemSpaceId(3), 0x1c00, Size::Byte).unwrap();
+    assert_eq!(pb & 0x10, 0, "notch covered");
+}
+
+/// A disk whose backend keeps what the drive writes back.
+struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl MediaBackend for Shared {
+    fn len(&self) -> u64 {
+        self.0.lock().unwrap().len() as u64
+    }
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), MediaError> {
+        let d = self.0.lock().unwrap();
+        buf.copy_from_slice(&d[offset as usize..offset as usize + buf.len()]);
+        Ok(())
+    }
+    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), MediaError> {
+        let mut d = self.0.lock().unwrap();
+        d[offset as usize..offset as usize + data.len()].copy_from_slice(data);
+        Ok(())
+    }
+    fn commit(&mut self) -> Result<(), MediaError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn writing_a_track_reaches_the_image() {
+    // Write mode, then a whole track 18 as the DOS formats it, from the GCR
+    // encoder (sector 1 with a new pattern), byte by byte on byte ready.
+    let mut image = D64::blank(b"TEST", *b"AB");
+    image.sector_mut(18, 1).unwrap()[..4].copy_from_slice(b"NEW!");
+    let track = gcr::encode_track(&image, 18);
+    let backing = std::sync::Arc::new(std::sync::Mutex::new(
+        D64::blank(b"TEST", *b"AB").to_bytes(),
+    ));
+    let mut d = drive_with(&[0x4c, 0x00, 0xc0]);
+    d.insert(Media {
+        name: "w.d64".into(),
+        kind: MediaKind::Disk,
+        backend: Box::new(Shared(backing.clone())),
+    })
+    .unwrap();
+    // Motor on, head stays on track 18; DDRA out, CB2 low (write).
+    d.via2.write(0x2, 0x6f);
+    d.via2.write(0x0, 0x04);
+    d.via2.write(0x3, 0xff);
+    d.via2.write(0xc, 0xc0);
+    let mut written = 0;
+    let mut cycles = 0;
+    while written < track.len() && cycles < 400_000 {
+        d.via2.write(0x1, track[written]);
+        let before = d.mech.position;
+        d.tick(IecLines::default(), None);
+        if d.mech.position != before {
+            written += 1;
+        }
+        cycles += 1;
+    }
+    assert_eq!(written, track.len());
+    // Motor off: the track is decoded back into the image and written.
+    d.via2.write(0x0, 0x00);
+    d.tick(IecLines::default(), None);
+    let disk = D64::parse(&backing.lock().unwrap()).unwrap();
+    assert_eq!(&disk.sector(18, 1).unwrap()[..4], b"NEW!");
 }
 
 #[test]

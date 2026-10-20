@@ -389,18 +389,19 @@ impl TedMachine {
                 Some(other) => return Err(ConfigError::Invalid(format!("port1 option '{other}'"))),
             };
         let stub = config.options.get("roms").is_some_and(|r| r == "stub");
-        let drive = match config.options.get("drive8").map(String::as_str) {
-            Some("none") => None,
-            None | Some("1541") if !stub && config.roms.contains_key("dos1541") => {
-                let rom = config.roms["dos1541"].clone().into_boxed_slice();
-                let rom = rom
-                    .try_into()
-                    .map_err(|_| ConfigError::Invalid("dos1541 ROM must be 16384 bytes".into()))?;
-                Some(Drive8::new(rom, double_hz))
-            }
-            None | Some("1541") => None,
-            Some(other) => return Err(ConfigError::Invalid(format!("drive8 option '{other}'"))),
+        let dos1541 = if stub {
+            None
+        } else {
+            config.roms.get("dos1541").map(Vec::as_slice)
         };
+        let drive = Drive8::from_option(
+            config.options.get("drive8").map(String::as_str),
+            dos1541,
+            8,
+            DRIVE8,
+            DRIVE_SPACE,
+            double_hz,
+        )?;
         let autostart = match config.options.get("autostart").map(String::as_str) {
             None | Some("off") => Autostart::Off,
             Some("on") => Autostart::Armed,
@@ -586,7 +587,7 @@ impl TedMachine {
         }
         match self.autostart {
             Autostart::Armed => {
-                let has_disk = self.drive.as_ref().is_some_and(|d| d.drive.has_disk());
+                let has_disk = self.drive.as_ref().is_some_and(|d| d.has_disk());
                 if has_disk {
                     self.type_text("LOAD\"*\",8\r");
                     self.autostart = Autostart::Loading;
@@ -682,7 +683,7 @@ impl Machine for TedMachine {
             self.io.ted = Ted::new(self.io.ted.model());
         }
         if let Some(d) = &mut self.drive {
-            d.drive.reset(hard);
+            d.reset(hard);
         }
         self.input.clear();
         if self.autostart == Autostart::Loading {
@@ -726,7 +727,7 @@ impl Machine for TedMachine {
             addr_bits: 16,
             big_endian: false,
         }];
-        if self.drive.is_some() {
+        if self.drive.as_ref().is_some_and(|d| d.is_true()) {
             spaces.push(MemSpace {
                 id: DRIVE_SPACE,
                 name: "drive8",
@@ -773,7 +774,7 @@ impl Machine for TedMachine {
 
     fn devices(&self) -> Vec<DeviceId> {
         let mut d = vec![CPU];
-        if self.drive.is_some() {
+        if self.drive.as_ref().is_some_and(|d| d.is_true()) {
             d.push(DRIVE8);
         }
         d
@@ -784,7 +785,7 @@ impl Machine for TedMachine {
             return Some(self as &mut dyn DebugTarget);
         }
         match &mut self.drive {
-            Some(d) if dev == DRIVE8 => Some(&mut d.drive as &mut dyn DebugTarget),
+            Some(d) if dev == DRIVE8 => d.debug_target(),
             _ => None,
         }
     }
@@ -840,7 +841,7 @@ impl Machine for TedMachine {
                 id: SLOT_DRIVE8,
                 name: "drive 8",
                 kind: MediaKind::Disk,
-                inserted: d.drive.has_disk(),
+                inserted: d.has_disk(),
             });
         }
         slots.push(MediaSlotInfo {
@@ -854,10 +855,7 @@ impl Machine for TedMachine {
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
         match slot {
-            SLOT_DRIVE8 => self
-                .drive
-                .as_mut()
-                .map(|d| &mut d.drive as &mut dyn MediaSlot),
+            SLOT_DRIVE8 => self.drive.as_mut().map(|d| d.media_slot()),
             SLOT_PROGRAM => Some(&mut self.program),
             _ => None,
         }

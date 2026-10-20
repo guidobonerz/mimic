@@ -502,7 +502,20 @@ fn ports_devices_and_media() {
     c.ok(json!({"cmd": "eject_media", "slot": program}));
     assert!(c.event("media_changed")["media"].is_null());
     let e = c.call(json!({"cmd": "set_drive_mode", "slot": program, "mode": "virtual"}));
-    assert_eq!(e["ok"], false, "virtual drives come with Phase 4");
+    assert_eq!(e["ok"], false, "not a drive");
+    // Without a DOS ROM drive 8 is the virtual drive; the mode is fixed at
+    // start.
+    let drive8 = slots
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "drive 8")
+        .expect("virtual drive 8")["id"]
+        .clone();
+    let r = c.ok(json!({"cmd": "set_drive_mode", "slot": drive8, "mode": "virtual"}));
+    assert_eq!(r["mode"], "virtual");
+    let e = c.call(json!({"cmd": "set_drive_mode", "slot": drive8, "mode": "true"}));
+    assert_eq!(e["ok"], false);
     let _ = std::fs::remove_dir_all(&dir);
     server.shutdown();
 }

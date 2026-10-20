@@ -24,7 +24,7 @@ RULES = [
     ("devices-input", ["emu-core"]),
     ("video-crt", ["emu-core"]),
     ("emu-input", ["emu-core"]),
-    ("media-backends", ["emu-core"]),
+    ("media-backends", ["emu-core", "media"]),  # host folders as D64 images
     ("drives-*", ["emu-core", "cpu-*", "chips-*", "media"]),
     ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-input", "media"]),
     # Also the catalogue of pluggable port devices for the frontends.

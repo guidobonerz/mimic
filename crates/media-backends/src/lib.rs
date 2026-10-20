@@ -2,5 +2,6 @@
 
 #![forbid(unsafe_code)]
 
+pub mod host_dir;
 pub mod image;
 pub mod roms;

@@ -12,6 +12,10 @@ use media::D64;
 use media_backends::image::MemoryBackend;
 
 fn boot(machine: &str, model: &str, autostart: bool) -> Box<dyn Machine> {
+    boot_with(machine, model, autostart, "1541")
+}
+
+fn boot_with(machine: &str, model: &str, autostart: bool, drive: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, machine).expect("ROMs"),
@@ -20,6 +24,9 @@ fn boot(machine: &str, model: &str, autostart: bool) -> Box<dyn Machine> {
     };
     if autostart {
         config.options.insert("autostart".into(), "on".into());
+    }
+    if config.roms.contains_key("dos1541") || drive == "virtual" {
+        config.options.insert("drive8".into(), drive.into());
     }
     emu_machines::registry().create(machine, &config).unwrap()
 }
@@ -106,7 +113,17 @@ const PROGRAM: [u8; 15] = [
 #[test]
 #[ignore = "needs Plus/4 ROMs and the 1541 DOS ROM in EMU_ROM_DIR"]
 fn plus4_autostart_loads_from_drive_8() {
-    let mut m = boot("plus4", "pal", true);
+    autostart_with("1541");
+}
+
+#[test]
+#[ignore = "needs Plus/4 ROMs in EMU_ROM_DIR"]
+fn plus4_autostart_from_the_virtual_drive() {
+    autostart_with("virtual");
+}
+
+fn autostart_with(drive: &str) {
+    let mut m = boot_with("plus4", "pal", true, drive);
     let slot = m
         .media_slots()
         .into_iter()

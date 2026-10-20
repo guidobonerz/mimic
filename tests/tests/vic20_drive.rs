@@ -39,13 +39,19 @@ fn screen(m: &mut dyn Machine, base: u32) -> Vec<u8> {
 #[ignore = "needs VIC-20 ROMs and the 1541 DOS ROM in EMU_ROM_DIR"]
 fn autostart_loads_and_runs_from_drive_8() {
     // With 8 KB, BASIC starts at $1201: LOAD"*",8 relocates the program.
-    for (ram, base) in [("none", 0x1e00), ("8k", 0x1000)] {
+    for (ram, base, drive) in [
+        ("none", 0x1e00, "1541"),
+        ("8k", 0x1000, "1541"),
+        ("none", 0x1e00, "virtual"),
+        ("8k", 0x1000, "virtual"),
+    ] {
         let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
         let mut config = MachineConfig {
             roms: media_backends::roms::load(&dir, "vic20").expect("ROMs"),
             ..MachineConfig::default()
         };
         assert!(config.roms.contains_key("dos1541"), "1541 DOS ROM missing");
+        config.options.insert("drive8".into(), drive.into());
         config.options.insert("autostart".into(), "on".into());
         config.options.insert("ram".into(), ram.into());
         let mut m = emu_machines::registry().create("vic20", &config).unwrap();
