@@ -22,9 +22,15 @@ pub mod gpu {
     /// WGSL source of the CRT stage (vertex `vs_main`, fragment `fs_main`).
     pub const SHADER: &str = include_str!("shaders/crt.wgsl");
 
-    /// The `Params` uniform of [`SHADER`], laid out for WGSL (std140-like:
-    /// 48 bytes).
-    pub fn params(profile: &Profile, src: (u32, u32), out: (u32, u32)) -> [f32; 12] {
+    /// The `Params` uniform of [`SHADER`], laid out for WGSL (48 bytes).
+    /// `origin` is the top-left corner of the output rectangle (`out`) in
+    /// the render target, for letterboxing.
+    pub fn params(
+        profile: &Profile,
+        src: (u32, u32),
+        out: (u32, u32),
+        origin: (u32, u32),
+    ) -> [f32; 12] {
         [
             src.0 as f32,
             src.1 as f32,
@@ -36,8 +42,8 @@ pub mod gpu {
             profile.scanlines,
             profile.gamma,
             0.0,
-            0.0,
-            0.0,
+            origin.0 as f32,
+            origin.1 as f32,
         ]
     }
 }
@@ -61,7 +67,13 @@ mod tests {
     fn shader_declares_its_entry_points_and_params() {
         assert!(gpu::SHADER.contains("fn vs_main"));
         assert!(gpu::SHADER.contains("fn fs_main"));
-        let p = gpu::params(&Profile::preset("1702").unwrap(), (404, 284), (756, 568));
+        let p = gpu::params(
+            &Profile::preset("1702").unwrap(),
+            (404, 284),
+            (756, 568),
+            (10, 20),
+        );
+        assert_eq!(&p[10..], &[10.0, 20.0]);
         assert_eq!(p[7], 0.35);
         assert_eq!(std::mem::size_of_val(&p), 48);
     }

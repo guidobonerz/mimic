@@ -11,7 +11,9 @@ struct Params {
     tint: vec3<f32>,
     scanlines: f32,
     gamma: f32,
-    _pad: vec3<f32>,
+    _pad: f32,
+    // Top-left corner of the output rectangle in the render target.
+    origin: vec2<f32>,
 };
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -37,7 +39,7 @@ fn fetch(x: i32, y: i32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    let out_px = in.position.xy;
+    let out_px = in.position.xy - params.origin;
     let scale_y = params.out_size.y / params.src_size.y;
     let sy = i32(floor(out_px.y / scale_y));
 

@@ -349,6 +349,8 @@ cargo bench -p cpu-6502                      # before/after when touching hot pa
 cargo build -p emu-web --target wasm32-unknown-unknown
 cargo run -p emu-headless -- --machine c64 --prg demo.prg --frames 300 --snapshot out.png
 cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines debug protocol on 127.0.0.1:6510
+cargo run --release -p emu-desktop -- --machine c64 --disk game.d64 --autostart   # window, sound, keyboard, gamepad
+# Linux build deps for emu-desktop: libasound2-dev libudev-dev
 ```
 
 ## Testing
