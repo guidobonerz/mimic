@@ -56,8 +56,10 @@ use emu_core::{
 
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms};
+use drives_other::Datasette;
 use keyboard::Keyboard;
 use loader::{Autostart, ProgramSlot, BASIC_START, BOOT_FRAMES};
+use media::tap::TapMachine;
 use memory::{Area, Memory, Roms, TedView, ROM_SIZE};
 
 pub const CPU: DeviceId = DeviceId("cpu");
@@ -206,6 +208,10 @@ pub struct Io {
     pub iec: IecLines,
     acia: Acia,
     user_port: u8,
+    /// Datasette READ (CPU port bit 4).
+    pub cassette_read: bool,
+    /// A datasette key is down (`$FD10` bit 2 low).
+    pub cassette_sense: bool,
 }
 
 impl Io {
@@ -236,7 +242,12 @@ fn peek_byte(mem: &Memory, io: &Io, port: &IoPort, plus4: bool, a: u16) -> u8 {
         Area::Rom => mem.rom_read(a),
         Area::Io => match a {
             0xfd00..=0xfd0f if plus4 => io.acia.peek(a as u8),
-            0xfd10..=0xfd1f if plus4 => io.user_port,
+            // The cassette sense line reads on bit 2 (KERNAL `$E31C`),
+            // through the 6529 on the Plus/4.
+            0xfd10..=0xfd1f => {
+                let sense = if io.cassette_sense { 0x04 } else { 0 };
+                (if plus4 { io.user_port } else { 0xff }) & !sense
+            }
             0xfd30..=0xfd3f => io.key_select,
             0xff08 => io.keyboard_read(),
             0xff13 => (io.ted.peek(0x13) & 0xfe) | u8::from(mem.rom_on),
@@ -246,9 +257,12 @@ fn peek_byte(mem: &Memory, io: &Io, port: &IoPort, plus4: bool, a: u16) -> u8 {
     }
 }
 
-/// Input levels on the CPU port: serial CLK and DATA in, cassette read high.
+/// Input levels on the CPU port: serial CLK and DATA in, cassette read.
 fn port_pins(io: &Io) -> u8 {
     let mut pins = 0xff;
+    if !io.cassette_read {
+        pins &= !0x10;
+    }
     if io.iec.clk {
         pins &= !0x40;
     }
@@ -342,6 +356,7 @@ impl Bus for PeekBus<'_> {
 
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(1);
+pub const SLOT_TAPE: SlotId = SlotId(2);
 const PORT_NAMES: [&str; 2] = ["joystick 1", "joystick 2"];
 
 pub struct TedMachine {
@@ -355,6 +370,8 @@ pub struct TedMachine {
     ports: [Option<Box<dyn PortDevice>>; 2],
     drive: Option<Drive8>,
     program: ProgramSlot,
+    /// The datasette (1531) on the cassette port.
+    tape: Datasette,
     autostart: Autostart,
     palette: [Rgb8; 128],
     field_done_pending: bool,
@@ -436,12 +453,15 @@ impl TedMachine {
                 iec: IecLines::default(),
                 acia: Acia::default(),
                 user_port: 0xff,
+                cassette_read: true,
+                cassette_sense: false,
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
             ports: [port1, None],
             drive,
             program: ProgramSlot::default(),
+            tape: Datasette::new(TapMachine::C16, double_hz),
             autostart,
             palette: ted::palette::palette(),
             field_done_pending: false,
@@ -493,6 +513,15 @@ impl TedMachine {
             };
             cpu_result = Some((self.cpu.tick(&mut hooked), self.cpu.take_interrupt()));
         }
+        // Datasette: CPU port bit 1 WRITE, bit 3 MOTOR (output low = on),
+        // READ on bit 4, SENSE at `$FD10`.
+        let port_out = self.port.outputs();
+        self.tape
+            .set_motor(self.port.ddr & 0x08 != 0 && port_out & 0x08 == 0);
+        self.tape.set_write(port_out & 0x02 != 0);
+        self.tape.tick();
+        self.io.cassette_read = self.tape.read();
+        self.io.cassette_sense = self.tape.sense();
         // Serial bus: the drive sees what the machine drives now.
         let host = self.iec_out();
         let mut drive_stop = None;
@@ -861,6 +890,12 @@ impl Machine for TedMachine {
             kind: MediaKind::Program,
             inserted: self.program.inserted(),
         });
+        slots.push(MediaSlotInfo {
+            id: SLOT_TAPE,
+            name: "tape",
+            kind: MediaKind::Tape,
+            inserted: self.tape.has_tape(),
+        });
         slots
     }
 
@@ -868,13 +903,14 @@ impl Machine for TedMachine {
         match slot {
             SLOT_DRIVE8 => self.drive.as_mut().map(|d| d.media_slot()),
             SLOT_PROGRAM => Some(&mut self.program),
+            SLOT_TAPE => Some(&mut self.tape),
             _ => None,
         }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"TEDS", 1, |w| {
+        w.chunk(*b"TEDS", 2, |w| {
             w.bool(self.field_done_pending);
             w.u8(self.autostart.to_u8());
             w.u64(self.boot_frame);
@@ -895,6 +931,7 @@ impl Machine for TedMachine {
         self.io.ted.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
+        self.tape.save(&mut w);
         w.chunk(*b"DRV8", 1, |w| w.bool(self.drive.is_some()));
         if let Some(d) = &self.drive {
             d.save(&mut w);
@@ -919,7 +956,7 @@ impl Machine for TedMachine {
             input: self.input.clone(),
         };
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"TEDS", 1)?;
+        let (version, mut c) = r.chunk(*b"TEDS", 2)?;
         let field_done_pending = c.bool()?;
         let autostart =
             Autostart::from_u8(c.u8()?).ok_or(StateError::Invalid("autostart state"))?;
@@ -942,10 +979,26 @@ impl Machine for TedMachine {
         next.io.ted.load(&mut r)?;
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
+        // The datasette (not clonable; version 2 on): restored if a later
+        // part fails.
+        let tape_backup = {
+            let mut w = StateWriter::new();
+            self.tape.save(&mut w);
+            w.into_bytes()
+        };
+        if version >= 2 {
+            self.tape.load(&mut r)?;
+        }
+        let restore_tape = |tape: &mut Datasette| {
+            let _ = tape.load(&mut StateReader::new(&tape_backup));
+        };
 
-        let (_, mut c) = r.chunk(*b"DRV8", 1)?;
-        if c.bool()? != self.drive.is_some() {
-            return Err(StateError::Invalid("drive 8 configuration differs"));
+        let drive_chunk = r.chunk(*b"DRV8", 1).and_then(|(_, mut c)| c.bool());
+        if drive_chunk != Ok(self.drive.is_some()) {
+            restore_tape(&mut self.tape);
+            return Err(drive_chunk
+                .err()
+                .unwrap_or(StateError::Invalid("drive 8 configuration differs")));
         }
         let drive_backup = self.drive.as_ref().map(|d| {
             let mut w = StateWriter::new();
@@ -953,7 +1006,10 @@ impl Machine for TedMachine {
             w.into_bytes()
         });
         if let Some(d) = &mut self.drive {
-            d.load(&mut r)?;
+            if let Err(e) = d.load(&mut r) {
+                restore_tape(&mut self.tape);
+                return Err(e);
+            }
         }
         let restore_drive = |drive: &mut Option<Drive8>| {
             if let (Some(d), Some(b)) = (drive, &drive_backup) {
@@ -967,6 +1023,7 @@ impl Machine for TedMachine {
             Ok(p) => p,
             Err(e) => {
                 restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape);
                 return Err(e);
             }
         };
@@ -984,6 +1041,7 @@ impl Machine for TedMachine {
                         }
                     }
                     restore_drive(&mut self.drive);
+                    restore_tape(&mut self.tape);
                     return Err(e);
                 }
             }
@@ -992,6 +1050,8 @@ impl Machine for TedMachine {
         self.port = next.port;
         self.mem = next.mem;
         self.io = next.io;
+        self.io.cassette_read = self.tape.read();
+        self.io.cassette_sense = self.tape.sense();
         self.sched = next.sched;
         self.input = next.input;
         self.field_done_pending = field_done_pending;

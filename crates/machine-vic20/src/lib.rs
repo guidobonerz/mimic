@@ -52,8 +52,10 @@ use emu_core::{
 
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms};
+use drives_other::Datasette;
 use io::Io;
 use loader::{Autostart, ProgramSlot, BASIC_STARTS, BOOT_FRAMES};
+use media::tap::TapMachine;
 use memory::{Area, Memory, Roms, VicView, BASIC_SIZE, CHARGEN_SIZE};
 
 pub const CPU: DeviceId = DeviceId("cpu");
@@ -190,6 +192,7 @@ pub const CONTROL_PORT: PortId = PortId(0);
 
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(1);
+pub const SLOT_TAPE: SlotId = SlotId(2);
 
 pub struct Vic20 {
     cpu: Cpu6502,
@@ -200,6 +203,8 @@ pub struct Vic20 {
     port: Option<Box<dyn PortDevice>>,
     drive: Option<Drive8>,
     program: ProgramSlot,
+    /// The datasette on the cassette port.
+    tape: Datasette,
     autostart: Autostart,
     palette: [Rgb8; 16],
     field_done_pending: bool,
@@ -275,6 +280,7 @@ impl Vic20 {
             port,
             drive,
             program: ProgramSlot::default(),
+            tape: Datasette::new(TapMachine::Vic20, cpu_hz),
             autostart,
             palette: vic::palette::palette(),
             field_done_pending: false,
@@ -293,6 +299,14 @@ impl Vic20 {
         }
         // VIAs clock before the CPU access: a read sees this cycle's state.
         self.io.tick_vias();
+        // Datasette: VIA1 CA2 MOTOR (low = on), VIA2 PB3 WRITE, VIA1 PA6
+        // SENSE, READ on VIA2 CA1.
+        self.tape.set_motor(!self.io.via1.ca2_out());
+        self.tape.set_write(self.io.via2.port_b_out() & 0x08 != 0);
+        self.tape.tick();
+        self.io.cassette_sense = self.tape.sense();
+        let (rows, _) = self.io.via2_pins();
+        self.io.via2.set_ca1(self.tape.read(), rows);
         self.cpu.set_irq(self.io.via2.irq());
         self.cpu.set_nmi(self.io.via1.irq());
         let beam = self.beam_pos();
@@ -695,6 +709,12 @@ impl Machine for Vic20 {
             kind: MediaKind::Program,
             inserted: self.program.inserted(),
         });
+        slots.push(MediaSlotInfo {
+            id: SLOT_TAPE,
+            name: "tape",
+            kind: MediaKind::Tape,
+            inserted: self.tape.has_tape(),
+        });
         slots
     }
 
@@ -702,13 +722,14 @@ impl Machine for Vic20 {
         match slot {
             SLOT_DRIVE8 => self.drive.as_mut().map(|d| d.media_slot()),
             SLOT_PROGRAM => Some(&mut self.program),
+            SLOT_TAPE => Some(&mut self.tape),
             _ => None,
         }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"V20S", 1, |w| {
+        w.chunk(*b"V20S", 2, |w| {
             w.bool(self.field_done_pending);
             w.u8(self.autostart.to_u8());
             w.u64(self.boot_frame);
@@ -718,6 +739,7 @@ impl Machine for Vic20 {
         self.io.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
+        self.tape.save(&mut w);
         w.chunk(*b"DRV8", 1, |w| w.bool(self.drive.is_some()));
         if let Some(d) = &self.drive {
             d.save(&mut w);
@@ -745,7 +767,7 @@ impl Machine for Vic20 {
             input: self.input.clone(),
         };
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"V20S", 1)?;
+        let (version, mut c) = r.chunk(*b"V20S", 2)?;
         let field_done_pending = c.bool()?;
         let autostart =
             Autostart::from_u8(c.u8()?).ok_or(StateError::Invalid("autostart state"))?;
@@ -755,10 +777,26 @@ impl Machine for Vic20 {
         next.io.load(&mut r)?;
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
+        // The datasette (not clonable; version 2 on): restored if a later
+        // part fails.
+        let tape_backup = {
+            let mut w = StateWriter::new();
+            self.tape.save(&mut w);
+            w.into_bytes()
+        };
+        if version >= 2 {
+            self.tape.load(&mut r)?;
+        }
+        let restore_tape = |tape: &mut Datasette| {
+            let _ = tape.load(&mut StateReader::new(&tape_backup));
+        };
 
-        let (_, mut c) = r.chunk(*b"DRV8", 1)?;
-        if c.bool()? != self.drive.is_some() {
-            return Err(StateError::Invalid("drive 8 configuration differs"));
+        let drive_chunk = r.chunk(*b"DRV8", 1).and_then(|(_, mut c)| c.bool());
+        if drive_chunk != Ok(self.drive.is_some()) {
+            restore_tape(&mut self.tape);
+            return Err(drive_chunk
+                .err()
+                .unwrap_or(StateError::Invalid("drive 8 configuration differs")));
         }
         let drive_backup = self.drive.as_ref().map(|d| {
             let mut w = StateWriter::new();
@@ -766,7 +804,10 @@ impl Machine for Vic20 {
             w.into_bytes()
         });
         if let Some(d) = &mut self.drive {
-            d.load(&mut r)?;
+            if let Err(e) = d.load(&mut r) {
+                restore_tape(&mut self.tape);
+                return Err(e);
+            }
         }
         let restore_drive = |drive: &mut Option<Drive8>| {
             if let (Some(d), Some(b)) = (drive, &drive_backup) {
@@ -777,18 +818,21 @@ impl Machine for Vic20 {
             Ok(p) => p,
             Err(e) => {
                 restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape);
                 return Err(e);
             }
         };
         if let (Some(dev), false) = (&mut self.port, port_state.is_empty()) {
             if let Err(e) = dev.load_state(port_state) {
                 restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape);
                 return Err(e);
             }
         }
         self.cpu = next.cpu;
         self.mem = next.mem;
         self.io = next.io;
+        self.io.cassette_sense = self.tape.sense();
         self.sched = next.sched;
         self.input = next.input;
         self.field_done_pending = field_done_pending;

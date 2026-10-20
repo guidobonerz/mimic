@@ -187,6 +187,52 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
     }
 }
 
+/// A tape for the datasette of machine `machine_id`: a TAP image (behind
+/// a copy-on-write overlay), or a PRG recorded as the machine's KERNAL
+/// saves it (C16/Plus/4 format for "c16" and "plus4", the PET/VIC-20/C64
+/// format otherwise), named after the file.
+pub fn open_tape(path: &Path, machine_id: &str) -> Result<Media, MediaError> {
+    use media::tap::{encode_cbm, encode_ted, TapMachine, Video};
+    let is_prg = path
+        .extension()
+        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("prg"));
+    if !is_prg {
+        let media = open(path)?;
+        if media.kind != MediaKind::Tape {
+            return Err(MediaError::Unsupported(media.kind));
+        }
+        return Ok(media);
+    }
+    let prg = std::fs::read(path).map_err(|e| MediaError::Backend(e.to_string()))?;
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_uppercase())
+        .unwrap_or_default();
+    let name: Vec<u8> = stem
+        .bytes()
+        .filter(|c| c.is_ascii_graphic() || *c == b' ')
+        .take(16)
+        .collect();
+    let tap = match machine_id {
+        "c16" | "plus4" => encode_ted(&prg, &name, true, Video::Pal)?,
+        id => {
+            let machine = match id {
+                "vic20" => TapMachine::Vic20,
+                "pet" => TapMachine::Pet,
+                _ => TapMachine::C64,
+            };
+            encode_cbm(&prg, &name, true, machine, Video::Pal)?
+        }
+    };
+    Ok(Media {
+        name: format!("{stem}.tap"),
+        kind: MediaKind::Tape,
+        backend: Box::new(MemoryBackend {
+            data: tap.to_bytes()?,
+        }),
+    })
+}
+
 /// Open an image file as media behind a copy-on-write overlay; a folder
 /// opens as a disk of its PRG files (see [`crate::host_dir`]).
 pub fn open(path: &Path) -> Result<Media, MediaError> {
@@ -208,6 +254,32 @@ pub fn open(path: &Path) -> Result<Media, MediaError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tapes_from_tap_and_prg_files() {
+        let dir = std::env::temp_dir().join(format!("polytrace-tape-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prg = dir.join("hello.prg");
+        std::fs::write(&prg, [0x01, 0x08, 0x60]).unwrap();
+        let mut m = open_tape(&prg, "c64").unwrap();
+        assert_eq!((m.kind, m.name.as_str()), (MediaKind::Tape, "HELLO.tap"));
+        let mut bytes = vec![0; m.backend.len() as usize];
+        m.backend.read(0, &mut bytes).unwrap();
+        let tap = media::tap::Tap::parse(&bytes).unwrap();
+        assert_eq!(tap.machine, media::tap::TapMachine::C64);
+        let ted = open_tape(&prg, "plus4").unwrap();
+        assert!(!ted.backend.is_empty());
+        let tap_file = dir.join("t.tap");
+        std::fs::write(&tap_file, &bytes).unwrap();
+        assert_eq!(open_tape(&tap_file, "c64").unwrap().kind, MediaKind::Tape);
+        let d64 = dir.join("x.d64");
+        std::fs::write(&d64, media::D64::blank(b"X", *b"XX").to_bytes()).unwrap();
+        assert!(matches!(
+            open_tape(&d64, "c64"),
+            Err(MediaError::Unsupported(MediaKind::Disk))
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn mem(n: usize) -> Box<MemoryBackend> {
         Box::new(MemoryBackend {

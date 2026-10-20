@@ -516,6 +516,28 @@ fn ports_devices_and_media() {
     assert_eq!(r["mode"], "virtual");
     let e = c.call(json!({"cmd": "set_drive_mode", "slot": drive8, "mode": "true"}));
     assert_eq!(e["ok"], false);
+    // The datasette's keys: refused without a tape and by slots without keys.
+    let tape = slots
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "tape")
+        .expect("tape slot")["id"]
+        .clone();
+    let e = c.call(json!({"cmd": "media_control", "slot": tape, "command": "play"}));
+    assert_eq!(e["ok"], false, "no tape");
+    let e = c.call(json!({"cmd": "media_control", "slot": program, "command": "play"}));
+    assert_eq!(e["ok"], false, "no keys");
+    let tap = dir.join("t.tap");
+    let blank = media::tap::Tap::blank(media::tap::TapMachine::C64, media::tap::Video::Pal, 1000);
+    std::fs::write(&tap, blank.to_bytes().unwrap()).unwrap();
+    c.ok(json!({"cmd": "insert_media", "slot": tape, "path": tap.to_str().unwrap()}));
+    for key in ["record", "stop", "rewind", "forward", "play"] {
+        let r = c.ok(json!({"cmd": "media_control", "slot": tape, "command": key}));
+        assert_eq!(r["command"], key);
+    }
+    let e = c.call(json!({"cmd": "media_control", "slot": tape, "command": "eject!"}));
+    assert_eq!(e["ok"], false);
     let _ = std::fs::remove_dir_all(&dir);
     server.shutdown();
 }

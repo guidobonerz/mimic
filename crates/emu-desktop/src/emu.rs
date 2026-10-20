@@ -9,7 +9,7 @@
 //! rule 3).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -63,6 +63,39 @@ pub struct Shared {
     /// Set by the window (F12): show the machine's next screen (C128: VIC
     /// and VDC).
     pub next_screen: AtomicBool,
+    /// Set by the window (F9–F11): a datasette key ([`TapeKey`]), 0 = none.
+    pub tape_key: AtomicU8,
+}
+
+/// Datasette keys from the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TapeKey {
+    Play = 1,
+    Record = 2,
+    Stop = 3,
+    Rewind = 4,
+}
+
+impl TapeKey {
+    fn from_u8(v: u8) -> Option<Self> {
+        Some(match v {
+            1 => Self::Play,
+            2 => Self::Record,
+            3 => Self::Stop,
+            4 => Self::Rewind,
+            _ => return None,
+        })
+    }
+
+    fn command(self) -> &'static str {
+        match self {
+            Self::Play => "play",
+            Self::Record => "record",
+            Self::Stop => "stop",
+            Self::Rewind => "rewind",
+        }
+    }
 }
 
 impl Shared {
@@ -82,6 +115,7 @@ impl Shared {
             rate_ppm: AtomicI64::new(0),
             status: Mutex::default(),
             next_screen: AtomicBool::new(false),
+            tape_key: AtomicU8::new(0),
         }
     }
 }
@@ -234,6 +268,19 @@ pub fn spawn(
                 }
             }
 
+            if let Some(key) = TapeKey::from_u8(shared.tape_key.swap(0, Ordering::Relaxed)) {
+                let m = session.machine_mut();
+                let tape = m
+                    .media_slots()
+                    .into_iter()
+                    .find(|s| s.kind == emu_core::media::MediaKind::Tape);
+                if let Some(slot) = tape.and_then(|s| m.media_slot(s.id)) {
+                    if let Err(e) = slot.control(key.command()) {
+                        *shared.status.lock().unwrap_or_else(|p| p.into_inner()) =
+                            Some(format!("tape: {e}"));
+                    }
+                }
+            }
             if shared.next_screen.swap(false, Ordering::Relaxed) {
                 let current = shown_screen(session.machine(), chosen);
                 chosen = Some(next_screen(session.machine(), current));

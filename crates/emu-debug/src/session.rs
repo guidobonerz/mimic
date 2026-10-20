@@ -829,6 +829,7 @@ impl Session {
             Command::EjectMedia { slot } => self.eject_media(slot),
             Command::FlushMedia { slot } => self.flush_media(slot),
             Command::SetDriveMode { slot, mode } => self.set_drive_mode(slot, &mode),
+            Command::MediaControl { slot, command } => self.media_control(slot, &command),
             Command::Input { events } => self.input_command(&events),
             Command::RecordStart => Ok(self.record_start()),
             Command::RecordStop => self.record_stop(),

@@ -59,8 +59,10 @@ use emu_core::{
 
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms, IecLines};
+use drives_other::Datasette;
 use io::Io;
 use loader::{Autostart, ProgramSlot, BOOT_FRAMES};
+use media::tap::TapMachine;
 use memory::{Memory, Read, Roms, VicView, CHARGEN_SIZE, ROM_16K};
 
 pub const CPU: DeviceId = DeviceId("cpu");
@@ -268,6 +270,7 @@ const PORT_NAMES: [&str; 2] = ["control port 1", "control port 2"];
 
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(1);
+pub const SLOT_TAPE: SlotId = SlotId(2);
 
 pub struct C128 {
     cpu: Cpu6502,
@@ -280,6 +283,8 @@ pub struct C128 {
     ports: [Option<Box<dyn PortDevice>>; 2],
     drive: Option<Drive8>,
     program: ProgramSlot,
+    /// The datasette on the cassette port.
+    tape: Datasette,
     autostart: Autostart,
     vic_palette: [Rgb8; 16],
     vdc_palette: [Rgb8; 16],
@@ -375,6 +380,7 @@ impl C128 {
             ports: [None, port2],
             drive,
             program: ProgramSlot::default(),
+            tape: Datasette::new(TapMachine::C64, cpu_hz),
             autostart,
             vic_palette: vic2::palette::palette(),
             vdc_palette: vdc::palette(),
@@ -538,7 +544,15 @@ impl C128 {
         let iec = self.io.iec;
         self.io.cia1.set_sp(fsdir || !iec.data);
         self.io.cia1.set_cnt(fsdir || !iec.srq);
-        self.io.cia1.set_flag(!iec.srq);
+        // Datasette: port bit 3 WRITE, bit 5 MOTOR (output low = on), bit 4
+        // SENSE; READ shares CIA1 /FLAG with SRQ.
+        let port = &self.mem.port;
+        let out = port.outputs();
+        self.tape.set_motor(port.ddr & 0x20 != 0 && out & 0x20 == 0);
+        self.tape.set_write(out & 0x08 != 0);
+        self.tape.tick();
+        self.mem.cassette_sense = self.tape.sense();
+        self.io.cia1.set_flag(!iec.srq && self.tape.read());
         self.update_interrupts();
         self.sched.tick();
         if new_field {
@@ -981,6 +995,12 @@ impl Machine for C128 {
             kind: MediaKind::Program,
             inserted: self.program.inserted(),
         });
+        slots.push(MediaSlotInfo {
+            id: SLOT_TAPE,
+            name: "tape",
+            kind: MediaKind::Tape,
+            inserted: self.tape.has_tape(),
+        });
         slots
     }
 
@@ -988,13 +1008,14 @@ impl Machine for C128 {
         match slot {
             SLOT_DRIVE8 => self.drive.as_mut().map(|d| d.media_slot()),
             SLOT_PROGRAM => Some(&mut self.program),
+            SLOT_TAPE => Some(&mut self.tape),
             _ => None,
         }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"C128", 1, |w| {
+        w.chunk(*b"C128", 2, |w| {
             w.u8(self.ints.0);
             w.u8(self.ints.1);
             w.bool(self.field_done_pending);
@@ -1008,6 +1029,7 @@ impl Machine for C128 {
         self.io.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
+        self.tape.save(&mut w);
         w.chunk(*b"DRV8", 1, |w| w.bool(self.drive.is_some()));
         if let Some(d) = &self.drive {
             d.save(&mut w);
@@ -1032,7 +1054,7 @@ impl Machine for C128 {
             input: self.input.clone(),
         };
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"C128", 1)?;
+        let (version, mut c) = r.chunk(*b"C128", 2)?;
         let ints = (c.u8()?, c.u8()?);
         let field_done_pending = c.bool()?;
         let autostart =
@@ -1045,10 +1067,26 @@ impl Machine for C128 {
         next.io.load(&mut r)?;
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
+        // The datasette (not clonable; version 2 on): restored if a later
+        // part fails.
+        let tape_backup = {
+            let mut w = StateWriter::new();
+            self.tape.save(&mut w);
+            w.into_bytes()
+        };
+        if version >= 2 {
+            self.tape.load(&mut r)?;
+        }
+        let restore_tape = |tape: &mut Datasette| {
+            let _ = tape.load(&mut StateReader::new(&tape_backup));
+        };
 
-        let (_, mut c) = r.chunk(*b"DRV8", 1)?;
-        if c.bool()? != self.drive.is_some() {
-            return Err(StateError::Invalid("drive 8 configuration differs"));
+        let drive_chunk = r.chunk(*b"DRV8", 1).and_then(|(_, mut c)| c.bool());
+        if drive_chunk != Ok(self.drive.is_some()) {
+            restore_tape(&mut self.tape);
+            return Err(drive_chunk
+                .err()
+                .unwrap_or(StateError::Invalid("drive 8 configuration differs")));
         }
         let drive_backup = self.drive.as_ref().map(|d| {
             let mut w = StateWriter::new();
@@ -1056,7 +1094,10 @@ impl Machine for C128 {
             w.into_bytes()
         });
         if let Some(d) = &mut self.drive {
-            d.load(&mut r)?;
+            if let Err(e) = d.load(&mut r) {
+                restore_tape(&mut self.tape);
+                return Err(e);
+            }
         }
         let restore_drive = |drive: &mut Option<Drive8>| {
             if let (Some(d), Some(b)) = (drive, &drive_backup) {
@@ -1070,6 +1111,7 @@ impl Machine for C128 {
             Ok(p) => p,
             Err(e) => {
                 restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape);
                 return Err(e);
             }
         };
@@ -1087,6 +1129,7 @@ impl Machine for C128 {
                         }
                     }
                     restore_drive(&mut self.drive);
+                    restore_tape(&mut self.tape);
                     return Err(e);
                 }
             }
@@ -1094,6 +1137,7 @@ impl Machine for C128 {
         self.cpu = next.cpu;
         self.z80 = next.z80;
         self.mem = next.mem;
+        self.mem.cassette_sense = self.tape.sense();
         self.io = next.io;
         self.sched = next.sched;
         self.input = next.input;

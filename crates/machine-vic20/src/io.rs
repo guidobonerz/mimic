@@ -9,10 +9,12 @@
 //!
 //! - VIA1 (`$9110`): PA0 serial CLK in, PA1 serial DATA in, PA2 joystick
 //!   up, PA3 down, PA4 left, PA5 fire, PA6 cassette sense, PA7 serial ATN
-//!   out; port B user port; CA1 RESTORE key. Its IRQ output drives /NMI.
+//!   out; port B user port; CA1 RESTORE key; CA2 cassette motor (low =
+//!   on). Its IRQ output drives /NMI.
 //! - VIA2 (`$9120`): port A keyboard rows (in), port B keyboard columns
-//!   (out) with PB7 also joystick right; CA2 serial CLK out, CB2 serial DATA
-//!   out; CA1 cassette read, CB1 serial SRQ in. Its IRQ output drives /IRQ.
+//!   (out) with PB7 also joystick right and PB3 also cassette write; CA2
+//!   serial CLK out, CB2 serial DATA out; CA1 cassette read, CB1 serial SRQ
+//!   in. Its IRQ output drives /IRQ.
 //!
 //! Serial outputs go through 7406 inverters (1 = line pulled low); the
 //! inputs read the line level (1 = released).
@@ -41,6 +43,8 @@ pub struct Io {
     pub port_lines: u32,
     /// Serial bus levels after the last drive update.
     pub iec: IecLines,
+    /// A datasette key is down (VIA1 PA6 low).
+    pub cassette_sense: bool,
 }
 
 impl Io {
@@ -52,6 +56,7 @@ impl Io {
             keyboard: Keyboard::default(),
             port_lines: 0,
             iec: IecLines::default(),
+            cassette_sense: false,
         }
     }
 
@@ -81,6 +86,7 @@ impl Io {
             (self.port_lines & JOY_DOWN != 0, 0x08),
             (self.port_lines & JOY_LEFT != 0, 0x10),
             (self.port_lines & JOY_FIRE != 0, 0x20),
+            (self.cassette_sense, 0x40),
         ] {
             if low {
                 ext &= !bit;

@@ -46,6 +46,8 @@
 //! `peek`, freezes in `save_state`/`load_state` and recordings), the cheat
 //! search (`search_start`/`next`/`results`), cheat files
 //! (`cheats_load`/`save`) and the optional `freeze_blocked_write` event.
+//! 6 adds `media_control` (a slot's own keys, e.g. a datasette's "play",
+//! "record", "stop", "rewind", "forward").
 //!
 //! Every change to this message set needs a contract test and a bump of
 //! [`PROTOCOL_VERSION`].
@@ -56,7 +58,7 @@ use serde_json::{json, Value};
 use emu_core::{BeamPos, StopReason};
 
 pub const PROTOCOL_NAME: &str = "polytrace-debug";
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Request {
@@ -257,6 +259,12 @@ pub enum Command {
         slot: u8,
         mode: String,
     },
+    /// Operate the slot's own keys (datasette: "play", "record", "stop",
+    /// "rewind", "forward").
+    MediaControl {
+        slot: u8,
+        command: String,
+    },
     /// Queue input events: `[{"target": "keyboard" | {"port": n},
     /// "event": {...}, "delay": cycles}]` (see [`crate::host::event_json`]).
     Input {
@@ -349,6 +357,7 @@ pub const COMMANDS: &[&str] = &[
     "eject_media",
     "flush_media",
     "set_drive_mode",
+    "media_control",
     "input",
     "record_start",
     "record_stop",

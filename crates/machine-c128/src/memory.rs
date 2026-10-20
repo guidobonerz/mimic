@@ -58,6 +58,8 @@ pub struct Memory {
     pub port: IoPort,
     /// CAPS LOCK down (8502 port bit 6 input).
     pub caps_lock: bool,
+    /// A datasette key is down (port bit 4 reads low).
+    pub cassette_sense: bool,
 }
 
 impl Memory {
@@ -69,6 +71,7 @@ impl Memory {
             mmu: Mmu::new(),
             port: IoPort::new(0x7f),
             caps_lock: false,
+            cassette_sense: false,
         }
     }
 
@@ -90,13 +93,16 @@ impl Memory {
     }
 
     /// External levels on the 8502 port's inputs: CAPS LOCK on bit 6, the
-    /// datasette sense line (bit 4) released.
+    /// datasette sense line on bit 4.
     fn port_pins(&self) -> u8 {
+        let mut pins = 0x7f;
         if self.caps_lock {
-            0x3f
-        } else {
-            0x7f
+            pins &= !0x40;
         }
+        if self.cassette_sense {
+            pins &= !0x10;
+        }
+        pins
     }
 
     fn port_out(&self) -> u8 {

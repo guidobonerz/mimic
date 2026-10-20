@@ -14,7 +14,8 @@ pub const BASIC_SIZE: usize = 0x2000;
 pub const CHARGEN_SIZE: usize = 0x1000;
 
 /// External levels on the 6510 port inputs: LORAM/HIRAM/CHAREN have
-/// pull-ups, bit 4 is the cassette sense line (high = no key pressed), bit 5
+/// pull-ups, bit 4 is the cassette sense line (high = no key pressed, see
+/// [`Memory::cassette_sense`]), bit 5
 /// (motor) reads low through the motor driver. Bits 3, 6 and 7 float: they
 /// keep the level last driven onto them (Lorenz cpuport). The slow fall-off
 /// of that charge is not modelled yet.
@@ -40,6 +41,8 @@ pub struct Memory {
     pub exrom: bool,
     /// Levels held on the floating port bits 3, 6, 7.
     floating: u8,
+    /// A datasette key is down: port bit 4 reads low.
+    pub cassette_sense: bool,
     /// Current PLA mapping, recomputed when its inputs change.
     map: Map,
 }
@@ -54,6 +57,7 @@ impl Memory {
             game: true,
             exrom: true,
             floating: 0,
+            cassette_sense: false,
             map: pla::TABLE[31],
         };
         m.update_map();
@@ -94,8 +98,11 @@ impl Memory {
 
     /// The 6510 port read value for `$00`/`$01`.
     pub fn port_read(&self, addr: u16) -> u8 {
-        self.port
-            .read(addr as u8, PORT_PULLUPS | (self.floating & PORT_FLOATING))
+        let sense = if self.cassette_sense { 0x10 } else { 0 };
+        self.port.read(
+            addr as u8,
+            (PORT_PULLUPS & !sense) | (self.floating & PORT_FLOATING),
+        )
     }
 
     /// CPU write to `$00`/`$01`: goes to the port and, as on the real board,

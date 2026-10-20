@@ -10,6 +10,7 @@ pub mod gcr;
 pub mod mfm;
 pub mod prg;
 pub mod t64;
+pub mod tap;
 
 pub use d64::{Format, D64};
 pub use prg::Prg;

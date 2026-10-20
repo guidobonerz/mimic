@@ -13,6 +13,7 @@ emu-core.workspace = true
 cpu-6502.workspace = true
 chips-cbm.workspace = true
 drives-cbm.workspace = true
+drives-other.workspace = true
 devices-input.workspace = true
 media.workspace = true
 cpu-z80.workspace = true

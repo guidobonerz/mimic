@@ -142,8 +142,20 @@ impl Session {
         Ok(json!({}))
     }
 
+    /// A slot's own keys, e.g. the datasette's "play" or "rewind".
+    pub(super) fn media_control(&mut self, slot: u8, command: &str) -> Result<Value, String> {
+        self.slot_name(slot)?;
+        self.machine
+            .media_slot(SlotId(slot))
+            .ok_or_else(|| format!("no media slot {slot}"))?
+            .control(command)
+            .map_err(|e| e.to_string())?;
+        Ok(json!({"command": command}))
+    }
+
     /// The drive mode is chosen when the machine is built (option
-    /// `drive8` = "1541" or "virtual"); this confirms the current one. A
+    /// `drive8` = "1541", "1571", "1581" or "virtual"); this confirms the
+    /// current one. A
     /// true drive is a debug device named like its slot ("drive 8" →
     /// "drive8"); a virtual drive is not.
     pub(super) fn set_drive_mode(&mut self, slot: u8, mode: &str) -> Result<Value, String> {
@@ -165,7 +177,7 @@ impl Session {
         match mode {
             "true" | "virtual" if mode == current => Ok(json!({"mode": current})),
             "true" | "virtual" => Err(format!(
-                "{name} is in {current} mode; the mode is set when the machine starts (option {device}=1541 or virtual)"
+                "{name} is in {current} mode; the mode is set when the machine starts (option {device}=1541, 1571, 1581 or virtual)"
             )),
             other => Err(format!("unknown drive mode '{other}'")),
         }

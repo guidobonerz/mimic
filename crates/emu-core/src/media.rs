@@ -13,6 +13,8 @@ pub enum MediaError {
     Format(String),
     /// The backend failed (file system, hardware).
     Backend(String),
+    /// A control command the slot does not know or cannot do now.
+    Control(String),
 }
 
 impl fmt::Display for MediaError {
@@ -24,6 +26,7 @@ impl fmt::Display for MediaError {
             MediaError::Unsupported(kind) => write!(f, "slot does not accept {kind:?} media"),
             MediaError::Format(msg) => write!(f, "invalid image: {msg}"),
             MediaError::Backend(msg) => write!(f, "media backend error: {msg}"),
+            MediaError::Control(msg) => write!(f, "media control: {msg}"),
         }
     }
 }
@@ -80,6 +83,14 @@ pub trait MediaSlot {
     fn write_protect(&mut self, on: bool);
     /// Write back through the backend.
     fn flush(&mut self) -> Result<(), MediaError>;
+
+    /// Operate the drive's own controls, e.g. a datasette's "play",
+    /// "record", "stop" and "rewind". Slots without controls refuse.
+    fn control(&mut self, command: &str) -> Result<(), MediaError> {
+        Err(MediaError::Control(format!(
+            "'{command}': this slot has no controls"
+        )))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

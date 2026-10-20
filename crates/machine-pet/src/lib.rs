@@ -38,6 +38,7 @@ pub mod video;
 use chips_cbm::pia::Pia;
 use chips_cbm::via::Via;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
+use drives_other::Datasette;
 use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
@@ -51,6 +52,7 @@ use emu_core::{
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason, SAMPLE_RATE,
 };
+use media::tap::TapMachine;
 
 use keyboard::{Keyboard, Layout};
 use loader::{ProgramSlot, BASIC_START, BOOT_CYCLES};
@@ -243,7 +245,8 @@ impl Memory {
 /// Wiring (PET schematics, Commodore PET user manuals):
 /// - PIA1: PA0–3 keyboard row select, PA4/PA5 cassette sense, PA6 EOI in,
 ///   PA7 diagnostic sense; PB keyboard columns; CA2 EOI out; CB1 retrace
-///   interrupt (vertical sync); CB2 cassette motor.
+///   interrupt (vertical sync); CA1 cassette 1 read; CB2 cassette 1 motor
+///   (low = on).
 /// - PIA2: PA IEEE data in, PB IEEE data out; CA1 ATN in, CA2 NDAC out;
 ///   CB1 SRQ in, CB2 DAV out.
 /// - VIA: PB0 NDAC in, PB1 NRFD out, PB2 ATN out, PB3 cassette write,
@@ -259,6 +262,8 @@ pub struct Io {
     pub keyboard: Keyboard,
     /// Vertical sync from the video timing.
     pub retrace: bool,
+    /// A key of the datasette on cassette port 1 is down (PIA1 PA4 low).
+    pub cassette_sense: bool,
 }
 
 impl Io {
@@ -266,6 +271,9 @@ impl Io {
         let mut ext_a = 0xff;
         if !self.pia1.ca2_out() {
             ext_a &= !0x40; // EOI: the PET's own EOI out
+        }
+        if self.cassette_sense {
+            ext_a &= !0x10;
         }
         let pa = self.pia1.port_a_out() & ext_a;
         let pb = self.pia1.port_b_out() & self.keyboard.columns(pa & 0x0f);
@@ -465,6 +473,8 @@ impl Bus for PeekBus<'_> {
 }
 
 pub const SLOT_PROGRAM: SlotId = SlotId(0);
+/// The datasette on cassette port 1.
+pub const SLOT_TAPE: SlotId = SlotId(1);
 
 /// Phosphor colours of the monochrome monitor: off, green.
 const PALETTE: [Rgb8; 2] = [
@@ -485,6 +495,8 @@ pub struct Pet {
     sched: Scheduler,
     input: InputQueue,
     program: ProgramSlot,
+    /// The datasette on cassette port 1.
+    tape: Datasette,
     resampler: Decimator,
     /// Audio produced but not yet taken (output, not machine state).
     samples: Vec<i16>,
@@ -559,11 +571,13 @@ impl Pet {
                 via: Via::new(),
                 keyboard: Keyboard::new(layout),
                 retrace: false,
+                cassette_sense: false,
             },
             video: Video::new(regs, cpc, char_lines, standard),
             sched: Scheduler::new(),
             input: InputQueue::new(),
             program: ProgramSlot::default(),
+            tape: Datasette::new(TapMachine::Pet, 1_000_000),
             resampler: Decimator::new(CPU_HZ, SAMPLE_RATE).expect("valid rates"),
             samples: Vec::new(),
             field_done_pending: false,
@@ -581,6 +595,13 @@ impl Pet {
             self.apply_input(ev);
         }
         self.io.via.tick();
+        // Datasette on cassette port 1: PIA1 CB2 MOTOR (low = on), VIA PB3
+        // WRITE, PIA1 PA4 SENSE, READ on PIA1 CA1.
+        self.tape.set_motor(!self.io.pia1.cb2_out());
+        self.tape.set_write(self.io.via.port_b_out() & 0x08 != 0);
+        self.tape.tick();
+        self.io.cassette_sense = self.tape.sense();
+        self.io.pia1.set_ca1(self.tape.read());
         let text = self.io.via.ca2_out();
         let video = self
             .video
@@ -903,21 +924,33 @@ impl Machine for Pet {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        vec![MediaSlotInfo {
-            id: SLOT_PROGRAM,
-            name: "program",
-            kind: MediaKind::Program,
-            inserted: self.program.inserted(),
-        }]
+        vec![
+            MediaSlotInfo {
+                id: SLOT_PROGRAM,
+                name: "program",
+                kind: MediaKind::Program,
+                inserted: self.program.inserted(),
+            },
+            MediaSlotInfo {
+                id: SLOT_TAPE,
+                name: "tape",
+                kind: MediaKind::Tape,
+                inserted: self.tape.has_tape(),
+            },
+        ]
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
-        (slot == SLOT_PROGRAM).then_some(&mut self.program as &mut dyn MediaSlot)
+        match slot {
+            SLOT_PROGRAM => Some(&mut self.program),
+            SLOT_TAPE => Some(&mut self.tape),
+            _ => None,
+        }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"PETS", 1, |w| {
+        w.chunk(*b"PETS", 2, |w| {
             w.bool(self.field_done_pending);
             w.u64(self.boot_cycle);
             w.u32(self.mem.ram.len() as u32);
@@ -937,6 +970,7 @@ impl Machine for Pet {
         self.video.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
+        self.tape.save(&mut w);
         w.into_bytes()
     }
 
@@ -952,7 +986,7 @@ impl Machine for Pet {
             resampler: self.resampler,
         };
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"PETS", 1)?;
+        let (version, mut c) = r.chunk(*b"PETS", 2)?;
         let field_done_pending = c.bool()?;
         let boot_cycle = c.u64()?;
         if c.u32()? as usize != next.mem.ram.len() {
@@ -975,6 +1009,12 @@ impl Machine for Pet {
         next.video.load(&mut r)?;
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
+        // The datasette last: its load is atomic, so a failure leaves all
+        // as it was.
+        if version >= 2 {
+            self.tape.load(&mut r)?;
+        }
+        next.io.cassette_sense = self.tape.sense();
         self.cpu = next.cpu;
         self.mem = next.mem;
         self.io = next.io;

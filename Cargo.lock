@@ -817,6 +817,7 @@ dependencies = [
 name = "emu-tests"
 version = "0.1.0"
 dependencies = [
+ "drives-other",
  "emu-core",
  "emu-debug",
  "emu-machines",
@@ -1464,6 +1465,7 @@ dependencies = [
  "cpu-z80",
  "devices-input",
  "drives-cbm",
+ "drives-other",
  "emu-core",
  "media",
 ]
@@ -1476,6 +1478,7 @@ dependencies = [
  "cpu-6502",
  "devices-input",
  "drives-cbm",
+ "drives-other",
  "emu-core",
  "media",
 ]
@@ -1500,6 +1503,7 @@ dependencies = [
  "cpu-6502",
  "devices-input",
  "drives-cbm",
+ "drives-other",
  "emu-core",
  "media",
 ]
@@ -1520,6 +1524,7 @@ dependencies = [
  "cpu-6502",
  "devices-input",
  "drives-cbm",
+ "drives-other",
  "emu-core",
  "media",
 ]
@@ -1532,6 +1537,7 @@ dependencies = [
  "cpu-6502",
  "devices-input",
  "drives-cbm",
+ "drives-other",
  "emu-core",
  "media",
 ]

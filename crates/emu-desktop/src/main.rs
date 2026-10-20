@@ -34,7 +34,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-use emu::Shared;
+use emu::{Shared, TapeKey};
 use gfx::Gfx;
 
 const USAGE: &str = "\
@@ -44,6 +44,8 @@ usage: emu-desktop [options]
   --model NAME          model variant (C64: pal, ntsc)
   --prg FILE            program (PRG/T64) to load and run
   --disk FILE           disk image for drive 8
+  --tape FILE           TAP image for the datasette (a PRG is recorded in the
+                        machine's tape format)
   --autostart           load and run the disk after boot
   --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
@@ -64,6 +66,7 @@ F2/F4/F6/F8 = shifted F1/F3/F5/F7. Joystick (port 2): numeric keypad
 
 F12 switches between a machine's screens (C128: 40-column VIC and
 80-column VDC; the window starts on the one the 40/80 key selects).
+Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
 
 EMU_DESKTOP_DEBUG=1 prints frame and audio statistics every 5 s.";
 
@@ -73,6 +76,7 @@ struct Args {
     rom_dir: Option<PathBuf>,
     prg: Option<String>,
     disk: Option<String>,
+    tape: Option<String>,
     crt: Option<String>,
     scale: u32,
     debug: Option<SocketAddr>,
@@ -91,6 +95,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         rom_dir: None,
         prg: None,
         disk: None,
+        tape: None,
         crt: None,
         scale: 2,
         debug: None,
@@ -105,6 +110,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--model" => a.config.model = Some(value("--model")?),
             "--prg" => a.prg = Some(value("--prg")?),
             "--disk" => a.disk = Some(value("--disk")?),
+            "--tape" => a.tape = Some(value("--tape")?),
             "--autostart" => {
                 a.config.options.insert("autostart".into(), "on".into());
             }
@@ -193,6 +199,20 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
     if let Some(d) = &args.disk {
         insert(m.as_mut(), MediaKind::Disk, d)?;
     }
+    if let Some(t) = &args.tape {
+        let slot = m
+            .media_slots()
+            .into_iter()
+            .find(|s| s.kind == MediaKind::Tape)
+            .map(|s| s.id)
+            .ok_or_else(|| format!("{} has no datasette", args.machine))?;
+        let media = media_backends::image::open_tape(Path::new(t), &args.machine)
+            .map_err(|e| format!("{t}: {e}"))?;
+        m.media_slot(slot)
+            .ok_or("no such slot")?
+            .insert(media)
+            .map_err(|e| format!("{t}: {e}"))?;
+    }
     Ok(m)
 }
 
@@ -231,6 +251,8 @@ struct App {
     /// measured average, in ns.
     nominal_period_ns: u64,
     period_ns: f64,
+    /// A shift key is down (Shift+F9 = RECORD).
+    shift: bool,
 }
 
 impl App {
@@ -390,6 +412,25 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // F9–F11 operate the datasette.
+                let tape_key = match event.physical_key {
+                    PhysicalKey::Code(KeyCode::F9) if self.shift => Some(TapeKey::Record),
+                    PhysicalKey::Code(KeyCode::F9) => Some(TapeKey::Play),
+                    PhysicalKey::Code(KeyCode::F10) => Some(TapeKey::Stop),
+                    PhysicalKey::Code(KeyCode::F11) => Some(TapeKey::Rewind),
+                    _ => None,
+                };
+                if let Some(key) = tape_key {
+                    if event.state == ElementState::Pressed && !event.repeat {
+                        self.shared.tape_key.store(key as u8, Ordering::Relaxed);
+                    }
+                    return;
+                }
+                if let PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) =
+                    event.physical_key
+                {
+                    self.shift = event.state == ElementState::Pressed;
+                }
                 if let PhysicalKey::Code(code) = event.physical_key {
                     // winit names its key codes after W3C KeyboardEvent.code.
                     let _ = self.input.send(HostEvent::Key {
@@ -530,6 +571,7 @@ fn run() -> Result<(), String> {
         error: None,
         nominal_period_ns: 0,
         period_ns: 0.0,
+        shift: false,
     };
     let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
     shared.quit.store(true, Ordering::Relaxed);

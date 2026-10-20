@@ -360,6 +360,7 @@ python tools/polydbg.py regs                 # Python debug client (stdlib only)
 python -m unittest discover -s tools         # its unit tests
 cargo run --release -p emu-desktop -- --machine c64 --disk game.d64 --autostart   # window, sound, keyboard, gamepad
 cargo run --release -p emu-desktop -- --machine c64 --option drive8=virtual --disk ./myprgs --autostart   # virtual drive; a folder of PRGs as disk
+cargo run --release -p emu-desktop -- --machine vic20 --tape game.tap   # datasette (PLAY pressed; a .prg is recorded as a tape); F9 play, Shift+F9 record, F10 stop, F11 rewind
 # Linux build deps for emu-desktop: libasound2-dev libudev-dev
 ```
 
