@@ -27,6 +27,8 @@ usage: emu-headless [options]
   --frames N            frames to run (default: 1)
   --snapshot FILE.png   write the last frame as PNG
   --wav FILE.wav        write the audio of the run (16-bit PCM)
+  --crt PROFILE[:N]     snapshot through a monitor profile (raw, 1702, 1084s,
+                        pal-tv or a .toml file) at N rows per line (default 2)
   --load-state FILE     restore a savestate before running
   --save-state FILE     write a savestate after running
   --debug [ADDR]        serve the debug protocol instead of running frames
@@ -46,6 +48,7 @@ struct Args {
     frames: u64,
     snapshot: Option<String>,
     wav: Option<String>,
+    crt: Option<(String, u32)>,
     load_state: Option<String>,
     save_state: Option<String>,
     debug: Option<SocketAddr>,
@@ -100,6 +103,17 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             }
             "--snapshot" => args.snapshot = Some(value("--snapshot")?),
             "--wav" => args.wav = Some(value("--wav")?),
+            "--crt" => {
+                let v = value("--crt")?;
+                let (name, scale) = match v.rsplit_once(':') {
+                    Some((n, s)) => (
+                        n.to_string(),
+                        s.parse().map_err(|_| format!("bad CRT scale '{s}'"))?,
+                    ),
+                    None => (v, 2),
+                };
+                args.crt = Some((name, scale));
+            }
             "--load-state" => args.load_state = Some(value("--load-state")?),
             "--save-state" => args.save_state = Some(value("--save-state")?),
             "--debug" => {
@@ -141,6 +155,20 @@ fn with_rom_dir(args: &Args) -> Result<MachineConfig, String> {
         config.roms.entry(role).or_insert(data);
     }
     Ok(config)
+}
+
+/// A built-in monitor profile by name, or a TOML profile file.
+fn load_profile(name: &str) -> Result<video_crt::Profile, String> {
+    if let Some(p) = video_crt::Profile::preset(name) {
+        return Ok(p);
+    }
+    let text = fs::read_to_string(name).map_err(|_| {
+        format!(
+            "unknown monitor profile '{name}' (presets: {})",
+            video_crt::Profile::PRESETS.join(", ")
+        )
+    })?;
+    video_crt::Profile::from_toml(&text).map_err(|e| format!("{name}: {e}"))
 }
 
 fn slot_of(m: &dyn Machine, kind: MediaKind) -> Option<SlotId> {
@@ -237,7 +265,13 @@ fn run(args: Args) -> Result<ExitCode, String> {
     }
 
     if let Some(path) = &args.snapshot {
-        let png = emu_preview::encode_png(&machine.framebuffer());
+        let png = match &args.crt {
+            Some((name, scale)) => {
+                let profile = load_profile(name)?;
+                emu_preview::encode_png_crt(&machine.framebuffer(), &profile, *scale)
+            }
+            None => emu_preview::encode_png(&machine.framebuffer()),
+        };
         fs::write(path, png).map_err(|e| format!("cannot write {path}: {e}"))?;
     }
     if let (Some(path), Some(format)) = (&args.wav, format) {
@@ -350,6 +384,12 @@ mod tests {
         assert!(parse("--bogus").is_err());
         assert!(parse("--disk").is_err());
         assert!(parse("--wav").is_err());
+        assert_eq!(parse("--crt 1702").unwrap().crt, Some(("1702".into(), 2)));
+        assert_eq!(
+            parse("--crt pal-tv:3").unwrap().crt,
+            Some(("pal-tv".into(), 3))
+        );
+        assert!(parse("--crt 1702:x").is_err());
         let a = parse("--disk x.d64 --autostart").unwrap();
         assert_eq!(a.disk.as_deref(), Some("x.d64"));
         assert_eq!(a.config.options["autostart"], "on");

@@ -1,11 +1,13 @@
 //! Live preview: frame encoders, snapshot endpoint, WebSocket stream, overlays.
 //!
-//! Works on [`FrameRef`] only (golden rule 1). Phase 1 provides the PNG
-//! encoder used by snapshots and the headless runner.
+//! Works on [`FrameRef`] only (golden rule 1). Snapshots come raw (the
+//! default, what tests compare) or through the CPU CRT path of `video-crt`
+//! (`filter=crt`).
 
 #![forbid(unsafe_code)]
 
 use emu_core::FrameRef;
+use video_crt::Profile;
 
 /// Encode the raw frame (no CRT processing) as an 8-bit RGB PNG.
 /// Invalid palette indices become black.
@@ -17,9 +19,20 @@ pub fn encode_png(frame: &FrameRef<'_>) -> Vec<u8> {
             rgb.extend_from_slice(&[c.r, c.g, c.b]);
         }
     }
+    png_rgb(frame.width, frame.height, &rgb)
+}
+
+/// Encode the frame through a monitor profile at vertical `scale` (rows
+/// per field line; 2 is the natural TV size).
+pub fn encode_png_crt(frame: &FrameRef<'_>, profile: &Profile, scale: u32) -> Vec<u8> {
+    let img = video_crt::render(frame, profile, scale);
+    png_rgb(img.width, img.height, &img.rgb)
+}
+
+fn png_rgb(width: u32, height: u32, rgb: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     {
-        let mut enc = png::Encoder::new(&mut out, frame.width, frame.height);
+        let mut enc = png::Encoder::new(&mut out, width, height);
         enc.set_color(png::ColorType::Rgb);
         enc.set_depth(png::BitDepth::Eight);
         // Writing into a Vec cannot fail for valid dimensions; an empty
@@ -27,7 +40,7 @@ pub fn encode_png(frame: &FrameRef<'_>) -> Vec<u8> {
         let Ok(mut writer) = enc.write_header() else {
             return Vec::new();
         };
-        if writer.write_image_data(&rgb).is_err() {
+        if writer.write_image_data(rgb).is_err() {
             return Vec::new();
         }
     }
