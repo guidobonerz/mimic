@@ -13,6 +13,12 @@
 //! BAM keeps their free counts in track 18 sector 0 at `$DD–$FF` and their
 //! bitmaps (3 bytes per track) in track 53 sector 0, which the 1571 keeps
 //! reserved; BAM byte 3 is `$80`. Source: Commodore 1571 User's Guide.
+//!
+//! D81 (1581): 80 tracks of 40 sectors. Track 40 holds the header (sector
+//! 0: name at `$04`, ID at `$16`, DOS type "3D" at `$19`), the BAM
+//! (sectors 1 and 2 for tracks 1–40 and 41–80: 6 bytes per track from
+//! `$10`, the free count and a 40-bit map) and the directory from sector 3.
+//! Files use interleave 1. Source: Commodore 1581 User's Guide.
 
 use emu_core::media::MediaError;
 
@@ -39,11 +45,22 @@ pub fn speed_zone(track: u8) -> u8 {
     }
 }
 
+/// The disk layouts of the CBM DOS images.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    /// 1541: 35 (or 40/42) tracks.
+    D64,
+    /// 1571: 70 tracks, 36–70 on side 1.
+    D71,
+    /// 1581: 80 tracks of 40 sectors.
+    D81,
+}
+
+/// A D64, D71 or D81 image.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct D64 {
     pub tracks: u8,
-    /// A D71: tracks 36–70 are side 1.
-    pub double_sided: bool,
+    pub format: Format,
     data: Vec<u8>,
     /// One code per sector; 1 = no error (absent in most images).
     errors: Option<Vec<u8>>,
@@ -71,22 +88,25 @@ type BamByte = (u8, u8, usize);
 
 /// Sectors of a D71 (both sides).
 const D71_SECTORS: usize = 2 * 683;
+/// Sectors of a D81.
+const D81_SECTORS: usize = 80 * 40;
 
 impl D64 {
-    /// A D64 (35, 40 or 42 tracks) or D71 image, with or without error
-    /// bytes.
+    /// A D64 (35, 40 or 42 tracks), D71 or D81 image, with or without
+    /// error bytes.
     pub fn parse(bytes: &[u8]) -> Result<Self, MediaError> {
         let layouts = [
-            (35u8, false, total_sectors(35)),
-            (40, false, total_sectors(40)),
-            (42, false, total_sectors(42)),
-            (70, true, D71_SECTORS),
+            (35u8, Format::D64, total_sectors(35)),
+            (40, Format::D64, total_sectors(40)),
+            (42, Format::D64, total_sectors(42)),
+            (70, Format::D71, D71_SECTORS),
+            (80, Format::D81, D81_SECTORS),
         ];
-        for (tracks, double_sided, n) in layouts {
+        for (tracks, format, n) in layouts {
             if bytes.len() == n * SECTOR_SIZE {
                 return Ok(Self {
                     tracks,
-                    double_sided,
+                    format,
                     data: bytes.to_vec(),
                     errors: None,
                 });
@@ -95,14 +115,14 @@ impl D64 {
                 let split = n * SECTOR_SIZE;
                 return Ok(Self {
                     tracks,
-                    double_sided,
+                    format,
                     data: bytes[..split].to_vec(),
                     errors: Some(bytes[split..].to_vec()),
                 });
             }
         }
         Err(MediaError::Format(format!(
-            "D64: unexpected size {} bytes",
+            "D64/D71/D81: unexpected size {} bytes",
             bytes.len()
         )))
     }
@@ -112,7 +132,7 @@ impl D64 {
     pub fn blank(name: &[u8], id: [u8; 2]) -> Self {
         let mut d = Self {
             tracks: 35,
-            double_sided: false,
+            format: Format::D64,
             data: vec![0; total_sectors(35) * SECTOR_SIZE],
             errors: None,
         };
@@ -148,7 +168,7 @@ impl D64 {
         data.resize(D71_SECTORS * SECTOR_SIZE, 0);
         let mut d = Self {
             tracks: 70,
-            double_sided: true,
+            format: Format::D71,
             data,
             errors: None,
         };
@@ -173,21 +193,98 @@ impl D64 {
         d
     }
 
+    /// An empty 1581 disk (D81), as its NEW command leaves it: header,
+    /// BAM and the first directory block on track 40.
+    pub fn blank_d81(name: &[u8], id: [u8; 2]) -> Self {
+        let mut d = Self {
+            tracks: 80,
+            format: Format::D81,
+            data: vec![0; D81_SECTORS * SECTOR_SIZE],
+            errors: None,
+        };
+        let n = name.len().min(16);
+        if let Some(h) = d.sector_mut(40, 0) {
+            h[0] = 40;
+            h[1] = 3;
+            h[2] = b'D';
+            h[0x04..0x1d].fill(0xa0);
+            h[0x04..0x04 + n].copy_from_slice(&name[..n]);
+            h[0x16] = id[0];
+            h[0x17] = id[1];
+            h[0x19] = b'3';
+            h[0x1a] = b'D';
+        }
+        for (sector, link) in [(1u8, [40u8, 2u8]), (2, [0, 0xff])] {
+            if let Some(b) = d.sector_mut(40, sector) {
+                b[0..2].copy_from_slice(&link);
+                b[2] = b'D';
+                b[3] = !b'D';
+                b[4] = id[0];
+                b[5] = id[1];
+                b[6] = 0xc0;
+                for i in 0..40usize {
+                    let e = 0x10 + 6 * i;
+                    b[e] = 40;
+                    b[e + 1..e + 6].fill(0xff);
+                }
+            }
+        }
+        if let Some(dir) = d.sector_mut(40, 3) {
+            dir[1] = 0xff;
+        }
+        for s in 0..4 {
+            d.allocate(40, s);
+        }
+        d
+    }
+
+    /// The image is a D71 (tracks 36–70 on side 1).
+    pub fn double_sided(&self) -> bool {
+        self.format == Format::D71
+    }
+
     /// Sectors on a track (side 1 of a D71 repeats tracks 1–35).
     pub fn sectors_in(&self, track: u8) -> u8 {
-        if self.double_sided && track > 35 {
-            sectors_per_track(track - 35)
-        } else {
-            sectors_per_track(track)
+        match self.format {
+            Format::D81 => 40,
+            Format::D71 if track > 35 => sectors_per_track(track - 35),
+            _ => sectors_per_track(track),
         }
     }
 
     /// Speed zone of a track (see [`speed_zone`]).
     pub fn zone_of(&self, track: u8) -> u8 {
-        if self.double_sided && track > 35 {
+        if self.double_sided() && track > 35 {
             speed_zone(track - 35)
         } else {
             speed_zone(track)
+        }
+    }
+
+    /// The directory track: 18, or 40 on a D81.
+    pub fn dir_track(&self) -> u8 {
+        if self.format == Format::D81 {
+            40
+        } else {
+            18
+        }
+    }
+
+    /// The first directory block.
+    fn dir_start(&self) -> (u8, u8) {
+        if self.format == Format::D81 {
+            (40, 3)
+        } else {
+            (18, 1)
+        }
+    }
+
+    /// The header block and the offsets of name, ID and DOS type in it.
+    fn header(&self) -> (u8, u8, usize, usize, usize) {
+        if self.format == Format::D81 {
+            (40, 0, 0x04, 0x16, 0x19)
+        } else {
+            (18, 0, 0x90, 0xa2, 0xa5)
         }
     }
 
@@ -195,14 +292,23 @@ impl D64 {
         (1..=tracks).map(|t| usize::from(self.sectors_in(t))).sum()
     }
 
-    /// Where the BAM keeps a track: the free count and the 3-byte bitmap.
+    /// Where the BAM keeps a track: the free count and the bitmap.
     fn bam_slot(&self, track: u8) -> Option<(BamByte, BamByte)> {
+        if self.format == Format::D81 {
+            let (sector, i) = match track {
+                1..=40 => (1, track - 1),
+                41..=80 => (2, track - 41),
+                _ => return None,
+            };
+            let e = 0x10 + 6 * usize::from(i);
+            return Some(((40, sector, e), (40, sector, e + 1)));
+        }
         match track {
             1..=35 => {
                 let e = 4 * usize::from(track);
                 Some(((18, 0, e), (18, 0, e + 1)))
             }
-            36..=70 if self.double_sided => {
+            36..=70 if self.double_sided() => {
                 let i = usize::from(track - 36);
                 Some(((18, 0, 0xdd + i), (53, 0, i * 3)))
             }
@@ -251,9 +357,10 @@ impl D64 {
         }
     }
 
-    /// The disk ID bytes from the BAM, as written into sector headers.
+    /// The disk ID bytes from the header, as written into sector headers.
     pub fn id(&self) -> [u8; 2] {
-        self.sector(18, 0).map_or([0, 0], |b| [b[0xa2], b[0xa3]])
+        let (t, s, _, id, _) = self.header();
+        self.sector(t, s).map_or([0, 0], |b| [b[id], b[id + 1]])
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -289,11 +396,11 @@ impl D64 {
 
     pub fn directory(&self) -> Result<Vec<DirEntry>, MediaError> {
         let mut entries = Vec::new();
-        let (mut t, mut s) = (18u8, 1u8);
+        let (mut t, mut s) = self.dir_start();
         let mut visited = 0;
         while t != 0 {
             visited += 1;
-            if visited > 64 {
+            if visited > 80 {
                 return Err(MediaError::Format("D64: directory loops".into()));
             }
             let b = self
@@ -323,8 +430,11 @@ impl D64 {
     /// already linked by other files; the directory gets an entry in track
     /// 18 sector 1 and the blocks are marked used in the BAM. A simple writer
     /// for generated test disks: the directory does not grow beyond its
-    /// first sector.
+    /// first sector. On a D81 the file is written as by [`D64::write_file`].
     pub fn add_prg(&mut self, name: &[u8], prg: &[u8]) -> Result<(), MediaError> {
+        if self.format == Format::D81 {
+            return self.write_file(name, 2, prg);
+        }
         let used = self.used_sectors()?;
         let order = (1..=17u8).rev().chain(19..=self.tracks);
         let free: Vec<(u8, u8)> = order
@@ -426,19 +536,20 @@ impl D64 {
         }
     }
 
-    /// The tracks the DOS keeps files on: all but the directory (18) and,
+    /// The tracks the DOS keeps files on: all but the directory track and,
     /// on a D71, the second BAM (53).
     fn data_tracks(&self) -> impl Iterator<Item = u8> + '_ {
-        let last = if self.double_sided {
-            70
-        } else {
-            self.tracks.min(35)
+        let last = match self.format {
+            Format::D64 => self.tracks.min(35),
+            Format::D71 => 70,
+            Format::D81 => 80,
         };
-        (1..=last).filter(move |&t| t != 18 && !(self.double_sided && t == 53))
+        let dir = self.dir_track();
+        (1..=last).filter(move |&t| t != dir && !(self.double_sided() && t == 53))
     }
 
-    /// Free blocks as the directory reports them (track 18, and track 53 of
-    /// a D71, not counted).
+    /// Free blocks as the directory reports them (the directory track, and
+    /// track 53 of a D71, not counted).
     pub fn blocks_free(&self) -> u16 {
         self.data_tracks()
             .filter_map(|t| {
@@ -449,9 +560,9 @@ impl D64 {
     }
 
     /// The next block for a file like the DOS picks it: on the same track
-    /// 10 sectors on (interleave), else on the next track away from the
-    /// directory; the first block on the free track nearest track 18 (then,
-    /// on a D71, nearest track 53).
+    /// 10 sectors on (interleave; 1 on a D81), else on the next track away
+    /// from the directory; the first block on the free track nearest the
+    /// directory track (then, on a D71, nearest track 53).
     fn next_free(&self, prev: Option<(u8, u8)>) -> Option<(u8, u8)> {
         let in_track = |t: u8, from: u8| {
             let n = self.sectors_in(t);
@@ -461,6 +572,25 @@ impl D64 {
                 .map(|s| (t, s))
         };
         let usable = |t: u8| self.data_tracks().any(|d| d == t);
+        if self.format == Format::D81 {
+            if let Some((t, s)) = prev {
+                if let Some(b) = in_track(t, s + 1) {
+                    return Some(b);
+                }
+                let away: Vec<u8> = if t < 40 {
+                    (1..t).rev().collect()
+                } else {
+                    (t + 1..=80).collect()
+                };
+                if let Some(b) = away.into_iter().find_map(|t| in_track(t, 0)) {
+                    return Some(b);
+                }
+            }
+            return (1..40u8)
+                .flat_map(|d| [40 - d, 40 + d])
+                .filter(|&t| usable(t))
+                .find_map(|t| in_track(t, 0));
+        }
         if let Some((t, s)) = prev {
             if let Some(b) = in_track(t, s + 10) {
                 return Some(b);
@@ -489,7 +619,7 @@ impl D64 {
 
     /// Write a file (`file_type` 1 SEQ, 2 PRG, 3 USR) with `data` as stored
     /// (a PRG includes its load address) and add its directory entry; the
-    /// directory grows by blocks on track 18 when its sectors are full.
+    /// directory grows by blocks on its track when its sectors are full.
     pub fn write_file(
         &mut self,
         name: &[u8],
@@ -545,10 +675,13 @@ impl D64 {
     }
 
     /// A free directory entry: (track, sector, offset), adding a directory
-    /// block on track 18 (interleave 3) when all are used.
+    /// block on the directory track (interleave 3, 1 on a D81) when all are
+    /// used.
     fn directory_slot(&mut self) -> Result<(u8, u8, usize), MediaError> {
-        let (mut t, mut s) = (18u8, 1u8);
-        for _ in 0..64 {
+        let (mut t, mut s) = self.dir_start();
+        let dir = self.dir_track();
+        let step = if self.format == Format::D81 { 1 } else { 3 };
+        for _ in 0..80 {
             let b = self
                 .sector(t, s)
                 .ok_or_else(|| MediaError::Format(format!("D64: bad directory link {t}/{s}")))?;
@@ -556,19 +689,19 @@ impl D64 {
                 return Ok((t, s, i * 32));
             }
             if b[0] == 0 {
-                let n = self.sectors_in(18);
+                let n = self.sectors_in(dir);
                 let new = (0..n)
-                    .map(|i| (s + 3 + i) % n)
-                    .find(|&x| self.is_free(18, x))
+                    .map(|i| (s + step + i) % n)
+                    .find(|&x| self.is_free(dir, x))
                     .ok_or_else(|| MediaError::Format("72, DISK FULL".into()))?;
-                self.allocate(18, new);
+                self.allocate(dir, new);
                 let last = self.sector_mut(t, s).unwrap_or_default();
-                last[0] = 18;
+                last[0] = dir;
                 last[1] = new;
-                let block = self.sector_mut(18, new).unwrap_or_default();
+                let block = self.sector_mut(dir, new).unwrap_or_default();
                 block.fill(0);
                 block[1] = 0xff;
-                return Ok((18, new, 0));
+                return Ok((dir, new, 0));
             }
             (t, s) = (b[0], b[1]);
         }
@@ -579,9 +712,9 @@ impl D64 {
     /// how many.
     pub fn scratch(&mut self, pattern: &[u8]) -> Result<usize, MediaError> {
         let mut count = 0;
-        let (mut t, mut s) = (18u8, 1u8);
+        let (mut t, mut s) = self.dir_start();
         let mut visited = 0;
-        while t != 0 && visited < 64 {
+        while t != 0 && visited < 80 {
             visited += 1;
             let block = self.sector(t, s).map(<[u8]>::to_vec).unwrap_or_default();
             if block.len() < SECTOR_SIZE {
@@ -596,7 +729,7 @@ impl D64 {
                 }
                 let (mut ft, mut fs) = (e[3], e[4]);
                 let mut chain = 0;
-                while ft != 0 && chain < 800 {
+                while ft != 0 && chain < 3200 {
                     chain += 1;
                     let next = self.sector(ft, fs).map(|b| (b[0], b[1]));
                     self.release(ft, fs);
@@ -625,9 +758,9 @@ impl D64 {
         Ok((entry, bytes))
     }
 
-    /// The directory as the 1541 sends it for `LOAD"$"`: a BASIC program at
-    /// `$0401` with the header (reversed name, ID, "2A"), one line per file
-    /// (blocks, quoted name, type) and BLOCKS FREE.
+    /// The directory as the drive sends it for `LOAD"$"`: a BASIC program at
+    /// `$0401` with the header (reversed name, ID, DOS type "2A" or "3D"),
+    /// one line per file (blocks, quoted name, type) and BLOCKS FREE.
     pub fn listing(&self) -> Vec<u8> {
         let mut out = vec![0x01, 0x04];
         let mut line = |number: u16, text: &[u8]| {
@@ -636,15 +769,19 @@ impl D64 {
             out.extend_from_slice(text);
             out.push(0);
         };
-        let bam = self.sector(18, 0).map(<[u8]>::to_vec).unwrap_or_default();
+        let (ht, hs, name, id, dos) = self.header();
+        let h = self
+            .sector(ht, hs)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_else(|| vec![0; SECTOR_SIZE]);
         let mut header = vec![0x12, b'"'];
         header.extend(
-            bam[0x90..0xa0]
+            h[name..name + 16]
                 .iter()
                 .map(|&c| if c == 0xa0 { b' ' } else { c }),
         );
         header.extend_from_slice(b"\" ");
-        header.extend_from_slice(&[bam[0xa2], bam[0xa3], b' ', bam[0xa5], bam[0xa6]]);
+        header.extend_from_slice(&[h[id], h[id + 1], b' ', h[dos], h[dos + 1]]);
         line(0, &header);
         for e in self.directory().unwrap_or_default() {
             let mut text = Vec::new();
@@ -831,7 +968,7 @@ mod tests {
     #[test]
     fn d71_is_double_sided() {
         let mut d = D64::blank_d71(b"SIDES", *b"DS");
-        assert!(d.double_sided);
+        assert!(d.double_sided());
         assert_eq!(d.to_bytes().len(), 349_696);
         assert_eq!(d.blocks_free(), 1328);
         assert_eq!(d.sectors_in(36), 21);
@@ -847,5 +984,42 @@ mod tests {
         let back = D64::parse(&d.to_bytes()).unwrap();
         assert_eq!(back, d);
         assert_eq!(back.read_file(b"SIDE0").unwrap().1, big);
+    }
+
+    #[test]
+    fn d81_layout_and_files() {
+        let mut d = D64::blank_d81(b"BIG DISK", *b"81");
+        assert_eq!(d.format, Format::D81);
+        assert_eq!(d.to_bytes().len(), 819_200);
+        assert_eq!(d.blocks_free(), 3160);
+        assert_eq!(d.id(), *b"81");
+        assert_eq!(&d.sector(40, 0).unwrap()[0x19..0x1b], b"3D");
+        assert_eq!(d.sector(40, 1).unwrap()[0x10 + 6 * 39], 36, "track 40");
+        // A file starts next to the directory, with interleave 1.
+        let data: Vec<u8> = (0..30_000u32).map(|i| (i * 3) as u8).collect();
+        d.write_file(b"LARGE", 2, &data).unwrap();
+        let (e, back) = d.read_file(b"LARGE").unwrap();
+        assert_eq!(back, data);
+        assert_eq!((e.track, e.sector, e.blocks), (39, 0, 119));
+        assert_eq!(d.sector(39, 0).unwrap()[..2], [39, 1]);
+        assert_eq!(d.blocks_free(), 3160 - 119);
+        // Tracks 41+ (second BAM sector) hold the rest of a full side.
+        let more = vec![0x77u8; 39 * 40 * 254];
+        d.write_file(b"MORE", 2, &more).unwrap();
+        let (e, _) = d.read_file(b"MORE").unwrap();
+        assert!(e.track <= 41);
+        assert!(d.sector(40, 2).unwrap()[0x10] < 40, "track 41 used");
+        for i in 0..40u8 {
+            d.write_file(&[b'F', b'0' + i % 10, b'A' + i / 10], 1, b"x")
+                .unwrap();
+        }
+        assert_eq!(d.directory().unwrap().len(), 42);
+        assert_eq!(d.sector(40, 3).unwrap()[..2], [40, 4], "directory grew");
+        assert_eq!(d.scratch(b"F*").unwrap(), 40);
+        let l = d.listing();
+        assert!(l.windows(5).any(|w| w == b"81 3D"));
+        assert_eq!(D64::parse(&d.to_bytes()).unwrap(), d);
+        d.add_prg(b"PRG", &[0x01, 0x08, 0]).unwrap();
+        assert_eq!(d.load(b"PRG").unwrap().1.to_bytes(), [0x01, 0x08, 0]);
     }
 }

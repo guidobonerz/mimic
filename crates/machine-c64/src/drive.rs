@@ -1,4 +1,4 @@
-//! Drive 8 on the serial bus: a [`Drive8`] (true 1541 or 1571, or virtual
+//! Drive 8 on the serial bus: a [`Drive8`] (true 1541, 1571 or 1581, or virtual
 //! drive) clocked next to the C64's 985 248 Hz (PAL) or 1 022 727 Hz (NTSC).
 //!
 //! C64 side (schematic 251469): CIA2 PA3 ATN out, PA4 CLK out, PA5 DATA

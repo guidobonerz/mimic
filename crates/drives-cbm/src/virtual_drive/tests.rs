@@ -287,3 +287,22 @@ fn savestate_round_trip() {
     other.save(&mut w2);
     assert_eq!(w2.into_bytes(), data);
 }
+
+#[test]
+fn d81_images_load_and_format_as_d81() {
+    let mut d = D64::blank_d81(b"BIG", *b"81");
+    d.write_file(b"HELLO", 2, &[0x01, 0x08, 7]).unwrap();
+    let image = Arc::new(Mutex::new(d.to_bytes()));
+    let mut h = Host::new(image.clone());
+    h.open(0, b"HELLO");
+    assert_eq!(h.talk_receive(0x60), [0x01, 0x08, 7]);
+    h.close(0);
+    h.open(0, b"$");
+    let listing = h.talk_receive(0x60);
+    assert!(listing.windows(5).any(|w| w == b"81 3D"));
+    assert!(listing.windows(16).any(|w| w == b"BLOCKS FREE.    "));
+    h.open(15, b"N0:NEW,NW");
+    let d = D64::parse(&image.lock().unwrap()).unwrap();
+    assert_eq!(d.format, media::Format::D81);
+    assert_eq!((d.id(), d.blocks_free()), (*b"NW", 3160));
+}

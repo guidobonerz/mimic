@@ -7,8 +7,9 @@
 
 pub mod d64;
 pub mod gcr;
+pub mod mfm;
 pub mod prg;
 pub mod t64;
 
-pub use d64::D64;
+pub use d64::{Format, D64};
 pub use prg::Prg;

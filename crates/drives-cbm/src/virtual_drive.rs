@@ -1,5 +1,6 @@
 //! Virtual drive: a serial bus device that speaks the Commodore IEC
-//! protocol at line level and serves files from a D64 image directly, with
+//! protocol at line level and serves files from a D64, D71 or D81 image
+//! directly (only the root directory of a D81, no partitions), with
 //! no drive CPU, DOS ROM or disk mechanics. Programs that only use the
 //! KERNAL's serial routines (LOAD, SAVE, OPEN/PRINT#/GET#, the command
 //! channel) work and load faster; fast loaders and copy protection need the
@@ -26,7 +27,7 @@
 
 use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
-use media::D64;
+use media::{Format, D64};
 
 use crate::iec::IecLines;
 
@@ -622,7 +623,12 @@ impl VirtualDrive {
                         ]
                     })
                     .unwrap_or_else(|| disk.image.id());
-                disk.image = D64::blank(name, id);
+                // NEW keeps the disk type: D64, D71 or D81.
+                disk.image = match disk.image.format {
+                    Format::D64 => D64::blank(name, id),
+                    Format::D71 => D64::blank_d71(name, id),
+                    Format::D81 => D64::blank_d81(name, id),
+                };
                 let _ = Self::write_back(disk);
                 self.set_status(0, " OK");
             }

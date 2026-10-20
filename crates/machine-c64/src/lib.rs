@@ -8,7 +8,8 @@
 //!
 //! Drive 8 (`options["drive8"]`): "1541" (true drive, `roms["dos1541"]`,
 //! 16 KB; the default when given), "1571" (`roms["dos1571"]`, 32 KB; in its
-//! 1541 mode, a C64 has no fast serial port), "virtual" (the default without
+//! 1541 mode, a C64 has no fast serial port), "1581" (`roms["dos1581"]`, D81
+//! disks), "virtual" (the default without
 //! DOS ROMs) or "none"; `drive8_ppm` sets the drive crystal's deviation.
 //! `options["autostart"] = "on"` loads and runs the disk in drive 8 after boot.
 //!

@@ -1,4 +1,4 @@
-//! Drive 8 on the serial bus: a [`Drive8`] (true 1541 or 1571, or virtual
+//! Drive 8 on the serial bus: a [`Drive8`] (true 1541, 1571 or 1581, or virtual
 //! drive) clocked next to the VIC-20's 1 108 404 Hz (PAL) or 1 022 727 Hz
 //! (NTSC). The VIA wiring is in [`crate::io`].
 

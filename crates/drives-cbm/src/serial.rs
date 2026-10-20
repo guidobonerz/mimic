@@ -1,10 +1,11 @@
 //! A device on the serial bus clocked next to the host computer: a
-//! true-emulated 1541 or 1571, or the virtual drive, at 1 MHz against the
-//! host's clock. Machines own one per drive slot and only map their port
-//! pins to [`IecLines`].
+//! true-emulated 1541, 1571 or 1581, or the virtual drive, ticked per
+//! microsecond against the host's clock. Machines own one per drive slot
+//! and only map their port pins to [`IecLines`].
 //!
 //! The drive mode is a slot setting chosen when the machine is built
-//! (`drive8` = "1541", "1571" or "virtual"); a true drive needs its DOS ROM.
+//! (`drive8` = "1541", "1571", "1581" or "virtual"); a true drive needs its
+//! DOS ROM.
 //!
 //! The drive has its own crystal, which is never exactly on its nominal
 //! frequency (quartz tolerance is some ±50 ppm), so on real hardware the
@@ -16,12 +17,14 @@
 
 use emu_core::media::MediaSlot;
 use emu_core::registry::ConfigError;
+use emu_core::CycleResult as Cycle;
 use emu_core::{
     ClockDivider, CycleResult, DebugHooks, DebugTarget, DeviceId, MemSpaceId, Savestate,
     StateError, StateReader, StateWriter, StopReason,
 };
 
 use crate::c1541::{CbmDrive, DriveModel};
+use crate::c1581::Drive1581;
 use crate::iec::IecLines;
 use crate::virtual_drive::VirtualDrive;
 
@@ -41,9 +44,72 @@ pub fn crystal_ppm(option: Option<&str>) -> Result<i32, ConfigError> {
         .ok_or_else(|| ConfigError::Invalid(format!("drive8_ppm '{v}' (-1000 to 1000)")))
 }
 
+/// A drive with its own CPU and DOS.
+pub trait TrueDrive: MediaSlot + DebugTarget + Savestate + Send {
+    fn model(&self) -> DriveModel;
+    /// The debug memory space of the drive's CPU.
+    fn space(&self) -> MemSpaceId;
+    fn pc(&self) -> u16;
+    fn has_disk(&self) -> bool;
+    /// RESET from the serial bus; `hard` = power cycle.
+    fn reset(&mut self, hard: bool);
+    /// Lines the drive pulls, given the bus ATN level.
+    fn iec_out(&self, atn_low: bool) -> IecLines;
+    /// One microsecond with the lines the host pulls.
+    fn tick(&mut self, host: IecLines, dbg: Option<&mut DebugHooks>) -> Cycle;
+}
+
+impl TrueDrive for CbmDrive {
+    fn model(&self) -> DriveModel {
+        CbmDrive::model(self)
+    }
+    fn space(&self) -> MemSpaceId {
+        CbmDrive::space(self)
+    }
+    fn pc(&self) -> u16 {
+        CbmDrive::pc(self)
+    }
+    fn has_disk(&self) -> bool {
+        CbmDrive::has_disk(self)
+    }
+    fn reset(&mut self, hard: bool) {
+        CbmDrive::reset(self, hard);
+    }
+    fn iec_out(&self, atn_low: bool) -> IecLines {
+        CbmDrive::iec_out(self, atn_low)
+    }
+    fn tick(&mut self, host: IecLines, dbg: Option<&mut DebugHooks>) -> Cycle {
+        CbmDrive::tick(self, host, dbg)
+    }
+}
+
+impl TrueDrive for Drive1581 {
+    fn model(&self) -> DriveModel {
+        DriveModel::C1581
+    }
+    fn space(&self) -> MemSpaceId {
+        Drive1581::space(self)
+    }
+    fn pc(&self) -> u16 {
+        Drive1581::pc(self)
+    }
+    fn has_disk(&self) -> bool {
+        Drive1581::has_disk(self)
+    }
+    fn reset(&mut self, hard: bool) {
+        Drive1581::reset(self, hard);
+    }
+    fn iec_out(&self, atn_low: bool) -> IecLines {
+        Drive1581::iec_out(self, atn_low)
+    }
+    fn tick(&mut self, host: IecLines, dbg: Option<&mut DebugHooks>) -> Cycle {
+        Drive1581::tick(self, host, dbg)
+    }
+}
+
 pub enum DriveKind {
     /// Its own CPU and DOS: fast loaders and copy protection work.
-    True(Box<CbmDrive>),
+    True(Box<dyn TrueDrive>),
     /// KERNAL-level file access served directly from the image.
     Virtual(Box<VirtualDrive>),
 }
@@ -53,6 +119,7 @@ pub enum DriveKind {
 pub struct DriveRoms<'a> {
     pub dos1541: Option<&'a [u8]>,
     pub dos1571: Option<&'a [u8]>,
+    pub dos1581: Option<&'a [u8]>,
 }
 
 impl<'a> DriveRoms<'a> {
@@ -61,6 +128,7 @@ impl<'a> DriveRoms<'a> {
         Self {
             dos1541: roms.get("dos1541").map(Vec::as_slice),
             dos1571: roms.get("dos1571").map(Vec::as_slice),
+            dos1581: roms.get("dos1581").map(Vec::as_slice),
         }
     }
 
@@ -68,6 +136,7 @@ impl<'a> DriveRoms<'a> {
         match model {
             DriveModel::C1541 => self.dos1541,
             DriveModel::C1571 => self.dos1571,
+            DriveModel::C1581 => self.dos1581,
         }
     }
 }
@@ -91,16 +160,19 @@ impl SerialDrive {
         host_hz: u32,
     ) -> Self {
         Self {
-            kind: DriveKind::True(Box::new(CbmDrive::new(model, rom, number, space))),
+            kind: DriveKind::True(match model {
+                DriveModel::C1581 => Box::new(Drive1581::new(rom, number, space)),
+                _ => Box::new(CbmDrive::new(model, rom, number, space)),
+            }),
             device,
             clock: ClockDivider::new(DRIVE_HZ, host_hz).expect("non-zero clock"),
         }
     }
 
-    /// The drive a machine option asks for: "1541" or "1571" (true drive,
-    /// needs its DOS ROM), "virtual" or "none". Without the option: the
-    /// `preferred` true drive if its ROM is there, else the other one, else
-    /// the virtual drive.
+    /// The drive a machine option asks for: "1541", "1571" or "1581" (true
+    /// drive, needs its DOS ROM), "virtual" or "none". Without the option:
+    /// the `preferred` true drive if its ROM is there, else the other 5.25"
+    /// drive, else the virtual drive (a 1581 only when asked for).
     pub fn from_option(
         option: Option<&str>,
         roms: DriveRoms<'_>,
@@ -133,18 +205,19 @@ impl SerialDrive {
         };
         let other = match preferred {
             DriveModel::C1541 => DriveModel::C1571,
-            DriveModel::C1571 => DriveModel::C1541,
+            DriveModel::C1571 | DriveModel::C1581 => DriveModel::C1541,
         };
         match option {
             Some("none") => Ok(None),
             Some("virtual") => Ok(Some(Self::new_virtual(number, device, host_hz))),
             Some("1541") => true_drive(DriveModel::C1541),
             Some("1571") => true_drive(DriveModel::C1571),
+            Some("1581") => true_drive(DriveModel::C1581),
             None if roms.get(preferred).is_some() => true_drive(preferred),
             None if roms.get(other).is_some() => true_drive(other),
             None => Ok(Some(Self::new_virtual(number, device, host_hz))),
             Some(other) => Err(ConfigError::Invalid(format!(
-                "drive{number} option '{other}' (1541, 1571, virtual or none)"
+                "drive{number} option '{other}' (1541, 1571, 1581, virtual or none)"
             ))),
         }
     }
@@ -295,6 +368,7 @@ mod tests {
         let both = DriveRoms {
             dos1541: Some(&r41),
             dos1571: Some(&r71),
+            dos1581: None,
         };
         let only41 = DriveRoms {
             dos1571: None,
@@ -312,6 +386,17 @@ mod tests {
         assert_eq!(pick(Some("1541"), both, DriveModel::C1571), "1541");
         assert_eq!(pick(Some("none"), both, DriveModel::C1571), "none");
         assert_eq!(pick(Some("1581"), both, DriveModel::C1571), "error");
+        let r81 = vec![0; 0x8000];
+        let with81 = DriveRoms {
+            dos1581: Some(&r81),
+            ..both
+        };
+        assert_eq!(pick(Some("1581"), with81, DriveModel::C1571), "1581");
+        let only81 = DriveRoms {
+            dos1581: Some(&r81),
+            ..DriveRoms::default()
+        };
+        assert_eq!(pick(None, only81, DriveModel::C1571), "virtual");
         let short = DriveRoms {
             dos1571: Some(&r41),
             ..both

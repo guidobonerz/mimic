@@ -374,3 +374,14 @@ fn c1571_savestate_round_trip() {
     drive_with(&[0x4c, 0x00, 0xc0]).save(&mut w3);
     assert!(b.load(&mut StateReader::new(&w3.into_bytes())).is_err());
 }
+
+#[test]
+fn d81_does_not_fit_a_1541() {
+    let mut d = drive_with(&[0x4c, 0x00, 0xc0]);
+    let d81 = Media {
+        name: "x.d81".into(),
+        kind: MediaKind::Disk,
+        backend: Box::new(Mem(D64::blank_d81(b"X", *b"XX").to_bytes())),
+    };
+    assert!(d.insert(d81).is_err());
+}

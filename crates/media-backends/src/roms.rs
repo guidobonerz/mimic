@@ -53,6 +53,7 @@ const fn optional(role: &'static str, prefixes: &'static [&'static str], size: u
 const DOS1541: RomSpec = optional("dos1541", &["dos1541-", "1541-"], 0x4000);
 /// The 1571 DOS (the C128D's 1571CR ROM is named `dos1571cr`).
 const DOS1571: RomSpec = optional("dos1571", &["dos1571-", "1571-"], 0x8000);
+const DOS1581: RomSpec = optional("dos1581", &["dos1581-", "1581-"], 0x8000);
 
 /// ROMs needed per machine id.
 pub fn specs(machine: &str) -> &'static [RomSpec] {
@@ -62,6 +63,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         rom("chargen", &["chargen", "characters", "char"], 0x1000),
         DOS1541,
         DOS1571,
+        DOS1581,
     ];
     // Kernal 901486-07 is the PAL one, -06 and -02 are NTSC; character
     // ROM 901460-03 is the standard set (-02 is the Japanese VIC-1001).
@@ -86,6 +88,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ),
         DOS1541,
         DOS1571,
+        DOS1581,
     ];
     // Every PET ROM is optional here: the model picks its set and reports
     // what is missing. Names follow the common `basic-4.901465-…` scheme.
@@ -143,8 +146,9 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ),
         DOS1541,
         DOS1571,
+        DOS1581,
     ];
-    const C16: &[RomSpec] = &[PLUS4[0], PLUS4[1], PLUS4[2], DOS1541, DOS1571];
+    const C16: &[RomSpec] = &[PLUS4[0], PLUS4[1], PLUS4[2], DOS1541, DOS1571, DOS1581];
     // C128: KERNAL 318020, BASIC 318018 (low) / 318019 (high), character
     // ROM 390059; the C64-mode ROM as one 16 KB 251913 or as the C64's two
     // 8 KB ROMs (VICE names them basic64/kernal64).
@@ -177,6 +181,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("function", &["function", "funcrom"], 0x8000),
         DOS1541,
         DOS1571,
+        DOS1581,
     ];
     match machine {
         "c64" => C64,

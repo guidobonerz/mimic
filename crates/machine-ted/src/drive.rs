@@ -1,4 +1,4 @@
-//! Drive 8 on the serial bus: a [`Drive8`] (true 1541 or 1571, or virtual
+//! Drive 8 on the serial bus: a [`Drive8`] (true 1541, 1571 or 1581, or virtual
 //! drive) clocked next to the TED's double clock (1 773 447 Hz PAL,
 //! 1 789 772 Hz NTSC). The CPU port wiring is in the crate docs.
 

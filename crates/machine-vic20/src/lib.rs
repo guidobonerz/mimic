@@ -14,7 +14,8 @@
 //!   blocks 1, 2, 3 and 5) — see [`memory`].
 //! - `port1`: "joystick" (default) or "none".
 //! - `drive8`: "1541" (default when `roms["dos1541"]` is given), "1571"
-//!   (`roms["dos1571"]`), "virtual" or "none"; `drive8_ppm`: the drive
+//!   (`roms["dos1571"]`), "1581" (`roms["dos1581"]`), "virtual" or "none";
+//!   `drive8_ppm`: the drive
 //!   crystal's deviation in ppm.
 //! - `autostart`: "on" loads and runs the disk in drive 8 after boot.
 //! - `roms`: "stub" uses a tiny built-in KERNAL, for tests without ROMs.

@@ -23,7 +23,8 @@
 //! motor, 4 cassette read, 6 serial CLK in, 7 serial DATA in (line level).
 //!
 //! Options: `ram` ("16k", "64k"; defaults per machine), `drive8` ("1541"
-//! when `roms["dos1541"]` is given, "1571" with `roms["dos1571"]`,
+//! when `roms["dos1541"]` is given, "1571" with `roms["dos1571"]`, "1581"
+//! with `roms["dos1581"]`,
 //! "virtual" or "none"), `drive8_ppm` (drive crystal deviation),
 //! `autostart` ("on"), `port1` ("joystick" default, "none"), `roms` = "stub".
 

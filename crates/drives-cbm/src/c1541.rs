@@ -60,13 +60,15 @@ const CYCLES_PER_BYTE: [u16; 4] = [32, 30, 28, 26];
 pub enum DriveModel {
     C1541,
     C1571,
+    /// 3.5" drive with its own implementation in [`crate::c1581`].
+    C1581,
 }
 
 impl DriveModel {
     pub fn rom_size(self) -> usize {
         match self {
             Self::C1541 => ROM_SIZE,
-            Self::C1571 => 0x8000,
+            Self::C1571 | Self::C1581 => 0x8000,
         }
     }
 
@@ -75,6 +77,7 @@ impl DriveModel {
         match self {
             Self::C1541 => "dos1541",
             Self::C1571 => "dos1571",
+            Self::C1581 => "dos1581",
         }
     }
 
@@ -82,13 +85,14 @@ impl DriveModel {
         match self {
             Self::C1541 => "1541",
             Self::C1571 => "1571",
+            Self::C1581 => "1581",
         }
     }
 
     fn sides(self) -> u8 {
         match self {
             Self::C1541 => 1,
-            Self::C1571 => 2,
+            Self::C1571 | Self::C1581 => 2,
         }
     }
 }
@@ -113,9 +117,9 @@ impl Disk {
     fn image_track(&self, side: u8, half_track: u8) -> Option<u8> {
         let t = half_track / 2 + 1;
         match side {
-            0 if self.image.double_sided && t > SIDE_TRACKS => None,
+            0 if self.image.double_sided() && t > SIDE_TRACKS => None,
             0 => Some(t),
-            _ if self.image.double_sided && t <= SIDE_TRACKS => Some(t + SIDE_TRACKS),
+            _ if self.image.double_sided() && t <= SIDE_TRACKS => Some(t + SIDE_TRACKS),
             _ => None,
         }
         .filter(|&t| t <= self.image.tracks)
@@ -394,7 +398,7 @@ impl CbmDrive {
             | (u8::from(bus.clk) << 2)
             | (u8::from(bus.atn) << 7);
         let pa = match self.model {
-            DriveModel::C1541 => 0xff,
+            DriveModel::C1541 | DriveModel::C1581 => 0xff,
             // Port A reads the pins: outputs as driven, PA0/PA7 inputs.
             DriveModel::C1571 => {
                 self.via1.port_a_out()
@@ -674,6 +678,12 @@ impl MediaSlot for CbmDrive {
         let mut bytes = vec![0; media.backend.len() as usize];
         media.backend.read(0, &mut bytes)?;
         let image = D64::parse(&bytes)?;
+        if image.format == media::Format::D81 {
+            return Err(MediaError::Format(format!(
+                "a 1581 disk (D81) does not fit a {}",
+                self.model.name()
+            )));
+        }
         let slots = usize::from(self.model.sides()) * usize::from(HALF_TRACKS);
         let mut disk = Disk {
             media,
@@ -725,6 +735,7 @@ impl Savestate for CbmDrive {
         let tag = match self.model {
             DriveModel::C1541 => *b"1541",
             DriveModel::C1571 => *b"1571",
+            DriveModel::C1581 => *b"1581",
         };
         w.chunk(tag, VERSION, |w| {
             w.raw(&self.ram[..]);

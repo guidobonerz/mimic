@@ -211,7 +211,7 @@ fn formats_a_double_sided_disk() {
     let mut bytes = vec![0; media.backend.len() as usize];
     media.backend.read(0, &mut bytes).unwrap();
     let d = D64::parse(&bytes).unwrap();
-    assert!(d.double_sided);
+    assert!(d.double_sided());
     assert_eq!(d.sector(18, 0).unwrap()[3], 0x80, "double-sided BAM flag");
     assert_eq!(&d.sector(18, 0).unwrap()[0x90..0x95], b"FRESH");
     assert_eq!(d.blocks_free(), 1328);

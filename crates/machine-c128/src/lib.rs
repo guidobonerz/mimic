@@ -2,8 +2,9 @@
 //!
 //! 8502 (1 or 2 MHz) and Z80 sharing the bus under the MMU 8722, VIC-IIe
 //! (40 columns) and VDC 8563 (80 columns, its own 16 or 64 KB RAM), SID,
-//! two CIAs, 128 KB RAM, C64 mode, drive 8 (a true-emulated 1571 with fast
-//! serial transfers, a 1541, or the virtual drive) and a "program" slot.
+//! two CIAs, 128 KB RAM, C64 mode, drive 8 (a true-emulated 1571 or 1581
+//! with fast serial transfers, a 1541, or the virtual drive) and a
+//! "program" slot.
 //!
 //! At power-on the Z80 runs its BIOS (KERNAL ROM `$D000–$DFFF`), which
 //! hands over to the 8502 through MCR bit 0 (or enters C64 mode when C= is
@@ -19,9 +20,9 @@
 //! Options: `display` ("40" default, "80": the 40/80 key down at power-on),
 //! `vdc_ram` ("16k" default, "64k"), `sid` ("6581"/"8580"), `drive8`
 //! ("1571" with `roms["dos1571"]`, the default when given; "1541" with
-//! `roms["dos1541"]`; "virtual"; "none"), `drive8_ppm` (drive crystal
-//! deviation, see [`drives_cbm::serial`]), `autostart` ("on"), `port2`
-//! ("joystick"/"none"), `roms` = "stub".
+//! `roms["dos1541"]`; "1581" with `roms["dos1581"]`; "virtual"; "none"),
+//! `drive8_ppm` (drive crystal deviation, see [`drives_cbm::serial`]),
+//! `autostart` ("on"), `port2` ("joystick"/"none"), `roms` = "stub".
 //!
 //! ROMs (`MachineConfig::roms`, user-supplied): "kernal" (16 KB, with the
 //! screen editor and the Z80 BIOS), "basic-lo", "basic-hi" (16 KB each),

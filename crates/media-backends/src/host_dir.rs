@@ -1,4 +1,5 @@
-//! A host folder as a disk: the PRG files in it appear as a D64 image
+//! A host folder as a disk: the PRG files in it appear as a D64 image, or a
+//! D81 when they do not fit a D64 (more than 664 blocks or 144 files)
 //! (built when the folder is opened), and what the drive writes goes back
 //! into the folder as files. Works with the true drive and the virtual one,
 //! since both only see the image.
@@ -7,7 +8,8 @@
 //! characters at most); a file the machine saves gets the lower-cased name
 //! plus `.prg`, or overwrites the host file it came from. Files are never
 //! deleted from the folder (SCRATCH only removes them from the image).
-//! Folders with more than 664 blocks of PRGs show the files that fit.
+//! Folders with more than 3160 blocks of PRGs show the files that fit. A
+//! D81 needs the 1581 (or the virtual drive) in the slot.
 //!
 //! Unlike image files (behind a copy-on-write overlay until committed), the
 //! folder is written through: a SAVE lands in the folder when the drive
@@ -56,18 +58,30 @@ impl HostDirBackend {
         let title = dir
             .file_name()
             .map_or_else(|| "HOST".into(), |n| n.to_string_lossy().into_owned());
-        let mut d64 = D64::blank(&cbm_name(&title), *b"PT");
-        let mut files = BTreeMap::new();
+        let mut programs = Vec::new();
         for path in entries {
             let stem = path
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let name = cbm_name(&stem);
-            if name.is_empty() || files.contains_key(&name) {
+            if name.is_empty() || programs.iter().any(|(n, _, _)| *n == name) {
                 continue;
             }
             let data = fs::read(&path).map_err(io_err)?;
+            programs.push((name, path, data));
+        }
+        let blocks: usize = programs
+            .iter()
+            .map(|(_, _, d)| d.len().div_ceil(254).max(1))
+            .sum();
+        let mut d64 = if blocks > 664 || programs.len() > 144 {
+            D64::blank_d81(&cbm_name(&title), *b"PT")
+        } else {
+            D64::blank(&cbm_name(&title), *b"PT")
+        };
+        let mut files = BTreeMap::new();
+        for (name, path, data) in programs {
             // A full disk shows the files that fit.
             if d64.write_file(&name, 2, &data).is_ok() {
                 files.insert(name, (path, data));
@@ -190,6 +204,22 @@ mod tests {
         assert_eq!(fs::read(dir.join("new game.prg")).unwrap(), [0x01, 0x10, 9]);
         assert_eq!(fs::read(dir.join("Hello.prg")).unwrap(), [0x01, 0x08, 7]);
         assert!(dir.join("notes.txt").exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn large_folders_become_d81() {
+        let dir = temp_dir("big");
+        for i in 0..4 {
+            fs::write(dir.join(format!("part{i}.prg")), vec![i as u8; 200 * 254]).unwrap();
+        }
+        let mut media = open(&dir).unwrap();
+        let mut bytes = vec![0; media.backend.len() as usize];
+        media.backend.read(0, &mut bytes).unwrap();
+        let d = D64::parse(&bytes).unwrap();
+        assert_eq!(d.format, media::Format::D81);
+        assert_eq!(d.directory().unwrap().len(), 4);
+        assert_eq!(d.read_file(b"PART3").unwrap().1, vec![3u8; 200 * 254]);
         fs::remove_dir_all(&dir).unwrap();
     }
 }
