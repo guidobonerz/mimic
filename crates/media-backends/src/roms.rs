@@ -83,9 +83,40 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ),
         DOS1541,
     ];
+    // Every PET ROM is optional here: the model picks its set and reports
+    // what is missing. Names follow the common `basic-4.901465-…` scheme.
+    const PET: &[RomSpec] = &[
+        optional("basic1", &["basic-1-", "basic1"], 0x2000),
+        optional("basic2", &["basic-2-", "basic2"], 0x2000),
+        optional("basic4", &["basic-4-", "basic4"], 0x3000),
+        optional("kernal1", &["kernal-1-", "kernal1"], 0x1000),
+        optional("kernal2", &["kernal-2-", "kernal2"], 0x1000),
+        optional("kernal4", &["kernal-4-", "kernal4"], 0x1000),
+        optional("edit1n", &["edit-1-n", "edit1n"], 0x800),
+        optional("edit2n", &["edit-2-n", "edit2n"], 0x800),
+        optional("edit2b", &["edit-2-b", "edit2b"], 0x800),
+        optional("edit4-40n-50", &["edit-4-40-n-50hz", "edit4-40n-50"], 0x800),
+        optional("edit4-40n-60", &["edit-4-40-n-60hz", "edit4-40n-60"], 0x800),
+        optional("edit4-40b-50", &["edit-4-40-b-50hz", "edit4-40b-50"], 0x800),
+        optional("edit4-40b-60", &["edit-4-40-b-60hz", "edit4-40b-60"], 0x800),
+        // 901474-04 is the original; a patched copy often sits next to it.
+        optional(
+            "edit4-80b-50",
+            &[
+                "edit-4-80-b-50hz-901474-04-bin",
+                "edit-4-80-b-50hz",
+                "edit4-80b-50",
+            ],
+            0x800,
+        ),
+        optional("edit4-80b-60", &["edit-4-80-b-60hz", "edit4-80b-60"], 0x800),
+        optional("chargen1", &["characters-1-", "chargen1"], 0x800),
+        optional("chargen2", &["characters-2-", "chargen2"], 0x800),
+    ];
     match machine {
         "c64" => C64,
         "vic20" => VIC20,
+        "pet" => PET,
         _ => &[],
     }
 }
@@ -95,6 +126,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
     match machine {
         "c64" => &["c64"],
         "vic20" => &["vic20"],
+        "pet" => &["pet"],
         _ => &[],
     }
 }

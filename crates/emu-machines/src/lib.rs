@@ -40,6 +40,7 @@ pub fn registry() -> Registry {
     r.register(machine_sim6502::entry());
     r.register(machine_c64::entry());
     r.register(machine_vic20::entry());
+    r.register(machine_pet::entry());
     r
 }
 

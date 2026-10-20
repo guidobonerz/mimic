@@ -21,8 +21,10 @@
 //! flag and, in free-run mode, reloads the latch (one cycle at the latch
 //! value), so it interrupts every N + 2 cycles. T2 counts down once and
 //! interrupts once per write of its high byte. Source: MOS 6522 data sheet;
-//! Rockwell R6522 data sheet (timing diagrams). The shift register stores
-//! but does not shift yet (unused by the 1541).
+//! Rockwell R6522 data sheet (timing diagrams). Of the shift register modes
+//! only mode 4 (free-running output at the T2 rate, the PET's sound) shifts;
+//! it shifts every T2 low latch + 1 cycles and drives CB2 with the bit
+//! shifted out. The other modes store the value.
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -65,6 +67,9 @@ pub struct Via {
     /// Input latches (ACR bits 0/1) captured on the CA1/CB1 edge.
     ira_latch: u8,
     irb_latch: u8,
+    /// Shift register mode 4: cycles to the next shift, CB2 output.
+    sr_count: u8,
+    sr_cb2: bool,
 }
 
 impl Via {
@@ -108,9 +113,14 @@ impl Via {
         self.pcr & 0x0e != 0x0c
     }
 
-    /// CB2 output level in manual output mode.
+    /// CB2 output level in manual output mode, or the shift register
+    /// output in shift mode 4.
     pub fn cb2_out(&self) -> bool {
-        self.pcr & 0xe0 != 0xc0
+        if self.acr & 0x1c == 0x10 {
+            self.sr_cb2
+        } else {
+            self.pcr & 0xe0 != 0xc0
+        }
     }
 
     /// CA1 input level; the edge selected by PCR bit 0 sets the CA1 flag.
@@ -159,6 +169,17 @@ impl Via {
             if self.t1_reload {
                 // The counter showed 0 this cycle; next cycle it reloads.
                 self.t1_counter = 0xffff;
+            }
+        }
+
+        // Shift register mode 4: free-running output at the T2 rate.
+        if self.acr & 0x1c == 0x10 {
+            if self.sr_count == 0 {
+                self.sr_count = self.t2_latch_lo;
+                self.sr = self.sr.rotate_left(1);
+                self.sr_cb2 = self.sr & 1 != 0;
+            } else {
+                self.sr_count -= 1;
             }
         }
 
@@ -279,7 +300,7 @@ impl Via {
 }
 
 const TAG: [u8; 4] = *b"6522";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Via {
     fn save(&self, w: &mut StateWriter) {
@@ -315,11 +336,13 @@ impl Savestate for Via {
             ] {
                 w.bool(b);
             }
+            w.u8(self.sr_count);
+            w.bool(self.sr_cb2);
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut v = Via::new();
         let mut bytes = [0u8; 12];
         c.raw_into(&mut bytes)?;
@@ -350,6 +373,11 @@ impl Savestate for Via {
         v.pb7 = c.bool()?;
         v.ca1 = c.bool()?;
         v.cb1 = c.bool()?;
+        // Version 1 states predate the shift register output.
+        if version >= 2 {
+            v.sr_count = c.u8()?;
+            v.sr_cb2 = c.bool()?;
+        }
         *self = v;
         Ok(())
     }
@@ -440,6 +468,26 @@ mod tests {
         assert!(!v.ca2_out());
         v.write(0xc, 0x0e);
         assert!(v.ca2_out());
+    }
+
+    #[test]
+    fn shift_register_mode_4_drives_cb2() {
+        let mut v = Via::new();
+        v.write(0x8, 3); // T2 low latch: shift every 4 cycles
+        v.write(0xb, 0x10);
+        v.write(0xa, 0x0f); // 0000 1111
+        let mut levels = Vec::new();
+        for _ in 0..32 {
+            v.tick();
+            levels.push(v.cb2_out());
+        }
+        // MSB first, each bit holding CB2 for 4 cycles: 0000 1111.
+        let bits: Vec<bool> = levels.iter().step_by(4).copied().collect();
+        assert_eq!(
+            bits,
+            [false, false, false, false, true, true, true, true],
+            "{levels:?}"
+        );
     }
 
     #[test]

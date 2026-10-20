@@ -13,6 +13,7 @@ emu-core.workspace = true
 emu-machines.workspace = true
 machine-c64.workspace = true
 machine-vic20.workspace = true
+machine-pet.workspace = true
 
 [dev-dependencies]
 emu-debug.workspace = true

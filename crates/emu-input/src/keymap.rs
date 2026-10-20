@@ -198,11 +198,115 @@ pub static VIC20: Keymap = Keymap {
     entries: VIC20_POSITIONAL,
 };
 
+/// PET graphics keyboard code (`row * 8 + column`).
+const fn g(row: u16, col: u16) -> u16 {
+    row * 8 + col
+}
+
+/// PET business keyboard code (`100 + row * 8 + column`).
+const fn b(row: u16, col: u16) -> u16 {
+    100 + row * 8 + col
+}
+
+/// PET keyboards by key label: each host key names the graphics and the
+/// business key with that label (see `machine-pet::keyboard`); the machine
+/// ignores the codes of the keyboard it does not have. Keypad keys map to
+/// the PC keypad; graphics-only symbols without a PC key of their own are
+/// on Page Up (@) and Page Down (?).
+const PET_LABELLED: &[(&str, &[u16])] = &[
+    ("Backquote", &[g(0, 5), b(9, 0)]), // ←
+    ("Digit0", &[g(8, 6), b(1, 3)]),
+    ("Digit1", &[g(6, 6), b(8, 7)]),
+    ("Digit2", &[g(7, 6), b(7, 7)]),
+    ("Digit3", &[g(6, 7), b(6, 7)]),
+    ("Digit4", &[g(4, 6), b(5, 7)]),
+    ("Digit5", &[g(5, 6), b(2, 7)]),
+    ("Digit6", &[g(4, 7), b(3, 7)]),
+    ("Digit7", &[g(2, 6), b(1, 4)]),
+    ("Digit8", &[g(3, 6), b(0, 4)]),
+    ("Digit9", &[g(2, 7), b(1, 7)]),
+    ("Minus", &[g(8, 7), b(0, 3)]),     // -
+    ("Equal", &[g(9, 7)]),              // =
+    ("Backspace", &[g(1, 7), b(4, 7)]), // DEL
+    ("Tab", &[b(4, 0)]),                // TAB
+    ("Insert", &[g(9, 0), b(8, 0)]),    // RVS
+    ("Home", &[g(0, 6), b(8, 4)]),      // HOME
+    ("Delete", &[g(2, 5), b(1, 5)]),    // ↑
+    ("Escape", &[g(9, 4), b(9, 4)]),    // STOP
+    ("F1", &[b(2, 0)]),                 // ESC
+    ("KeyA", &[g(4, 0), b(3, 0)]),
+    ("KeyB", &[g(6, 2), b(6, 2)]),
+    ("KeyC", &[g(6, 1), b(6, 1)]),
+    ("KeyD", &[g(4, 1), b(3, 1)]),
+    ("KeyE", &[g(2, 1), b(5, 1)]),
+    ("KeyF", &[g(5, 1), b(2, 2)]),
+    ("KeyG", &[g(4, 2), b(3, 2)]),
+    ("KeyH", &[g(5, 2), b(2, 3)]),
+    ("KeyI", &[g(3, 3), b(4, 5)]),
+    ("KeyJ", &[g(4, 3), b(3, 3)]),
+    ("KeyK", &[g(5, 3), b(2, 5)]),
+    ("KeyL", &[g(4, 4), b(3, 5)]),
+    ("KeyM", &[g(6, 3), b(8, 3)]),
+    ("KeyN", &[g(7, 2), b(7, 2)]),
+    ("KeyO", &[g(2, 4), b(5, 5)]),
+    ("KeyP", &[g(3, 4), b(4, 6)]),
+    ("KeyQ", &[g(2, 0), b(5, 0)]),
+    ("KeyR", &[g(3, 1), b(4, 2)]),
+    ("KeyS", &[g(5, 0), b(2, 1)]),
+    ("KeyT", &[g(2, 2), b(5, 2)]),
+    ("KeyU", &[g(2, 3), b(5, 3)]),
+    ("KeyV", &[g(7, 1), b(7, 1)]),
+    ("KeyW", &[g(3, 0), b(4, 1)]),
+    ("KeyX", &[g(7, 0), b(8, 1)]),
+    ("KeyY", &[g(3, 2), b(4, 3)]),
+    ("KeyZ", &[g(6, 0), b(7, 0)]),
+    ("BracketLeft", &[g(9, 1), b(5, 6)]),                 // [
+    ("BracketRight", &[g(8, 2), b(2, 4)]),                // ]
+    ("Backslash", &[g(1, 3), b(4, 4)]),                   // \
+    ("Semicolon", &[g(6, 4), b(2, 6)]),                   // ;
+    ("Quote", &[g(5, 4), b(9, 5)]),                       // :
+    ("Comma", &[g(7, 3), b(7, 3)]),                       // ,
+    ("Period", &[g(9, 6), b(6, 4)]),                      // .
+    ("Slash", &[g(3, 7), b(8, 6)]),                       // /
+    ("Enter", &[g(6, 5), b(3, 4)]),                       // RETURN
+    ("NumpadEnter", &[g(6, 5), b(3, 4)]),                 // RETURN
+    ("ShiftLeft", &[g(8, 0), b(6, 0)]),                   // LSHIFT
+    ("ShiftRight", &[g(8, 5), b(6, 6)]),                  // RSHIFT
+    ("Space", &[g(9, 2), b(8, 2)]),                       // SPACE
+    ("ArrowDown", &[g(1, 6), b(5, 4)]),                   // CRSR_DOWN
+    ("ArrowRight", &[g(0, 7), b(0, 5)]),                  // CRSR_RIGHT
+    ("ArrowUp", &[g(8, 5), b(6, 6), g(1, 6), b(5, 4)]),   // SHIFT + CRSR DOWN
+    ("ArrowLeft", &[g(8, 5), b(6, 6), g(0, 7), b(0, 5)]), // SHIFT + CRSR RIGHT
+    ("Numpad0", &[g(8, 6), b(7, 4)]),
+    ("Numpad1", &[g(6, 6), b(1, 0)]),
+    ("Numpad2", &[g(7, 6), b(0, 0)]),
+    ("Numpad3", &[g(6, 7), b(9, 1)]),
+    ("Numpad4", &[g(4, 6), b(1, 1)]),
+    ("Numpad5", &[g(5, 6), b(0, 1)]),
+    ("Numpad6", &[g(4, 7), b(9, 2)]),
+    ("Numpad7", &[g(2, 6), b(1, 2)]),
+    ("Numpad8", &[g(3, 6), b(0, 2)]),
+    ("Numpad9", &[g(2, 7), b(9, 3)]),
+    ("NumpadDecimal", &[g(9, 6), b(6, 3)]),  // .
+    ("NumpadSubtract", &[g(8, 7), b(0, 3)]), // -
+    ("NumpadAdd", &[g(7, 7)]),               // +
+    ("NumpadMultiply", &[g(5, 7)]),          // *
+    ("NumpadDivide", &[g(3, 7), b(8, 6)]),   // /
+    ("PageUp", &[g(8, 1), b(3, 6)]),         // @
+    ("PageDown", &[g(7, 4)]),                // ?
+];
+
+pub static PET: Keymap = Keymap {
+    machine: "pet",
+    entries: PET_LABELLED,
+};
+
 /// The positional keymap for a machine id.
 pub fn positional(machine: &str) -> Option<&'static Keymap> {
     match machine {
         "c64" => Some(&C64),
         "vic20" => Some(&VIC20),
+        "pet" => Some(&PET),
         _ => None,
     }
 }
@@ -241,6 +345,19 @@ mod tests {
             names.dedup();
             assert_eq!(names.len(), map.len());
         }
+    }
+
+    #[test]
+    fn pet_codes_are_in_range_and_host_names_unique() {
+        let mut names: Vec<_> = PET_LABELLED.iter().map(|(n, _)| *n).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), PET_LABELLED.len());
+        for (_, keys) in PET_LABELLED {
+            assert!(keys.iter().all(|&k| k < 80 || (100..180).contains(&k)));
+        }
+        let a: Vec<_> = PET.lookup("KeyA").unwrap().collect();
+        assert_eq!(a, [MachineKey(g(4, 0)), MachineKey(b(3, 0))]);
     }
 
     #[test]
