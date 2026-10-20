@@ -42,7 +42,11 @@ fn run_to(v: &mut Vic2, m: &Mem, line: u16, c: u8) {
 
 /// Screen at $0400, charset at $1000, text mode, 25 rows, 40 columns.
 fn text_setup() -> (Vic2, Mem) {
-    let mut v = Vic2::new();
+    text_setup_for(Model::Mos6569)
+}
+
+fn text_setup_for(model: Model) -> (Vic2, Mem) {
+    let mut v = Vic2::new(model);
     v.write(0x11, 0x1b);
     v.write(0x16, 0x08);
     v.write(0x18, 0x14);
@@ -53,14 +57,18 @@ fn text_setup() -> (Vic2, Mem) {
 
 /// Pixel at VIC X coordinate and raster line.
 fn px(v: &Vic2, x: u16, line: u16) -> u8 {
-    let col = usize::from((x + X_WRAP - VISIBLE_X0) % X_WRAP);
-    let row = usize::from(line - FIRST_LINE);
-    v.pixels()[row * WIDTH as usize + col]
+    let t = v.timing();
+    let p = (0..u16::from(t.cycles) * 8)
+        .find(|&p| t.x_at(p) == x)
+        .expect("X occurs in the line");
+    let col = usize::from(p - t.visible_p0);
+    let row = t.row(line).expect("visible line");
+    v.pixels()[row * t.width as usize + col]
 }
 
 #[test]
 fn a_field_is_312_lines_of_63_cycles() {
-    let mut v = Vic2::new();
+    let mut v = Vic2::new(Model::Mos6569);
     let m = Mem::new();
     let mut n = 1;
     while !cycle(&mut v, &m) {
@@ -73,7 +81,7 @@ fn a_field_is_312_lines_of_63_cycles() {
 
 #[test]
 fn register_read_masks_and_mirrors() {
-    let mut v = Vic2::new();
+    let mut v = Vic2::new(Model::Mos6569);
     for reg in 0..0x40 {
         v.write(reg, 0);
     }
@@ -96,7 +104,7 @@ fn register_read_masks_and_mirrors() {
 
 #[test]
 fn raster_irq_at_cycle_1_and_line_0_at_cycle_2() {
-    let mut v = Vic2::new();
+    let mut v = Vic2::new(Model::Mos6569);
     let m = Mem::new();
     v.write(0x1a, 0x01);
     v.write(0x12, 100);
@@ -119,7 +127,7 @@ fn raster_irq_at_cycle_1_and_line_0_at_cycle_2() {
 
 #[test]
 fn writing_the_current_line_to_the_compare_register_triggers() {
-    let mut v = Vic2::new();
+    let mut v = Vic2::new(Model::Mos6569);
     let m = Mem::new();
     v.write(0x1a, 0x01);
     run_to(&mut v, &m, 77, 30);
@@ -161,7 +169,7 @@ fn no_bad_lines_without_den_in_line_0x30() {
 
 #[test]
 fn sprite_dma_steals_cycles_55_to_59_for_sprite_0() {
-    let mut v = Vic2::new();
+    let mut v = Vic2::new(Model::Mos6569);
     let m = Mem::new();
     v.write(0x15, 0x01);
     v.write(0x01, 100);
@@ -300,7 +308,7 @@ fn savestate_mid_frame_continues_identically() {
     let mut w = StateWriter::new();
     a.save(&mut w);
     let data = w.into_bytes();
-    let mut b = Vic2::new();
+    let mut b = Vic2::new(Model::Mos6569);
     b.load(&mut StateReader::new(&data)).unwrap();
     assert_eq!(a, b);
     frame(&mut a, &m);
@@ -310,4 +318,105 @@ fn savestate_mid_frame_continues_identically() {
     let before = b.clone();
     assert!(b.load(&mut StateReader::new(&data[..100])).is_err());
     assert_eq!(b, before);
+}
+
+#[test]
+fn ntsc_field_is_263_lines_of_65_cycles() {
+    let mut v = Vic2::new(Model::Mos6567R8);
+    let m = Mem::new();
+    let mut n = 1;
+    while !cycle(&mut v, &m) {
+        n += 1;
+    }
+    assert_eq!(n, 263 * 65);
+    assert_eq!(v.timing().cpu_hz(), 1_022_727);
+    let s = v.timing().signal();
+    assert_eq!((s.lines_per_field, s.total_pixels), (263, 520));
+    assert_eq!(s.standard, VideoStandard::Ntsc);
+}
+
+#[test]
+fn x_coordinates_per_line() {
+    // 6569: every X from 0 to $1F7 exactly once; cycle 1 at $194.
+    let mut seen = [0u8; 512];
+    for p in 0..63 * 8 {
+        seen[usize::from(PAL.x_at(p))] += 1;
+    }
+    assert!(seen[..504].iter().all(|&n| n == 1));
+    assert_eq!(PAL.cycle_x(1), 0x194);
+
+    // 6567R8: $19C at cycle 1, $18C–$18F three times, every other X once.
+    let mut seen = [0u8; 512];
+    for p in 0..65 * 8 {
+        seen[usize::from(NTSC.x_at(p))] += 1;
+    }
+    for (x, &n) in seen.iter().enumerate() {
+        let expected = if (0x18c..0x190).contains(&x) { 3 } else { 1 };
+        assert_eq!(n, expected, "X = {x:#x}");
+    }
+    assert_eq!(NTSC.cycle_x(1), 0x19c);
+    assert_eq!(NTSC.cycle_x(62), 0x184);
+    assert_eq!(NTSC.cycle_x(65), 0x194);
+    // From cycle 14 on both types agree.
+    for c in 14..=61 {
+        assert_eq!(NTSC.cycle_x(c), PAL.cycle_x(c), "cycle {c}");
+    }
+}
+
+#[test]
+fn ntsc_sprite_0_dma_steals_cycles_57_to_61() {
+    let mut v = Vic2::new(Model::Mos6567R8);
+    let m = Mem::new();
+    v.write(0x15, 0x01);
+    v.write(0x01, 100);
+    run_to(&mut v, &m, 100, 50);
+    let mut low = Vec::new();
+    for _ in 0..15 {
+        v.phi1(&m);
+        if !v.ba() {
+            low.push(v.cycle());
+        }
+        v.phi2(&m);
+    }
+    assert_eq!(low, [57, 58, 59, 60, 61]);
+}
+
+#[test]
+fn ntsc_frame_wraps_past_line_0() {
+    let (mut v, mut m) = text_setup_for(Model::Mos6567R8);
+    m.ram[0x0400] = 1;
+    m.color[0] = 1;
+    for row in 0..8 {
+        m.ram[0x1000 + 8 + row] = 0xff;
+    }
+    sprite_setup(&mut v, &mut m, 3, 100, 100, 2);
+    frame(&mut v, &m);
+    frame(&mut v, &m);
+    assert_eq!(v.pixels().len(), 420 * 235);
+    assert_eq!(px(&v, 24, 51), 1, "first cell, first pixel");
+    assert_eq!(px(&v, 23, 51), 14, "left border");
+    assert_eq!(px(&v, 343, 100), 6);
+    assert_eq!(px(&v, 344, 100), 14, "right border");
+    assert_eq!(px(&v, 100, 101), 2, "sprite");
+    // The first visible line is 41; lines 0–12 are the last rows.
+    assert_eq!(v.timing().row(41), Some(0));
+    assert_eq!(v.timing().row(12), Some(234));
+    assert_eq!(v.timing().row(13), None);
+    assert_eq!(px(&v, 100, 5), 14, "lower border below line 0");
+}
+
+#[test]
+fn savestate_keeps_the_vic_type() {
+    let mut a = Vic2::new(Model::Mos6567R8);
+    let m = Mem::new();
+    run_to(&mut a, &m, 262, 64);
+    let mut w = StateWriter::new();
+    a.save(&mut w);
+    let data = w.into_bytes();
+    let mut b = Vic2::new(Model::Mos6567R8);
+    b.load(&mut StateReader::new(&data)).unwrap();
+    assert_eq!(a, b);
+    let mut pal = Vic2::new(Model::Mos6569);
+    assert!(pal.load(&mut StateReader::new(&data)).is_err());
+    assert_eq!(pal, Vic2::new(Model::Mos6569));
 }

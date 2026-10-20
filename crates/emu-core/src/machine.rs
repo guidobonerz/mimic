@@ -50,6 +50,15 @@ pub struct ChipInfo {
     pub regs: Vec<ChipReg>,
 }
 
+/// How a machine is reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetKind {
+    /// Pulse the RESET line: CPUs and chips restart, RAM keeps its contents.
+    Soft,
+    /// Power cycle: RAM back to its power-on pattern as well.
+    Hard,
+}
+
 /// Why `run_frame` / `step_cycle` returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopReason {
@@ -105,6 +114,11 @@ pub trait Machine: Send {
 
     /// Emulate exactly one master cycle.
     fn step_cycle(&mut self) -> StopReason;
+
+    /// Reset the machine. Connected devices, inserted media and the
+    /// configuration stay; queued input is dropped. The time base
+    /// ([`Machine::now`]) keeps counting.
+    fn reset(&mut self, kind: ResetKind);
 
     /// The current field: full visible area including border, plus signal
     /// metadata. While halted mid-frame it is the partially drawn field:

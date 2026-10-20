@@ -63,13 +63,49 @@ impl Client {
     }
 }
 
+impl Client {
+    /// Skip events until one named `name` arrives.
+    fn event(&mut self, name: &str) -> Value {
+        loop {
+            let v = self.recv();
+            if v["event"] == name {
+                return v;
+            }
+            assert!(v.get("event").is_some(), "unexpected response {v}");
+        }
+    }
+}
+
 fn server() -> DebugServer {
-    let machine = emu_machines::registry()
-        .create("sim6502", &MachineConfig::default())
-        .unwrap();
+    server_with(MachineConfig::default())
+}
+
+/// Subroutines for stepping tests, loaded at $0800:
+///
+/// ```text
+/// 0800 JSR $0810      0810 LDA #$01      0820 INC $0401
+/// 0803 JMP $0800      0812 STA $0400     0823 RTS
+///                     0815 JSR $0820
+///                     0818 RTS
+/// ```
+fn subroutines() -> MachineConfig {
+    let mut mem = vec![0xea; 0x24];
+    mem[0x00..0x06].copy_from_slice(&[0x20, 0x10, 0x08, 0x4c, 0x00, 0x08]);
+    mem[0x10..0x19].copy_from_slice(&[0xa9, 0x01, 0x8d, 0x00, 0x04, 0x20, 0x20, 0x08, 0x60]);
+    mem[0x20..0x24].copy_from_slice(&[0xee, 0x01, 0x04, 0x60]);
+    let mut program = vec![0x00, 0x08];
+    program.extend_from_slice(&mem);
+    let mut config = MachineConfig::default();
+    config.roms.insert("program".into(), program);
+    config
+}
+
+fn server_with(config: MachineConfig) -> DebugServer {
+    let machine = emu_machines::registry().create("sim6502", &config).unwrap();
     DebugServer::start(
         Session::new(machine, "sim6502"),
         ServerConfig {
+            vice: None,
             bind: "127.0.0.1:0".parse().unwrap(),
             run: false,
             realtime: false,
@@ -151,10 +187,16 @@ fn resume_until_breakpoint_pushes_stopped_event() {
     let mut c = Client::connect(&server);
     c.recv();
     let id = c.ok(json!({"cmd": "break_add", "addr": 0x0806}))["bp"].clone();
-    c.ok(json!({"cmd": "resume"}));
+    assert_eq!(c.ok(json!({"cmd": "resume"})), json!({"running": true}));
+    let ev = c.recv();
+    assert_eq!(ev["event"], "resumed");
+    assert!(ev["pc"].is_u64(), "{ev}");
     let ev = c.recv();
     assert_eq!(ev["event"], "stopped", "{ev}");
-    assert_eq!(ev["reason"], json!({"kind": "breakpoint", "bp": id}));
+    assert_eq!(
+        ev["reason"],
+        json!({"kind": "breakpoint", "bp": id, "hits": 1})
+    );
     assert_eq!(ev["pc"], 0x0806);
     let info = c.ok(json!({"cmd": "info"}));
     assert_eq!(info["running"], false);
@@ -192,10 +234,151 @@ fn refuses_non_loopback_bind() {
     let r = DebugServer::start(
         Session::new(machine, "sim6502"),
         ServerConfig {
+            vice: None,
             bind: "0.0.0.0:0".parse().unwrap(),
             run: false,
             realtime: false,
         },
     );
     assert!(r.is_err());
+}
+
+#[test]
+fn step_over_step_out_and_run_to() {
+    let server = server_with(subroutines());
+    let mut c = Client::connect(&server);
+    c.recv();
+    assert_eq!(c.ok(json!({"cmd": "step_instr"}))["pc"], 0x0800, "reset");
+
+    // Over the JSR at $0800: the whole subroutine runs.
+    assert_eq!(c.ok(json!({"cmd": "step_over"})), json!({"running": true}));
+    let ev = c.event("stopped");
+    assert_eq!(ev["reason"]["kind"], "step_done");
+    assert_eq!(ev["pc"], 0x0803);
+    let p = c.ok(json!({"cmd": "peek", "addr": 0x0400, "len": 2}));
+    assert_eq!(p["bytes"], json!([1, 1]), "subroutines ran");
+
+    // Into it, then out of the nested call and the outer one.
+    c.ok(json!({"cmd": "step_instr"})); // JMP $0800
+    assert_eq!(c.ok(json!({"cmd": "step_instr", "count": 4}))["pc"], 0x0820);
+    c.ok(json!({"cmd": "step_out"}));
+    assert_eq!(c.event("stopped")["pc"], 0x0818);
+    c.ok(json!({"cmd": "step_out"}));
+    assert_eq!(c.event("stopped")["pc"], 0x0803);
+
+    c.ok(json!({"cmd": "run_to", "addr": 0x0815}));
+    let ev = c.event("stopped");
+    assert_eq!(ev["pc"], 0x0815);
+    assert_eq!(c.ok(json!({"cmd": "break_list"})), json!([]));
+
+    let d = c.ok(json!({"cmd": "disasm", "addr": 0x0815, "count": 2}));
+    assert_eq!(d["lines"][0]["flow"], "call");
+    assert_eq!(d["lines"][1]["flow"], "return");
+    server.shutdown();
+}
+
+#[test]
+fn watchpoints_and_conditions() {
+    let server = server_with(subroutines());
+    let mut c = Client::connect(&server);
+    c.recv();
+    let w = c.ok(json!({"cmd": "break_add", "kind": "write", "addr": 0x0401}))["bp"].clone();
+    c.ok(json!({"cmd": "resume"}));
+    let ev = c.event("stopped");
+    assert_eq!(
+        ev["reason"],
+        json!({"kind": "watchpoint", "bp": w, "space": 0, "addr": 0x0401, "write": true, "hits": 1})
+    );
+    c.ok(json!({"cmd": "break_remove", "bp": w}));
+
+    // Stop at $0812 only once $0401 has reached 3.
+    let b = c.ok(json!({
+        "cmd": "break_add", "addr": 0x0812, "condition": "[$0401] == 3 && A == 1",
+    }))["bp"]
+        .clone();
+    c.ok(json!({"cmd": "resume"}));
+    let ev = c.event("stopped");
+    assert_eq!(ev["reason"]["bp"], b);
+    assert_eq!(ev["pc"], 0x0812);
+    let p = c.ok(json!({"cmd": "peek", "addr": 0x0401, "len": 1}));
+    assert_eq!(p["bytes"], json!([3]));
+
+    let e = c.call(json!({"cmd": "break_add", "addr": 1, "condition": "A =="}));
+    assert_eq!(e["ok"], false);
+    server.shutdown();
+}
+
+#[test]
+fn poke_savestate_reset_and_chips() {
+    let server = server_with(subroutines());
+    let mut c = Client::connect(&server);
+    c.recv();
+    c.ok(json!({"cmd": "poke", "addr": 0x0400, "bytes": [7, 8, 9]}));
+    let p = c.ok(json!({"cmd": "peek", "addr": 0x0400, "len": 3}));
+    assert_eq!(p["bytes"], json!([7, 8, 9]));
+
+    c.ok(json!({"cmd": "step_instr", "count": 3}));
+    let saved = c.ok(json!({"cmd": "save_state"}))["data"].clone();
+    let at = c.ok(json!({"cmd": "regs"}));
+    c.ok(json!({"cmd": "step_frame"}));
+    let r = c.ok(json!({"cmd": "load_state", "data": saved}));
+    assert_eq!(r["pc"], at["regs"][0]["value"]);
+    assert_eq!(c.ok(json!({"cmd": "regs"})), at);
+    let e = c.call(json!({"cmd": "load_state", "data": "AAAA"}));
+    assert_eq!(e["ok"], false, "corrupt state is rejected");
+    assert_eq!(c.ok(json!({"cmd": "regs"})), at, "and changes nothing");
+
+    let r = c.ok(json!({"cmd": "reset", "kind": "hard"}));
+    assert_eq!(r["reason"]["kind"], "step_done");
+    assert_eq!(c.ok(json!({"cmd": "step_instr"}))["pc"], 0x0800);
+    let p = c.ok(json!({"cmd": "peek", "addr": 0x0400, "len": 1}));
+    assert_eq!(p["bytes"], json!([0]), "hard reset restores RAM");
+
+    let chips = c.ok(json!({"cmd": "chips"}));
+    assert_eq!(chips[0]["name"], "video");
+    assert_eq!(chips[0]["regs"][0]["addr"], 0xd000);
+    server.shutdown();
+}
+
+#[test]
+fn capabilities_subscriptions_and_trace() {
+    let server = server();
+    let mut c = Client::connect(&server);
+    c.recv();
+    let caps = c.ok(json!({"cmd": "capabilities"}));
+    assert_eq!(caps["version"], PROTOCOL_VERSION);
+    for cmd in [
+        "step_over",
+        "run_to",
+        "break_add",
+        "save_state",
+        "trace_read",
+    ] {
+        assert!(
+            caps["commands"].as_array().unwrap().contains(&json!(cmd)),
+            "{cmd}"
+        );
+    }
+    assert!(caps["breakpoint_kinds"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("raster")));
+
+    let e = c.call(json!({"cmd": "subscribe", "events": ["teleported"]}));
+    assert_eq!(e["ok"], false);
+    c.ok(json!({"cmd": "subscribe", "events": ["frame_ready"]}));
+    c.ok(json!({"cmd": "trace_start", "instructions": true, "capacity": 16}));
+    c.ok(json!({"cmd": "resume"}));
+    let f = c.event("frame_ready");
+    assert!(f["beam"]["frame"].as_u64().unwrap() >= 1);
+    c.ok(json!({"cmd": "pause"}));
+    c.event("stopped");
+    let t = c.ok(json!({"cmd": "trace_read"}));
+    let entries = t["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 16, "ring buffer keeps the newest");
+    assert_eq!(entries[0]["kind"], "instr");
+    assert!(t["dropped"].as_u64().unwrap() > 0);
+    c.ok(json!({"cmd": "trace_stop"}));
+    c.ok(json!({"cmd": "subscribe", "events": []}));
+    server.shutdown();
 }

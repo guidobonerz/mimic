@@ -5,7 +5,7 @@
 //! MCS6500 hardware manual (appendix A) and "64doc" by John West and Marko
 //! Mäkelä; interrupt polling follows the NESdev wiki "CPU interrupts" page.
 
-use emu_core::{Bus, CycleResult, Size};
+use emu_core::{Bus, CycleResult, InterruptKind, Size};
 
 use crate::table::{Kind, Mode, Op, TABLE};
 
@@ -74,6 +74,10 @@ pub(crate) struct Core {
     /// Set by a cycle that must not update `poll` (branch quirk).
     pub no_poll: bool,
     pub jammed: bool,
+    /// A hardware interrupt sequence just completed (for IRQ/NMI
+    /// breakpoints); the machine takes it right after the tick, so it is
+    /// not part of the savestate.
+    pub entered: Option<InterruptKind>,
 
     /// Magic constants of the unstable ANE ($8B) and LXA ($AB) opcodes.
     pub ane_magic: u8,
@@ -105,6 +109,7 @@ impl Core {
             poll: false,
             no_poll: false,
             jammed: false,
+            entered: None,
             ane_magic,
             lxa_magic,
         }
@@ -282,6 +287,13 @@ impl Core {
             _ => {
                 let hi = read(bus, self.vector.wrapping_add(1));
                 self.pc = u16::from_le_bytes([self.data, hi]);
+                // BRK hijacked by an NMI counts as the NMI.
+                self.entered = match (self.seq, self.vector) {
+                    (Seq::Reset, _) => None,
+                    (_, 0xfffa) => Some(InterruptKind::Nmi),
+                    (Seq::Interrupt, _) => Some(InterruptKind::Irq),
+                    _ => None,
+                };
                 true
             }
         }

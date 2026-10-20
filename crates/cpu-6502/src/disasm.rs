@@ -1,8 +1,8 @@
 //! Disassembler. Uses `Bus::peek` only (golden rule 2).
 
-use emu_core::{Bus, Instr, Size};
+use emu_core::{Bus, Flow, Instr, Size};
 
-use crate::table::{Kind, Mode, TABLE};
+use crate::table::{Kind, Mode, Op, TABLE};
 
 fn peek(bus: &dyn Bus, addr: u16) -> u8 {
     bus.peek(u32::from(addr), Size::Byte) as u8
@@ -40,12 +40,23 @@ pub(crate) fn disassemble(bus: &dyn Bus, addr: u16) -> Instr {
         }
     };
 
+    let flow = match op {
+        Op::Jsr => Flow::Call,
+        Op::Rts | Op::Rti => Flow::Return,
+        Op::Jmp => Flow::Jump,
+        _ if mode == Mode::Rel => Flow::Branch,
+        // BRK enters the interrupt handler, which returns past its padding
+        // byte: stepped into, not over.
+        _ => Flow::Normal,
+    };
+
     Instr {
         addr: u32::from(addr),
         bytes,
         mnemonic: format!("{op:?}").to_ascii_uppercase(),
         operand,
         target,
+        flow,
     }
 }
 
@@ -79,5 +90,17 @@ mod tests {
         assert_eq!(bne.bytes, [0xd0, 0xfe]);
         assert_eq!(dis(&[0x20, 0xd2, 0xff]).target, Some(0xffd2));
         assert_eq!(dis(&[0xad, 0x20, 0xd0]).target, None);
+    }
+
+    #[test]
+    fn control_flow_kinds() {
+        assert_eq!(dis(&[0x20, 0xd2, 0xff]).flow, Flow::Call);
+        assert_eq!(dis(&[0x60]).flow, Flow::Return);
+        assert_eq!(dis(&[0x40]).flow, Flow::Return);
+        assert_eq!(dis(&[0x4c, 0x00, 0x10]).flow, Flow::Jump);
+        assert_eq!(dis(&[0x6c, 0xfc, 0xff]).flow, Flow::Jump);
+        assert_eq!(dis(&[0xd0, 0xfe]).flow, Flow::Branch);
+        assert_eq!(dis(&[0x00]).flow, Flow::Normal, "BRK is stepped into");
+        assert_eq!(dis(&[0xa9, 0x00]).flow, Flow::Normal);
     }
 }

@@ -60,6 +60,17 @@ impl Memory {
         m
     }
 
+    /// RESET: the 6510 port returns to all inputs; `hard` (power cycle)
+    /// also clears RAM and colour RAM.
+    pub fn reset(&mut self, hard: bool) {
+        self.port = IoPort::new(0x3f);
+        if hard {
+            self.ram.fill(0);
+            self.color.fill(0);
+        }
+        self.update_map();
+    }
+
     fn update_map(&mut self) {
         let lines = Lines::new(self.port.outputs(), self.game, self.exrom);
         self.map = pla::TABLE[usize::from(lines.mode())];

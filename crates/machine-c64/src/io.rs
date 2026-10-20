@@ -16,7 +16,7 @@
 
 use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::sid::{Sid, SidModel};
-use chips_cbm::vic2::{Vic2, VicMemory};
+use chips_cbm::vic2::{self, Vic2, VicMemory};
 use emu_core::{
     ClockDivider, Decimator, Savestate, StateError, StateReader, StateWriter, SAMPLE_RATE,
 };
@@ -26,9 +26,14 @@ use drives_cbm::IecLines;
 use crate::keyboard::Keyboard;
 use crate::memory::Memory;
 
-/// PAL C64 CPU clock and mains frequency for the TOD input.
-const CPU_HZ: u32 = 985_248;
-const MAINS_HZ: u32 = 50;
+/// Mains frequency for the TOD input: 50 Hz in PAL countries, 60 Hz in
+/// NTSC countries.
+fn mains_hz(vic: vic2::Model) -> u32 {
+    match vic {
+        vic2::Model::Mos6569 => 50,
+        vic2::Model::Mos6567R8 => 60,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Io {
@@ -73,18 +78,31 @@ impl VicMemory for VicView<'_> {
 }
 
 impl Io {
-    pub fn new(model: CiaModel, sid: SidModel) -> Self {
+    /// The CPU clock comes from the VIC-II's dot clock.
+    pub fn new(vic: vic2::Model, model: CiaModel, sid: SidModel) -> Self {
+        let cpu_hz = vic.timing().cpu_hz();
         Self {
-            vic: Vic2::new(),
+            vic: Vic2::new(vic),
             cia1: Cia::new(model),
             cia2: Cia::new(model),
-            sid: Sid::new(sid, CPU_HZ),
-            resampler: Decimator::new(CPU_HZ, SAMPLE_RATE).expect("valid rates"),
+            sid: Sid::new(sid, cpu_hz),
+            resampler: Decimator::new(cpu_hz, SAMPLE_RATE).expect("valid rates"),
             samples: Vec::new(),
-            tod: ClockDivider::new(MAINS_HZ, CPU_HZ).expect("CPU clock is non-zero"),
+            tod: ClockDivider::new(mains_hz(vic), cpu_hz).expect("CPU clock is non-zero"),
             keyboard: Keyboard::default(),
             port_lines: [0; 2],
             iec: IecLines::default(),
+        }
+    }
+
+    /// RESET line: both CIAs and the SID restart. The VIC-II has no reset
+    /// pin and only starts over on power-up (`hard`).
+    pub fn reset(&mut self, hard: bool) {
+        self.cia1.reset();
+        self.cia2.reset();
+        self.sid = Sid::new(self.sid.model(), self.vic.timing().cpu_hz());
+        if hard {
+            self.vic = Vic2::new(self.vic.model());
         }
     }
 

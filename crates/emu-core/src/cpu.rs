@@ -40,6 +40,23 @@ impl RegisterSet {
     }
 }
 
+/// How an instruction changes the flow of control. Lets the debugger do
+/// `step_over` and `step_out` without knowing the CPU (golden rule 1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Flow {
+    /// Continues with the next instruction.
+    #[default]
+    Normal,
+    /// Subroutine call that returns to the next instruction (JSR, CALL, BSR).
+    Call,
+    /// Return from a subroutine or interrupt (RTS, RTI, RET).
+    Return,
+    /// Unconditional jump.
+    Jump,
+    /// Conditional branch.
+    Branch,
+}
+
 /// A disassembled instruction.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Instr {
@@ -49,6 +66,7 @@ pub struct Instr {
     pub operand: String,
     /// Branch/jump target, if statically known.
     pub target: Option<u32>,
+    pub flow: Flow,
 }
 
 impl fmt::Display for Instr {

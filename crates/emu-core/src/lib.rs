@@ -26,12 +26,14 @@ pub mod testing;
 pub use audio::{AudioFormat, Decimator, SAMPLE_RATE};
 pub use beam::{BeamPos, TraceConfig, TraceEntry, TraceEvent, TraceRange};
 pub use bus::{Bus, Size};
-pub use cpu::{Cpu, CycleResult, Instr, Register, RegisterSet};
+pub use cpu::{Cpu, CycleResult, Flow, Instr, Register, RegisterSet};
 pub use cycle::Cycle;
-pub use debug::{BpId, Breakpoint, BreakpointKind, DebugHooks, FreezeId};
+pub use debug::{BpId, Breakpoint, BreakpointKind, DebugHooks, FreezeId, InterruptKind};
 pub use frame::FrameRef;
 pub use freeze::{Freeze, FreezeMode};
 pub use hooked::HookedBus;
-pub use machine::{ChipInfo, DebugTarget, DeviceId, Machine, MemSpace, MemSpaceId, StopReason};
+pub use machine::{
+    ChipInfo, DebugTarget, DeviceId, Machine, MemSpace, MemSpaceId, ResetKind, StopReason,
+};
 pub use savestate::{Savestate, StateError, StateReader, StateWriter};
 pub use scheduler::{ClockDivider, Event, EventId, Scheduler};

@@ -1,4 +1,4 @@
-//! MOS 6569 VIC-II (PAL).
+//! MOS 6569 (PAL) and 6567R8 (NTSC) VIC-II.
 //!
 //! Cycle-exact model after Christian Bauer, "The MOS 6567/6569 video
 //! controller (VIC-II) and its application in the Commodore 64" (1996):
@@ -8,9 +8,15 @@
 //! own; register descriptions follow the same document and the C64
 //! Programmer's Reference Guide.
 //!
-//! Cycles are numbered 1–63 as in Bauer's timing diagram. X coordinates are
-//! VIC-II sprite coordinates: cycle 1 starts at X = `$194`, 8 pixels per
-//! cycle, wrapping at 504.
+//! Cycles are numbered 1–63 (6569) or 1–65 (6567R8) as in Bauer's timing
+//! diagrams. Both types share the layout up to cycle 58; the 6567R8 has two
+//! more cycles before the fetch of sprites 0–2, which therefore come two
+//! cycles later (60/62/64 instead of 58/60/62). X coordinates are VIC-II
+//! sprite coordinates, 8 pixels per cycle: cycle 1 starts at X = `$194`
+//! (6569, wrapping after `$1F7`) or `$19C` (6567R8, wrapping after `$1FF`,
+//! with the counter repeating `$18C–$18F` twice to fill 520 pixels; Bauer
+//! 3.6.3, 6567R8 diagram). From cycle 14 on both types show the same X at
+//! the same cycle.
 //!
 //! Per cycle the machine calls [`Vic2::phi1`] (VIC memory access, BA for
 //! this cycle), lets the CPU run if BA allows, then [`Vic2::phi2`] (second
@@ -41,30 +47,135 @@ pub mod palette;
 use emu_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
 use emu_core::{BeamPos, Savestate, StateError, StateReader, StateWriter};
 
-pub const LINES: u16 = 312;
-pub const CYCLES: u8 = 63;
-/// X coordinate at the start of cycle 1.
-const X_CYCLE1: u16 = 0x194;
-const X_WRAP: u16 = 504;
+/// VIC-II type. Model variants are configuration, not savestate: a state
+/// only loads into a VIC-II of the same type.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Model {
+    /// PAL-B.
+    #[default]
+    Mos6569,
+    /// NTSC-M, the common NTSC type from 1983 on.
+    Mos6567R8,
+}
 
-/// Visible window of the frame buffer, in VIC X coordinates and raster lines
-/// (full overscan, not cropped).
-pub const VISIBLE_X0: u16 = 480;
-pub const WIDTH: u32 = 404;
-pub const FIRST_LINE: u16 = 16;
-pub const HEIGHT: u32 = 284;
+/// Line and frame geometry of a VIC-II type (Bauer 3.4, 3.6.3).
+#[derive(Debug, PartialEq, Eq)]
+pub struct Timing {
+    pub lines: u16,
+    pub cycles: u8,
+    /// X coordinate at the start of cycle 1.
+    pub first_x: u16,
+    /// The X counter wraps to 0 here.
+    pub x_wrap: u16,
+    /// Linear position (`first_x` + pixel in line) from which the X counter
+    /// repeats `$18C–$18F` for 8 extra pixels (6567R8 only).
+    pub x_stall: Option<u16>,
+    /// Visible window of the frame buffer (full overscan, not cropped): first
+    /// pixel within the line, width, first raster line, height. The window
+    /// may wrap past the last raster line to line 0.
+    pub visible_p0: u16,
+    pub width: u32,
+    pub first_line: u16,
+    pub height: u32,
+    /// Dot clock; the CPU clock is an eighth of it.
+    pub pixel_clock_hz: u32,
+    pub standard: VideoStandard,
+}
 
-pub const PIXEL_CLOCK_HZ: u32 = 7_881_984;
-
-pub const SIGNAL: SignalInfo = SignalInfo {
-    pixel_clock_hz: PIXEL_CLOCK_HZ,
-    active_pixels: WIDTH,
-    total_pixels: X_WRAP as u32,
-    lines_per_field: LINES as u32,
+pub const PAL: Timing = Timing {
+    lines: 312,
+    cycles: 63,
+    first_x: 0x194,
+    x_wrap: 504,
+    x_stall: None,
+    visible_p0: 76,
+    width: 404,
+    first_line: 16,
+    height: 284,
+    pixel_clock_hz: 7_881_984,
     standard: VideoStandard::Pal,
-    output: OutputType::SVideo,
-    field: FieldParity::Progressive,
 };
+
+/// 6567R8: visible lines 41–262 and 0–12 (first/last vblank line 13/40),
+/// X `$1E8–$18B`.
+pub const NTSC: Timing = Timing {
+    lines: 263,
+    cycles: 65,
+    first_x: 0x19c,
+    x_wrap: 512,
+    x_stall: Some(0x200 + 0x18c),
+    visible_p0: 76,
+    width: 420,
+    first_line: 41,
+    height: 235,
+    pixel_clock_hz: 8_181_816,
+    standard: VideoStandard::Ntsc,
+};
+
+impl Model {
+    pub fn timing(self) -> &'static Timing {
+        match self {
+            Model::Mos6569 => &PAL,
+            Model::Mos6567R8 => &NTSC,
+        }
+    }
+}
+
+impl Timing {
+    /// CPU clock (φ0 = dot clock / 8).
+    pub fn cpu_hz(&self) -> u32 {
+        self.pixel_clock_hz / 8
+    }
+
+    pub fn signal(&self) -> SignalInfo {
+        SignalInfo {
+            pixel_clock_hz: self.pixel_clock_hz,
+            active_pixels: self.width,
+            total_pixels: u32::from(self.cycles) * 8,
+            lines_per_field: u32::from(self.lines),
+            standard: self.standard,
+            output: OutputType::SVideo,
+            field: FieldParity::Progressive,
+        }
+    }
+
+    /// X coordinate of pixel `p` (0 = first pixel of cycle 1) in a line.
+    pub fn x_at(&self, p: u16) -> u16 {
+        let l = self.first_x + p;
+        let l = match self.x_stall {
+            Some(s) if l >= s + 12 => l - 8,
+            Some(s) if l >= s => s + (l - s) % 4,
+            _ => l,
+        };
+        l % self.x_wrap
+    }
+
+    /// X coordinate of the first pixel of `cycle`.
+    pub fn cycle_x(&self, cycle: u8) -> u16 {
+        self.x_at((u16::from(cycle) - 1) * 8)
+    }
+
+    /// First cycle (p-access) of sprite `n`'s fetch slot.
+    fn sprite_slot(&self, n: usize) -> u8 {
+        if n < 3 {
+            self.cycles - 5 + 2 * n as u8
+        } else {
+            1 + 2 * (n as u8 - 3)
+        }
+    }
+
+    /// Is `cycle` within `[start, start + len)` on the cycle ring?
+    fn in_ring(&self, cycle: u8, start: u8, len: u8) -> bool {
+        let d = (i16::from(cycle) - i16::from(start)).rem_euclid(i16::from(self.cycles));
+        d < i16::from(len)
+    }
+
+    /// Frame-buffer row of a raster line, if visible.
+    fn row(&self, raster: u16) -> Option<usize> {
+        let row = (raster + self.lines - self.first_line) % self.lines;
+        (u32::from(row) < self.height).then_some(usize::from(row))
+    }
+}
 
 pub mod irq {
     pub const RASTER: u8 = 0x01;
@@ -116,6 +227,8 @@ struct Pending {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Vic2 {
+    model: Model,
+
     // Registers.
     sprite_x_msb: u8,
     ctrl1: u8,
@@ -176,33 +289,15 @@ pub struct Vic2 {
 
 impl Default for Vic2 {
     fn default() -> Self {
-        Self::new()
+        Self::new(Model::default())
     }
-}
-
-/// X coordinate of the first pixel of `cycle`.
-fn cycle_x(cycle: u8) -> u16 {
-    (X_CYCLE1 + (u16::from(cycle) - 1) * 8) % X_WRAP
-}
-
-/// First cycle (p-access) of sprite `n`'s fetch slot.
-fn sprite_slot(n: usize) -> u8 {
-    if n < 3 {
-        58 + 2 * n as u8
-    } else {
-        1 + 2 * (n as u8 - 3)
-    }
-}
-
-/// Is `cycle` within `[start, start + len)` on the 63-cycle ring?
-fn in_ring(cycle: u8, start: u8, len: u8) -> bool {
-    let d = (i16::from(cycle) - i16::from(start)).rem_euclid(i16::from(CYCLES));
-    d < i16::from(len)
 }
 
 impl Vic2 {
-    pub fn new() -> Self {
+    pub fn new(model: Model) -> Self {
+        let t = model.timing();
         Self {
+            model,
             sprite_x_msb: 0,
             ctrl1: 0,
             raster_cmp: 0,
@@ -247,8 +342,16 @@ impl Vic2 {
             last_bus: 0xff,
             raster_irq_done: false,
             phi2_sprite: None,
-            pixels: vec![0; (WIDTH * HEIGHT) as usize],
+            pixels: vec![0; (t.width * t.height) as usize],
         }
+    }
+
+    pub fn model(&self) -> Model {
+        self.model
+    }
+
+    pub fn timing(&self) -> &'static Timing {
+        self.model.timing()
     }
 
     pub fn beam(&self) -> BeamPos {
@@ -256,7 +359,7 @@ impl Vic2 {
             frame: self.frame,
             line: self.raster,
             cycle: u16::from(self.cycle - 1),
-            hpos: cycle_x(self.cycle),
+            hpos: self.timing().cycle_x(self.cycle),
         }
     }
 
@@ -264,7 +367,7 @@ impl Vic2 {
         self.raster
     }
 
-    /// Cycle within the line, 1–63.
+    /// Cycle within the line, 1–63 (6569) or 1–65 (6567R8).
     pub fn cycle(&self) -> u8 {
         self.cycle
     }
@@ -284,7 +387,7 @@ impl Vic2 {
         self.last_bus
     }
 
-    /// Indexed pixels of the visible window, `WIDTH × HEIGHT`.
+    /// Indexed pixels of the visible window, `width × height` of the timing.
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
     }
@@ -332,6 +435,7 @@ impl Vic2 {
     /// applies to the CPU in this cycle.
     pub fn phi1(&mut self, mem: &dyn VicMemory) {
         let c = self.cycle;
+        let t = self.timing();
 
         // The raster compare runs in cycle 1, for line 0 one cycle later.
         if c == 1 && self.raster != 0 {
@@ -419,8 +523,8 @@ impl Vic2 {
         // slot to the end of its second cycle.
         let mut ba_low = self.bad_line && (12..=54).contains(&c);
         for n in 0..8 {
-            let start = (sprite_slot(n) + CYCLES - 1 - 3) % CYCLES + 1;
-            if self.sprites[n].dma && in_ring(c, start, 5) {
+            let start = (t.sprite_slot(n) + t.cycles - 1 - 3) % t.cycles + 1;
+            if self.sprites[n].dma && t.in_ring(c, start, 5) {
                 ba_low = true;
             }
         }
@@ -435,7 +539,7 @@ impl Vic2 {
         self.phi2_sprite = None;
         let mut phi1_value = 0xff;
         for n in 0..8 {
-            let slot = sprite_slot(n);
+            let slot = t.sprite_slot(n);
             if c == slot {
                 let p = mem.read(self.vm_base() | 0x3f8 | n as u16);
                 self.sprites[n].ptr = p;
@@ -443,7 +547,7 @@ impl Vic2 {
                 if self.sprites[n].dma {
                     self.phi2_sprite = Some(n);
                 }
-            } else if c == slot % CYCLES + 1 && self.sprites[n].dma {
+            } else if c == slot % t.cycles + 1 && self.sprites[n].dma {
                 phi1_value = self.sprite_fetch(mem, n);
                 self.phi2_sprite = Some(n);
             }
@@ -505,6 +609,7 @@ impl Vic2 {
     /// Returns true when a new field starts.
     pub fn phi2(&mut self, mem: &dyn VicMemory) -> bool {
         let c = self.cycle;
+        let t = self.timing();
         if let Some(n) = self.phi2_sprite {
             let v = if self.ba_low_cycles > 3 {
                 self.sprite_fetch(mem, n)
@@ -530,8 +635,8 @@ impl Vic2 {
 
         self.draw();
 
-        // Vertical border, cycle 63 rules.
-        if c == CYCLES {
+        // Vertical border, cycle 63 rules (the last cycle of the line).
+        if c == t.cycles {
             let (top, bottom) = self.border_rows();
             if self.raster == bottom {
                 self.vert_border = true;
@@ -540,10 +645,10 @@ impl Vic2 {
             }
         }
 
-        if c == CYCLES {
+        if c == t.cycles {
             self.cycle = 1;
             self.raster += 1;
-            if self.raster == LINES {
+            if self.raster == t.lines {
                 self.raster = 0;
                 self.frame += 1;
                 self.vcbase = 0;
@@ -573,14 +678,14 @@ impl Vic2 {
     }
 
     fn draw(&mut self) {
-        let x0 = cycle_x(self.cycle);
+        let t = self.timing();
+        let p0 = (u16::from(self.cycle) - 1) * 8;
         let (left, right) = self.border_cols();
         let (top, bottom) = self.border_rows();
-        let visible_line = (FIRST_LINE..FIRST_LINE + HEIGHT as u16).contains(&self.raster);
-        let row = usize::from(self.raster.wrapping_sub(FIRST_LINE)) * WIDTH as usize;
+        let row = t.row(self.raster).map(|r| r * t.width as usize);
 
-        for i in 0..8u16 {
-            let x = (x0 + i) % X_WRAP;
+        for p in p0..p0 + 8 {
+            let x = t.x_at(p);
 
             // Border flip-flops.
             if x == right {
@@ -623,9 +728,9 @@ impl Vic2 {
                 color = self.border_color;
             }
 
-            if visible_line {
-                let col = (x + X_WRAP - VISIBLE_X0) % X_WRAP;
-                if u32::from(col) < WIDTH {
+            if let Some(row) = row {
+                let col = p.wrapping_sub(t.visible_p0);
+                if u32::from(col) < t.width {
                     self.pixels[row + usize::from(col)] = color;
                 }
             }
@@ -890,7 +995,7 @@ impl Vic2 {
         if self.irq_flags & irq::LIGHT_PEN != 0 {
             return;
         }
-        let x = cycle_x(self.cycle);
+        let x = self.timing().cycle_x(self.cycle);
         self.lp_x = (x >> 1) as u8;
         self.lp_y = self.raster as u8;
         self.irq_flags |= irq::LIGHT_PEN;
@@ -898,7 +1003,8 @@ impl Vic2 {
 }
 
 const TAG: [u8; 4] = *b"6569";
-const VERSION: u16 = 1;
+/// 2: VIC-II type byte first (version 1 states are 6569).
+const VERSION: u16 = 2;
 
 fn save_sprite(w: &mut StateWriter, s: &Sprite) {
     w.u16(s.x);
@@ -945,6 +1051,10 @@ fn load_sprite(r: &mut StateReader<'_>) -> Result<Sprite, StateError> {
 impl Savestate for Vic2 {
     fn save(&self, w: &mut StateWriter) {
         w.chunk(TAG, VERSION, |w| {
+            w.u8(match self.model {
+                Model::Mos6569 => 0,
+                Model::Mos6567R8 => 1,
+            });
             w.u8(self.sprite_x_msb);
             w.u8(self.ctrl1);
             w.u16(self.raster_cmp);
@@ -1013,8 +1123,17 @@ impl Savestate for Vic2 {
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
-        let mut v = Vic2::new();
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
+        let model = match if version < 2 { 0 } else { c.u8()? } {
+            0 => Model::Mos6569,
+            1 => Model::Mos6567R8,
+            _ => return Err(StateError::Invalid("VIC-II type")),
+        };
+        if model != self.model {
+            return Err(StateError::Invalid("VIC-II type differs"));
+        }
+        let mut v = Vic2::new(model);
+        let t = model.timing();
         v.sprite_x_msb = c.u8()?;
         v.ctrl1 = c.u8()? & 0x7f;
         v.raster_cmp = c.u16()? & 0x1ff;
@@ -1040,7 +1159,7 @@ impl Savestate for Vic2 {
         v.raster = c.u16()?;
         v.cycle = c.u8()?;
         v.frame = c.u64()?;
-        if v.raster >= LINES || !(1..=CYCLES).contains(&v.cycle) {
+        if v.raster >= t.lines || !(1..=t.cycles).contains(&v.cycle) {
             return Err(StateError::Invalid("VIC-II beam position"));
         }
         v.vc = c.u16()? & 0x3ff;

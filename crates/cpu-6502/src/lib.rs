@@ -13,7 +13,7 @@ mod micro;
 mod table;
 
 use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
-use emu_core::{Bus, Cpu, CycleResult, Instr, Register, RegisterSet, Size};
+use emu_core::{Bus, Cpu, CycleResult, Instr, InterruptKind, Register, RegisterSet, Size};
 
 pub use crate::io_port::IoPort;
 use crate::micro::{Core, Seq, B, U, V};
@@ -125,6 +125,13 @@ impl Cpu6502 {
     /// SO input: a falling edge sets the V flag (used by the 1541).
     pub fn set_overflow(&mut self) {
         self.core.p |= V;
+    }
+
+    /// The hardware interrupt whose entry sequence completed in the last
+    /// tick, if any (the next instruction is the handler's first). Machines
+    /// call this after every tick that finished an instruction.
+    pub fn take_interrupt(&mut self) -> Option<InterruptKind> {
+        self.core.entered.take()
     }
 
     pub fn is_jammed(&self) -> bool {
@@ -413,6 +420,42 @@ mod tests {
         assert_eq!(bus.mem[0x01ff], 0x04, "PCH pushed");
         assert_eq!(bus.mem[0x01fe], 0x01, "PC of the next instruction pushed");
         assert_eq!(bus.mem[0x01fd] & B, 0, "B clear for hardware interrupts");
+    }
+
+    #[test]
+    fn interrupt_entry_is_reported_once_per_sequence() {
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0x00, 0x00, 0xea]);
+        bus.load(0xfffa, &[0x00, 0xa0, 0x00, 0xb0, 0x00, 0x90]);
+        step(&mut cpu, &mut bus); // BRK: software, not reported
+        assert_eq!(cpu.take_interrupt(), None);
+
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0xea, 0xea]);
+        bus.load(0xfffa, &[0x00, 0xa0, 0x00, 0xb0, 0x00, 0x90]);
+        cpu.set_reg("P", 0);
+        cpu.set_irq(true);
+        step(&mut cpu, &mut bus);
+        assert_eq!(cpu.take_interrupt(), None, "NOP");
+        step(&mut cpu, &mut bus);
+        assert_eq!(cpu.take_interrupt(), Some(InterruptKind::Irq));
+        assert_eq!(cpu.take_interrupt(), None, "taken once");
+
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0x00, 0x00]);
+        bus.load(0xfffa, &[0x00, 0xa0, 0x00, 0xb0, 0x00, 0x90]);
+        for _ in 0..3 {
+            cpu.tick(&mut bus);
+        }
+        cpu.set_nmi(true);
+        step(&mut cpu, &mut bus);
+        assert_eq!(
+            cpu.take_interrupt(),
+            Some(InterruptKind::Nmi),
+            "BRK hijacked"
+        );
+
+        let mut cpu = Cpu6502::default();
+        cpu.reset();
+        step(&mut cpu, &mut bus);
+        assert_eq!(cpu.take_interrupt(), None, "reset is not an interrupt");
     }
 
     #[test]

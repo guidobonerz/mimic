@@ -23,8 +23,13 @@ fn machine(code: &[u8], irq: &[u8], nmi: &[u8]) -> C64 {
 }
 
 fn stub() -> C64 {
+    stub_model("pal")
+}
+
+fn stub_model(model: &str) -> C64 {
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
+    config.model = Some(model.into());
     C64::new(&config).unwrap()
 }
 
@@ -82,7 +87,7 @@ fn rom_configuration_errors() {
     assert!(matches!(C64::new(&config), Err(ConfigError::Invalid(_))));
 
     let mut config = config_with(&[], &[], &[]);
-    config.model = Some("ntsc".into());
+    config.model = Some("secam".into());
     assert!(matches!(
         C64::new(&config),
         Err(ConfigError::UnknownModel(_))
@@ -316,26 +321,42 @@ fn cia_registers_are_mirrored_and_visible_to_the_debugger() {
 
 #[test]
 fn tod_runs_at_fifty_hertz() {
-    let mut m = stub();
+    // 50 frames ≈ 0.998 s at 985 248 Hz / 19 656 cycles per frame.
+    tod_runs_at_mains_rate("pal", 50);
+}
+
+#[test]
+fn tod_runs_at_sixty_hertz_on_ntsc() {
+    // 60 frames ≈ 1.003 s at 1 022 727 Hz / 17 095 cycles per frame.
+    tod_runs_at_mains_rate("ntsc", 60);
+}
+
+fn tod_runs_at_mains_rate(model: &str, frames_per_second: u32) {
+    let mut m = stub_model(model);
     let mut dbg = DebugHooks::new();
     m.run_frame(&mut dbg); // boot (IOINIT rewrites CRA)
     let cra = m.io.cia1.ta.cr;
-    m.io.cia1.write(0x0e, cra | 0x80);
+    // CRA bit 7 selects the 50 Hz TOD divider.
+    let cra = if frames_per_second == 50 {
+        cra | 0x80
+    } else {
+        cra & 0x7f
+    };
+    m.io.cia1.write(0x0e, cra);
     m.io.cia1.write(0x0b, 0x01);
     m.io.cia1.write(0x0a, 0);
     m.io.cia1.write(0x09, 0);
     m.io.cia1.write(0x08, 0);
-    for _ in 0..50 {
+    for _ in 0..frames_per_second {
         m.run_frame(&mut dbg);
     }
-    // 50 frames ≈ 0.998 s at 985 248 Hz / 19 656 cycles per frame; the
-    // power-line phase is arbitrary, so allow one tenth either way.
+    // The power-line phase is arbitrary, so allow one tenth either way.
     let tenths = |m: &C64| {
         let t = m.io.cia1.tod.time;
         u32::from(t[1] >> 4) * 100 + u32::from(t[1] & 15) * 10 + u32::from(t[0])
     };
     assert!((9..=10).contains(&tenths(&m)), "{}", tenths(&m));
-    for _ in 0..50 {
+    for _ in 0..frames_per_second {
         m.run_frame(&mut dbg);
     }
     assert!((19..=20).contains(&tenths(&m)), "{}", tenths(&m));
@@ -508,4 +529,94 @@ fn sid_output_reaches_the_audio_stream_at_the_right_pitch() {
         .count();
     let hz = crossings as f64 / (tail.len() as f64 / 48_000.0);
     assert!((230.0..=250.0).contains(&hz), "{hz} Hz");
+}
+
+#[test]
+fn ntsc_model_frame_timing_and_signal() {
+    let mut m = stub_model("ntsc");
+    let mut dbg = DebugHooks::new();
+    m.run_frame(&mut dbg);
+    let start = m.now().0;
+    assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
+    assert_eq!(m.now().0 - start, 263 * 65);
+    let f = m.framebuffer();
+    assert_eq!((f.width, f.height), (420, 235));
+    assert_eq!(f.signal.standard, emu_core::frame::VideoStandard::Ntsc);
+    assert_eq!(f.signal.pixel_clock_hz, 8 * 1_022_727);
+
+    let mut pal = stub();
+    pal.run_frame(&mut dbg);
+    let start = pal.now().0;
+    pal.run_frame(&mut dbg);
+    assert_eq!(pal.now().0 - start, 312 * 63);
+    assert_eq!(
+        pal.framebuffer().signal.standard,
+        emu_core::frame::VideoStandard::Pal
+    );
+}
+
+#[test]
+fn savestates_do_not_cross_video_standards() {
+    let mut dbg = DebugHooks::new();
+    let mut pal = stub();
+    pal.run_frame(&mut dbg);
+    let state = pal.save_state();
+    let mut ntsc = stub_model("ntsc");
+    ntsc.run_frame(&mut dbg);
+    let before = ntsc.save_state();
+    assert!(ntsc.load_state(&state).is_err());
+    assert_eq!(
+        ntsc.save_state(),
+        before,
+        "failed load leaves the machine untouched"
+    );
+    let own = ntsc.save_state();
+    ntsc.run_frame(&mut dbg);
+    ntsc.load_state(&own).unwrap();
+    assert_eq!(ntsc.save_state(), own);
+}
+
+#[test]
+fn irq_breakpoint_stops_at_the_first_handler_instruction() {
+    let mut m = stub();
+    let mut dbg = DebugHooks::new();
+    let bp = dbg.add_breakpoint(emu_core::BreakpointKind::Interrupt(
+        emu_core::InterruptKind::Irq,
+    ));
+    let mut stop = StopReason::FrameDone;
+    for _ in 0..10 {
+        stop = m.run_frame(&mut dbg);
+        if stop != StopReason::FrameDone {
+            break;
+        }
+    }
+    assert_eq!(stop, StopReason::Breakpoint(bp), "CIA1 timer IRQ");
+    assert_eq!(m.regs().get("PC"), Some(0xff48));
+}
+
+#[test]
+fn soft_reset_keeps_ram_hard_reset_clears_it() {
+    let mut m = stub();
+    let mut dbg = DebugHooks::new();
+    m.run_frame(&mut dbg);
+    m.mem.ram[0x4000] = 0x55;
+    m.mem.color[0] = 7;
+    m.io.cia1.write(0x0e, 0x00);
+    m.reset(ResetKind::Soft);
+    assert_eq!(m.mem.ram[0x4000], 0x55);
+    assert_eq!(m.mem.color[0], 7);
+    assert_eq!(m.mem.port.ddr, 0, "6510 port back to inputs");
+    run_cycles(&mut m, 7);
+    assert_eq!(m.regs().get("PC"), Some(0xe000), "reset vector");
+    m.run_frame(&mut dbg);
+    assert_eq!(
+        m.peek(CPU_SPACE, 1, Size::Byte),
+        Some(0x37),
+        "KERNAL ran again"
+    );
+
+    m.reset(ResetKind::Hard);
+    assert_eq!(m.mem.ram[0x4000], 0);
+    assert_eq!(m.mem.color[0], 0);
+    assert_eq!(m.io.vic.beam().frame, 0, "VIC-II restarts on power-up only");
 }

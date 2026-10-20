@@ -367,7 +367,7 @@ cargo run --release -p emu-desktop -- --machine c64 --disk game.d64 --autostart 
 
 ## Roadmap and current phase
 
-Work in phase order; each phase ends at a verifiable gate. **Current phase: 2.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green.)
+Work in phase order; each phase ends at a verifiable gate. **Current phase: 3.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64.)
 
 | # | Phase | Est. | Gate |
 | --- | --- | --- | --- |

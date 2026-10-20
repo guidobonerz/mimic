@@ -1,13 +1,18 @@
 //! Commodore 64.
 //!
 //! Phase 2 builds this up chip by chip. Present so far: 6510 with its I/O
-//! port, PLA banking, RAM, ROMs, colour RAM, VIC-II (PAL 6569), both CIAs
+//! port, PLA banking, RAM, ROMs, colour RAM, VIC-II, both CIAs
 //! the IRQ/NMI/RDY wiring, keyboard, control ports, a true-emulated 1541 as
 //! drive 8, a "program" slot for PRG/T64 and the SID (`options["sid"]` =
 //! "6581" or "8580"), producing 48 kHz mono audio.
 //!
 //! Drive 8 needs `roms["dos1541"]` (16 KB); without it there is no drive.
 //! `options["autostart"] = "on"` loads and runs the disk in drive 8 after boot.
+//!
+//! Models: "pal" (default; 6569, 985 248 Hz, 312 lines × 63 cycles, TOD 50 Hz)
+//! and "ntsc" (6567R8, 1 022 727 Hz, 263 lines × 65 cycles, TOD 60 Hz). The
+//! KERNAL tells them apart by itself (raster line count at boot); the stub
+//! KERNAL always sets up PAL timer values.
 //!
 //! CIA revision: options["cia"] = "6526" (default, original C64) or
 //! "6526a" (C64C).
@@ -40,7 +45,7 @@ use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
 use emu_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, HookedBus, Instr,
-    Machine, MemSpace, MemSpaceId, RegisterSet, Savestate, Scheduler, Size, StateError,
+    Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
 
@@ -70,7 +75,7 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "c64",
         name: "Commodore 64",
-        models: &["pal"],
+        models: &["pal", "ntsc"],
         create: |config| Ok(Box::new(C64::new(config)?)),
     }
 }
@@ -221,6 +226,8 @@ pub struct C64 {
     autostart: Autostart,
     palette: [Rgb8; 16],
     field_done_pending: bool,
+    /// VIC-II frame of the last reset; programs wait [`BOOT_FRAMES`] from here.
+    boot_frame: u64,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -236,11 +243,12 @@ struct Snapshot {
 
 impl C64 {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        if let Some(model) = config.model.as_deref() {
-            if model != "pal" {
-                return Err(ConfigError::UnknownModel(model.into()));
-            }
-        }
+        let vic = match config.model.as_deref() {
+            None | Some("pal") => vic2::Model::Mos6569,
+            Some("ntsc") => vic2::Model::Mos6567R8,
+            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        };
+        let cpu_hz = vic.timing().cpu_hz();
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Mos6510,
             ..CpuConfig::default()
@@ -268,7 +276,7 @@ impl C64 {
         let drive = match config.options.get("drive8").map(String::as_str) {
             Some("none") => None,
             None | Some("1541") if !stub && config.roms.contains_key("dos1541") => {
-                Some(Drive8::new(rom(config, "dos1541")?))
+                Some(Drive8::new(rom(config, "dos1541")?, cpu_hz))
             }
             None | Some("1541") => None,
             Some(other) => return Err(ConfigError::Invalid(format!("drive8 option '{other}'"))),
@@ -281,7 +289,7 @@ impl C64 {
         Ok(Self {
             cpu,
             mem: Memory::new(load_roms(config)?),
-            io: Io::new(cia, sid),
+            io: Io::new(vic, cia, sid),
             ints: Interrupts::default(),
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -291,6 +299,7 @@ impl C64 {
             autostart,
             palette: vic2::palette::palette(),
             field_done_pending: false,
+            boot_frame: 0,
         })
     }
 
@@ -336,6 +345,7 @@ impl C64 {
             };
             self.cpu.tick(&mut hooked)
         };
+        let entered = self.cpu.take_interrupt();
         // φ2: VIC-II's own phi2 accesses, pixel output, beam advance.
         let bank = self.io.vic_bank();
         let new_field = self.io.vic.phi2(&VicView {
@@ -360,6 +370,11 @@ impl C64 {
         }
 
         if let Some(dbg) = dbg {
+            if let Some(kind) = entered {
+                if dbg.interrupt_armed(kind) {
+                    dbg.check_interrupt(kind);
+                }
+            }
             if let CycleResult::InstrDone { next_pc } = result {
                 if dbg.trace_instr_armed() {
                     dbg.trace_instr(CPU, next_pc, self.beam_pos());
@@ -421,7 +436,7 @@ impl C64 {
 
     /// Program injection and autostart, once BASIC has booted.
     fn frame_tasks(&mut self) {
-        if self.io.vic.beam().frame < BOOT_FRAMES {
+        if self.io.vic.beam().frame.saturating_sub(self.boot_frame) < BOOT_FRAMES {
             return;
         }
         if let Some(prg) = self.program.pending.take() {
@@ -519,16 +534,36 @@ impl Machine for C64 {
         }
     }
 
+    /// The RESET line reaches the 6510, both CIAs, the SID and (through the
+    /// serial bus) drive 8, but not the VIC-II.
+    fn reset(&mut self, kind: ResetKind) {
+        let hard = kind == ResetKind::Hard;
+        self.cpu.reset();
+        self.mem.reset(hard);
+        self.io.reset(hard);
+        if let Some(d) = &mut self.drive {
+            d.drive.reset(hard);
+        }
+        self.ints = Interrupts::default();
+        self.input.clear();
+        if self.autostart == Autostart::Loading {
+            self.autostart = Autostart::Done;
+        }
+        self.field_done_pending = false;
+        self.boot_frame = self.io.vic.beam().frame;
+    }
+
     fn framebuffer(&self) -> FrameRef<'_> {
+        let t = self.io.vic.timing();
         FrameRef {
-            width: vic2::WIDTH,
-            height: vic2::HEIGHT,
+            width: t.width,
+            height: t.height,
             pixels: PixelData::Indexed {
                 pixels: self.io.vic.pixels(),
                 palette: &self.palette,
             },
             luma_chroma: None,
-            signal: vic2::SIGNAL,
+            signal: t.signal(),
         }
     }
 
@@ -726,11 +761,12 @@ impl Machine for C64 {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"C64S", 3, |w| {
+        w.chunk(*b"C64S", 4, |w| {
             w.u8(self.ints.irq);
             w.u8(self.ints.nmi);
             w.bool(self.field_done_pending);
             w.u8(self.autostart.to_u8());
+            w.u64(self.boot_frame);
         });
         self.cpu.save(&mut w);
         self.mem.save(&mut w);
@@ -762,7 +798,7 @@ impl Machine for C64 {
             field_done_pending: self.field_done_pending,
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"C64S", 3)?;
+        let (version, mut c) = r.chunk(*b"C64S", 4)?;
         if version < 3 {
             return Err(StateError::UnsupportedVersion {
                 tag: *b"C64S",
@@ -776,6 +812,8 @@ impl Machine for C64 {
         next.field_done_pending = c.bool()?;
         let autostart =
             Autostart::from_u8(c.u8()?).ok_or(StateError::Invalid("autostart state"))?;
+        // Version 3 states predate resets: booted at power-on.
+        let boot_frame = if version >= 4 { c.u64()? } else { 0 };
         next.cpu.load(&mut r)?;
         next.mem.load(&mut r)?;
         next.io.load(&mut r)?;
@@ -844,6 +882,7 @@ impl Machine for C64 {
         self.input = next.input;
         self.field_done_pending = next.field_done_pending;
         self.autostart = autostart;
+        self.boot_frame = boot_frame;
         Ok(())
     }
 }

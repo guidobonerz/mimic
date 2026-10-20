@@ -24,7 +24,7 @@ use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
 use emu_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, FrameRef, Instr,
-    Machine, MemSpace, MemSpaceId, RegisterSet, Savestate, Scheduler, Size, StateError,
+    Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
 
@@ -146,6 +146,8 @@ impl Bus for PeekBus<'_> {
 pub struct Sim6502 {
     cpu: Cpu6502,
     ram: Box<[u8; 0x10000]>,
+    /// RAM after loading the program, restored by a hard reset.
+    power_on_ram: Box<[u8; 0x10000]>,
     video: Video,
     sched: Scheduler,
     field_done_pending: bool,
@@ -187,6 +189,7 @@ impl Sim6502 {
         cpu.reset();
         Ok(Self {
             cpu,
+            power_on_ram: ram.clone(),
             ram,
             video: Video::default(),
             sched: Scheduler::new(),
@@ -202,10 +205,16 @@ impl Sim6502 {
             video: &mut self.video,
             dbg: dbg.as_deref_mut(),
         });
+        let entered = self.cpu.take_interrupt();
         self.sched.tick();
         let new_field = self.video.cycle(&self.ram);
 
         if let Some(dbg) = dbg {
+            if let Some(kind) = entered {
+                if dbg.interrupt_armed(kind) {
+                    dbg.check_interrupt(kind);
+                }
+            }
             if let CycleResult::InstrDone { next_pc } = result {
                 if dbg.trace_instr_armed() {
                     dbg.trace_instr(CPU, next_pc, self.video.beam());
@@ -281,6 +290,15 @@ impl Machine for Sim6502 {
             Some(stop @ StopReason::CpuJam { .. }) => stop,
             _ => StopReason::StepDone,
         }
+    }
+
+    fn reset(&mut self, kind: ResetKind) {
+        self.cpu.reset();
+        if kind == ResetKind::Hard {
+            self.ram.copy_from_slice(&self.power_on_ram[..]);
+            self.video = Video::default();
+        }
+        self.field_done_pending = false;
     }
 
     fn framebuffer(&self) -> FrameRef<'_> {

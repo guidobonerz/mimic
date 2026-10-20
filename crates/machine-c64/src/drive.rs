@@ -1,5 +1,5 @@
 //! Drive 8 on the serial bus: a true-emulated 1541 clocked at 1 MHz next to
-//! the PAL C64's 985 248 Hz.
+//! the C64's 985 248 Hz (PAL) or 1 022 727 Hz (NTSC).
 //!
 //! C64 side (schematic 251469): CIA2 PA3 ATN out, PA4 CLK out, PA5 DATA
 //! out through 7406 inverters (1 = line pulled low); PA6 CLK in, PA7 DATA
@@ -16,7 +16,6 @@ pub const DRIVE8: DeviceId = DeviceId("drive8");
 pub const DRIVE_SPACE: MemSpaceId = MemSpaceId(3);
 
 const DRIVE_HZ: u32 = 1_000_000;
-const C64_HZ: u32 = 985_248;
 
 /// What the C64 pulls on the bus, from CIA2 port A.
 pub fn c64_lines(cia2_pa: u8) -> IecLines {
@@ -33,10 +32,10 @@ pub struct Drive8 {
 }
 
 impl Drive8 {
-    pub fn new(rom: Box<[u8; drives_cbm::c1541::ROM_SIZE]>) -> Self {
+    pub fn new(rom: Box<[u8; drives_cbm::c1541::ROM_SIZE]>, c64_hz: u32) -> Self {
         Self {
             drive: Drive1541::new(rom, 8, DRIVE_SPACE),
-            clock: ClockDivider::new(DRIVE_HZ, C64_HZ).expect("non-zero clock"),
+            clock: ClockDivider::new(DRIVE_HZ, c64_hz).expect("non-zero clock"),
         }
     }
 

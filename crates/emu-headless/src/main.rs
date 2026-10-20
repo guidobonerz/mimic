@@ -34,6 +34,8 @@ usage: emu-headless [options]
   --save-state FILE     write a savestate after running
   --debug [ADDR]        serve the debug protocol instead of running frames
                         (default 127.0.0.1:6510; loopback only)
+  --vice [ADDR]         also serve the VICE binary monitor protocol (VS64,
+                        C64 Studio …; default 127.0.0.1:6502); implies --debug
   --run                 with --debug: start running instead of paused
   --no-realtime         with --debug: run as fast as possible
   --list                list machines and exit
@@ -54,6 +56,7 @@ struct Args {
     load_state: Option<String>,
     save_state: Option<String>,
     debug: Option<SocketAddr>,
+    vice: Option<SocketAddr>,
     run: bool,
     realtime: bool,
     list: bool,
@@ -61,6 +64,7 @@ struct Args {
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
+const DEFAULT_VICE_ADDR: &str = "127.0.0.1:6502";
 
 fn key_value(s: &str, flag: &str) -> Result<(String, String), String> {
     s.split_once('=')
@@ -122,15 +126,24 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             }
             "--load-state" => args.load_state = Some(value("--load-state")?),
             "--save-state" => args.save_state = Some(value("--save-state")?),
-            "--debug" => {
+            flag @ ("--debug" | "--vice") => {
+                let default = if flag == "--debug" {
+                    DEFAULT_DEBUG_ADDR
+                } else {
+                    DEFAULT_VICE_ADDR
+                };
                 let addr = match it.peek() {
                     Some(a) if !a.starts_with("--") => it.next().unwrap_or_default(),
-                    _ => DEFAULT_DEBUG_ADDR.to_string(),
+                    _ => default.to_string(),
                 };
-                let addr = addr
+                let addr: SocketAddr = addr
                     .parse()
-                    .map_err(|_| format!("bad debug address '{addr}'"))?;
-                args.debug = Some(addr);
+                    .map_err(|_| format!("bad {flag} address '{addr}'"))?;
+                if flag == "--debug" {
+                    args.debug = Some(addr);
+                } else {
+                    args.vice = Some(addr);
+                }
             }
             "--run" => args.run = true,
             "--no-realtime" => args.realtime = false,
@@ -138,6 +151,9 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--help" | "-h" => args.help = true,
             other => return Err(format!("unknown option '{other}'")),
         }
+    }
+    if args.vice.is_some() && args.debug.is_none() {
+        args.debug = DEFAULT_DEBUG_ADDR.parse().ok();
     }
     Ok(args)
 }
@@ -245,6 +261,7 @@ fn run(args: Args) -> Result<ExitCode, String> {
             session,
             ServerConfig {
                 bind,
+                vice: args.vice,
                 run: args.run,
                 realtime: args.realtime,
             },
@@ -256,6 +273,9 @@ fn run(args: Args) -> Result<ExitCode, String> {
             server.addr(),
             if args.run { "running" } else { "paused" }
         );
+        if let Some(vice) = server.vice_addr() {
+            eprintln!("VICE binary monitor listening on {vice}");
+        }
         server.wait();
         return Ok(ExitCode::SUCCESS);
     }

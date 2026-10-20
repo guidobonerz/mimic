@@ -155,6 +155,17 @@ impl Drive1541 {
         self.space
     }
 
+    /// RESET line (from the serial bus): CPU and both VIAs restart; `hard`
+    /// (power cycle) also clears the RAM. Disk and head position stay.
+    pub fn reset(&mut self, hard: bool) {
+        self.cpu.reset();
+        self.via1.reset();
+        self.via2.reset();
+        if hard {
+            self.ram.fill(0);
+        }
+    }
+
     /// Track under the head (1-based), as a half-track value / 2 + 1.
     pub fn track(&self) -> f32 {
         f32::from(self.mech.half_track) / 2.0 + 1.0
@@ -277,6 +288,8 @@ impl Drive1541 {
             beam: emu_core::BeamPos::default(),
         };
         let r = self.cpu.tick(&mut hooked);
+        // Interrupt breakpoints are for the main CPU only.
+        let _ = self.cpu.take_interrupt();
         self.step_head();
         r
     }

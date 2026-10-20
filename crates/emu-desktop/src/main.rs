@@ -37,6 +37,7 @@ const USAGE: &str = "\
 usage: emu-desktop [options]
 
   --machine ID          machine id (default: c64)
+  --model NAME          model variant (C64: pal, ntsc)
   --prg FILE            program (PRG/T64) to load and run
   --disk FILE           disk image for drive 8
   --autostart           load and run the disk after boot
@@ -79,6 +80,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         let mut value = |n: &str| it.next().ok_or_else(|| format!("{n} needs a value"));
         match flag.as_str() {
             "--machine" => a.machine = value("--machine")?,
+            "--model" => a.config.model = Some(value("--model")?),
             "--prg" => a.prg = Some(value("--prg")?),
             "--disk" => a.disk = Some(value("--disk")?),
             "--autostart" => {
