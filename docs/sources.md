@@ -109,6 +109,9 @@ own section.
 | Collision detection (CLXCON, CLXDAT) | HRM chapter 7 "Collision detection" | `chips-amiga/src/denise.rs` |
 | Blitter cycle lengths by channel, line-mode pixel time; CPU on even slots, BLITHOG and the three-cycle rule | HRM chapter 6 "Blitter speed" and "Blitter DMA" (read via the Amiga Developer CD 2.1 HTML copy, see below) | `chips-amiga/src/blitter.rs`, `custom.rs` |
 | Joystick bits in JOYxDAT, POTGO/POTGOR | HRM chapter 8 "Interface hardware" | `machine-amiga`, `chips-amiga/src/paula.rs` |
+| Audio channels: registers, DMA, block-start interrupts, left/right assignment, output filters | HRM chapter 5 "Audio hardware" | `chips-amiga/src/audio.rs`, `machine-amiga` |
+| Disk controller: DSKLEN double write, WORDSYNC, DSKSYNC, DSKBYTR, FIFO, ADKCON FAST; drive lines, index | HRM chapter 8 "Disk", appendix A | `chips-amiga/src/disk.rs`, `drives-other/src/amiga_drive.rs` |
+| ADF images, AmigaDOS track and sector format (odd/even MFM longs, header and data checksums), boot block checksum | Laurent Clévy, "The .ADF (Amiga Disk File) format FAQ" | `media/src/adf.rs`, `tests/tests/amiga_boot.rs` |
 | VPA/E-clock bus cycles (CIA accesses, autovector acknowledge) | Motorola, *M68000 User's Manual*, "Synchronous operation" | `machine-amiga` (`e_clock_waits`) |
 
 ### Video, colour and host conventions

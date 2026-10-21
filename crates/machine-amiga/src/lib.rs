@@ -4,7 +4,18 @@
 //! (`chips-amiga`: Agnus with Copper and Blitter, Denise, Paula), two 8520
 //! CIAs (`chips-cbm`, [`CiaModel::Mos8520`]), 512 KB chip RAM, 512 KB slow
 //! RAM, the Kickstart ROM (see [`memory`] for the map) and up to four
-//! floppy drives (mechanics only until milestone M3: no disks yet).
+//! floppy drives ("DF0:"–"DF3:", ADF images; `drives_other::amiga_drive`).
+//!
+//! **Disks.** Paula reads and writes the selected drive one bit cell at a
+//! time: every 2 µs with ADKCON FAST, else every 4 µs. The index hole
+//! pulses CIA-B /FLAG.
+//!
+//! **Audio.** Paula's channels 0+3 (left) and 1+2 (right) at the colour
+//! clock, averaged down to 48 kHz stereo, then the A500's output filters:
+//! a fixed low-pass (about 4.9 kHz) and the "LED" filter (about 3.3 kHz),
+//! on while CIA-A PA1 (/LED) is low. Both are approximated by first-order
+//! stages here (HRM chapter 5, "Audio filter"; the A500's actual filters
+//! are higher-order).
 //!
 //! Models: "pal" (default), "ntsc". Options:
 //! - `kickstart`: "1.3" (default), "1.2", "2.0", "3.1" — which ROM role to
@@ -45,10 +56,11 @@ use chips_amiga::custom::{self, Custom, Standard, FIRST_CCK, WIDTH};
 use chips_cbm::cia::{Cia, CiaModel};
 use cpu_m68k::{Access, Step, TimedBus68, M68000};
 use drives_other::amiga_drive::AmigaDrive;
+use emu_core::audio::Decimator;
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
 use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
-use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::{
@@ -70,6 +82,13 @@ pub const PORT1: PortId = PortId(1);
 
 pub const CPU_HZ_PAL: u32 = 7_093_790;
 pub const CPU_HZ_NTSC: u32 = 7_159_090;
+
+fn cpu_hz(standard: Standard) -> u32 {
+    match standard {
+        Standard::Pal => CPU_HZ_PAL,
+        Standard::Ntsc => CPU_HZ_NTSC,
+    }
+}
 
 const CHIP_RAM: usize = 0x8_0000;
 /// The OCS Agnus (8367/8361) addresses 512 KB.
@@ -153,7 +172,7 @@ fn joydat(lines: PortLines) -> u16 {
 }
 
 /// Everything on the boards' buses except the CPU and the port devices.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct Board {
     mem: Memory,
     custom: Custom,
@@ -166,7 +185,20 @@ struct Board {
     field_done: bool,
     /// /FIR0, /FIR1 pressed (CIA-A port A bits 6, 7).
     fire_low: u8,
+    /// Colour clocks per second (the disk bit clock divides it).
+    cck_hz: u32,
+    disk_acc: u32,
+    decimators: [Decimator; 2],
+    /// Output filter states (fixed, LED) per side, 16.16 fixed point.
+    filter: [[i32; 2]; 2],
+    /// Interleaved stereo samples since the last `audio` call.
+    samples: Vec<i16>,
 }
+
+/// One-pole low-pass coefficients at 48 kHz (16-bit fraction):
+/// 1 − e^(−2π·fc/48000) for 4.9 kHz and 3.3 kHz.
+const FILTER_FIXED: i32 = 31_025;
+const FILTER_LED: i32 = 22_853;
 
 impl Board {
     /// One colour clock. Returns true if a waiting CPU got the slot.
@@ -185,8 +217,67 @@ impl Board {
         self.custom.paula.ports_line = self.cia_a.irq();
         self.custom.paula.exter_line = self.cia_b.irq();
         self.field_done |= out.field_done;
+        self.audio(out.audio);
+        let rate = if self.custom.paula.adkcon & chips_amiga::disk::FAST != 0 {
+            500_000
+        } else {
+            250_000
+        };
+        self.disk_acc += rate;
+        if self.disk_acc >= self.cck_hz {
+            self.disk_acc -= self.cck_hz;
+            self.disk_cell();
+        }
         self.cck += 1;
         out.cpu_slot
+    }
+
+    /// One disk bit cell: Paula writes to or reads from the selected
+    /// drives; every spinning disk turns on.
+    fn disk_cell(&mut self) {
+        let write = self.custom.disk_bit_out();
+        let (mut bit, mut index) = (false, false);
+        for d in &mut self.drives {
+            if !d.motor {
+                continue;
+            }
+            let selected = d.selected;
+            let (b, i) = d.cell(if selected { write } else { None });
+            if selected {
+                bit |= b;
+                index |= i;
+            }
+        }
+        self.custom.disk_bit_in(bit);
+        if index {
+            self.cia_b.set_flag(false);
+            self.cia_b.set_flag(true);
+        }
+    }
+
+    fn audio(&mut self, levels: [i32; 2]) {
+        let [l, r] = [
+            self.decimators[0].push(levels[0] * 2),
+            self.decimators[1].push(levels[1] * 2),
+        ];
+        let (Some(l), Some(r)) = (l, r) else {
+            return;
+        };
+        let led = self.cia_a.port_a_out() & 2 == 0;
+        for (side, x) in [l, r].into_iter().enumerate() {
+            let f = &mut self.filter[side];
+            let x = i32::from(x) << 16;
+            f[0] += (((x - f[0]) as i64 * i64::from(FILTER_FIXED)) >> 16) as i32;
+            let mut y = f[0];
+            if led {
+                f[1] += (((y - f[1]) as i64 * i64::from(FILTER_LED)) >> 16) as i32;
+                y = f[1];
+            } else {
+                f[1] = y;
+            }
+            self.samples
+                .push((y >> 16).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16);
+        }
     }
 
     /// Run the chips up to (not including) colour clock `to`.
@@ -575,6 +666,13 @@ impl Amiga {
                 cck: 0,
                 field_done: false,
                 fire_low: 0,
+                cck_hz: cpu_hz(standard) / 2,
+                disk_acc: 0,
+                decimators: [Decimator::new(cpu_hz(standard) / 2, emu_core::SAMPLE_RATE)
+                    .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?;
+                    2],
+                filter: [[0; 2]; 2],
+                samples: Vec::new(),
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -830,8 +928,11 @@ impl Machine for Amiga {
         self.board.custom.reset();
         if kind == ResetKind::Hard {
             self.board.mem.clear();
+            // The mechanics restart; a disk stays in its drive.
             for d in &mut self.board.drives {
-                *d = AmigaDrive::new();
+                let mut n = AmigaDrive::new();
+                n.take_disk(d);
+                *d = n;
             }
         }
         self.input.clear();
@@ -850,10 +951,11 @@ impl Machine for Amiga {
         }
     }
 
-    fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+        out.append(&mut self.board.samples);
         emu_core::AudioFormat {
             sample_rate: emu_core::SAMPLE_RATE,
-            channels: 1,
+            channels: 2,
         }
     }
 
@@ -942,6 +1044,11 @@ impl Machine for Amiga {
             r("ADKCON", 0x09e, u32::from(p.adkcon), 16),
             r("POTGO", 0x034, u32::from(p.potgo), 16),
             ("IPL", None, u32::from(p.ipl()), 3),
+            r("DSKPT", 0x020, p.disk.pt, 32),
+            r("DSKLEN", 0x024, u32::from(p.dsklen), 16),
+            r("DSKSYNC", 0x07e, u32::from(p.dsksync), 16),
+            r("DSKBYTR", 0x01a, u32::from(p.disk.dskbytr()), 16),
+            ("DSKLEFT", None, u32::from(p.disk.remaining), 16),
         ];
         vec![
             chip_regs("agnus", &agnus),
@@ -951,6 +1058,22 @@ impl Machine for Amiga {
             chip_regs("paula", &paula),
             cia_info("cia_a", &self.board.cia_a, 0xbf_e001, 0x100),
             cia_info("cia_b", &self.board.cia_b, 0xbf_d000, 0x100),
+            chip_regs(
+                "floppy",
+                &self
+                    .board
+                    .drives
+                    .iter()
+                    .flat_map(|d| {
+                        [
+                            ("CYL", None, u32::from(d.cylinder), 8),
+                            ("HEAD", None, u32::from(d.upper), 1),
+                            ("MOTOR", None, u32::from(d.motor), 1),
+                            ("POS", None, d.pos, 32),
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
+            ),
         ]
     }
 
@@ -1017,19 +1140,32 @@ impl Machine for Amiga {
         dev
     }
 
-    /// Disks come with milestone M3.
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        Vec::new()
+        const NAMES: [&str; 4] = ["DF0:", "DF1:", "DF2:", "DF3:"];
+        self.board
+            .drives
+            .iter()
+            .enumerate()
+            .map(|(i, d)| MediaSlotInfo {
+                id: SlotId(i as u8),
+                name: NAMES[i],
+                kind: MediaKind::Disk,
+                inserted: d.has_disk(),
+            })
+            .collect()
     }
 
-    fn media_slot(&mut self, _slot: SlotId) -> Option<&mut dyn MediaSlot> {
-        None
+    fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
+        self.board
+            .drives
+            .get_mut(usize::from(slot.0))
+            .map(|d| d as &mut dyn MediaSlot)
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         let b = &self.board;
-        w.chunk(*b"A500", 1, |w| {
+        w.chunk(*b"A500", 2, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1039,6 +1175,13 @@ impl Machine for Amiga {
             w.bool(b.field_done);
             w.u8(b.fire_low);
             w.bool(self.jam_reported);
+            w.u32(b.disk_acc);
+            for d in &b.decimators {
+                d.save(w);
+            }
+            for v in b.filter.iter().flatten() {
+                w.u32(*v as u32);
+            }
         });
         self.cpu.save(&mut w);
         b.mem.save(&mut w);
@@ -1066,7 +1209,7 @@ impl Machine for Amiga {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"A500", 1)?;
+        let (_, mut c) = r.chunk(*b"A500", 2)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -1083,6 +1226,17 @@ impl Machine for Amiga {
         board.field_done = c.bool()?;
         board.fire_low = c.u8()? & 0xc0;
         let jam_reported = c.bool()?;
+        board.disk_acc = c.u32()?;
+        if board.disk_acc >= board.cck_hz {
+            return Err(StateError::Invalid("disk clock"));
+        }
+        for d in &mut board.decimators {
+            d.load(&mut c)?;
+        }
+        for v in board.filter.iter_mut().flatten() {
+            *v = c.u32()? as i32;
+        }
+        board.samples.clear();
         let mut cpu = self.cpu.clone();
         let mut sched = self.sched.clone();
         let mut input = self.input.clone();
@@ -1117,6 +1271,10 @@ impl Machine for Amiga {
                     return Err(e);
                 }
             }
+        }
+        // Disks are media, not state: they stay in their drives.
+        for (new, old) in board.drives.iter_mut().zip(&mut self.board.drives) {
+            new.take_disk(old);
         }
         self.cpu = cpu;
         self.board = board;

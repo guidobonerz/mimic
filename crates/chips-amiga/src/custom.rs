@@ -21,7 +21,7 @@
 //! **Bitplane fetch.** Inside the vertical display window and between
 //! DDFSTRT and DDFSTOP, eight-slot groups fetch the planes in the order
 //! (lowres) `- 4 6 2 - 3 5 1` and (hires) `4 2 3 1 4 2 3 1`; groups start
-//! at DDFSTRT + 8n while ≤ DDFSTOP. After the line's last group the
+//! at DDFSTRT + 8n while ≤ DDFSTOP (hires: DDFSTOP + 4). After the line's last group the
 //! modulos are added (BPL1MOD odd planes, BPL2MOD even planes).
 //!
 //! **Picture.** [`Custom::frame`] is the field in 12-bit colours as RGB, 720
@@ -87,12 +87,16 @@ pub struct TickOut {
     pub vsync: bool,
     /// The last colour clock of a field.
     pub field_done: bool,
+    /// Audio output: left (channels 0 + 3) and right (1 + 2) levels.
+    pub audio: [i32; 2],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Slot {
     Fixed,
     Plane(usize),
+    Disk,
+    Audio(usize),
     /// Sprite n, first (POS / DATA) or second (CTL / DATB) slot.
     Sprite(usize, bool),
     Free,
@@ -226,6 +230,18 @@ impl Custom {
         if h & 1 == 1 && h <= 7 {
             return Slot::Fixed;
         }
+        if matches!(h, 0x09 | 0x0b | 0x0d)
+            && self.dma_on(dma::DSKEN)
+            && self.paula.disk.wants_slot()
+        {
+            return Slot::Disk;
+        }
+        if matches!(h, 0x0f | 0x11 | 0x13 | 0x15) {
+            let n = usize::from((h - 0x0f) / 2);
+            if self.dma_on(1 << n) && self.paula.audio[n].wants_slot() {
+                return Slot::Audio(n);
+            }
+        }
         if let Some(p) = self.plane_at(h) {
             return Slot::Plane(p);
         }
@@ -239,9 +255,12 @@ impl Custom {
     }
 
     /// (first slot, first slot after) of the bitplane fetch window.
+    /// Groups start at DDFSTRT + 8n up to DDFSTOP; in high resolution the
+    /// stop counts half a group later, so the usual hires DDFSTOP $D0 and
+    /// $D4 both fetch 40 words (Workbench 1.3 uses $3C/$D0 for 640 pixels).
     fn fetch_window(&self) -> (u16, u16) {
         let start = (self.ddfstrt & 0xfc).max(0x18);
-        let stop = (self.ddfstop & 0xfc).min(0xd8);
+        let stop = (self.ddfstop & 0xfc).min(0xd8) + if self.denise.hires() { 4 } else { 0 };
         if stop < start {
             return (start, start);
         }
@@ -315,6 +334,15 @@ impl Custom {
         let cpu_turn = cpu_wants && h & 1 == 0;
         match self.slot(h) {
             Slot::Fixed => {}
+            Slot::Disk => {
+                let ints = self.paula.disk.dma(chip, self.ptr_mask);
+                self.paula.request(ints);
+            }
+            Slot::Audio(n) => {
+                if self.paula.audio[n].fetch(chip, self.ptr_mask) {
+                    self.paula.request(int::AUD0 << n);
+                }
+            }
             Slot::Sprite(n, first) => {
                 let w = chip.word(self.sprpt[n]);
                 self.sprpt[n] = self.sprpt[n].wrapping_add(2) & self.ptr_mask;
@@ -360,6 +388,13 @@ impl Custom {
             self.fetched = false;
         }
         self.render(v, h);
+        for n in 0..4 {
+            if self.paula.audio[n].tick() {
+                self.paula.request(int::AUD0 << n);
+            }
+        }
+        let a = &self.paula.audio;
+        out.audio = [a[0].level() + a[3].level(), a[1].level() + a[2].level()];
 
         self.h += 1;
         if self.h >= self.line_len() {
@@ -451,9 +486,13 @@ impl Custom {
         let mask = self.ptr_mask;
         match r {
             reg::DSKPTH | reg::DSKPTL => {
-                Self::set_ptr(&mut self.paula.dskpt, r == reg::DSKPTH, v, mask)
+                Self::set_ptr(&mut self.paula.disk.pt, r == reg::DSKPTH, v, mask)
             }
-            reg::DSKLEN => self.paula.dsklen = v,
+            reg::DSKLEN => {
+                self.paula.dsklen = v;
+                let ints = self.paula.disk.write_dsklen(v);
+                self.paula.request(ints);
+            }
             reg::VPOSW => {
                 self.lof = v & 0x8000 != 0;
                 self.v = (self.v & 0xff) | (v & 1) << 8;
@@ -504,7 +543,26 @@ impl Custom {
             }
             reg::DDFSTRT => self.ddfstrt = v & 0xfc,
             reg::DDFSTOP => self.ddfstop = v & 0xfc,
-            reg::DMACON => set_clr(&mut self.dmacon, v & 0x87ff),
+            reg::DMACON => {
+                set_clr(&mut self.dmacon, v & 0x87ff);
+                for n in 0..4 {
+                    let on = self.dma_on(1 << n);
+                    self.paula.audio[n].set_dma(on);
+                }
+            }
+            reg::AUD0LCH..=reg::AUD3DAT => {
+                let n = usize::from((r - reg::AUD0LCH) / 16);
+                let c = &mut self.paula.audio[n];
+                match (r - reg::AUD0LCH) % 16 {
+                    0 => c.lc = (c.lc & 0xffff) | u32::from(v) << 16 & mask,
+                    2 => c.lc = (c.lc & 0xffff_0000) | u32::from(v & 0xfffe),
+                    4 => c.len = v,
+                    6 => c.per = v,
+                    8 => c.vol = (v & 0x7f).min(64) as u8,
+                    10 => c.write_dat(v),
+                    _ => {}
+                }
+            }
             reg::CLXCON => self.denise.clxcon = v,
             reg::INTENA => self.paula.write_intena(v),
             reg::INTREQ => self.paula.write_intreq(v),
@@ -538,13 +596,32 @@ impl Custom {
         }
     }
 
-    /// A register read by the CPU: reading CLXDAT clears it.
+    /// A register read by the CPU: reading CLXDAT clears it, reading
+    /// DSKBYTR its DSKBYT flag.
     pub fn read(&mut self, r: u16) -> u16 {
-        let v = self.peek(r);
-        if r & 0x1fe == reg::CLXDAT {
-            self.denise.clxdat = 0;
+        match r & 0x1fe {
+            reg::CLXDAT => {
+                let v = self.peek(r);
+                self.denise.clxdat = 0;
+                v
+            }
+            reg::DSKBYTR => self.paula.disk.read_dskbytr(),
+            _ => self.peek(r),
         }
-        v
+    }
+
+    /// One disk bit cell, read side: the bit the selected drives deliver.
+    pub fn disk_bit_in(&mut self, bit: bool) {
+        let p = &mut self.paula;
+        let ints = p.disk.bit_in(bit, p.dsksync, p.adkcon);
+        p.request(ints);
+    }
+
+    /// One disk bit cell, write side: the bit to write, if writing.
+    pub fn disk_bit_out(&mut self) -> Option<bool> {
+        let (bit, ints) = self.paula.disk.bit_out();
+        self.paula.request(ints);
+        bit
     }
 
     /// Side-effect-free register read; write-only registers read $FFFF.
@@ -566,7 +643,7 @@ impl Custom {
             reg::POTGOR => self.paula.potgor(self.pot_low),
             // TBE and TSRE: the transmitter is idle.
             reg::SERDATR => 0x3000,
-            reg::DSKBYTR => 0,
+            reg::DSKBYTR => self.paula.disk.dskbytr(),
             reg::INTENAR => self.paula.intena,
             reg::INTREQR => self.paula.requests(),
             _ => 0xffff,

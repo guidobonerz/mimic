@@ -1,6 +1,6 @@
 //! Paula (8364): interrupt control (INTENA, INTREQ → IPL0–2), ADKCON,
-//! POTGO, the serial port's status. Audio and disk DMA follow in later
-//! milestones; their registers are stored.
+//! POTGO, the serial port's status, the disk controller ([`DiskCtl`]) and
+//! the four audio channels ([`Channel`]).
 //!
 //! Interrupt levels (HRM chapter 7, "Interrupts", table 7-1):
 //!
@@ -19,6 +19,8 @@
 
 use emu_core::{StateError, StateReader, StateWriter};
 
+use crate::audio::Channel;
+use crate::disk::DiskCtl;
 use crate::int;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -31,9 +33,10 @@ pub struct Paula {
     pub ports_line: bool,
     pub exter_line: bool,
     pub dsklen: u16,
-    pub dskpt: u32,
     pub dsksync: u16,
     pub serper: u16,
+    pub disk: DiskCtl,
+    pub audio: [Channel; 4],
 }
 
 pub(crate) fn set_clr(reg: &mut u16, v: u16) {
@@ -116,9 +119,12 @@ impl Paula {
         ] {
             w.u16(v);
         }
-        w.u32(self.dskpt);
         w.bool(self.ports_line);
         w.bool(self.exter_line);
+        self.disk.save(w);
+        for c in &self.audio {
+            c.save(w);
+        }
     }
 
     pub(crate) fn load(r: &mut StateReader<'_>) -> Result<Self, StateError> {
@@ -129,9 +135,12 @@ impl Paula {
         for v in [&mut p.potgo, &mut p.dsklen, &mut p.dsksync, &mut p.serper] {
             *v = r.u16()?;
         }
-        p.dskpt = r.u32()?;
         p.ports_line = r.bool()?;
         p.exter_line = r.bool()?;
+        p.disk = DiskCtl::load(r)?;
+        for c in &mut p.audio {
+            *c = Channel::load(r)?;
+        }
         Ok(p)
     }
 }

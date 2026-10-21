@@ -172,6 +172,142 @@ fn debugger_sees_registers_memory_and_disassembly() {
     let names: Vec<&str> = m.chips().iter().map(|c| c.name).collect();
     assert_eq!(
         names,
-        ["agnus", "copper", "blitter", "denise", "paula", "cia_a", "cia_b"]
+        ["agnus", "copper", "blitter", "denise", "paula", "cia_a", "cia_b", "floppy"]
     );
+}
+
+mod disk {
+    use super::*;
+    use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
+    use media::adf;
+    use std::sync::{Arc, Mutex};
+
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+
+    impl MediaBackend for Shared {
+        fn len(&self) -> u64 {
+            self.0.lock().unwrap().len() as u64
+        }
+        fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), MediaError> {
+            let d = self.0.lock().unwrap();
+            buf.copy_from_slice(&d[offset as usize..offset as usize + buf.len()]);
+            Ok(())
+        }
+        fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), MediaError> {
+            let mut d = self.0.lock().unwrap();
+            d[offset as usize..offset as usize + data.len()].copy_from_slice(data);
+            Ok(())
+        }
+        fn commit(&mut self) -> Result<(), MediaError> {
+            Ok(())
+        }
+    }
+
+    fn image() -> Vec<u8> {
+        (0..adf::ADF_SIZE)
+            .map(|i| (i / 512 + i % 251) as u8)
+            .collect()
+    }
+
+    /// The stub machine with `bytes` in DF0:, its motor on and selected,
+    /// DSKSYNC $4489, WORDSYNC and FAST, disk DMA enabled.
+    fn machine(bytes: Arc<Mutex<Vec<u8>>>) -> Amiga {
+        let mut m = stub();
+        frames(&mut m, 1);
+        let media = Media {
+            name: "test.adf".into(),
+            kind: MediaKind::Disk,
+            backend: Box::new(Shared(bytes)),
+        };
+        m.media_slot(SlotId(0)).unwrap().insert(media).unwrap();
+        let b = &mut m.board;
+        b.write(0xbf_d100, Size::Byte, 0x7f & !0x08);
+        b.write(0xbf_d300, Size::Byte, 0xff);
+        for (r, v) in [
+            (0x07e, 0x4489),
+            (0x09e, 0x8000 | 0x1000 | 0x0400 | 0x0100),
+            (0x096, 0x8210),
+        ] {
+            b.write(0xdf_f000 + r, Size::Word, v);
+        }
+        m
+    }
+
+    /// Start a transfer and run until DSKBLK.
+    fn transfer(m: &mut Amiga, addr: u32, dsklen: u16) {
+        let b = &mut m.board;
+        b.write(0xdf_f09c, Size::Word, 0x0002);
+        b.write(0xdf_f020, Size::Long, addr);
+        b.write(0xdf_f024, Size::Word, u32::from(dsklen));
+        b.write(0xdf_f024, Size::Word, u32::from(dsklen));
+        for _ in 0..100 {
+            frames(m, 1);
+            if m.board.custom.paula.requests() & 0x0002 != 0 {
+                return;
+            }
+        }
+        panic!("no DSKBLK");
+    }
+
+    #[test]
+    fn dma_reads_a_whole_track_after_the_sync() {
+        let img = image();
+        let mut m = machine(Arc::new(Mutex::new(img.clone())));
+        transfer(&mut m, 0x2_0000, 0x8000 | 0x1900);
+        let chip = &m.board.mem.chip;
+        let mut buf = vec![0x44, 0x89];
+        buf.extend((0..0x1900).flat_map(|i| chip.word(0x2_0000 + 2 * i).to_be_bytes()));
+        assert_eq!(
+            &buf[..4],
+            &[0x44, 0x89, 0x44, 0x89],
+            "transfer starts after the first sync"
+        );
+        let sectors = adf::decode_track(&buf);
+        assert_eq!(sectors.len(), adf::SECTORS);
+        let mut out = vec![0; adf::ADF_SIZE];
+        adf::store_track(&mut out, 0, &sectors);
+        assert_eq!(out[..adf::SECTORS * 512], img[..adf::SECTORS * 512]);
+        assert_ne!(m.board.custom.paula.requests() & 0x1000, 0, "DSKSYN");
+    }
+
+    #[test]
+    fn dma_writes_reach_the_image() {
+        let bytes = Arc::new(Mutex::new(vec![0; adf::ADF_SIZE]));
+        let mut m = machine(bytes.clone());
+        let mut img = vec![0u8; adf::ADF_SIZE];
+        img[512..1024].fill(0x3c);
+        let track = adf::encode_track(&img, 0);
+        let words = track.len() / 2;
+        for (i, w) in track.chunks(2).enumerate() {
+            m.board
+                .mem
+                .chip
+                .set_word(0x2_0000 + 2 * i as u32, u16::from_be_bytes([w[0], w[1]]));
+        }
+        transfer(&mut m, 0x2_0000, 0xc000 | words as u16);
+        m.media_slot(SlotId(0)).unwrap().flush().unwrap();
+        let b = bytes.lock().unwrap();
+        assert!(b[512..1024].iter().all(|&v| v == 0x3c));
+        assert!(b[..512].iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn index_pulses_reach_cia_b_flag() {
+        let mut m = machine(Arc::new(Mutex::new(image())));
+        m.board.cia_b.read(0x0d, 0xff, 0xff);
+        frames(&mut m, 12); // more than one revolution (200 ms)
+        assert_ne!(m.board.cia_b.peek(0x0d, 0xff, 0xff) & 0x10, 0);
+    }
+
+    #[test]
+    fn disks_survive_savestates_and_resets() {
+        let mut m = machine(Arc::new(Mutex::new(image())));
+        let s = m.save_state();
+        m.load_state(&s).unwrap();
+        assert!(m.media_slots()[0].inserted);
+        m.reset(ResetKind::Hard);
+        assert!(m.media_slots()[0].inserted);
+        assert!(m.media_slot(SlotId(0)).unwrap().eject().is_some());
+        assert!(!m.media_slots()[0].inserted);
+    }
 }

@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod adf;
 pub mod atr;
 pub mod car;
 pub mod cas;

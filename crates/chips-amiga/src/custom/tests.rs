@@ -255,3 +255,24 @@ fn dual_playfield_through_dma() {
     let rgb = |c: u16| crate::denise::rgb12(c);
     assert_eq!(px, [rgb(0xf00), rgb(0x0f0), rgb(0x00f)]);
 }
+
+#[test]
+fn hires_fetch_window_takes_40_words_with_ddfstop_d0_or_d4() {
+    for stop in [0xd0, 0xd4] {
+        let (mut c, mut chip) = setup();
+        for (r, v) in [
+            (reg::BPLCON0, 0x9200),
+            (reg::DIWSTRT, 0xac81),
+            (reg::DIWSTOP, 0xadc1), // one line ($AC; VSTOP bit 8 = !bit 7)
+            (reg::DDFSTRT, 0x3c),
+            (reg::DDFSTOP, stop),
+            (reg::BPL1PTH, 0x0001),
+            (reg::BPL1PTH + 2, 0x0000),
+            (reg::DMACON, 0x8000 | dma::DMAEN | dma::BPLEN),
+        ] {
+            c.write(r, v);
+        }
+        field(&mut c, &mut chip);
+        assert_eq!(c.bplpt[0], 0x1_0000 + 80, "one line, DDFSTOP {stop:x}");
+    }
+}

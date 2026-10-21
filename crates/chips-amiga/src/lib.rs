@@ -14,11 +14,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod audio;
 pub mod blitter;
 pub mod chipram;
 pub mod copper;
 pub mod custom;
 pub mod denise;
+pub mod disk;
 pub mod paula;
 
 pub use chipram::ChipRam;
@@ -89,6 +91,9 @@ pub mod reg {
     pub const BPL1DAT: u16 = 0x110;
     pub const BPL6DAT: u16 = 0x11a;
     pub const SPR0PTH: u16 = 0x120;
+    pub const DSKDAT: u16 = 0x026;
+    pub const AUD0LCH: u16 = 0x0a0;
+    pub const AUD3DAT: u16 = 0x0da;
     pub const COLOR00: u16 = 0x180;
     pub const COLOR31: u16 = 0x1be;
     pub const DENISEID: u16 = 0x07c;
