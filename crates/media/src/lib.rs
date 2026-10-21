@@ -8,6 +8,7 @@
 pub mod atr;
 pub mod car;
 pub mod cas;
+pub mod cdt;
 pub mod crt;
 pub mod d64;
 pub mod gcr;

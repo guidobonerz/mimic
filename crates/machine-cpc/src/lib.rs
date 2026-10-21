@@ -12,6 +12,9 @@
 //! - `roms`: "stub" runs a tiny built-in program instead of the OS (tests
 //!   without ROMs).
 //!
+//! Media slots: "tape" (CDT/TZX on the cassette deck: motor on PPI port C
+//! bit 4, write bit 5, read on port B bit 7).
+//!
 //! ROMs (`MachineConfig::roms`, see `media-backends`): "os464"/"basic464",
 //! "os664"/"basic664", "os6128"/"basic6128" (16 KB each), or the 32 KB
 //! "rom464"/"rom664"/"rom6128" with both, "amsdos", "parados". User-supplied,
@@ -41,7 +44,7 @@ use emu_core::frame::{
 };
 use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
-use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::{
@@ -50,11 +53,15 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
+use drives_other::cpc_tape::CpcTape;
 use memory::{Memory, Rom, Roms, ROM_SIZE};
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The Z80's view: memory at 0–&FFFF, I/O ports at `IO_BASE + port`.
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
+
+/// The cassette deck (slots 0 and 1 are the disc drives A and B).
+pub const SLOT_TAPE: SlotId = SlotId(2);
 
 /// Z80 T-states per second.
 pub const CPU_HZ: u32 = 4_000_000;
@@ -64,7 +71,7 @@ const T_PER_US: u64 = 4;
 /// advance.
 const CHIP_PHASE: u64 = 3;
 
-/// PPI port B inputs other than VSYNC: no cassette signal (7), printer not
+/// PPI port B inputs other than VSYNC and the cassette (7): printer not
 /// ready (6), no expansion (5), 50 Hz (4), distributor Amstrad (3–1).
 const PORT_B: u8 = 0x7e;
 
@@ -173,8 +180,9 @@ struct Io {
     ay: Ay,
     /// Keyboard matrix lines, a 0 bit = key down.
     keys: [u8; 10],
-    /// The CRTC's VSYNC (PPI port B bit 0).
+    /// The CRTC's VSYNC (PPI port B bit 0) and the cassette's READ (bit 7).
     vsync: bool,
+    cas_in: bool,
     /// The PAL's RAM configurations exist (6128).
     has_pal: bool,
 }
@@ -196,7 +204,7 @@ impl Io {
     }
 
     fn port_b(&self) -> u8 {
-        PORT_B | u8::from(self.vsync)
+        PORT_B | u8::from(self.vsync) | u8::from(self.cas_in) << 7
     }
 
     /// An I/O read (no side effects on the CPC's chips).
@@ -263,26 +271,30 @@ struct CpcBus<'a> {
     chips_now: &'a mut u64,
     /// T-state the instruction started on.
     start: u64,
-    audio: &'a mut Decimator,
-    samples: &'a mut Vec<i16>,
+    side: Side<'a>,
     dbg: Option<&'a mut DebugHooks>,
     beam: BeamPos,
 }
 
+/// What runs beside the chips: the cassette deck and the audio.
+struct Side<'a> {
+    tape: &'a mut CpcTape,
+    audio: &'a mut Decimator,
+    samples: &'a mut Vec<i16>,
+}
+
 /// Run the chips up to (not including) T-state `to`.
-fn catch_up(
-    mem: &Memory,
-    io: &mut Io,
-    now: &mut u64,
-    to: u64,
-    audio: &mut Decimator,
-    samples: &mut Vec<i16>,
-) {
+fn catch_up(mem: &Memory, io: &mut Io, now: &mut u64, to: u64, side: &mut Side<'_>) {
     while *now < to {
         if *now % T_PER_US == CHIP_PHASE {
             io.tick_us(mem);
-            if let Some(s) = audio.push(0) {
-                samples.push(s);
+            let c = io.ppi.c_pins();
+            side.tape.set_motor(c & 0x10 != 0);
+            side.tape.set_write(c & 0x20 != 0);
+            side.tape.tick();
+            io.cas_in = side.tape.read();
+            if let Some(s) = side.audio.push(0) {
+                side.samples.push(s);
             }
         }
         *now += 1;
@@ -347,8 +359,7 @@ impl TimedBus for CpcBus<'_> {
             self.io,
             self.chips_now,
             at + u64::from(w),
-            self.audio,
-            self.samples,
+            &mut self.side,
         );
         w
     }
@@ -392,6 +403,7 @@ pub struct Cpc {
     audio: Decimator,
     samples: Vec<i16>,
     field_done_pending: bool,
+    tape: CpcTape,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -438,6 +450,7 @@ impl Cpc {
                 ay: Ay::new(),
                 keys: [0xff; 10],
                 vsync: false,
+                cas_in: false,
                 has_pal: model == Model::Cpc6128,
             },
             sched: Scheduler::new(),
@@ -447,6 +460,7 @@ impl Cpc {
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
             samples: Vec::new(),
             field_done_pending: false,
+            tape: CpcTape::new(),
         };
         m.cpu.set_int_vector(0xff);
         Ok(m)
@@ -482,8 +496,11 @@ impl Cpc {
                 io: &mut self.io,
                 chips_now: &mut chips_now,
                 start,
-                audio: &mut self.audio,
-                samples: &mut self.samples,
+                side: Side {
+                    tape: &mut self.tape,
+                    audio: &mut self.audio,
+                    samples: &mut self.samples,
+                },
                 dbg: dbg.as_deref_mut(),
                 beam,
             };
@@ -495,8 +512,11 @@ impl Cpc {
             &mut self.io,
             &mut chips_now,
             end,
-            &mut self.audio,
-            &mut self.samples,
+            &mut Side {
+                tape: &mut self.tape,
+                audio: &mut self.audio,
+                samples: &mut self.samples,
+            },
         );
         self.sched.advance(u64::from(t));
         let entered = self.cpu.take_interrupt();
@@ -769,11 +789,19 @@ impl Machine for Cpc {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        Vec::new()
+        vec![MediaSlotInfo {
+            id: SLOT_TAPE,
+            name: "tape",
+            kind: MediaKind::Tape,
+            inserted: self.tape.has_tape(),
+        }]
     }
 
-    fn media_slot(&mut self, _slot: SlotId) -> Option<&mut dyn MediaSlot> {
-        None
+    fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
+        match slot {
+            SLOT_TAPE => Some(&mut self.tape),
+            _ => None,
+        }
     }
 
     fn save_state(&self) -> Vec<u8> {
@@ -783,6 +811,7 @@ impl Machine for Cpc {
             w.bool(self.field_done_pending);
             w.raw(&self.io.keys);
             w.bool(self.io.vsync);
+            w.bool(self.io.cas_in);
             self.audio.save(w);
         });
         self.cpu.save(&mut w);
@@ -793,6 +822,7 @@ impl Machine for Cpc {
         self.io.ay.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
+        self.tape.save(&mut w);
         w.into_bytes()
     }
 
@@ -814,6 +844,7 @@ impl Machine for Cpc {
         let field_done_pending = c.bool()?;
         c.raw_into(&mut next.io.keys)?;
         next.io.vsync = c.bool()?;
+        next.io.cas_in = c.bool()?;
         next.audio.load(&mut c)?;
         next.cpu.load(&mut r)?;
         next.mem.load(&mut r)?;
@@ -823,6 +854,11 @@ impl Machine for Cpc {
         next.io.ay.load(&mut r)?;
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
+        // The deck loads last (it has no copy), after everything that can
+        // fail: check its chunk first.
+        let at = s.len() - r.remaining();
+        CpcTape::new().load(&mut r)?;
+        self.tape.load(&mut StateReader::new(&s[at..]))?;
         self.cpu = next.cpu;
         self.mem = next.mem;
         self.io = next.io;

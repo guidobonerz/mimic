@@ -85,6 +85,7 @@ own section.
 | Gate Array (PENR/INKR/RMR/MMR, hardware colours, pixel encodings, interrupts, 6128 RAM configurations) | cpcwiki, "Gate Array" (mirror https://oldwiki.cpcwiki.eu/index.php/Gate_Array) | `chips-amstrad/src/gate_array.rs`, `palette.rs`, `machine-cpc/src/memory.rs` |
 | 8255 PPI on the CPC (ports, port B links, port C, AY control) | cpcwiki, "8255" (mirror https://oldwiki.cpcwiki.eu/index.php/8255); Intel 8255A data sheet | `chips-amstrad/src/ppi.rs`, `machine-cpc` |
 | Keyboard matrix | cpcwiki, "Programming:Keyboard scanning" (mirror) | `machine-cpc/src/keyboard.rs`, `emu-input` keymap `cpc` |
+| CDT tape images (TZX 1.20 block format, pulse and pause semantics) | "TZX format" specification, World of Spectrum (format revision 1.20) | `media/src/cdt.rs`, `drives-other/src/cpc_tape.rs` |
 | AY-3-8912 registers | General Instrument AY-3-8910/8912 data sheet | `chips-amstrad/src/ay.rs` |
 | Z80 samples /WAIT on the falling edge of T2 (TW for I/O) | Zilog Z80 CPU User Manual (UM0080), timing diagrams; Thomas Harte, CLK wiki "Amstrad CPC Timing" (search summary, page not reachable) | `cpu-z80/src/lib.rs` (`step_timed`) |
 
