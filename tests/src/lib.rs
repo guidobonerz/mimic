@@ -2,5 +2,6 @@
 
 #![forbid(unsafe_code)]
 
+pub mod acid800;
 pub mod lorenz;
 pub mod typing;

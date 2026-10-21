@@ -18,8 +18,16 @@
 //! AUDCTL: 7 9-bit poly, 6 channel 1 at 1.79 MHz, 5 channel 3 at 1.79 MHz,
 //! 4 join 1+2, 3 join 3+4, 2/1 high-pass filters, 0 15 kHz base clock
 //! (else 64 kHz). Base clocks: 64 kHz = every 28 cycles, 15 kHz = every 114.
-//! Timer periods: AUDF+1 base ticks; AUDF+4 cycles at 1.79 MHz; a joined
-//! pair at 1.79 MHz AUDF16+7 cycles.
+//!
+//! Timers (fitted to Acid800 `pokey_timertiming`, which measures them to
+//! the cycle): a counter that reaches 0 commits its underflow; 3 cycles
+//! later it takes effect — IRQ, output change, reload from AUDF as it was
+//! the cycle before. A STIMER in between does not stop it. Periods: AUDF+1
+//! base ticks; AUDF+4 cycles at 1.79 MHz (first period after STIMER the
+//! same). Joined pairs: the low channel keeps its own IRQ; each of its
+//! effects counts the high channel, the low counter running through 256
+//! values until the high channel commits; the pair reloads when that takes
+//! effect (16-bit period at 1.79 MHz: AUDF16+7).
 //!
 //! IRQEN/IRQST (IRQST bits are 0 while pending): 7 BREAK, 6 key, 5 serial
 //! input ready, 4 serial output needed, 3 serial output finished (a level,
@@ -45,6 +53,13 @@
 //! High-pass filters: channel 1 (2) is XORed with its own output sampled at
 //! each channel 3 (4) underflow. Channels mix linearly.
 //!
+//! Polynomial counters (fitted to Acid800 `pokey_noise`, which measures
+//! RANDOM at exact cycles): all shift right one step per cycle with the
+//! XOR of bit 0 and a tap fed into the top bit — 9-bit tap 5, 17-bit tap 5,
+//! 5-bit tap 2, 4-bit tap 1. RANDOM reads the 9-bit counter's bits 0–7 or
+//! the 17-bit counter's bits 8–15. Initialization mode (SKCTL bits 0–1 = 0)
+//! does not reset them: they keep shifting with 1s fed in.
+//!
 //! Pots: POTGO restarts a counter that steps once per line (every cycle
 //! with SKCTL bit 2, fast scan) up to 228; each POT register latches the
 //! count at which its line's capacitor charged, ALLPOT shows the lines
@@ -67,6 +82,8 @@ const SERIAL_BITS: u8 = 10;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pokey {
     pub audf: [u8; 4],
+    /// AUDF as the counters see it (one cycle behind the register).
+    audf_latched: [u8; 4],
     pub audc: [u8; 4],
     pub audctl: u8,
     pub skctl: u8,
@@ -77,6 +94,14 @@ pub struct Pokey {
     counters: [u32; 4],
     /// Channel outputs before the high-pass filters.
     outputs: [bool; 4],
+    /// Cycles until a joined high channel's underflow takes effect.
+    delayed: [u8; 4],
+    /// A joined low channel waiting for the pair's reload.
+    hold: [bool; 4],
+    /// A committed underflow from before the last STIMER.
+    after_stimer: [bool; 4],
+    /// Cycles until a late reload (two-tone channel 1).
+    reload_wait: [u8; 4],
     /// High-pass filter latches of channels 1 and 2.
     highpass: [bool; 2],
     prescale64: u8,
@@ -108,6 +133,8 @@ pub struct Pokey {
     shifting: u8,
     shift_bits: u8,
     shift_phase: bool,
+    /// Cycles until an idle shifter takes the holding register.
+    load_wait: u8,
     /// Bytes sent completely (for SIO devices), oldest first.
     sent: Vec<u8>,
     pub serin: u8,
@@ -130,6 +157,7 @@ impl Pokey {
     pub fn new() -> Self {
         Self {
             audf: [0; 4],
+            audf_latched: [0; 4],
             audc: [0; 4],
             audctl: 0,
             skctl: 0,
@@ -137,6 +165,10 @@ impl Pokey {
             pending: 0,
             counters: [0; 4],
             outputs: [false; 4],
+            delayed: [0; 4],
+            hold: [false; 4],
+            after_stimer: [false; 4],
+            reload_wait: [0; 4],
             highpass: [false; 2],
             prescale64: 0,
             prescale15: 0,
@@ -160,6 +192,7 @@ impl Pokey {
             shifting: 0,
             shift_bits: 0,
             shift_phase: false,
+            load_wait: 0,
             sent: Vec::new(),
             serin: 0xff,
             serial_overrun: false,
@@ -256,24 +289,28 @@ impl Pokey {
         }
     }
 
+    /// "Serial output finished": the shift register is empty (a byte
+    /// waiting in SEROUT with a stopped clock does not count, Acid800
+    /// `pokey_serclock`).
     fn serout_done(&self) -> bool {
-        self.shift_bits == 0 && self.serout_hold.is_none()
+        self.shift_bits == 0
     }
 
-    /// Active interrupt bits (1 = active), including the level of
-    /// "serial output finished".
+    /// IRQST bits (1 = active): the latched requests and the level of
+    /// "serial output finished", which shows even while disabled
+    /// (Acid800 `pokey_seroc`).
     fn active(&self) -> u8 {
         let done = if self.serout_done() {
-            IRQ_SEROUT_DONE & self.irqen
+            IRQ_SEROUT_DONE
         } else {
             0
         };
         self.pending | done
     }
 
-    /// The /IRQ output.
+    /// The /IRQ output: enabled requests only.
     pub fn irq(&self) -> bool {
-        self.active() != 0
+        self.active() & (self.irqen | !IRQ_SEROUT_DONE) != 0
     }
 
     // --- serial --------------------------------------------------------
@@ -316,7 +353,13 @@ impl Pokey {
 
     /// Serial output clock: one bit per two timer-4 underflows.
     fn serial_clock(&mut self) {
+        // An idle shifter takes the holding register on a clock edge, not
+        // when SEROUT is written (Acid800 `pokey_serclock`), 2 cycles after
+        // the edge (`pokey_sertiming`).
         if self.shift_bits == 0 {
+            if self.serout_hold.is_some() {
+                self.load_wait = 2;
+            }
             return;
         }
         self.shift_phase = !self.shift_phase;
@@ -333,7 +376,8 @@ impl Pokey {
 
     /// The serial output line (1 = mark/idle).
     pub fn serial_out(&self) -> bool {
-        self.shift_bits == 0 || self.shift_reg & 1 != 0
+        // SKCTL bit 7 forces a break (0).
+        self.skctl & 0x80 == 0 && (self.shift_bits == 0 || self.shift_reg & 1 != 0)
     }
 
     // --- timers --------------------------------------------------------
@@ -354,33 +398,99 @@ impl Pokey {
         }
     }
 
-    /// Ticks from reload to underflow minus one, for channel `ch`.
-    fn reload(&self, ch: usize) -> u32 {
+    /// Restart a counter (STIMER): a 1.79 MHz channel's first period is
+    /// AUDF+4 cycles, like the others.
+    fn restart(&mut self, ch: usize) {
         let joined_high = (ch == 1 || ch == 3) && self.joined(ch);
-        if joined_high {
-            let v = u32::from(self.audf[ch - 1]) | (u32::from(self.audf[ch]) << 8);
-            if self.fast(ch - 1) {
-                v + 6
-            } else {
-                v
-            }
-        } else if self.fast(ch) {
-            u32::from(self.audf[ch]) + 3
-        } else {
-            u32::from(self.audf[ch])
+        self.counters[ch] = self.audf_of(ch) + if !joined_high && self.fast(ch) { 4 } else { 0 };
+        self.hold[ch] = false;
+        self.after_stimer[ch] = self.delayed[ch] > 0;
+        self.reload_wait[ch] = 0;
+    }
+
+    /// AUDF of `ch` as the counter loads it (one cycle behind writes: a
+    /// write in the reload cycle itself is too late).
+    fn audf_of(&self, ch: usize) -> u32 {
+        u32::from(self.audf_latched[ch])
+    }
+
+    /// Count channel `ch` once. A counter at 0 commits its underflow; the
+    /// underflow takes effect 3 cycles later ([`Pokey::effect`]).
+    fn count(&mut self, ch: usize) {
+        // A counter waits at 0 for its reload, unless a STIMER restarted it
+        // meanwhile.
+        let waiting = self.delayed[ch] > 0 && !self.after_stimer[ch];
+        if waiting || self.hold[ch] || self.reload_wait[ch] > 0 {
+            return;
+        }
+        if self.counters[ch] > 0 {
+            self.counters[ch] -= 1;
+        } else if self.delayed[ch] == 0 {
+            self.delayed[ch] = 3;
         }
     }
 
-    /// Clock channel `ch` once; true on underflow.
-    fn clock(&mut self, ch: usize) -> bool {
-        if self.counters[ch] == 0 {
-            self.counters[ch] = self.reload(ch);
-            self.distort(ch);
-            true
-        } else {
-            self.counters[ch] -= 1;
-            false
+    /// An underflow takes effect: output, IRQ, reload (and, for a joined
+    /// low channel, the high channel's count). Returns whether it reloaded
+    /// a joined pair.
+    fn effect(&mut self, ch: usize) -> bool {
+        self.distort(ch);
+        self.underflow(ch);
+        // Two-tone mode (SKCTL bit 3, channels 1+2 unjoined): timer 2
+        // resynchronises timer 1 — reloads it and drops an underflow it
+        // committed in the cycle before; timer 1 resets timer 2 while the
+        // serial output is 1 (Acid800 `pokey_timertiming` two-tone
+        // cancellation, `pokey_twotone`).
+        if self.skctl & 0x08 != 0 && !self.joined(1) {
+            let other = 1 - ch.min(1);
+            if ch == 1 || (ch == 0 && self.serial_out()) {
+                if self.delayed[other] == 3 {
+                    self.delayed[other] = 0;
+                }
+                self.counters[other] = self.audf_of(other);
+                self.reload_wait[other] = 0;
+            }
         }
+        // Committed before a STIMER: the IRQ still happens, the counters
+        // keep their restart.
+        if std::mem::take(&mut self.after_stimer[ch]) {
+            return false;
+        }
+        let joined_high = (ch == 1 || ch == 3) && self.joined(ch);
+        let joined_low = (ch == 0 || ch == 2) && self.joined(ch + 1);
+        if joined_high {
+            if ch == 1 && self.skctl & 0x08 != 0 {
+                // Two-tone: the 1+2 pair reloads 2 cycles later.
+                self.reload_wait[0] = 2;
+                self.reload_wait[1] = 2;
+                return false;
+            }
+            // The pair reloads together; the low channel was waiting.
+            self.counters[ch] = self.audf_of(ch);
+            self.counters[ch - 1] = self.audf_of(ch - 1);
+            self.hold[ch - 1] = false;
+            return true;
+        } else if joined_low {
+            let high = ch + 1;
+            if self.counters[high] == 0 {
+                // The high channel underflows; the low one waits for the
+                // pair's reload.
+                self.delayed[high] = 3;
+                self.hold[ch] = true;
+            } else {
+                self.counters[high] -= 1;
+                // Without a reload the low counter runs through all 256
+                // values.
+                self.counters[ch] = if self.fast(ch) { 252 } else { 255 };
+            }
+        } else if ch == 0 && self.skctl & 0x08 != 0 {
+            // Two-tone mode: channel 1 reloads 2 cycles later (periods 2
+            // cycles longer after the first, Acid800 `pokey_timertiming`).
+            self.reload_wait[0] = 2;
+        } else {
+            self.counters[ch] = self.audf_of(ch);
+        }
+        false
     }
 
     /// A channel's output change on underflow (AUDC bits 7–5).
@@ -402,18 +512,24 @@ impl Pokey {
 
     /// One machine cycle.
     pub fn tick(&mut self) {
+        self.tick_counters();
+        self.audf_latched = self.audf;
+    }
+
+    fn tick_counters(&mut self) {
         let init = self.skctl & 0x03 == 0;
-        if !init {
-            // Polynomial counters, one step per cycle.
-            let b4 = ((self.poly4 >> 3) ^ (self.poly4 >> 2)) & 1;
-            self.poly4 = ((self.poly4 << 1) | b4) & 0x0f;
-            let b5 = ((self.poly5 >> 4) ^ (self.poly5 >> 2)) & 1;
-            self.poly5 = ((self.poly5 << 1) | b5) & 0x1f;
-            let b17 = ((self.poly17 >> 16) ^ (self.poly17 >> 11)) & 1;
-            self.poly17 = ((self.poly17 << 1) | b17) & 0x1ffff;
-            let b9 = ((self.poly9 >> 8) ^ (self.poly9 >> 3)) & 1;
-            self.poly9 = ((self.poly9 << 1) | b9) & 0x1ff;
-        }
+        // Polynomial counters, one step per cycle, shifting right with the
+        // feedback into the top bit. In initialization mode they keep
+        // shifting with 1s fed in, so they fill with ones (RANDOM reads $FF
+        // once settled, but not right after entering it).
+        let fb = |taps: u32| if init { 1 } else { taps & 1 };
+        self.poly4 =
+            (self.poly4 >> 1) | ((fb(u32::from(self.poly4 ^ (self.poly4 >> 1))) as u8) << 3);
+        self.poly5 =
+            (self.poly5 >> 1) | ((fb(u32::from(self.poly5 ^ (self.poly5 >> 2))) as u8) << 4);
+        self.poly9 =
+            (self.poly9 >> 1) | ((fb(u32::from(self.poly9 ^ (self.poly9 >> 5))) as u16) << 8);
+        self.poly17 = (self.poly17 >> 1) | (fb(self.poly17 ^ (self.poly17 >> 5)) << 16);
         if self.skctl & 0x04 != 0 {
             self.pot_step();
         }
@@ -440,22 +556,62 @@ impl Pokey {
                 }
             }
         }
-        // Channels 1 and 3 run on their own clock; 2 and 4 on it or, when
-        // joined, on the underflows of 1 and 3.
+        // A clock edge loads the idle shifter after a delay.
+        if self.load_wait > 0 {
+            self.load_wait -= 1;
+            if self.load_wait == 0 {
+                self.load_shift();
+            }
+        }
+        // Pending underflows take effect after their 3-cycle delay; a
+        // channel that reloads in this cycle does not count in it too.
+        let mut fired = [false; 4];
+        for (ch, fired) in fired.iter_mut().enumerate() {
+            if self.reload_wait[ch] > 0 {
+                self.reload_wait[ch] -= 1;
+                if self.reload_wait[ch] == 0 {
+                    self.counters[ch] = self.audf_of(ch);
+                    self.hold[ch] = false;
+                    *fired = true;
+                }
+            }
+        }
+        // Within a pair the high channel first (a low channel's effect
+        // starts its high channel's delay, which must not count down in the
+        // same cycle); channels 1/2 before 3/4 (the high-pass latches sample
+        // their new outputs).
+        for ch in [1, 0, 3, 2] {
+            if self.delayed[ch] > 0 {
+                self.delayed[ch] -= 1;
+                if self.delayed[ch] == 0 {
+                    // After a STIMER the counter keeps counting.
+                    let restarted = self.after_stimer[ch];
+                    let pair = self.effect(ch);
+                    fired[ch] = !restarted;
+                    // A joined pair's reload also restarts the low channel.
+                    if pair {
+                        fired[ch - 1] = true;
+                    }
+                }
+            }
+        }
+        // Asynchronous receive mode (SKCTL bit 4) waiting for a start bit
+        // keeps channels 3 and 4 at their reload values (Acid800
+        // `pokey_asyncrecv`).
+        if self.skctl & 0x10 != 0 && !self.serial_busy {
+            for ch in [2, 3] {
+                self.restart(ch);
+            }
+        }
+        // Channels 1 and 3 run on their own clock (1.79 MHz or the base
+        // clock); 2 and 4 on the base clock or, joined, on the effects of 1
+        // and 3.
         for low in [0usize, 2] {
-            let high = low + 1;
-            let low_clock = self.fast(low) || base;
-            if self.joined(high) {
-                if low_clock && self.clock(high) {
-                    self.underflow(high);
-                }
-            } else {
-                if low_clock && self.clock(low) {
-                    self.underflow(low);
-                }
-                if base && self.clock(high) {
-                    self.underflow(high);
-                }
+            if (self.fast(low) || base) && !fired[low] {
+                self.count(low);
+            }
+            if !self.joined(low + 1) && base && !fired[low + 1] {
+                self.count(low + 1);
             }
         }
     }
@@ -463,13 +619,30 @@ impl Pokey {
     fn underflow(&mut self, ch: usize) {
         match ch {
             0 => self.request(IRQ_TIMER1),
-            1 => self.request(IRQ_TIMER2),
+            1 => {
+                self.request(IRQ_TIMER2);
+                if self.output_clock() == Some(1) {
+                    self.serial_clock();
+                }
+            }
             2 => self.highpass[0] = self.outputs[0],
             _ => {
                 self.highpass[1] = self.outputs[1];
                 self.request(IRQ_TIMER4);
-                self.serial_clock();
+                if self.output_clock() == Some(3) {
+                    self.serial_clock();
+                }
             }
+        }
+    }
+
+    /// The channel clocking the serial output (SKCTL bits 6–5): none
+    /// (external clock), channel 4, or channel 2 (Acid800 `pokey_serclock`).
+    fn output_clock(&self) -> Option<usize> {
+        match (self.skctl >> 5) & 3 {
+            0 => None,
+            3 => Some(1),
+            _ => Some(3),
         }
     }
 
@@ -507,10 +680,11 @@ impl Pokey {
             0x08 => self.allpot,
             0x09 => self.kbcode,
             0x0a => {
+                // 9-bit: its low 8 bits; 17-bit: bits 8–15.
                 if self.audctl & 0x80 != 0 {
                     self.poly9 as u8
                 } else {
-                    (self.poly17 >> 9) as u8
+                    (self.poly17 >> 8) as u8
                 }
             }
             0x0d => self.serin,
@@ -544,8 +718,10 @@ impl Pokey {
             r @ (0x01 | 0x03 | 0x05 | 0x07) => self.audc[usize::from(r / 2)] = v,
             0x08 => self.audctl = v,
             0x09 => {
+                // STIMER restarts the counters; a committed underflow still
+                // takes effect.
                 for ch in 0..4 {
-                    self.counters[ch] = self.reload(ch);
+                    self.restart(ch);
                 }
             }
             0x0a => self.serial_overrun = false,
@@ -555,9 +731,6 @@ impl Pokey {
             }
             0x0d => {
                 self.serout_hold = Some(v);
-                if self.shift_bits == 0 {
-                    self.load_shift();
-                }
             }
             0x0e => {
                 self.irqen = v;
@@ -572,12 +745,15 @@ impl Pokey {
                 }
                 self.skctl = v;
                 if v & 0x03 == 0 {
-                    self.poly4 = 0x0f;
-                    self.poly5 = 0x1f;
-                    self.poly17 = 0x1ffff;
-                    self.poly9 = 0x1ff;
-                    self.prescale64 = 0;
-                    self.prescale15 = 0;
+                    // Initialization holds the clock dividers at a phase
+                    // that gives the first 64 kHz tick 21 cycles, the first
+                    // 15 kHz tick 80 cycles after leaving it (Acid800
+                    // `pokey_inittiming`, `pokey_timertiming`).
+                    self.prescale64 = 6;
+                    self.prescale15 = 33;
+                    // and stops a transmission in progress (Acid800
+                    // `pokey_serclock` expects SEROC afterwards).
+                    self.shift_bits = 0;
                     self.key_down = false;
                     self.compare = None;
                 }
@@ -589,8 +765,8 @@ impl Pokey {
 
 const TAG: [u8; 4] = *b"POKY";
 /// Version 2: sound polynomials, high-pass latches, pots; 3: serial input
-/// line; 4: receiver restart.
-const VERSION: u16 = 4;
+/// line; 4: receiver restart; 5: joined-timer delay.
+const VERSION: u16 = 5;
 
 impl Savestate for Pokey {
     fn save(&self, w: &mut StateWriter) {
@@ -643,6 +819,13 @@ impl Savestate for Pokey {
             w.bool(self.serial_line);
             w.bool(self.serial_busy);
             w.bool(self.rx_discard);
+            w.raw(&self.delayed);
+            w.raw(&self.audf_latched);
+            for h in self.hold.iter().chain(&self.after_stimer) {
+                w.bool(*h);
+            }
+            w.raw(&self.reload_wait);
+            w.u8(self.load_wait);
         });
     }
 
@@ -697,6 +880,17 @@ impl Savestate for Pokey {
         }
         if version >= 4 {
             n.rx_discard = c.bool()?;
+        }
+        if version >= 5 {
+            c.raw_into(&mut n.delayed)?;
+            c.raw_into(&mut n.audf_latched)?;
+            for h in n.hold.iter_mut().chain(n.after_stimer.iter_mut()) {
+                *h = c.bool()?;
+            }
+            c.raw_into(&mut n.reload_wait)?;
+            n.load_wait = c.u8()?;
+        } else {
+            n.audf_latched = n.audf;
         }
         if n.prescale64 >= 28 || n.prescale15 >= 114 || n.shift_bits > SERIAL_BITS {
             return Err(StateError::Invalid("POKEY counters"));

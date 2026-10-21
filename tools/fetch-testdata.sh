@@ -128,4 +128,42 @@ for t in $LORENZ_TESTS; do
 done
 echo "$LORENZ_REV" > "$DEST/lorenz/REVISION"
 
+# Acid800 1.2 (Avery Lee): Atari 8-bit hardware test suite, the Phase 5 gate.
+# Run only, never committed. A .7z archive: needs 7z/7za or bsdtar (Windows'
+# tar.exe is bsdtar). Keeps the boot disk and the standalone tests with
+# their label files.
+ACID_URL="https://www.virtualdub.org/downloads/Acid800-1.2.7z"
+ACID_SHA256=4074e6a40db1833e97603e334ca130f5923bff34a0d4f8a83e2ecf9617de1b20
+
+echo "Acid800 1.2 -> $DEST/acid800"
+mkdir -p "$DEST/acid800"
+if [ ! -s "$DEST/acid800/standalone/cpu_insn.xex" ]; then
+  fetch "$ACID_URL" "$DEST/acid800/Acid800-1.2.7z"
+  actual="$(sha256 "$DEST/acid800/Acid800-1.2.7z")"
+  if [ "$actual" != "$ACID_SHA256" ]; then
+    echo "error: Acid800 archive checksum mismatch ($actual)" >&2
+    exit 1
+  fi
+  tmp="$DEST/acid800/extract"
+  rm -rf "$tmp"
+  mkdir -p "$tmp"
+  if command -v 7z >/dev/null; then
+    7z x -y -o"$tmp" "$DEST/acid800/Acid800-1.2.7z" >/dev/null
+  elif command -v 7za >/dev/null; then
+    7za x -y -o"$tmp" "$DEST/acid800/Acid800-1.2.7z" >/dev/null
+  elif command -v bsdtar >/dev/null; then
+    bsdtar -xf "$DEST/acid800/Acid800-1.2.7z" -C "$tmp"
+  elif [ -x /c/Windows/System32/tar.exe ]; then
+    /c/Windows/System32/tar.exe -xf "$DEST/acid800/Acid800-1.2.7z" -C "$tmp"
+  else
+    echo "error: no 7z, 7za or bsdtar to unpack Acid800" >&2
+    exit 1
+  fi
+  rm -rf "$DEST/acid800/standalone"
+  cp "$tmp/out/Release/Acid800/acid800.atr" "$DEST/acid800/"
+  cp -r "$tmp/out/Release/Acid800/standalone" "$DEST/acid800/standalone"
+  rm -rf "$tmp" "$DEST/acid800/Acid800-1.2.7z"
+  echo "1.2" > "$DEST/acid800/VERSION"
+fi
+
 echo "done. export EMU_TESTDATA_DIR=$DEST"

@@ -277,6 +277,12 @@ impl Core {
                     self.p | U
                 };
                 self.push(bus, p);
+                // An NMI arriving in this cycle is lost: too late to hijack,
+                // and the latch is cleared as the vector is chosen (Acid800
+                // `antic_blockednmi`).
+                if self.seq != Seq::Reset {
+                    self.nmi_pending = false;
+                }
                 false
             }
             5 => {

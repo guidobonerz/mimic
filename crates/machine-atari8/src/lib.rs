@@ -133,7 +133,7 @@ impl Io {
         match addr >> 8 {
             0xd0 => self.gtia.peek(addr as u8),
             0xd2 => self.pokey.peek(addr as u8),
-            0xd3 => self.pia.peek(pia_reg(addr), self.porta, 0xff),
+            0xd3 => self.pia.peek(pia_reg(addr), self.porta_pins(), 0xff),
             0xd4 => self.antic.peek(addr as u8),
             _ => 0xff,
         }
@@ -141,7 +141,7 @@ impl Io {
 
     fn read(&mut self, addr: u16) -> u8 {
         match addr >> 8 {
-            0xd3 => self.pia.read(pia_reg(addr), self.porta, 0xff),
+            0xd3 => self.pia.read(pia_reg(addr), self.porta_pins(), 0xff),
             _ => self.peek(addr),
         }
     }
@@ -159,6 +159,12 @@ impl Io {
             _ => {}
         }
         None
+    }
+
+    /// Port A pins: what the PIA drives (inputs pulled up), pulled low by
+    /// the joysticks.
+    fn porta_pins(&self) -> u8 {
+        self.pia.port_a_out() & self.porta
     }
 
     /// Port B pins: outputs as driven, inputs pulled up.
@@ -451,6 +457,7 @@ impl Atari800Xl {
             self.io.gtia.dma(which, v, self.io.antic.line(), single);
         }
         self.cpu.set_halt(out.halt);
+        self.cpu.set_rdy(!out.wsync);
         // ANTIC's NMI is a pulse; the 6502 latches the edge.
         self.cpu.set_nmi(out.nmi);
         self.cpu.set_irq(self.io.pokey.irq() || self.io.pia.irq());
@@ -628,6 +635,10 @@ impl Atari800Xl {
         };
         if l.phase == Phase::Boot {
             self.write_word(RUNAD, 0);
+            // The OS has looked at OPTION (BASIC off); release it for the
+            // program.
+            self.option_until = 0;
+            self.refresh_console();
         }
         while l.next < l.segments.len() {
             let seg = l.segments[l.next].clone();
@@ -965,7 +976,7 @@ impl Machine for Atari800Xl {
             .collect(),
         };
         let pia = regs("pia", 0xd300, &["PORTA", "PORTB", "PACTL", "PBCTL"], |i| {
-            io.pia.peek(pia_reg(u16::from(i)), io.porta, 0xff)
+            io.pia.peek(pia_reg(u16::from(i)), io.porta_pins(), 0xff)
         });
         vec![antic, gtia, pokey, pia]
     }

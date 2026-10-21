@@ -43,6 +43,15 @@ pub const WIDTH: u32 = 384;
 pub const HEIGHT: u32 = (VBLANK_LINE - FIRST_LINE) as u32;
 
 const LAST_CC: u16 = FIRST_CC + (WIDTH as u16) / 2;
+/// Colour clocks until the player logic sees a SIZEP write: from the third
+/// colour clock after the write's cycle (Acid800 `gtia_pmresize`).
+const SIZE_DELAY: u8 = 4;
+/// The same for HPOSP, whose comparator acts on the fifth (Acid800
+/// `gtia_pmoverlap`, `gtia_pmretrigger`).
+const HPOS_DELAY: u8 = 6;
+/// Colour clocks outside horizontal blank, $22–$DD (Acid800
+/// `gtia_collision`: objects collide there and only there).
+const VISIBLE_CC: (u16, u16) = (0x22, 0xdd);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Gtia {
@@ -70,9 +79,36 @@ pub struct Gtia {
     trig_latched: [bool; 4],
     /// XL/XE: TRIG3 reads the cartridge's RD5 line (1 = cartridge present).
     cartridge: bool,
+    /// The hires bits of the previous cycle (GTIA mode 10's delay).
+    prev_nibble: u8,
+    /// Player shift registers, width counters, the HPOSP and SIZEP values
+    /// the player logic uses and colour clocks until written ones apply,
+    /// and the players showing at the current colour clock.
+    p_shift: [u8; 4],
+    p_ctr: [u8; 4],
+    hpos_eff: [u8; 4],
+    hpos_wait: [u8; 4],
+    size_eff: [u8; 4],
+    size_wait: [u8; 4],
+    p_out: u8,
     /// Console keys held down: bit 0 START, 1 SELECT, 2 OPTION.
     pub console_keys: u8,
     pixels: Vec<u8>,
+}
+
+/// One colour clock of a player's width logic: whether the shift register
+/// shifts, and the width counter's next value. Fitted to Acid800
+/// `gtia_pmresize`, which changes SIZEP while a player is shown: 1x shifts
+/// every clock; 2x on odd counts; 4x at count 3; size 10 ("1x alt") shifts
+/// at counts 0 and 3 and holds the counter, so a player switched to it at
+/// count 1 or 2 stops shifting.
+fn width_step(size: u8, ctr: u8) -> (bool, u8) {
+    match size & 3 {
+        0 => (true, 0),
+        1 => (ctr & 1 != 0, (ctr & 1) ^ 1),
+        2 => (ctr == 0 || ctr == 3, ctr),
+        _ => (ctr == 3, (ctr + 1) & 3),
+    }
 }
 
 /// Width multiplier of a 2-bit size field (00 normal, 01 double,
@@ -109,6 +145,14 @@ impl Gtia {
             trig_down: [false; 4],
             trig_latched: [false; 4],
             cartridge: false,
+            prev_nibble: 0,
+            p_shift: [0; 4],
+            p_ctr: [0; 4],
+            hpos_eff: [0; 4],
+            hpos_wait: [0; 4],
+            size_eff: [0; 4],
+            size_wait: [0; 4],
+            p_out: 0,
             console_keys: 0,
             pixels: vec![0; (WIDTH * HEIGHT) as usize],
         }
@@ -159,7 +203,9 @@ impl Gtia {
                 VideoStandard::Pal => 0x01,
                 VideoStandard::Ntsc => 0x0f,
             },
-            0x1f => (!self.console_keys & 0x07) | 0x08,
+            // A 1 written to bits 0–2 pulls that key line low like a
+            // pressed key (Acid800 `gtia_consol`).
+            0x1f => (!(self.console_keys | self.consol_out) & 0x07) | 0x08,
             _ => 0x0f,
         }
     }
@@ -167,9 +213,15 @@ impl Gtia {
     pub fn write(&mut self, reg: u8, v: u8) {
         let r = usize::from(reg & 0x1f);
         match r {
-            0x00..=0x03 => self.hposp[r] = v,
+            0x00..=0x03 => {
+                self.hposp[r] = v;
+                self.hpos_wait[r] = HPOS_DELAY;
+            }
             0x04..=0x07 => self.hposm[r - 4] = v,
-            0x08..=0x0b => self.sizep[r - 8] = v & 3,
+            0x08..=0x0b => {
+                self.sizep[r - 8] = v & 3;
+                self.size_wait[r - 8] = SIZE_DELAY;
+            }
             0x0c => self.sizem = v,
             0x0d..=0x10 => self.grafp[r - 0x0d] = v,
             0x11 => self.grafm = v,
@@ -197,13 +249,13 @@ impl Gtia {
 
     /// Player/missile DMA data from ANTIC (`which` 0–3 players, 4 missiles),
     /// taken if GRACTL enables it. VDELAY: a delayed object only loads on
-    /// even lines in double-line resolution.
+    /// odd lines in double-line resolution (Acid800 `gtia_vdelay`).
     pub fn dma(&mut self, which: u8, v: u8, line: u16, single_line: bool) {
         if which == 4 {
             if self.gractl & 0x01 != 0 {
                 let mut m = self.grafm;
                 for n in 0..4 {
-                    let delayed = self.vdelay & (1 << n) != 0 && !single_line && line & 1 == 1;
+                    let delayed = self.vdelay & (1 << n) != 0 && !single_line && line & 1 == 0;
                     if !delayed {
                         let mask = 3 << (2 * n);
                         m = (m & !mask) | (v & mask);
@@ -213,17 +265,51 @@ impl Gtia {
             }
         } else if self.gractl & 0x02 != 0 {
             let n = usize::from(which);
-            let delayed = self.vdelay & (0x10 << n) != 0 && !single_line && line & 1 == 1;
+            let delayed = self.vdelay & (0x10 << n) != 0 && !single_line && line & 1 == 0;
             if !delayed {
                 self.grafp[n] = v;
             }
         }
     }
 
-    fn player(&self, n: usize, cc: u16) -> bool {
-        let mult = size_mult(self.sizep[n]);
-        let off = cc.wrapping_sub(u16::from(self.hposp[n]));
-        off < 8 * mult && self.grafp[n] & (0x80 >> (off / mult)) != 0
+    /// Advance the players by one colour clock. A player starts when the
+    /// colour clock reaches its HPOSP: GRAFP is ORed into the shift
+    /// register and the width counter restarts. An image still being
+    /// shifted out goes on, overlapping the new one; caught in the middle
+    /// of a wide pixel (counter not 0) it first shifts once (fitted to
+    /// Acid800 `gtia_pmoverlap`).
+    fn step_players(&mut self, cc: u16) {
+        let mut out = 0;
+        for n in 0..4 {
+            if self.size_wait[n] > 0 {
+                self.size_wait[n] -= 1;
+                if self.size_wait[n] == 0 {
+                    self.size_eff[n] = self.sizep[n];
+                }
+            }
+            if self.hpos_wait[n] > 0 {
+                self.hpos_wait[n] -= 1;
+                if self.hpos_wait[n] == 0 {
+                    self.hpos_eff[n] = self.hposp[n];
+                }
+            }
+            if cc == u16::from(self.hpos_eff[n]) {
+                if self.p_ctr[n] != 0 {
+                    self.p_shift[n] <<= 1;
+                }
+                self.p_shift[n] |= self.grafp[n];
+                self.p_ctr[n] = 0;
+            }
+            if self.p_shift[n] & 0x80 != 0 {
+                out |= 1 << n;
+            }
+            let (shift, next) = width_step(self.size_eff[n], self.p_ctr[n]);
+            if shift {
+                self.p_shift[n] <<= 1;
+            }
+            self.p_ctr[n] = next;
+        }
+        self.p_out = out;
     }
 
     fn missile(&self, n: usize, cc: u16) -> bool {
@@ -238,28 +324,42 @@ impl Gtia {
         if !(FIRST_LINE..VBLANK_LINE).contains(&line) {
             return;
         }
-        let cc0 = cycle * 2;
-        if cc0 + 1 < FIRST_CC || cc0 >= LAST_CC {
-            return;
-        }
-        let gtia_mode = self.prior >> 6;
         let nibble = match pf {
             [Playfield::Hires(a), Playfield::Hires(b)] => (a << 2) | b,
             _ => 0,
         };
+        // Mode 10 pixels lag one colour clock: the first colour clock of a
+        // cycle still shows the previous cycle's pixel (Acid800
+        // `gtia_collision2`).
+        let prev_nibble = std::mem::replace(&mut self.prev_nibble, nibble);
+        let cc0 = cycle * 2;
+        let gtia_mode = self.prior >> 6;
         let row = usize::from(line - FIRST_LINE) * WIDTH as usize;
         for (k, &p) in pf.iter().enumerate() {
             let cc = cc0 + k as u16;
+            // Players run through horizontal blank too.
+            self.step_players(cc);
             if !(FIRST_CC..LAST_CC).contains(&cc) {
                 continue;
             }
+            let x = row + usize::from(cc - FIRST_CC) * 2;
+            // Horizontal blank: black, and no collisions.
+            if !(VISIBLE_CC.0..=VISIBLE_CC.1).contains(&cc) {
+                self.pixels[x] = 0;
+                self.pixels[x + 1] = 0;
+                continue;
+            }
             let [a, b] = if gtia_mode != 0 {
-                let c = self.gtia_mode_colour(cc, gtia_mode, nibble);
+                let n = if gtia_mode == 2 && k == 0 {
+                    prev_nibble
+                } else {
+                    nibble
+                };
+                let c = self.gtia_mode_colour(cc, gtia_mode, n);
                 [c, c]
             } else {
                 self.colour_clock(cc, p)
             };
-            let x = row + usize::from(cc - FIRST_CC) * 2;
             self.pixels[x] = a;
             self.pixels[x + 1] = b;
         }
@@ -270,7 +370,7 @@ impl Gtia {
         let mut p = 0;
         let mut m = 0;
         for n in 0..4 {
-            if self.player(n, cc) {
+            if self.p_out & (1 << n) != 0 {
                 p |= 1 << n;
             }
             if self.missile(n, cc) {
@@ -374,7 +474,14 @@ impl Gtia {
     fn gtia_mode_colour(&mut self, cc: u16, mode: u8, nibble: u8) -> u8 {
         let (p, m) = self.objects(cc);
         if p | m != 0 {
-            self.collide(p, m, 0);
+            // Only mode 10 has playfield collisions: colour indexes 4–7 and
+            // 12–15 are PF0–PF3 (Acid800 `gtia_collision2`).
+            let pf_mask = match (mode, nibble) {
+                (2, 4..=7) => 1 << (nibble - 4),
+                (2, 12..=15) => 1 << (nibble - 12),
+                _ => 0,
+            };
+            self.collide(p, m, pf_mask);
             let pl = p | m;
             if let Some(n) = (0..4).find(|n| pl & (1 << n) != 0) {
                 return self.colpm[n];
@@ -394,7 +501,8 @@ impl Gtia {
 }
 
 const TAG: [u8; 4] = *b"GTIA";
-const VERSION: u16 = 1;
+/// Version 2: mode 10 pixel delay, player shift registers.
+const VERSION: u16 = 2;
 
 impl Savestate for Gtia {
     fn save(&self, w: &mut StateWriter) {
@@ -429,11 +537,23 @@ impl Savestate for Gtia {
                 w.bool(*v);
             }
             w.raw(&self.pixels);
+            w.u8(self.prev_nibble);
+            for a in [
+                &self.p_shift,
+                &self.p_ctr,
+                &self.hpos_eff,
+                &self.hpos_wait,
+                &self.size_eff,
+                &self.size_wait,
+            ] {
+                w.raw(a);
+            }
+            w.u8(self.p_out);
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut n = self.clone();
         for a in [
             &mut n.hposp,
@@ -464,6 +584,30 @@ impl Savestate for Gtia {
             *v = c.bool()?;
         }
         c.raw_into(&mut n.pixels)?;
+        if version >= 2 {
+            n.prev_nibble = c.u8()?;
+            for a in [
+                &mut n.p_shift,
+                &mut n.p_ctr,
+                &mut n.hpos_eff,
+                &mut n.hpos_wait,
+                &mut n.size_eff,
+                &mut n.size_wait,
+            ] {
+                c.raw_into(a)?;
+            }
+            n.p_out = c.u8()?;
+        } else {
+            n.prev_nibble = 0;
+            n.hpos_eff = n.hposp;
+            n.size_eff = n.sizep;
+        }
+        if n.p_ctr.iter().chain(&n.size_eff).any(|&v| v > 3)
+            || n.size_wait.iter().any(|&v| v > SIZE_DELAY)
+            || n.hpos_wait.iter().any(|&v| v > HPOS_DELAY)
+        {
+            return Err(StateError::Invalid("GTIA players"));
+        }
         *self = n;
         Ok(())
     }

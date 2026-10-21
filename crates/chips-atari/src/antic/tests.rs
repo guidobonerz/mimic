@@ -74,7 +74,10 @@ fn halts_of_line(a: &mut Antic, mem: &Mem) -> usize {
 fn vbi_nmi_on_line_248() {
     let (mut a, mem) = setup(0x42);
     a.write(0x0e, 0x40);
+    // NMIST at cycle 7, the NMI itself at cycle 8.
     run_to(&mut a, &mem, VBLANK_LINE, NMI_CYCLE);
+    a.tick(&mem);
+    a.end_cycle();
     let o = a.tick(&mem);
     assert!(o.nmi);
     assert_eq!(a.peek(0x0f) & 0xc0, 0x40, "NMIST VBI");
@@ -88,8 +91,9 @@ fn mode_2_line_dma_and_pixels() {
     let (mut a, mem) = setup(0x42);
     run_to(&mut a, &mem, 32, 0);
     // First line of the mode line: instruction, LMS (2), 40 names,
-    // 40 character bytes, 9 refresh cycles.
-    assert_eq!(halts_of_line(&mut a, &mem), 1 + 2 + 40 + 40 + 9);
+    // 40 character bytes; the playfield blocks all refresh requests but
+    // one, which waits for a free cycle.
+    assert_eq!(halts_of_line(&mut a, &mem), 1 + 2 + 40 + 40 + 1);
     // Second line: character data again, no names.
     assert_eq!(halts_of_line(&mut a, &mem), 40 + 9);
     // The solid block in the first cell, background after it.
@@ -141,7 +145,8 @@ fn dli_on_the_last_line_of_its_mode_line() {
     assert_eq!(a.peek(0x0f) & 0x80, 0x80);
     // The DLI was at cycle 7 of line 39 (rows 0–7 of lines 32–39).
     let last = outs.len() - 1;
-    assert_eq!(last - nmis[0], usize::from(CYCLES_PER_LINE - 1 - NMI_CYCLE));
+    // NMIST at cycle 7, the NMI to the CPU at cycle 8.
+    assert_eq!(last - nmis[0], usize::from(CYCLES_PER_LINE - 2 - NMI_CYCLE));
 }
 
 #[test]
@@ -154,14 +159,16 @@ fn wsync_releases_at_cycle_105() {
     let mut halted = Vec::new();
     for _ in 0..90 {
         let c = a.cycle();
-        if a.tick(&mem).halt {
+        if a.tick(&mem).wsync {
             halted.push(c);
         }
         a.end_cycle();
     }
-    assert_eq!(halted.first(), Some(&21));
+    // Written in cycle 20: the CPU still runs in cycle 21 (it fetches the
+    // next opcode), RDY is low from 22 to 104.
+    assert_eq!(halted.first(), Some(&22));
     assert_eq!(halted.last(), Some(&(WSYNC_RELEASE - 1)));
-    assert_eq!(halted.len(), usize::from(WSYNC_RELEASE - 21));
+    assert_eq!(halted.len(), usize::from(WSYNC_RELEASE - 22));
 }
 
 #[test]

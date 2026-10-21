@@ -16,6 +16,15 @@
 //!
 //! Port A reads the pin levels; port B reads the output register for
 //! output bits. Handshake modes are reduced to their idle level (high).
+//!
+//! Cx2 as a manual output and back (measured by Acid800 `pia_irq`): the
+//! edge logic remembers a low output and a low-to-high change of it
+//! ("pending"; handshake mode keeps both, pulse mode clears them, going
+//! low again drops the pending change). Switching to an input mode turns
+//! that into the IRQx2 flag — on port B a pending change does so for either
+//! edge setting; on port A a pending change or a still-low output does,
+//! but only with CRA bit 4 set (rising edge). Any output mode clears the
+//! flag.
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -27,6 +36,11 @@ pub struct PiaPort {
     /// Last level seen on Cx1 / Cx2 (for edge detection).
     c1: bool,
     c2: bool,
+    /// Cx2 as a manual output: driven low, and a pending low-to-high change.
+    c2_low: bool,
+    c2_rise: bool,
+    /// Port B (its edge logic differs from port A's).
+    is_b: bool,
 }
 
 impl PiaPort {
@@ -75,8 +89,43 @@ impl PiaPort {
     }
 
     fn write_cr(&mut self, v: u8) {
+        let was_output = self.cr & 0x20 != 0;
         self.cr = (self.cr & 0xc0) | (v & 0x3f);
-        // Turning Cx2 into an output clears its flag.
+        match (v >> 3) & 7 {
+            // Manual output low / high.
+            0b110 => {
+                self.c2_low = true;
+                self.c2_rise = false;
+            }
+            0b111 => {
+                if self.c2_low {
+                    self.c2_rise = true;
+                }
+                self.c2_low = false;
+            }
+            // Handshake output keeps the state, pulse output clears it.
+            0b100 => {}
+            0b101 => {
+                self.c2_low = false;
+                self.c2_rise = false;
+            }
+            // An input mode.
+            _ => {
+                if was_output {
+                    let set = if self.is_b {
+                        self.c2_rise
+                    } else {
+                        (self.c2_rise || self.c2_low) && v & 0x10 != 0
+                    };
+                    if set {
+                        self.cr |= 0x40;
+                    }
+                }
+                self.c2_low = false;
+                self.c2_rise = false;
+            }
+        }
+        // Any output mode clears the flag.
         if v & 0x20 != 0 {
             self.cr &= !0x40;
         }
@@ -93,7 +142,10 @@ impl Pia {
     pub fn new() -> Self {
         Self {
             a: PiaPort::new(),
-            b: PiaPort::new(),
+            b: PiaPort {
+                is_b: true,
+                ..PiaPort::new()
+            },
         }
     }
 
@@ -181,7 +233,8 @@ impl Pia {
 }
 
 const TAG: [u8; 4] = *b"6520";
-const VERSION: u16 = 1;
+/// Version 2: the Cx2 output edge state.
+const VERSION: u16 = 2;
 
 impl Savestate for Pia {
     fn save(&self, w: &mut StateWriter) {
@@ -192,23 +245,33 @@ impl Savestate for Pia {
                 w.u8(p.cr);
                 w.bool(p.c1);
                 w.bool(p.c2);
+                w.bool(p.c2_low);
+                w.bool(p.c2_rise);
             }
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
-        let mut port = || -> Result<PiaPort, StateError> {
-            Ok(PiaPort {
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
+        let mut port = |is_b: bool| -> Result<PiaPort, StateError> {
+            let mut p = PiaPort {
                 or: c.u8()?,
                 ddr: c.u8()?,
                 cr: c.u8()?,
                 c1: c.bool()?,
                 c2: c.bool()?,
-            })
+                c2_low: false,
+                c2_rise: false,
+                is_b,
+            };
+            if version >= 2 {
+                p.c2_low = c.bool()?;
+                p.c2_rise = c.bool()?;
+            }
+            Ok(p)
         };
-        let a = port()?;
-        let b = port()?;
+        let a = port(false)?;
+        let b = port(true)?;
         *self = Pia { a, b };
         Ok(())
     }

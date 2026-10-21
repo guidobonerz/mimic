@@ -14,18 +14,24 @@ fn cycles_until(p: &mut Pokey, bit: u8, limit: u32) -> Option<u32> {
     })
 }
 
+/// Cycles between two consecutive IRQs of `bit` (after the first one).
+fn period(p: &mut Pokey, bit: u8) -> u32 {
+    p.write(0x0e, bit);
+    cycles_until(p, bit, 100_000).expect("first IRQ");
+    p.write(0x0e, 0);
+    p.write(0x0e, bit);
+    cycles_until(p, bit, 100_000).expect("second IRQ")
+}
+
 #[test]
 fn timer_1_at_64_khz() {
     let mut p = pokey();
     p.write(0x00, 9); // AUDF1
-    p.write(0x0e, IRQ_TIMER1);
-    p.write(0x09, 0); // STIMER
-    let first = cycles_until(&mut p, IRQ_TIMER1, 10_000).unwrap();
-    p.write(0x0e, 0);
-    p.write(0x0e, IRQ_TIMER1);
-    let second = cycles_until(&mut p, IRQ_TIMER1, 10_000).unwrap();
-    assert_eq!(second, 10 * 28, "AUDF+1 ticks of 28 cycles");
-    assert!(first <= 10 * 28);
+    assert_eq!(
+        period(&mut p, IRQ_TIMER1),
+        10 * 28,
+        "AUDF+1 ticks of 28 cycles"
+    );
     assert!(p.irq());
 }
 
@@ -34,19 +40,20 @@ fn fast_and_joined_periods() {
     let mut p = pokey();
     p.write(0x08, 0x40); // channel 1 at 1.79 MHz
     p.write(0x00, 10);
-    p.write(0x0e, IRQ_TIMER1);
+    assert_eq!(period(&mut p, IRQ_TIMER1), 10 + 4);
+    // First IRQ after STIMER: AUDF+4 cycles to the underflow, 3 more until
+    // it takes effect, visible the cycle after.
+    p.tick();
+    p.write(0x0e, 0);
     p.write(0x09, 0);
-    let first = cycles_until(&mut p, IRQ_TIMER1, 1000).unwrap();
-    assert_eq!(first, 10 + 4);
+    p.write(0x0e, IRQ_TIMER1);
+    assert_eq!(cycles_until(&mut p, IRQ_TIMER1, 1000), Some(10 + 8));
 
     let mut p = pokey();
     p.write(0x08, 0x28); // join 3+4, channel 3 at 1.79 MHz
     p.write(0x04, 0x28); // AUDF3
     p.write(0x06, 0x00); // AUDF4
-    p.write(0x0e, IRQ_TIMER4);
-    p.write(0x09, 0);
-    let first = cycles_until(&mut p, IRQ_TIMER4, 1000).unwrap();
-    assert_eq!(first, 0x28 + 7);
+    assert_eq!(period(&mut p, IRQ_TIMER4), 0x28 + 7, "AUDF16+7");
 }
 
 #[test]
@@ -69,18 +76,21 @@ fn keyboard_scan_latches_with_debounce() {
 #[test]
 fn serial_output_at_19200_baud() {
     let mut p = pokey();
+    p.write(0x0f, 0x23); // serial output clocked by channel 4
     p.write(0x08, 0x28);
     p.write(0x04, 0x28);
     p.write(0x06, 0x00);
     p.write(0x0e, IRQ_SEROUT_NEEDED | IRQ_SEROUT_DONE);
     assert_eq!(p.peek(0x0e) & IRQ_SEROUT_DONE, 0, "idle: finished");
     p.write(0x0d, 0x31);
-    assert_eq!(p.peek(0x0e) & IRQ_SEROUT_NEEDED, 0, "holding register free");
+    // The shifter takes the byte on the next serial clock.
+    cycles_until(&mut p, IRQ_SEROUT_NEEDED, 200).expect("holding register free");
     assert_ne!(p.peek(0x0e) & IRQ_SEROUT_DONE, 0, "busy");
     p.write(0x0e, IRQ_SEROUT_DONE);
     let t = cycles_until(&mut p, IRQ_SEROUT_DONE, 10_000).unwrap();
-    // Ten bits of two timer-4 periods of 47 cycles.
-    assert!((10 * 2 * 47 - 47..=10 * 2 * 47 + 47).contains(&t), "{t}");
+    // Ten bits of two timer-4 periods of 47 cycles (the first period
+    // depends on where the free-running timer stands).
+    assert!((10 * 2 * 47 - 100..=10 * 2 * 47 + 100).contains(&t), "{t}");
     assert_eq!(p.take_sent(), vec![0x31]);
 }
 
@@ -93,10 +103,14 @@ fn random_runs_except_in_init() {
         seen.insert(p.peek(0x0a));
     }
     assert!(seen.len() > 50, "{} distinct values", seen.len());
+    // Initialization mode fills the counters with ones.
     p.write(0x0f, 0);
-    let held = p.peek(0x0a);
+    for _ in 0..20 {
+        p.tick();
+    }
+    assert_eq!(p.peek(0x0a), 0xff);
     p.tick();
-    assert_eq!(p.peek(0x0a), held);
+    assert_eq!(p.peek(0x0a), 0xff);
 }
 
 #[test]

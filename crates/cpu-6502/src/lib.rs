@@ -16,7 +16,7 @@ use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
 use emu_core::{Bus, Cpu, CycleResult, Instr, InterruptKind, Register, RegisterSet, Size};
 
 pub use crate::io_port::IoPort;
-use crate::micro::{Core, Seq, B, U, V};
+use crate::micro::{Core, Seq, B, I, U, V};
 
 /// Members of the 6502 family.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -218,7 +218,16 @@ impl Cpu for Cpu6502 {
         if probe.wrote || self.core.jammed {
             result
         } else {
+            // Interrupt recognition keeps running while the cycle repeats:
+            // an NMI that arrives during the stall is taken after the
+            // stalled instruction even when that was its last cycle
+            // (Acid800 `antic_dlitiming`, DLI during WSYNC).
+            let poll = saved.t != 0 && saved.op != 0x00 && !saved.no_poll;
             self.core = saved;
+            if poll {
+                let c = &mut self.core;
+                c.poll |= c.nmi_pending || (c.irq_line && c.p & I == 0);
+            }
             CycleResult::Busy
         }
     }

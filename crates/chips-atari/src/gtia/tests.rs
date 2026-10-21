@@ -13,6 +13,9 @@ fn gtia() -> Gtia {
     g.write(0x1a, 0x00); // COLBK
     g.write(0x00, CC as u8); // HPOSP0
     g.write(0x0d, 0x80); // GRAFP0: leftmost pixel
+                         // Position writes reach the player logic a few colour clocks later.
+    render_line(&mut g);
+    g.write(0x1e, 0); // HITCLR
     g
 }
 
@@ -49,7 +52,7 @@ fn collisions_latch_until_hitclr() {
     assert_eq!(g.peek(0x04), 0x01, "P0PF: playfield 0");
     g.write(0x01, CC as u8); // player 1 on top of player 0
     g.write(0x0e, 0x80);
-    render(&mut g, CC, Playfield::Background);
+    render_line(&mut g);
     assert_eq!(g.peek(0x0c), 0x02, "P0PL: player 1");
     assert_eq!(g.peek(0x0d), 0x01, "P1PL: player 0");
     g.write(0x1e, 0);
@@ -65,16 +68,45 @@ fn hires_pixels_take_pf1_luma() {
     assert_eq!(pixel(&g, CC), [0x9e, 0x94]);
 }
 
+/// Render the whole line over background.
+fn render_line(g: &mut Gtia) {
+    for cycle in 0..114 {
+        g.render_cycle(LINE, cycle, [Playfield::Background; 2]);
+    }
+}
+
 #[test]
 fn player_sizes() {
     let mut g = gtia();
     g.write(0x08, 0x03); // quadruple width: one bit covers 4 colour clocks
+    render_line(&mut g);
     for cc in CC..CC + 4 {
-        render(&mut g, cc, Playfield::Background);
         assert_eq!(pixel(&g, cc), [0x46, 0x46], "cc {cc}");
     }
-    render(&mut g, CC + 4, Playfield::Background);
     assert_eq!(pixel(&g, CC + 4), [0, 0]);
+}
+
+#[test]
+fn player_retriggers_while_shifting() {
+    let mut g = gtia();
+    g.write(0x0d, 0x81); // pixels 0 and 7
+    render_line(&mut g);
+    // Started again 2 clocks later: the first image goes on under the new
+    // one.
+    for cycle in 0..114 {
+        if cycle == CC / 2 - 2 {
+            g.write(0x00, (CC + 2) as u8);
+        }
+        g.render_cycle(LINE, cycle, [Playfield::Background; 2]);
+    }
+    for cc in CC..CC + 12 {
+        let want = if [CC, CC + 2, CC + 7, CC + 9].contains(&cc) {
+            0x46
+        } else {
+            0
+        };
+        assert_eq!(pixel(&g, cc), [want, want], "cc {cc}");
+    }
 }
 
 #[test]
