@@ -11,6 +11,7 @@ pub mod cas;
 pub mod cdt;
 pub mod crt;
 pub mod d64;
+pub mod dsk;
 pub mod gcr;
 pub mod mfm;
 pub mod prg;

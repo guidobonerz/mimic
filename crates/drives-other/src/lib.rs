@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cpc_drive;
 pub mod cpc_tape;
 pub mod datasette;
 pub mod recorder;

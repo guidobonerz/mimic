@@ -86,6 +86,8 @@ own section.
 | 8255 PPI on the CPC (ports, port B links, port C, AY control) | cpcwiki, "8255" (mirror https://oldwiki.cpcwiki.eu/index.php/8255); Intel 8255A data sheet | `chips-amstrad/src/ppi.rs`, `machine-cpc` |
 | Keyboard matrix | cpcwiki, "Programming:Keyboard scanning" (mirror) | `machine-cpc/src/keyboard.rs`, `emu-input` keymap `cpc` |
 | CDT tape images (TZX 1.20 block format, pulse and pause semantics) | "TZX format" specification, World of Spectrum (format revision 1.20) | `media/src/cdt.rs`, `drives-other/src/cpc_tape.rs` |
+| µPD765A floppy controller (commands, phases, MSR, ST0–ST3, end of cylinder without TC) | NEC µPD765 data sheet; cpcwiki, "765 FDC" | `chips-amstrad/src/fdc.rs` |
+| DSK / extended DSK disk images | cpcwiki, "Format:DSK disk image file format" (Marco Vieth, Ulrich Doewich, Kevin Thacker) | `media/src/dsk.rs`, `drives-other/src/cpc_drive.rs` |
 | AY-3-8912 registers | General Instrument AY-3-8910/8912 data sheet | `chips-amstrad/src/ay.rs` |
 | Z80 samples /WAIT on the falling edge of T2 (TW for I/O) | Zilog Z80 CPU User Manual (UM0080), timing diagrams; Thomas Harte, CLK wiki "Amstrad CPC Timing" (search summary, page not reachable) | `cpu-z80/src/lib.rs` (`step_timed`) |
 

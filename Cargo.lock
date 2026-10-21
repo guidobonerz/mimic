@@ -724,6 +724,7 @@ dependencies = [
 name = "drives-other"
 version = "0.1.0"
 dependencies = [
+ "chips-amstrad",
  "cpu-6502",
  "emu-core",
  "media",

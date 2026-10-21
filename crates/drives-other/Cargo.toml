@@ -11,4 +11,5 @@ workspace = true
 [dependencies]
 emu-core.workspace = true
 cpu-6502.workspace = true
+chips-amstrad.workspace = true
 media.workspace = true

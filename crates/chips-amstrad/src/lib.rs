@@ -4,6 +4,7 @@
 
 pub mod ay;
 pub mod crtc;
+pub mod fdc;
 pub mod gate_array;
 pub mod palette;
 pub mod ppi;

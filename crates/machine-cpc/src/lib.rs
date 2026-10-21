@@ -12,8 +12,10 @@
 //! - `roms`: "stub" runs a tiny built-in program instead of the OS (tests
 //!   without ROMs).
 //!
-//! Media slots: "tape" (CDT/TZX on the cassette deck: motor on PPI port C
-//! bit 4, write bit 5, read on port B bit 7).
+//! Media slots: "drive A" and "drive B" (664/6128: DSK images on the
+//! µPD765A, ports &FA7E motor, &FB7E status, &FB7F data) and "tape"
+//! (CDT/TZX on the cassette deck: motor on PPI port C bit 4, write bit 5,
+//! read on port B bit 7).
 //!
 //! ROMs (`MachineConfig::roms`, see `media-backends`): "os464"/"basic464",
 //! "os664"/"basic664", "os6128"/"basic6128" (16 KB each), or the 32 KB
@@ -35,6 +37,7 @@ pub mod stub;
 
 use chips_amstrad::ay::Ay;
 use chips_amstrad::crtc::{Crtc, CrtcType};
+use chips_amstrad::fdc::Fdc;
 use chips_amstrad::gate_array::{self, GateArray};
 use chips_amstrad::ppi::Ppi;
 use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
@@ -53,6 +56,7 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
+use drives_other::cpc_drive::CpcDrive;
 use drives_other::cpc_tape::CpcTape;
 use memory::{Memory, Rom, Roms, ROM_SIZE};
 
@@ -60,8 +64,23 @@ pub const CPU: DeviceId = DeviceId("cpu");
 /// The Z80's view: memory at 0–&FFFF, I/O ports at `IO_BASE + port`.
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 
-/// The cassette deck (slots 0 and 1 are the disc drives A and B).
+/// Disc drives A and B (664/6128) and the cassette deck.
+pub const SLOT_A: SlotId = SlotId(0);
+pub const SLOT_B: SlotId = SlotId(1);
 pub const SLOT_TAPE: SlotId = SlotId(2);
+
+/// The FDC's ports: A10 = 0 and A7 = 0; A8 = 0 the motor latch, else A0
+/// picks the status (0) or data (1) register.
+fn fdc_port(port: u16) -> Option<u8> {
+    if port & 0x0480 != 0 {
+        return None;
+    }
+    Some(match (port >> 8 & 1, port & 1) {
+        (0, _) => 0,
+        (_, 0) => 1,
+        _ => 2,
+    })
+}
 
 /// Z80 T-states per second.
 pub const CPU_HZ: u32 = 4_000_000;
@@ -178,6 +197,9 @@ struct Io {
     ga: GateArray,
     ppi: Ppi,
     ay: Ay,
+    fdc: Fdc,
+    /// The disc interface is fitted (664/6128).
+    has_fdc: bool,
     /// Keyboard matrix lines, a 0 bit = key down.
     keys: [u8; 10],
     /// The CRTC's VSYNC (PPI port B bit 0) and the cassette's READ (bit 7).
@@ -222,6 +244,13 @@ impl Io {
                 .ppi
                 .read((port >> 8) as u8 & 3, self.ppi_a_in(), self.port_b());
         }
+        if self.has_fdc {
+            match fdc_port(port) {
+                Some(1) => v &= self.fdc.status(),
+                Some(2) => v &= self.fdc.peek_data(),
+                _ => {}
+            }
+        }
         v
     }
 
@@ -243,6 +272,9 @@ impl Io {
         }
         if port & 0x2000 == 0 {
             mem.upper = v;
+        }
+        if self.has_fdc && fdc_port(port) == Some(0) {
+            self.fdc.motor = v & 1 != 0;
         }
         if port & 0x0800 == 0 {
             self.ppi.write((port >> 8) as u8 & 3, v);
@@ -276,8 +308,10 @@ struct CpcBus<'a> {
     beam: BeamPos,
 }
 
-/// What runs beside the chips: the cassette deck and the audio.
+/// What runs beside the chips: the disc drives, the cassette deck and the
+/// audio.
 struct Side<'a> {
+    drives: &'a mut [CpcDrive; 2],
     tape: &'a mut CpcTape,
     audio: &'a mut Decimator,
     samples: &'a mut Vec<i16>,
@@ -288,6 +322,12 @@ fn catch_up(mem: &Memory, io: &mut Io, now: &mut u64, to: u64, side: &mut Side<'
     while *now < to {
         if *now % T_PER_US == CHIP_PHASE {
             io.tick_us(mem);
+            if io.has_fdc {
+                for d in side.drives.iter_mut() {
+                    d.set_motor(io.fdc.motor);
+                }
+                io.fdc.tick(side.drives);
+            }
             let c = io.ppi.c_pins();
             side.tape.set_motor(c & 0x10 != 0);
             side.tape.set_write(c & 0x20 != 0);
@@ -304,7 +344,14 @@ fn catch_up(mem: &Memory, io: &mut Io, now: &mut u64, to: u64, side: &mut Side<'
 impl CpcBus<'_> {
     fn raw_read(&mut self, addr: u32) -> u8 {
         if addr >= IO_BASE {
-            self.io.read(addr as u16)
+            let port = addr as u16;
+            let v = self.io.read(port);
+            if self.io.has_fdc && fdc_port(port) == Some(2) {
+                // The read itself moves the FDC on (the value is the same
+                // as the peek above).
+                self.io.fdc.read_data();
+            }
+            v
         } else {
             self.mem
                 .read(addr as u16, self.io.ga.lower_rom(), self.io.ga.upper_rom())
@@ -339,7 +386,11 @@ impl Bus for CpcBus<'_> {
             }
         }
         if addr >= IO_BASE {
-            self.io.write(self.mem, addr as u16, v as u8);
+            let port = addr as u16;
+            self.io.write(self.mem, port, v as u8);
+            if self.io.has_fdc && fdc_port(port) == Some(2) {
+                self.io.fdc.write_data(v as u8, self.side.drives);
+            }
         } else {
             self.mem.write(addr as u16, v as u8);
         }
@@ -403,6 +454,7 @@ pub struct Cpc {
     audio: Decimator,
     samples: Vec<i16>,
     field_done_pending: bool,
+    drives: [CpcDrive; 2],
     tape: CpcTape,
 }
 
@@ -448,6 +500,8 @@ impl Cpc {
                 ga: GateArray::new(),
                 ppi: Ppi::new(),
                 ay: Ay::new(),
+                fdc: Fdc::new(),
+                has_fdc: model != Model::Cpc464,
                 keys: [0xff; 10],
                 vsync: false,
                 cas_in: false,
@@ -460,6 +514,7 @@ impl Cpc {
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
             samples: Vec::new(),
             field_done_pending: false,
+            drives: [CpcDrive::new(), CpcDrive::new()],
             tape: CpcTape::new(),
         };
         m.cpu.set_int_vector(0xff);
@@ -497,6 +552,7 @@ impl Cpc {
                 chips_now: &mut chips_now,
                 start,
                 side: Side {
+                    drives: &mut self.drives,
                     tape: &mut self.tape,
                     audio: &mut self.audio,
                     samples: &mut self.samples,
@@ -513,6 +569,7 @@ impl Cpc {
             &mut chips_now,
             end,
             &mut Side {
+                drives: &mut self.drives,
                 tape: &mut self.tape,
                 audio: &mut self.audio,
                 samples: &mut self.samples,
@@ -664,6 +721,7 @@ impl Machine for Cpc {
         self.io.ga.reset();
         self.io.ppi.reset();
         self.io.ay.reset();
+        self.io.fdc.reset();
         self.mem.reset(hard);
         if hard {
             self.io.crtc = Crtc::new(self.io.crtc.kind);
@@ -789,16 +847,34 @@ impl Machine for Cpc {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        vec![MediaSlotInfo {
+        let mut slots = Vec::new();
+        if self.io.has_fdc {
+            for (i, (id, name)) in [(SLOT_A, "drive A"), (SLOT_B, "drive B")]
+                .into_iter()
+                .enumerate()
+            {
+                slots.push(MediaSlotInfo {
+                    id,
+                    name,
+                    kind: MediaKind::Disk,
+                    inserted: self.drives[i].has_disc(),
+                });
+            }
+        }
+        slots.push(MediaSlotInfo {
             id: SLOT_TAPE,
             name: "tape",
             kind: MediaKind::Tape,
             inserted: self.tape.has_tape(),
-        }]
+        });
+        slots
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
         match slot {
+            SLOT_A | SLOT_B if self.io.has_fdc => {
+                Some(&mut self.drives[usize::from(slot.0)] as &mut dyn MediaSlot)
+            }
             SLOT_TAPE => Some(&mut self.tape),
             _ => None,
         }
@@ -820,9 +896,13 @@ impl Machine for Cpc {
         self.io.ga.save(&mut w);
         self.io.ppi.save(&mut w);
         self.io.ay.save(&mut w);
+        self.io.fdc.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
         self.tape.save(&mut w);
+        for d in &self.drives {
+            d.save(&mut w);
+        }
         w.into_bytes()
     }
 
@@ -852,13 +932,21 @@ impl Machine for Cpc {
         next.io.ga.load(&mut r)?;
         next.io.ppi.load(&mut r)?;
         next.io.ay.load(&mut r)?;
+        next.io.fdc.load(&mut r)?;
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
         // The deck loads last (it has no copy), after everything that can
         // fail: check its chunk first.
         let at = s.len() - r.remaining();
         CpcTape::new().load(&mut r)?;
-        self.tape.load(&mut StateReader::new(&s[at..]))?;
+        for _ in 0..2 {
+            CpcDrive::new().load(&mut r)?;
+        }
+        let mut rest = StateReader::new(&s[at..]);
+        self.tape.load(&mut rest)?;
+        for d in &mut self.drives {
+            d.load(&mut rest)?;
+        }
         self.cpu = next.cpu;
         self.mem = next.mem;
         self.io = next.io;
