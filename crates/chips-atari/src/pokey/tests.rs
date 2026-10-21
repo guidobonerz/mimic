@@ -127,3 +127,96 @@ fn savestate_round_trip() {
     assert_eq!(p, q);
     assert!(q.load(&mut StateReader::new(&bytes[..8])).is_err());
 }
+
+/// Output levels over `n` cycles.
+fn levels(p: &mut Pokey, n: usize) -> Vec<u8> {
+    (0..n)
+        .map(|_| {
+            p.tick();
+            p.output()
+        })
+        .collect()
+}
+
+#[test]
+fn pure_tone_and_volume_only() {
+    let mut p = pokey();
+    p.write(0x08, 0x40); // channel 1 at 1.79 MHz
+    p.write(0x00, 46); // period 50 cycles
+    p.write(0x01, 0xa8); // pure tone, volume 8
+    let out = levels(&mut p, 1000);
+    assert!(out.iter().all(|&v| v == 0 || v == 8));
+    // A square wave: the output changes every 50 cycles.
+    let changes = out.windows(2).filter(|w| w[0] != w[1]).count();
+    assert!((19..=21).contains(&changes), "{changes}");
+    p.write(0x01, 0x18); // volume only
+    assert!(levels(&mut p, 100).iter().all(|&v| v == 8));
+}
+
+#[test]
+fn polynomial_distortion_is_irregular() {
+    let mut p = pokey();
+    p.write(0x08, 0x40);
+    p.write(0x00, 6); // underflow every 10 cycles
+    p.write(0x01, 0x08); // 5-bit + 17-bit polynomial noise
+    let out = levels(&mut p, 20_000);
+    let high = out.iter().filter(|&&v| v == 8).count();
+    assert!(
+        (4_000..16_000).contains(&high),
+        "noise mixes levels: {high}"
+    );
+    // Runs of equal level vary in length (not a square wave).
+    let mut runs = std::collections::BTreeSet::new();
+    let mut len = 0;
+    for w in out.windows(2) {
+        len += 1;
+        if w[0] != w[1] {
+            runs.insert(len);
+            len = 0;
+        }
+    }
+    assert!(runs.len() > 3, "{runs:?}");
+}
+
+#[test]
+fn high_pass_filter_cancels_equal_frequencies() {
+    let mut p = pokey();
+    p.write(0x08, 0x64); // ch1 + ch3 at 1.79 MHz, filter ch1 by ch3
+    p.write(0x00, 46);
+    p.write(0x04, 46);
+    p.write(0x01, 0xa8);
+    p.write(0x09, 0);
+    let out = levels(&mut p, 2000);
+    let high = out.iter().filter(|&&v| v != 0).count();
+    assert!(high < 100, "filtered to (almost) silence: {high}");
+}
+
+#[test]
+fn pots_count_lines_after_potgo() {
+    let mut p = pokey();
+    p.set_pot(0, 100);
+    p.set_pot(1, 1);
+    p.write(0x0b, 0); // POTGO
+    assert_eq!(p.peek(0x08), 0xff, "all counting");
+    for _ in 0..50 * 114 {
+        p.tick();
+    }
+    assert_eq!(p.peek(0x08) & 0x03, 0x01, "pot 1 done, pot 0 counting");
+    assert_eq!(p.peek(0x01), 1);
+    for _ in 0..60 * 114 {
+        p.tick();
+    }
+    assert_eq!(p.peek(0x00), 100);
+    for _ in 0..130 * 114 {
+        p.tick();
+    }
+    assert_eq!(p.peek(0x08), 0, "scan over");
+    assert_eq!(p.peek(0x02), 228, "nothing connected");
+    // Fast scan: one step per cycle.
+    p.write(0x0f, 0x07);
+    p.write(0x0b, 0);
+    for _ in 0..110 {
+        p.tick();
+    }
+    assert_eq!(p.peek(0x00), 100);
+}

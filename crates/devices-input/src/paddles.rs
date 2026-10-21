@@ -1,7 +1,12 @@
-//! A pair of paddles on one CBM control port: two 470 kΩ potentiometers on
-//! POTX (pin 9) and POTY (pin 5) and their fire buttons on pins 3 (paddle
-//! X) and 4 (paddle Y), the joystick's left and right lines. Source:
-//! Commodore 64 Programmer's Reference Guide, appendix I.
+//! A pair of paddles on one control port: two potentiometers and their
+//! fire buttons on the joystick's left and right lines.
+//!
+//! - CBM control port: 470 kΩ pots on POTX (pin 9) and POTY (pin 5),
+//!   buttons on pins 3 (paddle X) and 4 (paddle Y). Source: Commodore 64
+//!   Programmer's Reference Guide, appendix I.
+//! - Atari joystick port: 1 MΩ pots on pins 9 and 5 (POKEY POT0/1 on port
+//!   1, POT2/3 on port 2), buttons on pins 3 and 4 (left/right). Source:
+//!   Atari 400/800 Technical Reference Notes, "Controllers".
 //!
 //! Input: [`InputEvent::Analog`] sets a paddle's position (axis 0 = X,
 //! 1 = Y; 0 = turned fully one way, 65535 the other), [`InputEvent::Digital`]
@@ -20,6 +25,7 @@ const MOUSE_STEP: i32 = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Paddles {
+    kind: PortKind,
     /// Resistance of each pot, 0–65535 (the SID counts it as 0–255).
     pub position: [u16; 2],
     buttons: u8,
@@ -32,8 +38,16 @@ impl Default for Paddles {
 }
 
 impl Paddles {
+    /// Paddles for a CBM control port.
     pub fn new() -> Self {
+        Self::for_port(PortKind::CbmControl)
+    }
+
+    /// Paddles for a port of `kind` (CBM control port or Atari joystick
+    /// port).
+    pub fn for_port(kind: PortKind) -> Self {
         Self {
+            kind,
             position: [0x8000; 2],
             buttons: 0,
         }
@@ -42,7 +56,7 @@ impl Paddles {
 
 impl PortDevice for Paddles {
     fn kind(&self) -> PortKind {
-        PortKind::CbmControl
+        self.kind
     }
 
     fn read_lines(&self, _now: Cycle) -> PortLines {

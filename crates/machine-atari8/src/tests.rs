@@ -215,3 +215,35 @@ fn options() {
     config.model = Some("secam".into());
     assert!(Atari800Xl::new(&config).is_err());
 }
+
+#[test]
+fn paddles_turn_pokey_pots() {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("port2".into(), "paddles".into());
+    let mut m = Atari800Xl::new(&config).unwrap();
+    let at = m.now();
+    for (axis, value) in [(0u8, 0u16), (1, 0x8000)] {
+        m.input(TimedInput {
+            at,
+            target: InputTarget::Port(PORT2),
+            event: InputEvent::Analog { axis, value },
+        });
+    }
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(PORT2),
+        event: InputEvent::Digital {
+            dirs: Dirs::NONE,
+            buttons: 1,
+        },
+    });
+    frames(&mut m, 1);
+    poke(&mut m, 0xd20b, 0); // POTGO
+    frames(&mut m, 1);
+    assert_eq!(byte(&m, 0xd202), 1, "POT2: turned fully");
+    assert_eq!(byte(&m, 0xd203), 114, "POT3: mid travel");
+    assert_eq!(byte(&m, 0xd200), 228, "POT0: nothing in port 1's pots");
+    poke(&mut m, 0xd302, 0x34);
+    assert_eq!(byte(&m, 0xd300), 0xbf, "paddle 2's button: stick 1 left");
+}

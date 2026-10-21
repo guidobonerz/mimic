@@ -36,6 +36,19 @@
 //! with debounce a key must be seen on two passes before KBCODE latches.
 //! Serial output shifts one bit per two timer-4 periods (start bit, eight
 //! data bits LSB first, stop bit).
+//!
+//! Sound: on each underflow a channel's output changes as AUDC bits 7–5
+//! select — bit 7 = 0 gates the change with the 5-bit polynomial, bit 5 = 1
+//! toggles (pure tone), else the output takes the 4-bit (bit 6 = 1) or
+//! 17/9-bit polynomial. Polynomials x^4+x^3+1, x^5+x^3+1, x^9+x^4+1,
+//! x^17+x^12+1 step every cycle. AUDC bit 4 outputs the volume constantly.
+//! High-pass filters: channel 1 (2) is XORed with its own output sampled at
+//! each channel 3 (4) underflow. Channels mix linearly.
+//!
+//! Pots: POTGO restarts a counter that steps once per line (every cycle
+//! with SKCTL bit 2, fast scan) up to 228; each POT register latches the
+//! count at which its line's capacitor charged, ALLPOT shows the lines
+//! still counting (1).
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -62,12 +75,23 @@ pub struct Pokey {
     pending: u8,
     /// Ticks of each channel's clock until it underflows.
     counters: [u32; 4],
-    /// Channel output flip-flops (pure tones).
+    /// Channel outputs before the high-pass filters.
     outputs: [bool; 4],
+    /// High-pass filter latches of channels 1 and 2.
+    highpass: [bool; 2],
     prescale64: u8,
     prescale15: u8,
+    poly4: u8,
+    poly5: u8,
     poly17: u32,
     poly9: u16,
+    /// Pot positions 0–228 from the paddles (228 = open line).
+    pot_input: [u8; 8],
+    /// Latched pot counts and the scan counter.
+    pots: [u8; 8],
+    pot_counter: u8,
+    /// Pots still counting (ALLPOT, 1 = counting).
+    allpot: u8,
     /// Keys held down by key code 0–63.
     keys: u64,
     shift: bool,
@@ -107,10 +131,17 @@ impl Pokey {
             pending: 0,
             counters: [0; 4],
             outputs: [false; 4],
+            highpass: [false; 2],
             prescale64: 0,
             prescale15: 0,
+            poly4: 0x0f,
+            poly5: 0x1f,
             poly17: 0x1ffff,
             poly9: 0x1ff,
+            pot_input: [228; 8],
+            pots: [228; 8],
+            pot_counter: 228,
+            allpot: 0,
             keys: 0,
             shift: false,
             control: false,
@@ -131,6 +162,32 @@ impl Pokey {
 
     /// POKEY has no reset pin; the 800XL's RESET key leaves it alone.
     pub fn reset(&mut self) {}
+
+    // --- pots ----------------------------------------------------------
+
+    /// A paddle position on pot line `n` (0–7): 1 (turned fully) to 228
+    /// (other end, or nothing connected).
+    pub fn set_pot(&mut self, n: usize, value: u8) {
+        if let Some(p) = self.pot_input.get_mut(n) {
+            *p = value.min(228);
+        }
+    }
+
+    fn pot_step(&mut self) {
+        if self.allpot == 0 {
+            return;
+        }
+        self.pot_counter = self.pot_counter.saturating_add(1);
+        for n in 0..8 {
+            let bit = 1 << n;
+            if self.allpot & bit != 0
+                && (self.pot_counter >= self.pot_input[n] || self.pot_counter >= 228)
+            {
+                self.pots[n] = self.pot_counter;
+                self.allpot &= !bit;
+            }
+        }
+    }
 
     // --- keyboard ------------------------------------------------------
 
@@ -298,7 +355,7 @@ impl Pokey {
     fn clock(&mut self, ch: usize) -> bool {
         if self.counters[ch] == 0 {
             self.counters[ch] = self.reload(ch);
-            self.outputs[ch] = !self.outputs[ch];
+            self.distort(ch);
             true
         } else {
             self.counters[ch] -= 1;
@@ -306,16 +363,39 @@ impl Pokey {
         }
     }
 
+    /// A channel's output change on underflow (AUDC bits 7–5).
+    fn distort(&mut self, ch: usize) {
+        let c = self.audc[ch];
+        if c & 0x80 == 0 && self.poly5 & 1 == 0 {
+            return;
+        }
+        self.outputs[ch] = if c & 0x20 != 0 {
+            !self.outputs[ch]
+        } else if c & 0x40 != 0 {
+            self.poly4 & 1 != 0
+        } else if self.audctl & 0x80 != 0 {
+            self.poly9 & 1 != 0
+        } else {
+            self.poly17 & 1 != 0
+        };
+    }
+
     /// One machine cycle.
     pub fn tick(&mut self) {
         let init = self.skctl & 0x03 == 0;
         if !init {
-            // 17-bit and 9-bit polynomial counters (x^17 + x^12 + 1,
-            // x^9 + x^4 + 1), one step per cycle.
+            // Polynomial counters, one step per cycle.
+            let b4 = ((self.poly4 >> 3) ^ (self.poly4 >> 2)) & 1;
+            self.poly4 = ((self.poly4 << 1) | b4) & 0x0f;
+            let b5 = ((self.poly5 >> 4) ^ (self.poly5 >> 2)) & 1;
+            self.poly5 = ((self.poly5 << 1) | b5) & 0x1f;
             let b17 = ((self.poly17 >> 16) ^ (self.poly17 >> 11)) & 1;
             self.poly17 = ((self.poly17 << 1) | b17) & 0x1ffff;
             let b9 = ((self.poly9 >> 8) ^ (self.poly9 >> 3)) & 1;
             self.poly9 = ((self.poly9 << 1) | b9) & 0x1ff;
+        }
+        if self.skctl & 0x04 != 0 {
+            self.pot_step();
         }
         let mut base = false;
         if !init {
@@ -331,6 +411,9 @@ impl Pokey {
                 self.prescale15 = 0;
                 if self.audctl & 0x01 != 0 {
                     base = true;
+                }
+                if self.skctl & 0x04 == 0 {
+                    self.pot_step();
                 }
                 if self.skctl & 0x02 != 0 {
                     self.scan_step();
@@ -361,24 +444,29 @@ impl Pokey {
         match ch {
             0 => self.request(IRQ_TIMER1),
             1 => self.request(IRQ_TIMER2),
-            3 => {
+            2 => self.highpass[0] = self.outputs[0],
+            _ => {
+                self.highpass[1] = self.outputs[1];
                 self.request(IRQ_TIMER4);
                 self.serial_clock();
             }
-            _ => {}
         }
     }
 
-    /// Mixed output of the four channels, 0–60 (pure tones and
-    /// volume-only; distortion arrives with the full sound model).
+    /// Mixed output of the four channels, 0–60.
     pub fn output(&self) -> u8 {
         let mut sum = 0;
         for ch in 0..4 {
             let c = self.audc[ch];
-            let vol = c & 0x0f;
-            let on = c & 0x10 != 0 || (c & 0x20 != 0 && self.outputs[ch]);
-            if on {
-                sum += vol;
+            let mut out = self.outputs[ch];
+            if ch == 0 && self.audctl & 0x04 != 0 {
+                out ^= self.highpass[0];
+            }
+            if ch == 1 && self.audctl & 0x02 != 0 {
+                out ^= self.highpass[1];
+            }
+            if c & 0x10 != 0 || out {
+                sum += c & 0x0f;
             }
         }
         sum
@@ -388,9 +476,15 @@ impl Pokey {
 
     pub fn peek(&self, reg: u8) -> u8 {
         match reg & 0x0f {
-            // No paddles: pots count to 228.
-            0x00..=0x07 => 228,
-            0x08 => 0,
+            r @ 0x00..=0x07 => {
+                let n = usize::from(r);
+                if self.allpot & (1 << n) != 0 {
+                    self.pot_counter
+                } else {
+                    self.pots[n]
+                }
+            }
+            0x08 => self.allpot,
             0x09 => self.kbcode,
             0x0a => {
                 if self.audctl & 0x80 != 0 {
@@ -429,6 +523,10 @@ impl Pokey {
                 }
             }
             0x0a => self.serial_overrun = false,
+            0x0b => {
+                self.pot_counter = 0;
+                self.allpot = 0xff;
+            }
             0x0d => {
                 self.serout_hold = Some(v);
                 if self.shift_bits == 0 {
@@ -442,6 +540,8 @@ impl Pokey {
             0x0f => {
                 self.skctl = v;
                 if v & 0x03 == 0 {
+                    self.poly4 = 0x0f;
+                    self.poly5 = 0x1f;
                     self.poly17 = 0x1ffff;
                     self.poly9 = 0x1ff;
                     self.prescale64 = 0;
@@ -456,7 +556,8 @@ impl Pokey {
 }
 
 const TAG: [u8; 4] = *b"POKY";
-const VERSION: u16 = 1;
+/// Version 2: sound polynomials, high-pass latches, pots.
+const VERSION: u16 = 2;
 
 impl Savestate for Pokey {
     fn save(&self, w: &mut StateWriter) {
@@ -498,11 +599,19 @@ impl Savestate for Pokey {
             w.u64(self.keys);
             w.u16(self.shift_reg);
             w.bytes(&self.sent);
+            w.u8(self.poly4);
+            w.u8(self.poly5);
+            w.bool(self.highpass[0]);
+            w.bool(self.highpass[1]);
+            w.raw(&self.pot_input);
+            w.raw(&self.pots);
+            w.u8(self.pot_counter);
+            w.u8(self.allpot);
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut n = self.clone();
         c.raw_into(&mut n.audf)?;
         c.raw_into(&mut n.audc)?;
@@ -537,6 +646,15 @@ impl Savestate for Pokey {
         n.keys = c.u64()?;
         n.shift_reg = c.u16()?;
         n.sent = c.bytes()?.to_vec();
+        if version >= 2 {
+            n.poly4 = c.u8()? & 0x0f;
+            n.poly5 = c.u8()? & 0x1f;
+            n.highpass = [c.bool()?, c.bool()?];
+            c.raw_into(&mut n.pot_input)?;
+            c.raw_into(&mut n.pots)?;
+            n.pot_counter = c.u8()?;
+            n.allpot = c.u8()?;
+        }
         if n.prescale64 >= 28 || n.prescale15 >= 114 || n.shift_bits > SERIAL_BITS {
             return Err(StateError::Invalid("POKEY counters"));
         }

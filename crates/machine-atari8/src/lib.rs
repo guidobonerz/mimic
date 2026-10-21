@@ -9,8 +9,9 @@
 //! (1 789 773 Hz, 262 lines); 114 cycles per line on both.
 //!
 //! Options:
-//! - `port1`, `port2`: "joystick" (default port 1) or "none" (default
-//!   port 2).
+//! - `port1`, `port2`: "joystick" (default port 1), "paddles" or "none"
+//!   (default port 2). Paddles turn POKEY's POT0/1 (port 1) or POT2/3
+//!   (port 2); their buttons are the stick's left/right lines.
 //! - `basic`: "on" (default) or "off" — holds OPTION while the OS boots,
 //!   like the real machine.
 //! - `roms`: "stub" uses a tiny built-in OS, for tests without ROMs.
@@ -235,17 +236,34 @@ fn load_roms(config: &MachineConfig) -> Result<Roms, ConfigError> {
     }
 }
 
-fn port_option(config: &MachineConfig, key: &str, default: &str) -> Result<bool, ConfigError> {
+fn port_option(
+    config: &MachineConfig,
+    key: &str,
+    default: &str,
+) -> Result<Option<Box<dyn PortDevice>>, ConfigError> {
     match config
         .options
         .get(key)
         .map(String::as_str)
         .unwrap_or(default)
     {
-        "joystick" => Ok(true),
-        "none" => Ok(false),
-        other => Err(ConfigError::Invalid(format!("{key} option '{other}'"))),
+        "joystick" => Ok(Some(Box::new(devices_input::Joystick::new(
+            PortKind::AtariJoy,
+        )))),
+        "paddles" => Ok(Some(Box::new(devices_input::Paddles::for_port(
+            PortKind::AtariJoy,
+        )))),
+        "none" => Ok(None),
+        other => Err(ConfigError::Invalid(format!(
+            "{key} option '{other}' (joystick, paddles or none)"
+        ))),
     }
+}
+
+/// A pot line's analog value (0 = no resistance … 65535, open line) as
+/// POKEY counts it: 1 … 228.
+fn pot_count(analog: u16) -> u8 {
+    (1 + u32::from(analog) * 227 / 0xffff) as u8
 }
 
 pub struct Atari800Xl {
@@ -294,9 +312,7 @@ impl Atari800Xl {
             .into_iter()
             .enumerate()
         {
-            if port_option(config, key, default)? {
-                ports[i] = Some(Box::new(devices_input::Joystick::new(PortKind::AtariJoy)));
-            }
+            ports[i] = port_option(config, key, default)?;
         }
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Sally,
@@ -485,10 +501,16 @@ impl Atari800Xl {
         let now = self.sched.now();
         let mut porta = 0xffu8;
         for (i, dev) in self.ports.iter().enumerate() {
-            let low = dev.as_ref().map_or(0, |d| d.read_lines(now).pulled_low);
+            let lines = dev.as_ref().map(|d| d.read_lines(now));
+            let low = lines.map_or(0, |l| l.pulled_low);
             // Up, down, left, right on bits 0–3 (port 1) / 4–7 (port 2).
             porta &= !(((low & 0x0f) as u8) << (4 * i));
             self.io.gtia.set_trigger(i, low & 0x20 != 0);
+            // Pins 9 and 5: POT0/1 (port 1), POT2/3 (port 2).
+            let analog = lines.map_or([u16::MAX; 2], |l| l.analog);
+            for (k, a) in analog.into_iter().enumerate() {
+                self.io.pokey.set_pot(2 * i + k, pot_count(a));
+            }
         }
         self.io.porta = porta;
     }

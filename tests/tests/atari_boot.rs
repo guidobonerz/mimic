@@ -118,3 +118,68 @@ fn without_basic_the_xl_starts_the_self_test() {
     );
     assert!(find(&screen(m.as_mut()), "READY").is_none(), "{shot}");
 }
+
+#[test]
+#[ignore = "needs Atari XL OS and BASIC ROMs in EMU_ROM_DIR"]
+fn basic_reads_stick_and_paddle_and_plays_sound() {
+    use emu_core::input::{Dirs, InputEvent, InputTarget, TimedInput};
+    let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
+    let mut config = MachineConfig {
+        roms: media_backends::roms::load(&dir, "atari800xl").expect("ROMs"),
+        ..MachineConfig::default()
+    };
+    config.options.insert("port2".into(), "paddles".into());
+    let mut m = emu_machines::registry()
+        .create("atari800xl", &config)
+        .unwrap();
+    run(m.as_mut(), 350);
+    let at = m.now();
+    let ev = |target, event| TimedInput { at, target, event };
+    m.input(ev(
+        InputTarget::Port(machine_atari8::PORT1),
+        InputEvent::Digital {
+            dirs: Dirs::RIGHT,
+            buttons: 0,
+        },
+    ));
+    m.input(ev(
+        InputTarget::Port(machine_atari8::PORT2),
+        InputEvent::Analog {
+            axis: 0,
+            value: 0x8000,
+        },
+    ));
+    let (events, end) = machine_atari8::keyboard::typed_events(
+        "PRINT STICK(0);\" \";PADDLE(2)\r",
+        m.now().0 + 1000,
+    );
+    for e in events {
+        m.input(e);
+    }
+    while m.now().0 < end + 200_000 {
+        run(m.as_mut(), 1);
+    }
+    let s = screen(m.as_mut());
+    let shot = snapshot(m.as_ref(), "atari_stick.png");
+    let typed = find(&s, "PRINT STICK").map(|p| p / 40);
+    assert!(typed.is_some(), "not echoed; {shot}");
+    assert_eq!(
+        find(&s, "7 114").map(|p| p / 40),
+        typed.map(|l| l + 1),
+        "{shot}"
+    );
+
+    // SOUND 0,121,10,8: pure tone on channel 1, heard on the audio output.
+    let (events, end) = machine_atari8::keyboard::typed_events("SOUND 0,121,10,8\r", m.now().0);
+    for e in events {
+        m.input(e);
+    }
+    let mut out = Vec::new();
+    while m.now().0 < end + 100_000 {
+        run(m.as_mut(), 1);
+        out.clear();
+        m.audio(&mut out);
+    }
+    let (min, max) = (out.iter().min().unwrap(), out.iter().max().unwrap());
+    assert!(max - min > 1000, "a tone: {min}..{max}");
+}

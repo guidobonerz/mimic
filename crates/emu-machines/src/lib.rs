@@ -19,6 +19,7 @@ fn joystick_port(kind: PortKind) -> bool {
 pub fn device_names(kind: PortKind) -> Vec<&'static str> {
     match kind {
         PortKind::CbmControl => vec!["joystick", "paddles", "mouse1351"],
+        PortKind::AtariJoy => vec!["joystick", "paddles"],
         k if joystick_port(k) => vec!["joystick"],
         _ => Vec::new(),
     }
@@ -29,7 +30,9 @@ pub fn device_names(kind: PortKind) -> Vec<&'static str> {
 pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> {
     match name {
         "joystick" if joystick_port(kind) => Some(Box::new(devices_input::Joystick::new(kind))),
-        "paddles" if kind == PortKind::CbmControl => Some(Box::new(devices_input::Paddles::new())),
+        "paddles" if matches!(kind, PortKind::CbmControl | PortKind::AtariJoy) => {
+            Some(Box::new(devices_input::Paddles::for_port(kind)))
+        }
         "mouse1351" if kind == PortKind::CbmControl => {
             Some(Box::new(devices_input::Mouse1351::new()))
         }
@@ -65,7 +68,11 @@ mod tests {
             ["joystick", "paddles", "mouse1351"]
         );
         assert!(create_device("mouse1351", PortKind::CbmControl).is_some());
-        assert!(create_device("paddles", PortKind::AtariJoy).is_none());
+        assert_eq!(
+            create_device("paddles", PortKind::AtariJoy).map(|d| d.kind()),
+            Some(PortKind::AtariJoy)
+        );
+        assert!(create_device("paddles", PortKind::CpcJoy).is_none());
         assert!(device_names(PortKind::Iec).is_empty());
         let j = create_device("joystick", PortKind::AtariJoy).unwrap();
         assert_eq!(j.kind(), PortKind::AtariJoy);

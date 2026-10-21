@@ -476,6 +476,96 @@ pub static PET: Keymap = Keymap {
     entries: PET_LABELLED,
 };
 
+/// Atari 800XL keys (POKEY key codes 0–63; SHIFT 64, CONTROL 65, BREAK
+/// 66, START 67, SELECT 68, OPTION 69, RESET 70 — see
+/// `machine-atari8::keyboard`).
+const A_SHIFT: u16 = 64;
+const A_CONTROL: u16 = 65;
+
+/// Atari keyboard laid onto a PC (US) keyboard by position. The Atari's
+/// `< >` sit on `- =`, its `- =` on `[ ]`, `+ *` on `' \`; the console
+/// keys on F2 START, F3 SELECT, F4 OPTION, F5 RESET, F6 HELP, F7 and Pause
+/// BREAK; the Atari (inverse) key on right Alt. The cursor keys are
+/// CONTROL with `- = + *`, as on the machine.
+const ATARI_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Escape", &[0x1c]),
+    ("Backquote", &[0x1c]),
+    ("Digit1", &[0x1f]),
+    ("Digit2", &[0x1e]),
+    ("Digit3", &[0x1a]),
+    ("Digit4", &[0x18]),
+    ("Digit5", &[0x1d]),
+    ("Digit6", &[0x1b]),
+    ("Digit7", &[0x33]),
+    ("Digit8", &[0x35]),
+    ("Digit9", &[0x30]),
+    ("Digit0", &[0x32]),
+    ("Minus", &[0x36]),     // <
+    ("Equal", &[0x37]),     // >
+    ("Backspace", &[0x34]), // DELETE/BACK S
+    ("Tab", &[0x2c]),
+    ("KeyQ", &[0x2f]),
+    ("KeyW", &[0x2e]),
+    ("KeyE", &[0x2a]),
+    ("KeyR", &[0x28]),
+    ("KeyT", &[0x2d]),
+    ("KeyY", &[0x2b]),
+    ("KeyU", &[0x0b]),
+    ("KeyI", &[0x0d]),
+    ("KeyO", &[0x08]),
+    ("KeyP", &[0x0a]),
+    ("BracketLeft", &[0x0e]),  // -
+    ("BracketRight", &[0x0f]), // =
+    ("Enter", &[0x0c]),
+    ("NumpadEnter", &[0x0c]),
+    ("ControlLeft", &[A_CONTROL]),
+    ("KeyA", &[0x3f]),
+    ("KeyS", &[0x3e]),
+    ("KeyD", &[0x3a]),
+    ("KeyF", &[0x38]),
+    ("KeyG", &[0x3d]),
+    ("KeyH", &[0x39]),
+    ("KeyJ", &[0x01]),
+    ("KeyK", &[0x05]),
+    ("KeyL", &[0x00]),
+    ("Semicolon", &[0x02]),
+    ("Quote", &[0x06]),     // +
+    ("Backslash", &[0x07]), // *
+    ("CapsLock", &[0x3c]),
+    ("ShiftLeft", &[A_SHIFT]),
+    ("ShiftRight", &[A_SHIFT]),
+    ("KeyZ", &[0x17]),
+    ("KeyX", &[0x16]),
+    ("KeyC", &[0x12]),
+    ("KeyV", &[0x10]),
+    ("KeyB", &[0x15]),
+    ("KeyN", &[0x23]),
+    ("KeyM", &[0x25]),
+    ("Comma", &[0x20]),
+    ("Period", &[0x22]),
+    ("Slash", &[0x26]),
+    ("AltRight", &[0x27]), // Atari / inverse
+    ("Space", &[0x21]),
+    ("ArrowUp", &[A_CONTROL, 0x0e]),
+    ("ArrowDown", &[A_CONTROL, 0x0f]),
+    ("ArrowLeft", &[A_CONTROL, 0x06]),
+    ("ArrowRight", &[A_CONTROL, 0x07]),
+    ("Delete", &[A_CONTROL, 0x34]), // delete character
+    ("Insert", &[A_CONTROL, 0x37]), // insert character
+    ("F2", &[67]),                  // START
+    ("F3", &[68]),                  // SELECT
+    ("F4", &[69]),                  // OPTION
+    ("F5", &[70]),                  // RESET
+    ("F6", &[0x11]),                // HELP
+    ("F7", &[66]),                  // BREAK
+    ("Pause", &[66]),
+];
+
+pub static ATARI: Keymap = Keymap {
+    machine: "atari800xl",
+    entries: ATARI_POSITIONAL,
+};
+
 /// The positional keymap for a machine id.
 pub fn positional(machine: &str) -> Option<&'static Keymap> {
     match machine {
@@ -484,6 +574,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "vic20" => Some(&VIC20),
         "pet" => Some(&PET),
         "plus4" | "c16" => Some(&TED),
+        "atari800xl" => Some(&ATARI),
         _ => None,
     }
 }
@@ -491,6 +582,24 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atari_keys_are_reachable_once() {
+        let mut seen = std::collections::BTreeMap::new();
+        for (code, keys) in ATARI_POSITIONAL {
+            if let [single] = keys {
+                *seen.entry(*single).or_insert(0) += 1;
+            }
+            assert!(keys.iter().all(|&k| k <= 70), "{code}");
+        }
+        // Every key code of the 800XL keyboard (the 1200XL's F1–F4 and the
+        // unused codes have no key).
+        let unused = [0x03, 0x04, 0x09, 0x13, 0x14, 0x19, 0x24, 0x29, 0x31, 0x3b];
+        for k in (0..64).filter(|k| !unused.contains(k)) {
+            assert!(seen.contains_key(&k), "key code {k:#04x} unreachable");
+        }
+        assert_eq!(positional("atari800xl").unwrap().machine, "atari800xl");
+    }
 
     type Entries = &'static [(&'static str, &'static [u16])];
 

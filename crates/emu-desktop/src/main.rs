@@ -67,6 +67,10 @@ left Ctrl = C=, Insert = £, Delete = ↑, Page Up = RESTORE, Home = CLR/HOME,
 F2/F4/F6/F8 = shifted F1/F3/F5/F7. Joystick (port 2): numeric keypad
 8/2/4/6 + 0 or right Ctrl, or the first gamepad.
 
+Atari 800XL keys by position: < > on - =, - = on [ ], + * on ' \\, Tab, Esc,
+CapsLock, right Alt = Atari key, arrows = CONTROL + - = + *; F2 START,
+F3 SELECT, F4 OPTION, F5 RESET, F6 HELP, F7/Pause BREAK.
+
 F12 switches between a machine's screens (C128: 40-column VIC and
 80-column VDC; the window starts on the one the 40/80 key selects).
 Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
