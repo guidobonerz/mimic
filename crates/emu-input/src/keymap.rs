@@ -566,6 +566,48 @@ pub static ATARI: Keymap = Keymap {
     entries: ATARI_POSITIONAL,
 };
 
+/// Atari 2600: console switches on F1–F5 (machine keys 0–4, see
+/// `machine-atari2600::keys`) and the two keypads as 3 × 4 key blocks in
+/// reading order (1 2 3 / 4 5 6 / 7 8 9 / * 0 #): the left one on
+/// 1 2 3 / Q W E / A S D / Z X C (codes 16–27), the right one on
+/// 8 9 0 / I O P / K L ; / , . / (codes 32–43).
+const ATARI2600_POSITIONAL: &[(&str, &[u16])] = &[
+    ("F1", &[1]), // SELECT
+    ("F2", &[0]), // RESET
+    ("F3", &[2]), // colour / black and white
+    ("F4", &[3]), // left difficulty A/B
+    ("F5", &[4]), // right difficulty A/B
+    ("Digit1", &[16]),
+    ("Digit2", &[17]),
+    ("Digit3", &[18]),
+    ("KeyQ", &[19]),
+    ("KeyW", &[20]),
+    ("KeyE", &[21]),
+    ("KeyA", &[22]),
+    ("KeyS", &[23]),
+    ("KeyD", &[24]),
+    ("KeyZ", &[25]),
+    ("KeyX", &[26]),
+    ("KeyC", &[27]),
+    ("Digit8", &[32]),
+    ("Digit9", &[33]),
+    ("Digit0", &[34]),
+    ("KeyI", &[35]),
+    ("KeyO", &[36]),
+    ("KeyP", &[37]),
+    ("KeyK", &[38]),
+    ("KeyL", &[39]),
+    ("Semicolon", &[40]),
+    ("Comma", &[41]),
+    ("Period", &[42]),
+    ("Slash", &[43]),
+];
+
+pub static ATARI2600: Keymap = Keymap {
+    machine: "atari2600",
+    entries: ATARI2600_POSITIONAL,
+};
+
 /// Amstrad CPC keys: `line * 8 + bit` of the keyboard matrix (see
 /// `machine-cpc::keyboard`).
 const fn cpc(line: u16, bit: u16) -> u16 {
@@ -679,6 +721,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "pet" => Some(&PET),
         "plus4" | "c16" => Some(&TED),
         "atari800xl" => Some(&ATARI),
+        "atari2600" => Some(&ATARI2600),
         "cpc" => Some(&CPC),
         _ => None,
     }
@@ -704,6 +747,10 @@ mod tests {
             assert!(seen.contains_key(&k), "key code {k:#04x} unreachable");
         }
         assert_eq!(positional("atari800xl").unwrap().machine, "atari800xl");
+        let vcs = positional("atari2600").unwrap();
+        let codes: Vec<u16> = ATARI2600_POSITIONAL.iter().map(|(_, k)| k[0]).collect();
+        assert_eq!(codes.len(), 5 + 24);
+        assert!(vcs.lookup("KeyC").unwrap().eq([MachineKey(27)]));
     }
 
     #[test]

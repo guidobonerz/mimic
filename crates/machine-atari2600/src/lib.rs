@@ -25,8 +25,20 @@
 //!
 //! Options:
 //! - `port1`, `port2` (left and right controller port): "joystick"
-//!   (default) or "none".
+//!   (default), "paddles" (a pair; the host mouse turns paddle 0, the one
+//!   on pin 5), "keypad", "driving" or "none".
+//! - `tv`: "color" (default) or "bw"; `left`, `right`: difficulty switch
+//!   "b" (default) or "a".
 //! - `roms`: "stub" inserts a built-in test cartridge ([`stub`]).
+//!
+//! Controllers (pins of the 9-pin port → chips; left port / right port):
+//! directions pins 1–4 → SWCHA D4–D7 / D0–D3 (also the keypad rows, which
+//! the program drives as outputs); fire pin 6 → INPT4 / INPT5; pin 5 →
+//! INPT0 / INPT2 and pin 9 → INPT1 / INPT3 (paddle pots, keypad columns).
+//!
+//! Console switches on SWCHB (keys, see [`keys`]): D0 RESET and D1 SELECT
+//! (low while pressed), D3 colour (1) / black-and-white (0), D6 left and
+//! D7 right difficulty (1 = A).
 //!
 //! Media slot: "cartridge" (raw `.a26`/`.bin` dumps; inserting or removing
 //! one powers the console up again). Without a cartridge the CPU has no
@@ -46,15 +58,16 @@ use chips_atari::tia::{self, Tia};
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use devices_cartridge::atari2600::Cart2600;
 use devices_cartridge::CartSlot;
+use devices_input::joystick::pin;
 use emu_core::audio::Decimator;
 use emu_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
 use emu_core::hooked::HookedBus;
-use emu_core::input::{InputQueue, InputTarget, TimedInput};
+use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
+use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
 use emu_core::{
@@ -72,10 +85,29 @@ pub const PORT2: PortId = PortId(1);
 
 pub const SLOT_CARTRIDGE: SlotId = SlotId(0);
 
-/// SWCHB with the console switches at rest: RESET and SELECT up (1),
-/// colour (bit 3 = 1), both difficulties B (bits 6, 7 = 0); the unused
-/// inputs read high.
-const SWITCHES: u8 = 0x3f;
+/// Machine key codes ([`InputEvent::Key`] on the keyboard target): the
+/// console switches and the keypads in the ports.
+pub mod keys {
+    use emu_core::input::MachineKey;
+
+    pub const RESET: MachineKey = MachineKey(0);
+    pub const SELECT: MachineKey = MachineKey(1);
+    /// Toggles: TV type, left and right difficulty.
+    pub const TV_TYPE: MachineKey = MachineKey(2);
+    pub const LEFT_DIFFICULTY: MachineKey = MachineKey(3);
+    pub const RIGHT_DIFFICULTY: MachineKey = MachineKey(4);
+    /// Keypad keys in reading order (1 2 3 4 5 6 7 8 9 * 0 #): left port
+    /// from 16, right port from 32.
+    pub const LEFT_KEYPAD: u16 = 16;
+    pub const RIGHT_KEYPAD: u16 = 32;
+}
+
+/// SWCHB with the switches at rest: RESET and SELECT up, the unused
+/// inputs high; colour and difficulties come from the options.
+const SWITCHES_IDLE: u8 = 0x37;
+const SWCHB_COLOUR: u8 = 0x08;
+const SWCHB_LEFT_A: u8 = 0x40;
+const SWCHB_RIGHT_A: u8 = 0x80;
 
 pub fn entry() -> MachineEntry {
     MachineEntry {
@@ -106,6 +138,8 @@ struct Board {
     cart: Option<Cart2600>,
     /// What the last bus cycle left on the data lines.
     data_bus: u8,
+    /// SWCHA or SWACNT was written: the keypad rows may have changed.
+    porta_written: bool,
 }
 
 impl Board {
@@ -144,6 +178,8 @@ impl Board {
                 self.tia.write(a as u8, v);
             } else {
                 self.riot.write(a, v);
+                // A9 = 1, A2 = 0, A1 = 0: SWCHA or SWACNT.
+                self.porta_written |= a & 0x206 == 0x200;
             }
         }
         self.data_bus = v;
@@ -171,19 +207,46 @@ impl Bus for Board {
 fn port_option(
     config: &MachineConfig,
     key: &str,
+    hz: u32,
 ) -> Result<Option<Box<dyn PortDevice>>, ConfigError> {
+    let kind = PortKind::AtariJoy;
     match config
         .options
         .get(key)
         .map(String::as_str)
         .unwrap_or("joystick")
     {
-        "joystick" => Ok(Some(Box::new(devices_input::Joystick::new(
-            PortKind::AtariJoy,
+        "joystick" => Ok(Some(Box::new(devices_input::Joystick::new(kind)))),
+        // Paddle 0 of a pair is the one on pin 5: the mouse turns that one.
+        "paddles" => Ok(Some(Box::new(
+            devices_input::Paddles::for_port(kind).mouse_turns(1),
+        ))),
+        "keypad" => Ok(Some(Box::new(devices_input::Keypad::new()))),
+        // About two turns (32 code steps) a second while held.
+        "driving" => Ok(Some(Box::new(devices_input::Driving::new(
+            u64::from(hz) / 32,
         )))),
         "none" => Ok(None),
         other => Err(ConfigError::Invalid(format!(
-            "{key} option '{other}' (joystick or none)"
+            "{key} option '{other}' (joystick, paddles, keypad, driving or none)"
+        ))),
+    }
+}
+
+/// A two-way option (`key`): `on` sets `bit`, `off` clears it.
+fn switch_option(
+    config: &MachineConfig,
+    key: &str,
+    [on, off]: [&str; 2],
+    default_on: bool,
+    bit: u8,
+) -> Result<u8, ConfigError> {
+    match config.options.get(key).map(String::as_str) {
+        None => Ok(if default_on { bit } else { 0 }),
+        Some(v) if v == on => Ok(bit),
+        Some(v) if v == off => Ok(0),
+        Some(v) => Err(ConfigError::Invalid(format!(
+            "{key} option '{v}' ({on} or {off})"
         ))),
     }
 }
@@ -203,6 +266,8 @@ pub struct Atari2600 {
     cart: CartSlot<Cart2600>,
     /// `roms=stub`: the built-in cartridge while the slot is empty.
     stub: Option<Cart2600>,
+    /// Console switch levels (SWCHB inputs).
+    switches: u8,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -226,14 +291,22 @@ impl Atari2600 {
             Some("stub") => true,
             Some(other) => return Err(ConfigError::Invalid(format!("roms option '{other}'"))),
         };
-        let ports = [port_option(config, "port1")?, port_option(config, "port2")?];
+        let hz = cpu_hz(standard);
+        let ports = [
+            port_option(config, "port1", hz)?,
+            port_option(config, "port2", hz)?,
+        ];
+        let switches = SWITCHES_IDLE
+            | switch_option(config, "tv", ["color", "bw"], true, SWCHB_COLOUR)?
+            | switch_option(config, "left", ["a", "b"], false, SWCHB_LEFT_A)?
+            | switch_option(config, "right", ["a", "b"], false, SWCHB_RIGHT_A)?;
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Mos6507,
             ..CpuConfig::default()
         });
         cpu.reset();
         let mut riot = Riot::new();
-        riot.set_port_b_input(SWITCHES);
+        riot.set_port_b_input(switches);
         let mut m = Self {
             standard,
             cpu,
@@ -242,6 +315,7 @@ impl Atari2600 {
                 riot,
                 cart: None,
                 data_bus: 0,
+                porta_written: false,
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -253,6 +327,7 @@ impl Atari2600 {
             field_done_pending: false,
             cart: devices_cartridge::atari2600::slot(),
             stub: None,
+            switches,
         };
         if stub {
             m.stub = Some(
@@ -307,7 +382,15 @@ impl Atari2600 {
         for _ in 0..3 {
             new_field |= self.board.tia.tick();
         }
-        if let Some(s) = self.audio.push(0) {
+        // Keypad rows right after the program sets them; time-dependent
+        // devices (driving controller) once per line.
+        if std::mem::take(&mut self.board.porta_written) || self.board.tia.clock() < 3 {
+            self.refresh_ports();
+        }
+        if let Some(s) = self
+            .audio
+            .push(i32::from(self.board.tia.audio_level()) * 1000)
+        {
             self.samples.push(s);
         }
         self.sched.tick();
@@ -344,26 +427,92 @@ impl Atari2600 {
     }
 
     fn apply_input(&mut self, ev: TimedInput) {
-        if let InputTarget::Port(p) = ev.target {
-            if let Some(Some(dev)) = self.ports.get_mut(usize::from(p.0)) {
-                dev.input(&ev.event);
+        match ev.target {
+            InputTarget::Port(p) => {
+                if let Some(Some(dev)) = self.ports.get_mut(usize::from(p.0)) {
+                    dev.input(&ev.event);
+                }
             }
-            self.refresh_ports();
+            InputTarget::Keyboard => {
+                if let InputEvent::Key { machine_key, down } = ev.event {
+                    self.key(machine_key, down);
+                }
+            }
+        }
+        self.refresh_ports();
+    }
+
+    /// A console switch, or a key of a keypad in a port.
+    fn key(&mut self, key: MachineKey, down: bool) {
+        let momentary = |s: &mut u8, bit: u8| {
+            if down {
+                *s &= !bit;
+            } else {
+                *s |= bit;
+            }
+        };
+        match key {
+            keys::RESET => momentary(&mut self.switches, 0x01),
+            keys::SELECT => momentary(&mut self.switches, 0x02),
+            keys::TV_TYPE if down => self.switches ^= SWCHB_COLOUR,
+            keys::LEFT_DIFFICULTY if down => self.switches ^= SWCHB_LEFT_A,
+            keys::RIGHT_DIFFICULTY if down => self.switches ^= SWCHB_RIGHT_A,
+            MachineKey(k) => {
+                let (port, base) = match k {
+                    16..=27 => (0, keys::LEFT_KEYPAD),
+                    32..=43 => (1, keys::RIGHT_KEYPAD),
+                    _ => return,
+                };
+                if let Some(dev) = &mut self.ports[port] {
+                    dev.input(&InputEvent::Key {
+                        machine_key: MachineKey(k - base),
+                        down,
+                    });
+                }
+            }
         }
     }
 
-    /// Joystick lines into RIOT port A (directions) and the TIA's I4/I5
-    /// (fire buttons).
+    /// Controller pins into RIOT port A and the TIA inputs, the program's
+    /// port A outputs (keypad rows) out to the controllers, the console
+    /// switches into port B.
     fn refresh_ports(&mut self) {
         let now = self.sched.now();
+        let riot = &self.board.riot;
+        let driven_low = riot.ddra & !riot.ora;
         let mut swcha = 0xffu8;
-        for (i, dev) in self.ports.iter().enumerate() {
-            let low = dev.as_ref().map_or(0, |d| d.read_lines(now).pulled_low);
-            // Up, down, left, right: bits 4–7 (left port), 0–3 (right).
-            swcha &= !(((low & 0x0f) as u8) << (4 - 4 * i));
-            self.board.tia.set_input(4 + i as u8, low & 0x20 == 0);
+        for i in 0..2 {
+            // Up, down, left, right: D4–D7 (left port), D0–D3 (right).
+            let shift = 4 - 4 * i;
+            let Some(dev) = &mut self.ports[i] else {
+                for n in [2 * i, 2 * i + 1] {
+                    self.board.tia.set_pot(n as u8, u16::MAX);
+                    self.board.tia.set_input(n as u8, true);
+                }
+                self.board.tia.set_input(4 + i as u8, true);
+                continue;
+            };
+            dev.write_lines(
+                PortLines {
+                    pulled_low: u32::from((driven_low >> shift) & 0x0f),
+                    analog: [u16::MAX; 2],
+                },
+                now,
+            );
+            let lines = dev.read_lines(now);
+            let low = lines.pulled_low;
+            swcha &= !(((low & 0x0f) as u8) << shift);
+            let tia = &mut self.board.tia;
+            tia.set_input(4 + i as u8, low & pin::FIRE == 0);
+            // Pin 5 → INPT0/2, pin 9 → INPT1/3.
+            let (pin5, pin9) = (2 * i as u8, 2 * i as u8 + 1);
+            tia.set_pot(pin5, lines.analog[1]);
+            tia.set_input(pin5, low & pin::BUTTON3 == 0);
+            tia.set_pot(pin9, lines.analog[0]);
+            tia.set_input(pin9, low & pin::BUTTON2 == 0);
         }
         self.board.riot.set_port_a_input(swcha);
+        self.board.riot.set_port_b_input(self.switches);
     }
 
     fn apply_frame_freezes(&mut self, dbg: &DebugHooks) {
@@ -579,6 +728,7 @@ impl Machine for Atari2600 {
         w.chunk(*b"A26M", 1, |w| {
             w.bool(self.field_done_pending);
             w.u8(self.board.data_bus);
+            w.u8(self.switches);
             self.audio.save(w);
         });
         self.cpu.save(&mut w);
@@ -617,6 +767,7 @@ impl Machine for Atari2600 {
         let (_, mut c) = r.chunk(*b"A26M", 1)?;
         let field_done_pending = c.bool()?;
         next.board.data_bus = c.u8()?;
+        let switches = c.u8()?;
         next.audio.load(&mut c)?;
         next.cpu.load(&mut r)?;
         next.board.tia.load(&mut r)?;
@@ -659,6 +810,7 @@ impl Machine for Atari2600 {
         self.audio = next.audio;
         self.samples.clear();
         self.field_done_pending = field_done_pending;
+        self.switches = switches;
         self.refresh_ports();
         Ok(())
     }

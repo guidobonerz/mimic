@@ -19,7 +19,7 @@ fn joystick_port(kind: PortKind) -> bool {
 pub fn device_names(kind: PortKind) -> Vec<&'static str> {
     match kind {
         PortKind::CbmControl => vec!["joystick", "paddles", "mouse1351"],
-        PortKind::AtariJoy => vec!["joystick", "paddles"],
+        PortKind::AtariJoy => vec!["joystick", "paddles", "keypad", "driving"],
         PortKind::CpcJoy => vec!["joystick", "amx"],
         k if joystick_port(k) => vec!["joystick"],
         _ => Vec::new(),
@@ -36,6 +36,11 @@ pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> 
         }
         "mouse1351" if kind == PortKind::CbmControl => {
             Some(Box::new(devices_input::Mouse1351::new()))
+        }
+        "keypad" if kind == PortKind::AtariJoy => Some(Box::new(devices_input::Keypad::new())),
+        // About 32 code steps (two turns) a second at the 2600's 1.19 MHz.
+        "driving" if kind == PortKind::AtariJoy => {
+            Some(Box::new(devices_input::Driving::new(37_000)))
         }
         // One step of motion per millisecond of the CPC's 4 MHz clock.
         "amx" if kind == PortKind::CpcJoy => Some(Box::new(devices_input::AmxMouse::new(4000))),

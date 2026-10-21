@@ -11,7 +11,9 @@
 //! Input: [`InputEvent::Analog`] sets a paddle's position (axis 0 = X,
 //! 1 = Y; 0 = turned fully one way, 65535 the other), [`InputEvent::Digital`]
 //! its buttons (bit 0 = X, bit 1 = Y), and a host mouse turns paddle X
-//! ([`InputEvent::MouseRel`]: horizontal motion, left/right button).
+//! ([`InputEvent::MouseRel`]: horizontal motion, left/right button), or
+//! paddle Y with [`Paddles::mouse_turns`] (the Atari 2600's paddle 0 is the
+//! one on pin 5).
 
 use emu_core::input::InputEvent;
 use emu_core::port::{PortDevice, PortKind, PortLines};
@@ -29,6 +31,8 @@ pub struct Paddles {
     /// Resistance of each pot, 0–65535 (the SID counts it as 0–255).
     pub position: [u16; 2],
     buttons: u8,
+    /// The paddle the host mouse turns (0 = X, 1 = Y).
+    mouse_paddle: u8,
 }
 
 impl Default for Paddles {
@@ -50,7 +54,15 @@ impl Paddles {
             kind,
             position: [0x8000; 2],
             buttons: 0,
+            mouse_paddle: 0,
         }
+    }
+
+    /// The host mouse turns paddle `paddle` (0 = X, 1 = Y); its left button
+    /// is that paddle's button, the right one the other's.
+    pub fn mouse_turns(mut self, paddle: u8) -> Self {
+        self.mouse_paddle = paddle & 1;
+        self
     }
 }
 
@@ -82,9 +94,14 @@ impl PortDevice for Paddles {
             }
             InputEvent::Digital { buttons, .. } => self.buttons = buttons & 3,
             InputEvent::MouseRel { dx, buttons, .. } => {
-                let p = i32::from(self.position[0]) + i32::from(dx) * MOUSE_STEP;
-                self.position[0] = p.clamp(0, 0xffff) as u16;
-                self.buttons = buttons & 3;
+                let i = usize::from(self.mouse_paddle);
+                let p = i32::from(self.position[i]) + i32::from(dx) * MOUSE_STEP;
+                self.position[i] = p.clamp(0, 0xffff) as u16;
+                self.buttons = if i == 0 {
+                    buttons & 3
+                } else {
+                    (buttons & 1) << 1 | (buttons >> 1 & 1)
+                };
             }
             _ => {}
         }

@@ -54,22 +54,49 @@ pub fn palette(standard: VideoStandard) -> [Rgb8; 256] {
     let mut out = [Rgb8::default(); 256];
     for (i, c) in out.iter_mut().enumerate() {
         let (y, u, v) = yuv(standard, i as u8);
-        let to8 = |x: f64| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
-        *c = Rgb8 {
-            r: to8(y + 1.140 * v),
-            g: to8(y - 0.395 * u - 0.581 * v),
-            b: to8(y + 2.032 * u),
-        };
+        *c = rgb(y, u, v);
     }
     out
 }
 
 /// TIA palette (Atari 2600): 16 hues × 8 luminances, indexed by the
-/// colour register value ÷ 2. The TIA generates colour like GTIA with
-/// three luminance bits (provisional for PAL, whose hue layout differs).
+/// colour register value ÷ 2.
+///
+/// - NTSC: the TIA makes colour like GTIA (hue 1 at the burst, 25.7° per
+///   hue), with three luminance bits.
+/// - PAL (this project's approximation of the commonly described layout):
+///   hues 0, 1, 14 and 15 are grey; the even hues 2–12 run from gold
+///   through orange, red and magenta to violet, 30° apart, and each odd
+///   hue is the even hue before it mirrored on the U axis (yellow-green,
+///   green, teal, cyan, light blue, blue), which gives 104 distinct
+///   colours.
 pub fn tia(standard: VideoStandard) -> [Rgb8; 128] {
-    let full = palette(standard);
-    std::array::from_fn(|i| full[((i >> 3) << 4) | ((i & 7) << 1)])
+    std::array::from_fn(|i| {
+        let (hue, lum) = (i >> 3, i & 7);
+        let y = LUMA_MIN + (LUMA_MAX - LUMA_MIN) * lum as f64 / 7.0;
+        let angle = match standard {
+            VideoStandard::Ntsc if hue > 0 => Some(180.0 - 360.0 / 14.0 * (hue - 1) as f64),
+            VideoStandard::Pal if (2..=13).contains(&hue) => {
+                let a = 168.0 - 30.0 * ((hue - 2) / 2) as f64;
+                Some(if hue % 2 == 0 { a } else { -a })
+            }
+            _ => None,
+        };
+        let (u, v) = angle.map_or((0.0, 0.0), |a: f64| {
+            let r = a.to_radians();
+            (SATURATION * r.cos(), SATURATION * r.sin())
+        });
+        rgb(y, u, v)
+    })
+}
+
+fn rgb(y: f64, u: f64, v: f64) -> Rgb8 {
+    let to8 = |x: f64| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Rgb8 {
+        r: to8(y + 1.140 * v),
+        g: to8(y - 0.395 * u - 0.581 * v),
+        b: to8(y + 2.032 * u),
+    }
 }
 
 #[cfg(test)]
@@ -123,5 +150,26 @@ mod tests {
             let (y0, _, _) = yuv(VideoStandard::Pal, 0x08);
             assert!((y - y0).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn tia_palettes() {
+        let ntsc = tia(VideoStandard::Ntsc);
+        assert_eq!(ntsc[0], Rgb8 { r: 0, g: 0, b: 0 });
+        assert_eq!(ntsc[7].r, ntsc[7].b, "hue 0 is grey");
+        // Hue 1 is gold: red and green over blue.
+        let gold = ntsc[0x0c];
+        assert!(gold.r > gold.b && gold.g > gold.b);
+        let pal = tia(VideoStandard::Pal);
+        for hue in [0, 1, 14, 15] {
+            let c = pal[hue * 8 + 4];
+            assert_eq!((c.r, c.g), (c.b, c.b), "PAL hue {hue} is grey");
+        }
+        let distinct: std::collections::BTreeSet<_> = pal.iter().map(|c| (c.r, c.g, c.b)).collect();
+        // 12 colour hues × 8 + 8 greys = 104; clamping at black merges a few.
+        assert!(distinct.len() > 96, "{}", distinct.len());
+        // Hue 2 is warm (red over blue), hue 3 its green mirror.
+        let (h2, h3) = (pal[2 * 8 + 4], pal[3 * 8 + 4]);
+        assert!(h2.r > h2.b && h3.g > h3.r);
     }
 }

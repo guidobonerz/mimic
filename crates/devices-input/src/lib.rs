@@ -3,12 +3,16 @@
 #![forbid(unsafe_code)]
 
 pub mod amx_mouse;
+pub mod driving;
 pub mod joystick;
+pub mod keypad;
 pub mod mouse1351;
 pub mod paddles;
 
 pub use amx_mouse::AmxMouse;
+pub use driving::Driving;
 pub use joystick::Joystick;
+pub use keypad::Keypad;
 pub use mouse1351::Mouse1351;
 pub use paddles::Paddles;
 

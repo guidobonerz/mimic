@@ -103,12 +103,16 @@ Atari 800XL keys by position: < > on - =, - = on [ ], + * on ' \\, Tab, Esc,
 CapsLock, right Alt = Atari key, arrows = CONTROL + - = + *; F2 START,
 F3 SELECT, F4 OPTION, F5 RESET, F6 HELP, F7/Pause BREAK.
 
+Atari 2600 console: F1 SELECT, F2 RESET, F3 colour/black-and-white,
+F4/F5 left/right difficulty A/B. Keypads (--option port1=keypad, port2):
+left 1 2 3 / Q W E / A S D / Z X C, right 8 9 0 / I O P / K L ; / , . /.
+
 F12 switches between a machine's screens (C128: 40-column VIC and
 80-column VDC; the window starts on the one the 40/80 key selects).
 Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
 Ctrl+Space shows or hides the status footer: mouse pointer position in
 frame pixels, joystick directions and drive activity/errors.
-With --option port1=mouse1351 (or paddles, also port2) a click into the
+With --option port1=mouse1351 (or paddles, driving, also port2) a click into the
 window captures the mouse for the machine; the middle button releases it.
 
 EMU_DESKTOP_DEBUG=1 prints frame and audio statistics every 5 s.";
@@ -687,7 +691,7 @@ fn run() -> Result<(), String> {
     for (option, port) in [("port1", 0u8), ("port2", 1), ("joy1", 0)] {
         if matches!(
             args.config.options.get(option).map(String::as_str),
-            Some("mouse1351" | "paddles" | "amx")
+            Some("mouse1351" | "paddles" | "amx" | "driving")
         ) {
             input_profile
                 .mouse
