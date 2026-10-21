@@ -398,3 +398,19 @@ fn raw_stream_sends_indices_changed_lines_and_audio() {
     s.preview.shutdown();
     s.debug.shutdown();
 }
+
+#[test]
+fn raw_stream_carries_the_pixel_aspect_ratio() {
+    use emu_preview::raw::RawEncoder;
+    use emu_preview::OwnedFrame;
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    for (machine, want) in [("vic20", 1.66), ("c64", 0.936), ("atari2600", 1.714)] {
+        let m = emu_machines::registry().create(machine, &config).unwrap();
+        let msg = RawEncoder::new()
+            .encode(&OwnedFrame::from_machine(m.as_ref(), true))
+            .unwrap();
+        let par = f64::from(u32::from_le_bytes(msg[28..32].try_into().unwrap())) / 65536.0;
+        assert!((par - want).abs() < 0.01, "{machine}: {par}");
+    }
+}

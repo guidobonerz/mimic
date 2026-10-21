@@ -60,8 +60,15 @@ function connect() {
   socket.onclose = () => { status.textContent = "disconnected – retrying"; setTimeout(connect, 1000); };
 }
 
+// Raw pictures are shown at the machine's pixel aspect ratio (from the
+// stream header); CRT pictures come from the server already corrected.
+let aspect = 1;
 function fit() {
-  canvas.style.width = filter.value === "raw" ? `${canvas.width * scale.value}px` : "";
+  const raw = filter.value === "raw";
+  const w = Math.round(canvas.width * scale.value * aspect), h = canvas.height * scale.value;
+  canvas.style.width = raw ? `${w}px` : "";
+  // The height follows the ratio, also when max-width shrinks the canvas.
+  canvas.style.aspectRatio = raw ? `${w} / ${h}` : "";
 }
 
 // Raw picture: indices (or RGB) as the server sent them, the palette as
@@ -75,6 +82,8 @@ function onRaw(buffer) {
   const flags = v.getUint8(5), bpp = v.getUint8(6);
   const frame = Number(v.getBigUint64(8, true)), line = v.getUint16(16, true), cycle = v.getUint16(18, true);
   const [w, h, entries, runs] = [20, 22, 24, 26].map((o) => v.getUint16(o, true));
+  const par = v.getUint32(28, true) / 65536 || 1;
+  if (par !== aspect) { aspect = par; fit(); }
   if (flags & 1 || !pic) {
     const img = ctx.createImageData(w, h);
     pic = { w, h, bpp, idx: new Uint8Array(w * h), pal: new Uint32Array(256), img, px: new Uint32Array(img.data.buffer), top: h, bottom: 0 };

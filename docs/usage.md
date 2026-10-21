@@ -288,7 +288,9 @@ Parameter (Query-String): `filter=raw|crt`, `profile=<name>`,
 Der **Rohstrom** `/stream` (nach dem Vorbild des Video-Streams des
 Ultimate 64) kodiert keine Bilder: Er schickt die Farbindizes der Maschine
 (4 Bit pro Pixel bis 16 Farben, sonst 8 Bit, beim RGB-Bild 24 Bit) und nach
-dem ersten Bild nur die Zeilen, die sich geändert haben. Der Server braucht
+dem ersten Bild nur die Zeilen, die sich geändert haben, dazu das
+Seitenverhältnis eines Pixels (VIC-20 ≈ 1,66, C64 ≈ 0,94), mit dem der Viewer
+das Bild so breit zeigt wie ein Fernseher. Der Server braucht
 dafür etwa ein Achtel der Zeit des PNG-Stroms; 50 fps sind lokal und im LAN
 kein Problem. Parameter: `screen=`, `fps=1..50` (Standard 50), `audio=0|1`
 (Ton als 16-Bit-PCM, 48 kHz). Das Nachrichtenformat steht in

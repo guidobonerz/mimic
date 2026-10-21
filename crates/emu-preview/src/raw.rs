@@ -24,7 +24,7 @@
 //! | 22     | 2    | height                                                       |
 //! | 24     | 2    | palette entries that follow (0 if bit 2 is clear)            |
 //! | 26     | 2    | number of line runs that follow                              |
-//! | 28     | 4    | reserved (0)                                                 |
+//! | 28     | 4    | pixel aspect ratio (width ÷ height of one pixel on a TV), 16.16 fixed point; 0 = unknown (square) |
 //!
 //! Then the palette (3 bytes R, G, B per entry), then each run: first line
 //! (u16), line count (u16) and the packed lines. A line is `(width + 1) / 2`
@@ -32,6 +32,10 @@
 //! `3 * width` at 24 bpp. A key frame resets the picture (all lines and, for
 //! indices, the palette follow); indices without a palette entry are black.
 //! A message without runs and palette only updates beam and paused state.
+//! The pixel aspect ratio comes from the machine's signal timing
+//! ([`video_crt::cpu::pixel_aspect`]): a viewer shows the picture
+//! `width × aspect` wide for `height` lines (VIC-20 PAL ≈ 1.66, C64 PAL
+//! ≈ 0.94).
 //!
 //! Audio message, [`AUDIO_HEADER_LEN`] bytes of header: magic `PTRA`,
 //! version, channels (u8), reserved (u16), sample rate (u32), sample count
@@ -178,7 +182,8 @@ impl RawEncoder {
         for v in [cur.width as usize, cur.height as usize, entries, runs.len()] {
             m.extend_from_slice(&(v.min(0xffff) as u16).to_le_bytes());
         }
-        m.extend_from_slice(&[0; 4]);
+        let aspect = video_crt::cpu::pixel_aspect(&frame.as_frame_ref());
+        m.extend_from_slice(&((aspect * 65536.0).round() as u32).to_le_bytes());
         for c in &cur.palette[..entries] {
             m.extend_from_slice(&[c.r, c.g, c.b]);
         }
@@ -262,6 +267,9 @@ mod tests {
         assert_eq!(u64::from_le_bytes(m[8..16].try_into().unwrap()), 9);
         assert_eq!((u16_at(&m, 20), u16_at(&m, 22)), (3, 2));
         assert_eq!((u16_at(&m, 24), u16_at(&m, 26)), (16, 1));
+        // Test signal: 1 Hz pixel clock (no meaningful aspect); real machines
+        // in the integration test.
+        assert!(u32::from_le_bytes(m[28..32].try_into().unwrap()) > 0);
         let runs = VIDEO_HEADER_LEN + 16 * 3;
         assert_eq!((u16_at(&m, runs), u16_at(&m, runs + 2)), (0, 2));
         assert_eq!(&m[runs + 4..], &[0x21, 0x03, 0x54, 0x06]);

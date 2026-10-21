@@ -63,9 +63,10 @@ jobs:
           dir="mimic-$VERSION-${{ matrix.name }}"
           echo "DIR=$dir" >> "$GITHUB_ENV"
           mkdir "$dir"
-          for bin in mimic-desktop mimic-headless; do
-            cp "target/${{ matrix.target }}/release/$bin${{ matrix.exe }}" "$dir/"
-          done
+          # The desktop frontend ships as plain "mimic".
+          release="target/${{ matrix.target }}/release"
+          cp "$release/mimic-desktop${{ matrix.exe }}" "$dir/mimic${{ matrix.exe }}"
+          cp "$release/mimic-headless${{ matrix.exe }}" "$dir/"
           cp README.md "$dir/"
       # Linux and Windows only: UPX leaves macOS binaries unsupported (macOS
       # packing is off by default in UPX and breaks code signing).
@@ -75,7 +76,7 @@ jobs:
         with:
           version: latest
           files: |
-            ${{ env.DIR }}/mimic-desktop${{ matrix.exe }}
+            ${{ env.DIR }}/mimic${{ matrix.exe }}
             ${{ env.DIR }}/mimic-headless${{ matrix.exe }}
           args: --best --lzma
       - name: Package
