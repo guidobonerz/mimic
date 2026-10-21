@@ -183,7 +183,25 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         DOS1571,
         DOS1581,
     ];
+    // Atari 800XL: XL/XE OS (Rev. 2 is CO61598B) and BASIC Rev. C
+    // (CO24947A). Common names: atarixl.rom, atari-xl-os-rev2.rom,
+    // ataribas.rom, basic-revc.rom.
+    const ATARI800XL: &[RomSpec] = &[
+        rom(
+            "os",
+            &[
+                "co61598", "atarixl", "atari-xl", "xl-os", "xlos", "os-xl", "os",
+            ],
+            0x4000,
+        ),
+        optional(
+            "basic",
+            &["co24947", "ataribas", "atari-basic", "basic-revc", "basic"],
+            0x2000,
+        ),
+    ];
     match machine {
+        "atari800xl" => ATARI800XL,
         "c64" => C64,
         "c128" => C128,
         "vic20" => VIC20,
@@ -203,6 +221,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "c128" => &["c128"],
         "plus4" => &["plus4"],
         "c16" => &["c16", "plus4"],
+        "atari800xl" => &["atari800xl", "atari8", "atari"],
         _ => &[],
     }
 }
@@ -313,6 +332,23 @@ mod tests {
         fs::remove_file(dir.join("basic.bin")).unwrap();
         let err = load(&dir, "c64").unwrap_err();
         assert!(err.to_string().contains("basic"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn atari_xl_roms_by_common_names() {
+        let dir = temp_dir("atari");
+        fs::create_dir_all(dir.join("atari")).unwrap();
+        fs::write(dir.join("atari/ATARIXL.ROM"), vec![1; 0x4000]).unwrap();
+        // The 400/800 OS-B has another size and must not match.
+        fs::write(dir.join("atari/ATARIOSB.ROM"), vec![2; 0x2800]).unwrap();
+        fs::write(dir.join("atari/ATARIBAS.ROM"), vec![3; 0x2000]).unwrap();
+        let roms = load(&dir, "atari800xl").unwrap();
+        assert_eq!(roms["os"][0], 1);
+        assert_eq!(roms["basic"][0], 3);
+        fs::remove_file(dir.join("atari/ATARIBAS.ROM")).unwrap();
+        let roms = load(&dir, "atari800xl").unwrap();
+        assert!(!roms.contains_key("basic"), "BASIC is optional");
         fs::remove_dir_all(&dir).unwrap();
     }
 

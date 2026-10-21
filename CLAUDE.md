@@ -380,7 +380,7 @@ cargo run --release -p emu-desktop -- --machine c64 --cart game.crt   # cartridg
 
 ## Roadmap and current phase
 
-Work in phase order; each phase ends at a verifiable gate. **Current phase: 4.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64. Phase 3 done 2026-10-20: VS64 debugs the C64 through the VICE binary monitor adapter.)
+Work in phase order; each phase ends at a verifiable gate. **Current phase: 5.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64. Phase 3 done 2026-10-20: VS64 debugs the C64 through the VICE binary monitor adapter. Phase 4 done 2026-10-21: VIC-20, PET, C16/Plus/4 and C128 boot to BASIC with real ROMs; the items under "Deferred from Phase 4" are held back.)
 
 | # | Phase | Est. | Gate |
 | --- | --- | --- | --- |
@@ -407,7 +407,7 @@ Memory freezer by phase:
 
 - **Phase 1:** freeze bitmaps share the watchpoint mechanism in `DebugHooks`; `Freeze` in savestate format.
 - **Phase 3:** freeze + cheat-search commands in the debug server, frozen-address highlighting.
-- **Phase 4:** C64/C128 freezer cartridges (Action Replay, Retro Replay, Final Cartridge III), cheat-file import.
+- **Phase 4 (deferred, see "Deferred from Phase 4"):** C64/C128 freezer cartridges (Action Replay, Retro Replay, Final Cartridge III), cheat-file import.
 - **Phase 7:** Amiga Action Replay, word/long freezes in chip/fast RAM.
 - **Phase 8:** cheat UI in desktop/web frontends, per-game cheat database.
 
@@ -420,6 +420,20 @@ CRT work by phase:
 - **Phase 5/6:** Atari NTSC artifact colors (gate includes an artifacting test image); CPC CTM644 and GT65 profiles.
 - **Phase 7:** Amiga RGB, interlace field stage (weave/bob/persistence), 1084S RGB profile.
 - **Phase 8:** full CRT stage (mask types, bloom, curvature, phosphor decay), profile editor, "lite" preset for WASM.
+
+### Deferred from Phase 4
+
+Held back on 2026-10-21 so Phase 5 can start; pick them up in a later phase. They are not part of the Phase 4 gate.
+
+- **Freezer cartridges (C64/C128):** Action Replay, Retro Replay, Final Cartridge III (later Super Snapshot) as `devices-cartridge` types with a freeze button (NMI + bank switch), triggerable from desktop UI, hotkey and the debug command `press_cartridge_button`; tests for freeze/restart round trips.
+- **Cheat-file import:** POKE lists and VICE monitor commands into `cheats/<machine>/<game-hash>.toml`.
+- **True-emulated 2031** (IEEE-488 drive with its own CPU, `dos2031` ROM); the PET has the virtual IEEE drive only.
+- **Input replay files** in `tests/replays/` for end-to-end game tests (need game images, user-supplied).
+- **Preview:** marking the current raster line in partial frames.
+- **VICE adapter:** D64 autostart through the VICE monitor protocol.
+- **Signal stage on the GPU:** composite/S-Video decoding runs on the CPU (`video_crt::signal`) in every frontend; a WGSL version is optional.
+- **CI:** move `actions/checkout`/`actions/cache` from v4 (Node 20) to v5.
+- **Known issues:** `tests/tests/preview.rs::stream_sends_key_frame_then_deltas_and_the_paused_state` fails in `--release` builds (passes in debug); in the `polydbg` shell, the `stopped` event from `pause` is printed again after the next command.
 
 When finishing a phase, update "Current phase" above.
 

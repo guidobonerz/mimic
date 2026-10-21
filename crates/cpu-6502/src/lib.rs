@@ -75,6 +75,11 @@ pub struct Cpu6502 {
     core: Core,
     variant: Variant,
     rdy: bool,
+    /// SALLY HALT input (true = halted). Driven by ANTIC every cycle, so
+    /// it is not part of the savestate.
+    halt: bool,
+    /// `rdy && !halt`: the fast path of `tick` tests one flag.
+    free: bool,
 }
 
 impl Cpu6502 {
@@ -85,6 +90,8 @@ impl Cpu6502 {
             core: Core::new(config.ane_magic, config.lxa_magic),
             variant: config.variant,
             rdy: true,
+            halt: false,
+            free: true,
         }
     }
 
@@ -120,6 +127,17 @@ impl Cpu6502 {
     /// write cycles proceed (VIC-II bad lines rely on this).
     pub fn set_rdy(&mut self, ready: bool) {
         self.rdy = ready;
+        self.free = self.rdy && !self.halt;
+    }
+
+    /// HALT input of the 6502C "SALLY" (true = halted). Unlike RDY it stops
+    /// the CPU on any cycle, writes included: ANTIC asserts it for each DMA
+    /// cycle it takes, and the CPU simply does not run in that cycle
+    /// (Altirra Hardware Reference Manual, "6502C"). Other variants have no
+    /// HALT pin and ignore it.
+    pub fn set_halt(&mut self, halted: bool) {
+        self.halt = halted && self.variant == Variant::Sally;
+        self.free = self.rdy && !self.halt;
     }
 
     /// SO input: a falling edge sets the V flag (used by the 1541).
@@ -186,8 +204,11 @@ impl Bus for WriteProbe<'_> {
 
 impl Cpu for Cpu6502 {
     fn tick(&mut self, bus: &mut dyn Bus) -> CycleResult {
-        if self.rdy {
+        if self.free {
             return self.core.cycle(bus);
+        }
+        if self.halt {
+            return CycleResult::Busy;
         }
         // RDY low: the CPU repeats a read cycle, so roll the state back
         // unless the cycle was a write.
@@ -311,6 +332,7 @@ impl Savestate for Cpu6502 {
         c.no_poll = false;
         self.core = c;
         self.rdy = rdy;
+        self.free = self.rdy && !self.halt;
         Ok(())
     }
 }
@@ -561,6 +583,38 @@ mod tests {
         fn addr_bits(&self) -> u8 {
             16
         }
+    }
+
+    #[test]
+    fn sally_halt_stops_writes_too() {
+        let (_, mut bus) = cpu_at(0x0400, &[0x8d, 0x00, 0x20]); // STA $2000
+        let mut cpu = Cpu6502::new(Config {
+            variant: Variant::Sally,
+            ..Config::default()
+        });
+        cpu.set_reg("PC", 0x0400);
+        cpu.set_reg("A", 0x42);
+        for _ in 0..3 {
+            cpu.tick(&mut bus);
+        }
+        // The write cycle is next: HALT freezes it.
+        cpu.set_halt(true);
+        for _ in 0..5 {
+            assert_eq!(cpu.tick(&mut bus), CycleResult::Busy);
+        }
+        assert_eq!(bus.mem[0x2000], 0);
+        cpu.set_halt(false);
+        cpu.tick(&mut bus);
+        assert_eq!(bus.mem[0x2000], 0x42);
+        assert!(cpu.at_instruction_boundary());
+
+        // Other variants have no HALT pin.
+        let (mut nmos, mut bus) = cpu_at(0x0400, &[0xea]);
+        nmos.set_halt(true);
+        nmos.tick(&mut bus);
+        nmos.tick(&mut bus);
+        assert!(nmos.at_instruction_boundary());
+        assert_eq!(nmos.pc(), 0x0401);
     }
 
     #[test]
