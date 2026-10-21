@@ -1,4 +1,4 @@
-//! 6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY) via variant flags.
+//! 6502 family: 6502, 6507, 6510, 8502, 7501/8501, 6502C (SALLY) via variant flags.
 //!
 //! The core is cycle-stepped: every [`Cpu::tick`] performs exactly one bus
 //! access, including dummy reads and writes. Only NMOS 6502 behaviour is
@@ -32,6 +32,11 @@ pub enum Variant {
     Mos7501,
     /// 6502C "SALLY" with HALT input (Atari 8-bit).
     Sally,
+    /// 6507 (Atari 2600): the NMOS core in a 28-pin package with 13
+    /// address lines and no IRQ/NMI pins. The machine's bus ignores
+    /// A13–A15 and never raises an interrupt (MOS MCS6500 data sheet,
+    /// "MCS6507").
+    Mos6507,
 }
 
 impl Variant {
@@ -41,7 +46,7 @@ impl Variant {
             Variant::Mos6510 => Some(0x3f),
             Variant::Mos8502 => Some(0x7f),
             Variant::Mos7501 => Some(0xdf),
-            Variant::Nmos6502 | Variant::Sally => None,
+            Variant::Nmos6502 | Variant::Sally | Variant::Mos6507 => None,
         }
     }
 }

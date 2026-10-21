@@ -1,0 +1,16 @@
+[package]
+name = "machine-atari2600"
+description = "Atari 2600 (VCS): 6507, TIA, RIOT 6532, cartridge bank switching"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-6502.workspace = true
+chips-atari.workspace = true
+devices-input.workspace = true
+devices-cartridge.workspace = true

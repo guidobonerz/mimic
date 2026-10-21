@@ -118,7 +118,7 @@ impl Profile {
         // games' joysticks.
         let port = match machine {
             "c64" | "c128" => Some(1),
-            "vic20" | "c16" | "plus4" | "atari800xl" | "cpc" => Some(0),
+            "vic20" | "c16" | "plus4" | "atari800xl" | "atari2600" | "cpc" => Some(0),
             _ => None,
         };
         // The CPC's numeric keypad is its function keys: gamepad only.

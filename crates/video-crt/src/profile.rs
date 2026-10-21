@@ -187,7 +187,7 @@ impl Profile {
         let name = match machine {
             "c64" | "c128" | "vic20" | "c16" | "plus4" => "1702",
             "pet" => "pet-green",
-            "atari800xl" => "tv",
+            "atari800xl" | "atari2600" => "tv",
             "cpc" => "ctm644",
             _ => "raw",
         };

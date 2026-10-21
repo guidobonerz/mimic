@@ -1,6 +1,6 @@
 [package]
 name = "chips-atari"
-description = "Atari 8-bit chips: ANTIC, GTIA, POKEY, PIA"
+description = "Atari chips: ANTIC, GTIA, POKEY (8-bit); TIA, RIOT 6532 (2600)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

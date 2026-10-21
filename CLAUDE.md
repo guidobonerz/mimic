@@ -114,6 +114,7 @@ Multi-CPU machines (C64 + 1541, C128 8502 + Z80, Amiga Copper/Blitter) expose ea
 | PET | 1 MHz | Models with/without CRTC (2001 vs 4032/8032) |
 | C128 | 8502 1/2 MHz, Z80 | MMU switches CPUs; VDC with its own RAM and 2nd screen |
 | Amiga 500 | 7.09379 MHz | Agnus DMA slot arbitration per line; Copper/Blitter; CPU only gets free chip-RAM slots; ADF converted to MFM tracks |
+| Atari 2600 | colour clock 3.546894 MHz, CPU ÷3 (NTSC 3.579545) | No frame buffer: the CPU races the beam; WSYNC halts it via RDY; fields follow VSYNC; bank switching by cartridge hotspots |
 | Atari 800XL | CPU 1.773447 MHz | ANTIC DMA steals cycles; display lists; DLIs |
 | CPC 464/664/6128 | Z80 4 MHz | Wait states align memory access to 1 µs; CRTC register tricks; 464 tape only, 664/6128 FDC, 6128 128 KB banking |
 
@@ -371,6 +372,7 @@ cargo run -p emu-headless -- --machine plus4 --rom-dir roms --frames 200 --snaps
 cargo run -p emu-headless -- --machine c128 --option display=80 --rom-dir roms --frames 600 --screen vdc --snapshot c128.png   # --screen vic|vdc
 cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --frames 350 --snapshot atari.png   # ROMs in roms/atari/; --model ntsc, --option basic=off (self-test)
 cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --disk game.atr --frames 600 --snapshot a.png   # also --prg game.xex, --tape game.cas, --cart game.car; --option drives=0..4, drive=810|1050|xf551
+cargo run -p emu-headless -- --machine atari2600 --cart game.a26 --frames 120 --snapshot vcs.png   # no system ROM; --model pal; --option roms=stub (built-in test cartridge)
 cargo run -p emu-headless -- --machine cpc --rom-dir roms --frames 150 --snapshot cpc.png   # ROMs in roms/cpc/; --model 6128|664|464, --option crtc=0|1|2, dos=amsdos|parados|none
 cargo run --release -p emu-desktop -- --machine cpc --option joy1=amx   # AMX mouse (click to capture); joy2=joystick daisy-chains a second stick; --crt gt65 green monitor
 cargo run --release -p emu-desktop -- --machine cpc --disk game.dsk   # CPC 664/6128: DSK/EDSK in drive A (RUN"DISC or CAT)
@@ -400,7 +402,7 @@ cargo run --release -p emu-desktop -- --machine c64 --cart game.crt   # cartridg
 
 ## Roadmap and current phase
 
-Work in phase order; each phase ends at a verifiable gate. **Current phase: 7.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64. Phase 3 done 2026-10-20: VS64 debugs the C64 through the VICE binary monitor adapter. Phase 4 done 2026-10-21: VIC-20, PET, C16/Plus/4 and C128 boot to BASIC with real ROMs; the items under "Deferred from Phase 4" are held back. Phase 5 done 2026-10-21: Acid800 52/57 on PAL and NTSC; still failing `antic_virtdma`, `gtia_phantomdma` (need the CPU's bus value in ANTIC/GTIA), `antic_hscrolbug`, `antic_hiresbug`, `gtia_psuedomodee`. Phase 6 done 2026-10-21: CPC 464/664/6128 boot, tape and disc work with real ROMs; Arnold acid tests 66/70 (94.3 %, CRTC type 1) in the 8 programs that report results; still failing PPI mode 1 port C output latching (two tests the author's type 0/1 CPCs fail too), "port b read (vsync on)" (depends on where in the frame it starts) and "ppi i/o decode (f5xx)" (port B /EXP level unverified); `crtctest` and `disc/fdc` (needs its own test disc) do not finish.)
+Work in phase order; each phase ends at a verifiable gate. **Current phase: 6b** (Atari 2600, pulled ahead of the Amiga on 2026-10-21; Phase 7 follows). (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64. Phase 3 done 2026-10-20: VS64 debugs the C64 through the VICE binary monitor adapter. Phase 4 done 2026-10-21: VIC-20, PET, C16/Plus/4 and C128 boot to BASIC with real ROMs; the items under "Deferred from Phase 4" are held back. Phase 5 done 2026-10-21: Acid800 52/57 on PAL and NTSC; still failing `antic_virtdma`, `gtia_phantomdma` (need the CPU's bus value in ANTIC/GTIA), `antic_hscrolbug`, `antic_hiresbug`, `gtia_psuedomodee`. Phase 6 done 2026-10-21: CPC 464/664/6128 boot, tape and disc work with real ROMs; Arnold acid tests 66/70 (94.3 %, CRTC type 1) in the 8 programs that report results; still failing PPI mode 1 port C output latching (two tests the author's type 0/1 CPCs fail too), "port b read (vsync on)" (depends on where in the frame it starts) and "ppi i/o decode (f5xx)" (port B /EXP level unverified); `crtctest` and `disc/fdc` (needs its own test disc) do not finish.)
 
 | # | Phase | Est. | Gate |
 | --- | --- | --- | --- |
@@ -410,6 +412,7 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 7.**
 | 4 | Commodore family: VIC-20, PET, C16/Plus/4 (TED), C128 (8502+Z80, VDC, MMU), 1571/1581, IEC bus | 12 wk | All boot to BASIC |
 | 5 | Atari 800XL: ANTIC, GTIA, POKEY, PIA, ATR/XEX/CAS — debugger unchanged | 8 wk | Acid800 mostly green |
 | 6 | CPC 464, 664, 6128 (models of one machine): reuse Z80, CRTC, Gate Array, AY, FDC, DSK/CDT | 6 wk | BASIC + disk work |
+| 6b | Atari 2600 (NTSC, PAL): 6507, TIA (video, sound, inputs), RIOT 6532, cartridge bank switching (2K/4K, F8/F6/F4 + Superchip, FE, E0, E7, 3F, FA), joystick, paddles, keypad, driving controller, console switches | 6 wk | own TIA/RIOT test programs green; user-supplied games run correctly |
 | 7 | Amiga 500 (OCS): 68000, Agnus DMA slots, Copper, Blitter, Denise, Paula, ADF via MFM, Copper debugger | 20 wk | Workbench 1.3 boots |
 | 8 | Expansion: GDB stub with live-picture extension, graphics data views (sprites/chars/bitmaps), DAP, overlays, rewind, partial frames, A1200 (AGA), web frontend | 10 wk | Release 1.0 |
 
@@ -446,7 +449,7 @@ CRT work by phase:
 Added 2026-10-21; not part of a phase gate yet, scheduled when a phase has room:
 
 - **Atari 8-bit models** (configuration of `machine-atari8`, Phase 5 ships the 800XL only): **400** (and 800: OS-A/B, four joystick ports, no PORTB banking, RESET as NMI), **65XE** (800XL hardware in XE case), **130XE** (128 KB, PORTB banking with separate CPU/ANTIC access).
-- **Atari 2600 (VCS)**: own crate `machine-atari2600` with 6507 (cpu-6502 variant), TIA (beam-racing video, no frame buffer DMA) and RIOT 6532 in new `chips-*` code; cartridge bank-switching schemes. The debugger/preview contract applies unchanged.
+- **Atari 2600 (VCS)**: now Phase 6b (see the phase table): `machine-atari2600` with the 6507 (cpu-6502 variant), TIA and RIOT 6532 in `chips-atari`, bank-switching schemes in `devices-cartridge::atari2600`. Later: DPC (Pitfall II), Starpath Supercharger, SECAM.
 - **CPC 464 and 664** alongside the 6128 in Phase 6 (see the phase table).
 - **Amstrad CPC Plus** (464+/6128+/GX4000): ASIC (hardware sprites, DMA sound, split screen, 4096-colour palette, soft scroll), CRTC types 3/4, CPR cartridges; as models of `machine-cpc` after Phase 6.
 - **Mattel Intellivision**: new CPU core `cpu-cp1610` (GI CP1610, 16-bit), STIC video (MOBs, GRAM/GROM), PSG AY-3-8914; Executive ROM and GROM user-supplied.

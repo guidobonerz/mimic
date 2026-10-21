@@ -35,6 +35,7 @@ machine-ted = { path = "crates/machine-ted" }
 machine-c128 = { path = "crates/machine-c128" }
 machine-amiga = { path = "crates/machine-amiga" }
 machine-atari8 = { path = "crates/machine-atari8" }
+machine-atari2600 = { path = "crates/machine-atari2600" }
 machine-cpc = { path = "crates/machine-cpc" }
 machine-sim6502 = { path = "crates/machine-sim6502" }
 emu-machines = { path = "crates/emu-machines" }

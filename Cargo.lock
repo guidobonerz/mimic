@@ -800,6 +800,7 @@ dependencies = [
  "devices-input",
  "emu-core",
  "machine-amiga",
+ "machine-atari2600",
  "machine-atari8",
  "machine-c128",
  "machine-c64",
@@ -1458,6 +1459,17 @@ dependencies = [
  "drives-other",
  "emu-core",
  "media",
+]
+
+[[package]]
+name = "machine-atari2600"
+version = "0.1.0"
+dependencies = [
+ "chips-atari",
+ "cpu-6502",
+ "devices-cartridge",
+ "devices-input",
+ "emu-core",
 ]
 
 [[package]]

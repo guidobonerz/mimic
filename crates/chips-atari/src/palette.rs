@@ -64,6 +64,14 @@ pub fn palette(standard: VideoStandard) -> [Rgb8; 256] {
     out
 }
 
+/// TIA palette (Atari 2600): 16 hues × 8 luminances, indexed by the
+/// colour register value ÷ 2. The TIA generates colour like GTIA with
+/// three luminance bits (provisional for PAL, whose hue layout differs).
+pub fn tia(standard: VideoStandard) -> [Rgb8; 128] {
+    let full = palette(standard);
+    std::array::from_fn(|i| full[((i >> 3) << 4) | ((i & 7) << 1)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
