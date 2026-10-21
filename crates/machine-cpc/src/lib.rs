@@ -1,3 +1,881 @@
-//! Amstrad CPC 6128.
+//! Amstrad CPC 464, 664 and 6128.
+//!
+//! Z80 at 4 MHz, Gate Array (video, palette, interrupts, wait states),
+//! CRTC 6845, 8255 PPI, AY-3-8912 (keyboard port; sound with Phase 6 M4),
+//! 64 KB RAM (128 KB on the 6128) with the OS and BASIC ROMs and, on the
+//! 664/6128, the AMSDOS disc ROM as upper ROM 7 (see [`memory`]).
+//!
+//! Models: "6128" (default), "664", "464". Options:
+//! - `crtc`: CRTC type "0", "1" or "2" (default 0 on the 464, 1 otherwise).
+//! - `dos`: upper ROM 7 on the disc models, "amsdos" (default), "parados"
+//!   or "none".
+//! - `roms`: "stub" runs a tiny built-in program instead of the OS (tests
+//!   without ROMs).
+//!
+//! ROMs (`MachineConfig::roms`, see `media-backends`): "os464"/"basic464",
+//! "os664"/"basic664", "os6128"/"basic6128" (16 KB each), or the 32 KB
+//! "rom464"/"rom664"/"rom6128" with both, "amsdos", "parados". User-supplied,
+//! never in the repository.
+//!
+//! **Timing.** The Z80 runs whole instructions with [`Z80::step_timed`];
+//! before each of its bus accesses the bus brings the CRTC and the Gate
+//! Array up to that T-state and adds the Gate Array's wait states, so I/O
+//! and video memory see the CPU's accesses at the right moment. The CRTC
+//! and the Gate Array advance once per microsecond (every 4th T-state).
+//! [`Machine::step_cycle`] runs one instruction.
 
 #![forbid(unsafe_code)]
+
+pub mod keyboard;
+pub mod memory;
+pub mod stub;
+
+use chips_amstrad::ay::Ay;
+use chips_amstrad::crtc::{Crtc, CrtcType};
+use chips_amstrad::gate_array::{self, GateArray};
+use chips_amstrad::ppi::Ppi;
+use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
+use emu_core::audio::Decimator;
+use emu_core::frame::{
+    FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
+};
+use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use emu_core::machine::ChipReg;
+use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
+use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use emu_core::{
+    BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, InterruptKind,
+    Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
+    StateReader, StateWriter, StopReason,
+};
+
+use memory::{Memory, Rom, Roms, ROM_SIZE};
+
+pub const CPU: DeviceId = DeviceId("cpu");
+/// The Z80's view: memory at 0–&FFFF, I/O ports at `IO_BASE + port`.
+pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
+
+/// Z80 T-states per second.
+pub const CPU_HZ: u32 = 4_000_000;
+/// T-states per microsecond (one CRTC character).
+const T_PER_US: u64 = 4;
+/// The T-state of each microsecond on which the CRTC and the Gate Array
+/// advance.
+const CHIP_PHASE: u64 = 3;
+
+/// PPI port B inputs other than VSYNC: no cassette signal (7), printer not
+/// ready (6), no expansion (5), 50 Hz (4), distributor Amstrad (3–1).
+const PORT_B: u8 = 0x7e;
+
+pub fn entry() -> MachineEntry {
+    MachineEntry {
+        id: "cpc",
+        name: "Amstrad CPC",
+        models: &["6128", "664", "464"],
+        create: |config| Ok(Box::new(Cpc::new(config)?)),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Model {
+    Cpc464,
+    Cpc664,
+    Cpc6128,
+}
+
+impl Model {
+    fn id(self) -> u8 {
+        match self {
+            Self::Cpc464 => 0,
+            Self::Cpc664 => 1,
+            Self::Cpc6128 => 2,
+        }
+    }
+
+    fn rom_names(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Cpc464 => ("os464", "basic464", "rom464"),
+            Self::Cpc664 => ("os664", "basic664", "rom664"),
+            Self::Cpc6128 => ("os6128", "basic6128", "rom6128"),
+        }
+    }
+}
+
+fn rom16(data: &[u8], role: &str) -> Result<Rom, ConfigError> {
+    let boxed: Box<[u8]> = data.to_vec().into_boxed_slice();
+    boxed.try_into().map_err(|_| {
+        ConfigError::Invalid(format!(
+            "{role} ROM must be 16384 bytes, got {}",
+            data.len()
+        ))
+    })
+}
+
+fn load_roms(config: &MachineConfig, model: Model) -> Result<Roms, ConfigError> {
+    if let Some(v) = config.options.get("roms") {
+        return match v.as_str() {
+            "stub" => Ok(stub::roms()),
+            other => Err(ConfigError::Invalid(format!("roms option '{other}'"))),
+        };
+    }
+    let (os_role, basic_role, both_role) = model.rom_names();
+    let (os, basic) = match (config.roms.get(os_role), config.roms.get(basic_role)) {
+        (Some(os), Some(basic)) => (rom16(os, os_role)?, rom16(basic, basic_role)?),
+        _ => {
+            let both = config
+                .roms
+                .get(both_role)
+                .ok_or_else(|| ConfigError::MissingRom(format!("{os_role} + {basic_role}")))?;
+            if both.len() != 2 * ROM_SIZE {
+                return Err(ConfigError::Invalid(format!(
+                    "{both_role} ROM must be 32768 bytes"
+                )));
+            }
+            (
+                rom16(&both[..ROM_SIZE], both_role)?,
+                rom16(&both[ROM_SIZE..], both_role)?,
+            )
+        }
+    };
+    let dos = if model == Model::Cpc464 {
+        None
+    } else {
+        match config.options.get("dos").map(String::as_str) {
+            None | Some("amsdos") => match config.roms.get("amsdos") {
+                Some(r) => Some(rom16(r, "amsdos")?),
+                None => None,
+            },
+            Some("parados") => Some(rom16(
+                config
+                    .roms
+                    .get("parados")
+                    .ok_or_else(|| ConfigError::MissingRom("parados".into()))?,
+                "parados",
+            )?),
+            Some("none") => None,
+            Some(other) => {
+                return Err(ConfigError::Invalid(format!(
+                    "dos option '{other}' (amsdos, parados or none)"
+                )))
+            }
+        }
+    };
+    Ok(Roms { os, basic, dos })
+}
+
+/// The chips on the I/O bus.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Io {
+    crtc: Crtc,
+    ga: GateArray,
+    ppi: Ppi,
+    ay: Ay,
+    /// Keyboard matrix lines, a 0 bit = key down.
+    keys: [u8; 10],
+    /// The CRTC's VSYNC (PPI port B bit 0).
+    vsync: bool,
+    /// The PAL's RAM configurations exist (6128).
+    has_pal: bool,
+}
+
+impl Io {
+    /// The keyboard line selected by PPI port C.
+    fn key_line(&self) -> u8 {
+        let line = usize::from(self.ppi.c_pins() & 0x0f);
+        self.keys.get(line).copied().unwrap_or(0xff)
+    }
+
+    /// What PPI port A reads: the AY's bus in a read cycle.
+    fn ppi_a_in(&self) -> u8 {
+        if self.ppi.c_pins() >> 6 == 1 {
+            self.ay.read(self.key_line())
+        } else {
+            0xff
+        }
+    }
+
+    fn port_b(&self) -> u8 {
+        PORT_B | u8::from(self.vsync)
+    }
+
+    /// An I/O read (no side effects on the CPC's chips).
+    fn read(&self, port: u16) -> u8 {
+        let mut v = 0xff;
+        if port & 0x4000 == 0 {
+            match (port >> 8) & 3 {
+                2 => v &= self.crtc.status(),
+                3 => v &= self.crtc.read(),
+                _ => {}
+            }
+        }
+        if port & 0x0800 == 0 {
+            v &= self
+                .ppi
+                .read((port >> 8) as u8 & 3, self.ppi_a_in(), self.port_b());
+        }
+        v
+    }
+
+    /// An I/O write; several chips may be selected at once.
+    fn write(&mut self, mem: &mut Memory, port: u16, v: u8) {
+        if port & 0xc000 == 0x4000 {
+            if let Some(mmr) = self.ga.write(v) {
+                if self.has_pal {
+                    mem.config = mmr & 7;
+                }
+            }
+        }
+        if port & 0x4000 == 0 {
+            match (port >> 8) & 3 {
+                0 => self.crtc.select(v),
+                1 => self.crtc.write(v),
+                _ => {}
+            }
+        }
+        if port & 0x2000 == 0 {
+            mem.upper = v;
+        }
+        if port & 0x0800 == 0 {
+            self.ppi.write((port >> 8) as u8 & 3, v);
+            // BDIR/BC1 on port C drive the AY with port A's value.
+            let function = self.ppi.c_pins() >> 6;
+            if function >= 2 {
+                self.ay.bus_write(function, self.ppi.a_out());
+            }
+        }
+    }
+
+    /// One microsecond of video.
+    fn tick_us(&mut self, mem: &Memory) {
+        let out = self.crtc.tick();
+        self.vsync = out.vsync;
+        self.ga.tick(out, mem.video());
+    }
+}
+
+/// The Z80's bus for one instruction: brings the chips up to each access,
+/// adds the wait states, routes debugger hooks.
+struct CpcBus<'a> {
+    mem: &'a mut Memory,
+    io: &'a mut Io,
+    /// T-states the chips have run.
+    chips_now: &'a mut u64,
+    /// T-state the instruction started on.
+    start: u64,
+    audio: &'a mut Decimator,
+    samples: &'a mut Vec<i16>,
+    dbg: Option<&'a mut DebugHooks>,
+    beam: BeamPos,
+}
+
+/// Run the chips up to (not including) T-state `to`.
+fn catch_up(
+    mem: &Memory,
+    io: &mut Io,
+    now: &mut u64,
+    to: u64,
+    audio: &mut Decimator,
+    samples: &mut Vec<i16>,
+) {
+    while *now < to {
+        if *now % T_PER_US == CHIP_PHASE {
+            io.tick_us(mem);
+            if let Some(s) = audio.push(0) {
+                samples.push(s);
+            }
+        }
+        *now += 1;
+    }
+}
+
+impl CpcBus<'_> {
+    fn raw_read(&mut self, addr: u32) -> u8 {
+        if addr >= IO_BASE {
+            self.io.read(addr as u16)
+        } else {
+            self.mem
+                .read(addr as u16, self.io.ga.lower_rom(), self.io.ga.upper_rom())
+        }
+    }
+}
+
+impl Bus for CpcBus<'_> {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        let v = u32::from(self.raw_read(addr));
+        match self.dbg.as_deref_mut() {
+            Some(dbg) if dbg.read_armed(CPU_SPACE) => {
+                let seen = dbg.on_read(CPU_SPACE, addr, size, v);
+                dbg.trace_read(CPU_SPACE, addr, size, seen, self.beam);
+                seen
+            }
+            _ => v,
+        }
+    }
+
+    fn peek(&self, addr: u32, _size: Size) -> u32 {
+        u32::from(peek(self.mem, self.io, addr))
+    }
+
+    fn write(&mut self, addr: u32, size: Size, v: u32) {
+        if let Some(dbg) = self.dbg.as_deref_mut() {
+            if dbg.write_armed(CPU_SPACE) {
+                dbg.trace_write(CPU_SPACE, addr, size, v & 0xff, self.beam);
+                if !dbg.on_write(CPU_SPACE, addr, size, v & 0xff) {
+                    return;
+                }
+            }
+        }
+        if addr >= IO_BASE {
+            self.io.write(self.mem, addr as u16, v as u8);
+        } else {
+            self.mem.write(addr as u16, v as u8);
+        }
+    }
+
+    fn addr_bits(&self) -> u8 {
+        17
+    }
+}
+
+impl TimedBus for CpcBus<'_> {
+    fn wait_states(&mut self, _access: Access, t: u32) -> u32 {
+        let at = self.start + u64::from(t);
+        let w = gate_array::cpu_wait_states(at);
+        catch_up(
+            self.mem,
+            self.io,
+            self.chips_now,
+            at + u64::from(w),
+            self.audio,
+            self.samples,
+        );
+        w
+    }
+}
+
+fn peek(mem: &Memory, io: &Io, addr: u32) -> u8 {
+    if addr >= IO_BASE {
+        io.read(addr as u16)
+    } else {
+        mem.read(addr as u16, io.ga.lower_rom(), io.ga.upper_rom())
+    }
+}
+
+struct PeekBus<'a>(&'a Memory, &'a Io);
+
+impl Bus for PeekBus<'_> {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        self.peek(addr, size)
+    }
+
+    fn peek(&self, addr: u32, _size: Size) -> u32 {
+        u32::from(peek(self.0, self.1, addr))
+    }
+
+    fn write(&mut self, _addr: u32, _size: Size, _v: u32) {}
+
+    fn addr_bits(&self) -> u8 {
+        17
+    }
+}
+
+pub struct Cpc {
+    model: Model,
+    cpu: Z80,
+    mem: Memory,
+    io: Io,
+    /// T-states since power-on (the CPU's and the chips' time base).
+    sched: Scheduler,
+    input: InputQueue,
+    palette: [Rgb8; 32],
+    audio: Decimator,
+    samples: Vec<i16>,
+    field_done_pending: bool,
+}
+
+/// The clonable part of the machine, for atomic savestate loading.
+struct Snapshot {
+    cpu: Z80,
+    mem: Memory,
+    io: Io,
+    sched: Scheduler,
+    input: InputQueue,
+    audio: Decimator,
+}
+
+impl Cpc {
+    pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
+        let model = match config.model.as_deref() {
+            None | Some("6128") => Model::Cpc6128,
+            Some("664") => Model::Cpc664,
+            Some("464") => Model::Cpc464,
+            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        };
+        let crtc = match config.options.get("crtc").map(String::as_str) {
+            None => {
+                if model == Model::Cpc464 {
+                    CrtcType::T0
+                } else {
+                    CrtcType::T1
+                }
+            }
+            Some(n) => n
+                .parse::<u8>()
+                .ok()
+                .and_then(CrtcType::from_number)
+                .ok_or_else(|| ConfigError::Invalid(format!("crtc option '{n}' (0, 1 or 2)")))?,
+        };
+        let ram_kb = if model == Model::Cpc6128 { 128 } else { 64 };
+        let mut m = Self {
+            model,
+            cpu: Z80::new(),
+            mem: Memory::new(load_roms(config, model)?, ram_kb),
+            io: Io {
+                crtc: Crtc::new(crtc),
+                ga: GateArray::new(),
+                ppi: Ppi::new(),
+                ay: Ay::new(),
+                keys: [0xff; 10],
+                vsync: false,
+                has_pal: model == Model::Cpc6128,
+            },
+            sched: Scheduler::new(),
+            input: InputQueue::new(),
+            palette: chips_amstrad::palette::palette(),
+            audio: Decimator::new(1_000_000, emu_core::SAMPLE_RATE)
+                .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
+            samples: Vec::new(),
+            field_done_pending: false,
+        };
+        m.cpu.set_int_vector(0xff);
+        Ok(m)
+    }
+
+    pub fn model(&self) -> Model {
+        self.model
+    }
+
+    fn beam_pos(&self) -> BeamPos {
+        let (line, us, fields) = self.io.ga.beam();
+        BeamPos {
+            frame: fields,
+            line,
+            cycle: u16::from(us),
+            hpos: u16::from(us) * 16,
+        }
+    }
+
+    /// One instruction (or interrupt response). Returns `Some` if
+    /// emulation must stop.
+    fn instruction(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        while let Some(ev) = self.input.pop_due(self.sched.now()) {
+            self.apply_input(ev);
+        }
+        self.cpu.set_int(self.io.ga.int_pending);
+        let start = self.sched.now().0;
+        let mut chips_now = start;
+        let beam = self.beam_pos();
+        let t = {
+            let mut bus = CpcBus {
+                mem: &mut self.mem,
+                io: &mut self.io,
+                chips_now: &mut chips_now,
+                start,
+                audio: &mut self.audio,
+                samples: &mut self.samples,
+                dbg: dbg.as_deref_mut(),
+                beam,
+            };
+            self.cpu.step_timed(&mut bus)
+        };
+        let end = start + u64::from(t);
+        catch_up(
+            &self.mem,
+            &mut self.io,
+            &mut chips_now,
+            end,
+            &mut self.audio,
+            &mut self.samples,
+        );
+        self.sched.advance(u64::from(t));
+        let entered = self.cpu.take_interrupt();
+        if entered == Some(InterruptKind::Irq) {
+            self.io.ga.acknowledge();
+        }
+        let new_field = self.io.ga.take_field_done();
+        if let Some(dbg) = dbg {
+            if let Some(kind) = entered {
+                if dbg.interrupt_armed(kind) {
+                    dbg.check_interrupt(kind);
+                }
+            }
+            let next_pc = u32::from(self.cpu.pc);
+            if dbg.trace_instr_armed() {
+                dbg.trace_instr(CPU, next_pc, self.beam_pos());
+            }
+            if dbg.instr_step_armed() {
+                dbg.check_instr_step();
+            }
+            if dbg.exec_armed(CPU_SPACE) {
+                dbg.check_exec(CPU_SPACE, next_pc);
+            }
+            if dbg.raster_armed() {
+                let b = self.beam_pos();
+                dbg.check_raster(b.line, b.cycle);
+            }
+            if let Some(stop) = dbg.take_stop() {
+                self.field_done_pending |= new_field;
+                return Some(stop);
+            }
+        }
+        new_field.then_some(StopReason::FrameDone)
+    }
+
+    fn apply_input(&mut self, ev: TimedInput) {
+        if let (InputTarget::Keyboard, InputEvent::Key { machine_key, down }) =
+            (ev.target, ev.event)
+        {
+            self.key(machine_key.0, down);
+        }
+    }
+
+    fn key(&mut self, code: u16, down: bool) {
+        let (line, bit) = (usize::from(code / 8), code % 8);
+        if let Some(l) = self.io.keys.get_mut(line) {
+            if down {
+                *l &= !(1 << bit);
+            } else {
+                *l |= 1 << bit;
+            }
+        }
+    }
+
+    fn type_text(&mut self, text: &str) {
+        let (events, _) = keyboard::typed_events(text, self.sched.now().0);
+        for e in events {
+            self.input.push(e);
+        }
+    }
+
+    fn apply_frame_freezes(&mut self, dbg: &DebugHooks) {
+        for f in dbg.per_frame_freezes() {
+            if f.space != CPU_SPACE {
+                continue;
+            }
+            for i in 0..f.size.bytes() {
+                let addr = f.addr.wrapping_add(i);
+                let v = (f.value >> (8 * i)) as u8;
+                if addr >= IO_BASE {
+                    self.io.write(&mut self.mem, addr as u16, v);
+                } else {
+                    self.mem.write(addr as u16, v);
+                }
+            }
+        }
+    }
+
+    fn signal(&self) -> SignalInfo {
+        SignalInfo {
+            pixel_clock_hz: 16_000_000,
+            active_pixels: gate_array::WIDTH,
+            total_pixels: 64 * 16,
+            lines_per_field: 312,
+            standard: VideoStandard::Pal,
+            output: OutputType::Rgb,
+            field: FieldParity::Progressive,
+        }
+    }
+}
+
+/// Typing for tests and tools: queue key presses for `text`.
+pub fn type_text(m: &mut Cpc, text: &str) {
+    m.type_text(text);
+}
+
+/// Read a byte as the CPU sees it now (tests and tools).
+pub fn peek_cpu(m: &Cpc, addr: u16) -> u8 {
+    peek(&m.mem, &m.io, u32::from(addr))
+}
+
+fn regs(name: &'static str, base: Option<u32>, values: &[(&'static str, u8)]) -> ChipInfo {
+    ChipInfo {
+        name,
+        regs: values
+            .iter()
+            .enumerate()
+            .map(|(i, &(n, v))| ChipReg {
+                name: n,
+                addr: base.map(|b| b + i as u32),
+                value: u32::from(v),
+                bits: 8,
+            })
+            .collect(),
+    }
+}
+
+impl Machine for Cpc {
+    fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
+        if std::mem::take(&mut self.field_done_pending) {
+            return StopReason::FrameDone;
+        }
+        let b = self.beam_pos();
+        if b.line == 0 && b.cycle == 0 {
+            self.apply_frame_freezes(dbg);
+        }
+        loop {
+            if let Some(stop) = self.instruction(Some(dbg)) {
+                return stop;
+            }
+        }
+    }
+
+    fn step_cycle(&mut self) -> StopReason {
+        self.instruction(None);
+        StopReason::StepDone
+    }
+
+    /// RESET (power-on; the CPC has no reset button): CPU, Gate Array,
+    /// PPI, AY and the upper ROM / RAM configuration latches. Power-up
+    /// also clears RAM.
+    fn reset(&mut self, kind: ResetKind) {
+        let hard = kind == ResetKind::Hard;
+        self.cpu.reset();
+        self.io.ga.reset();
+        self.io.ppi.reset();
+        self.io.ay.reset();
+        self.mem.reset(hard);
+        if hard {
+            self.io.crtc = Crtc::new(self.io.crtc.kind);
+            self.io.keys = [0xff; 10];
+        }
+        self.input.clear();
+        self.field_done_pending = false;
+    }
+
+    fn framebuffer(&self) -> FrameRef<'_> {
+        FrameRef {
+            width: gate_array::WIDTH,
+            height: gate_array::HEIGHT,
+            pixels: PixelData::Indexed {
+                pixels: self.io.ga.pixels(),
+                palette: &self.palette,
+            },
+            luma_chroma: None,
+            signal: self.signal(),
+        }
+    }
+
+    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+        out.append(&mut self.samples);
+        emu_core::AudioFormat {
+            sample_rate: emu_core::SAMPLE_RATE,
+            channels: 1,
+        }
+    }
+
+    fn beam(&self) -> Option<BeamPos> {
+        Some(self.beam_pos())
+    }
+
+    fn memory_spaces(&self) -> Vec<MemSpace> {
+        vec![MemSpace {
+            id: CPU_SPACE,
+            name: "cpu",
+            device: CPU,
+            addr_bits: 17,
+            big_endian: false,
+        }]
+    }
+
+    fn chips(&self) -> Vec<ChipInfo> {
+        let c = &self.io.crtc;
+        const CRTC_NAMES: [&str; 18] = [
+            "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12", "R13",
+            "R14", "R15", "R16", "R17",
+        ];
+        let crtc: Vec<(&'static str, u8)> = CRTC_NAMES
+            .iter()
+            .zip(c.regs)
+            .map(|(&n, v)| (n, v))
+            .collect();
+        let ga = &self.io.ga;
+        const PENS: [&str; 17] = [
+            "PEN0", "PEN1", "PEN2", "PEN3", "PEN4", "PEN5", "PEN6", "PEN7", "PEN8", "PEN9",
+            "PEN10", "PEN11", "PEN12", "PEN13", "PEN14", "PEN15", "BORDER",
+        ];
+        let mut gav: Vec<(&'static str, u8)> =
+            PENS.iter().zip(ga.inks).map(|(&n, v)| (n, v)).collect();
+        gav.extend([
+            ("RMR", ga.rmr),
+            ("MODE", ga.mode),
+            ("INTCNT", ga.int_counter),
+            ("RAMCFG", self.mem.config),
+            ("UPPER", self.mem.upper),
+        ]);
+        let p = &self.io.ppi;
+        const AY_NAMES: [&str; 16] = [
+            "AFINE", "ACOARSE", "BFINE", "BCOARSE", "CFINE", "CCOARSE", "NOISE", "MIXER", "AVOL",
+            "BVOL", "CVOL", "EFINE", "ECOARSE", "ESHAPE", "PORTA", "PORTB",
+        ];
+        let ay: Vec<(&'static str, u8)> = AY_NAMES
+            .iter()
+            .zip(self.io.ay.regs)
+            .map(|(&n, v)| (n, v))
+            .collect();
+        vec![
+            regs("crtc", None, &crtc),
+            regs("gate_array", None, &gav),
+            regs(
+                "ppi",
+                None,
+                &[
+                    ("PORTA", p.a),
+                    ("PORTB", self.io.port_b()),
+                    ("PORTC", p.c),
+                    ("CONTROL", p.control),
+                ],
+            ),
+            regs("ay", None, &ay),
+        ]
+    }
+
+    fn devices(&self) -> Vec<DeviceId> {
+        vec![CPU]
+    }
+
+    fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget> {
+        (dev == CPU).then_some(self as &mut dyn DebugTarget)
+    }
+
+    fn input(&mut self, ev: TimedInput) {
+        self.input.push(ev);
+    }
+
+    fn now(&self) -> Cycle {
+        self.sched.now()
+    }
+
+    fn ports(&self) -> Vec<PortInfo> {
+        Vec::new()
+    }
+
+    fn connect(&mut self, port: PortId, _dev: Box<dyn PortDevice>) -> Result<(), PortError> {
+        Err(PortError::NoSuchPort(port))
+    }
+
+    fn disconnect(&mut self, _port: PortId) -> Option<Box<dyn PortDevice>> {
+        None
+    }
+
+    fn media_slots(&self) -> Vec<MediaSlotInfo> {
+        Vec::new()
+    }
+
+    fn media_slot(&mut self, _slot: SlotId) -> Option<&mut dyn MediaSlot> {
+        None
+    }
+
+    fn save_state(&self) -> Vec<u8> {
+        let mut w = StateWriter::new();
+        w.chunk(*b"CPCM", 1, |w| {
+            w.u8(self.model.id());
+            w.bool(self.field_done_pending);
+            w.raw(&self.io.keys);
+            w.bool(self.io.vsync);
+            self.audio.save(w);
+        });
+        self.cpu.save(&mut w);
+        self.mem.save(&mut w);
+        self.io.crtc.save(&mut w);
+        self.io.ga.save(&mut w);
+        self.io.ppi.save(&mut w);
+        self.io.ay.save(&mut w);
+        self.sched.save(&mut w);
+        self.input.save(&mut w);
+        w.into_bytes()
+    }
+
+    /// Atomic: everything loads into copies first.
+    fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
+        let mut next = Snapshot {
+            cpu: self.cpu.clone(),
+            mem: self.mem.clone(),
+            io: self.io.clone(),
+            sched: self.sched.clone(),
+            input: self.input.clone(),
+            audio: self.audio,
+        };
+        let mut r = StateReader::new(s);
+        let (_, mut c) = r.chunk(*b"CPCM", 1)?;
+        if c.u8()? != self.model.id() {
+            return Err(StateError::Invalid("CPC model differs"));
+        }
+        let field_done_pending = c.bool()?;
+        c.raw_into(&mut next.io.keys)?;
+        next.io.vsync = c.bool()?;
+        next.audio.load(&mut c)?;
+        next.cpu.load(&mut r)?;
+        next.mem.load(&mut r)?;
+        next.io.crtc.load(&mut r)?;
+        next.io.ga.load(&mut r)?;
+        next.io.ppi.load(&mut r)?;
+        next.io.ay.load(&mut r)?;
+        next.sched.load(&mut r)?;
+        next.input.load(&mut r)?;
+        self.cpu = next.cpu;
+        self.mem = next.mem;
+        self.io = next.io;
+        self.sched = next.sched;
+        self.input = next.input;
+        self.audio = next.audio;
+        self.samples.clear();
+        self.field_done_pending = field_done_pending;
+        Ok(())
+    }
+}
+
+impl DebugTarget for Cpc {
+    fn regs(&self) -> RegisterSet {
+        self.cpu.regs()
+    }
+
+    fn set_reg(&mut self, name: &str, v: u32) {
+        self.cpu.set_reg(name, v);
+    }
+
+    fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
+        if space != CPU_SPACE {
+            return None;
+        }
+        let mut v = 0;
+        for i in 0..size.bytes() {
+            let a = addr.wrapping_add(i) & 0x1_ffff;
+            v |= u32::from(peek(&self.mem, &self.io, a)) << (8 * i);
+        }
+        Some(v)
+    }
+
+    fn poke(&mut self, space: MemSpaceId, addr: u32, size: Size, v: u32) -> bool {
+        if space != CPU_SPACE {
+            return false;
+        }
+        for i in 0..size.bytes() {
+            let a = addr.wrapping_add(i) & 0x1_ffff;
+            let b = (v >> (8 * i)) as u8;
+            if a >= IO_BASE {
+                self.io.write(&mut self.mem, a as u16, b);
+            } else {
+                self.mem.write(a as u16, b);
+            }
+        }
+        true
+    }
+
+    fn disassemble(&self, addr: u32) -> Instr {
+        self.cpu.disassemble(&PeekBus(&self.mem, &self.io), addr)
+    }
+}
+
+#[cfg(test)]
+mod tests;

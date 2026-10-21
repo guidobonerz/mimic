@@ -2,4 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ay;
+pub mod crtc;
 pub mod gate_array;
+pub mod palette;
+pub mod ppi;

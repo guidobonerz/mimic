@@ -835,6 +835,7 @@ dependencies = [
  "machine-atari8",
  "machine-c128",
  "machine-c64",
+ "machine-cpc",
  "machine-pet",
  "machine-ted",
  "machine-vic20",

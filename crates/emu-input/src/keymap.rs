@@ -566,6 +566,110 @@ pub static ATARI: Keymap = Keymap {
     entries: ATARI_POSITIONAL,
 };
 
+/// Amstrad CPC keys: `line * 8 + bit` of the keyboard matrix (see
+/// `machine-cpc::keyboard`).
+const fn cpc(line: u16, bit: u16) -> u16 {
+    line * 8 + bit
+}
+
+/// CPC keyboard laid onto a PC (US) keyboard by position: the CPC's
+/// `- ^` on `- =`, `@ [` on `[ ]`, `: ;` on `; '`, `]` on the backslash
+/// key, `\` on the ISO key; DEL on Backspace, CLR on Delete, COPY on
+/// left Alt; the function keys f0–f9 and f. on the numeric keypad (and
+/// F1–F10), the small ENTER on the keypad's Enter.
+const CPC_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Escape", &[cpc(8, 2)]),
+    ("Digit1", &[cpc(8, 0)]),
+    ("Digit2", &[cpc(8, 1)]),
+    ("Digit3", &[cpc(7, 1)]),
+    ("Digit4", &[cpc(7, 0)]),
+    ("Digit5", &[cpc(6, 1)]),
+    ("Digit6", &[cpc(6, 0)]),
+    ("Digit7", &[cpc(5, 1)]),
+    ("Digit8", &[cpc(5, 0)]),
+    ("Digit9", &[cpc(4, 1)]),
+    ("Digit0", &[cpc(4, 0)]),
+    ("Minus", &[cpc(3, 1)]),
+    ("Equal", &[cpc(3, 0)]),     // ^
+    ("Backspace", &[cpc(9, 7)]), // DEL
+    ("Delete", &[cpc(2, 0)]),    // CLR
+    ("Tab", &[cpc(8, 4)]),
+    ("KeyQ", &[cpc(8, 3)]),
+    ("KeyW", &[cpc(7, 3)]),
+    ("KeyE", &[cpc(7, 2)]),
+    ("KeyR", &[cpc(6, 2)]),
+    ("KeyT", &[cpc(6, 3)]),
+    ("KeyY", &[cpc(5, 3)]),
+    ("KeyU", &[cpc(5, 2)]),
+    ("KeyI", &[cpc(4, 3)]),
+    ("KeyO", &[cpc(4, 2)]),
+    ("KeyP", &[cpc(3, 3)]),
+    ("BracketLeft", &[cpc(3, 2)]),  // @
+    ("BracketRight", &[cpc(2, 1)]), // [
+    ("Enter", &[cpc(2, 2)]),        // RETURN
+    ("CapsLock", &[cpc(8, 6)]),
+    ("KeyA", &[cpc(8, 5)]),
+    ("KeyS", &[cpc(7, 4)]),
+    ("KeyD", &[cpc(7, 5)]),
+    ("KeyF", &[cpc(6, 5)]),
+    ("KeyG", &[cpc(6, 4)]),
+    ("KeyH", &[cpc(5, 4)]),
+    ("KeyJ", &[cpc(5, 5)]),
+    ("KeyK", &[cpc(4, 5)]),
+    ("KeyL", &[cpc(4, 4)]),
+    ("Semicolon", &[cpc(3, 5)]), // :
+    ("Quote", &[cpc(3, 4)]),     // ;
+    ("Backslash", &[cpc(2, 3)]), // ]
+    ("ShiftLeft", &[cpc(2, 5)]),
+    ("ShiftRight", &[cpc(2, 5)]),
+    ("IntlBackslash", &[cpc(2, 6)]), // backslash
+    ("KeyZ", &[cpc(8, 7)]),
+    ("KeyX", &[cpc(7, 7)]),
+    ("KeyC", &[cpc(7, 6)]),
+    ("KeyV", &[cpc(6, 7)]),
+    ("KeyB", &[cpc(6, 6)]),
+    ("KeyN", &[cpc(5, 6)]),
+    ("KeyM", &[cpc(4, 6)]),
+    ("Comma", &[cpc(4, 7)]),
+    ("Period", &[cpc(3, 7)]),
+    ("Slash", &[cpc(3, 6)]),
+    ("ControlLeft", &[cpc(2, 7)]),
+    ("ControlRight", &[cpc(2, 7)]),
+    ("AltLeft", &[cpc(1, 1)]), // COPY
+    ("Space", &[cpc(5, 7)]),
+    ("ArrowUp", &[cpc(0, 0)]),
+    ("ArrowRight", &[cpc(0, 1)]),
+    ("ArrowDown", &[cpc(0, 2)]),
+    ("ArrowLeft", &[cpc(1, 0)]),
+    ("Numpad0", &[cpc(1, 7)]),
+    ("Numpad1", &[cpc(1, 5)]),
+    ("Numpad2", &[cpc(1, 6)]),
+    ("Numpad3", &[cpc(0, 5)]),
+    ("Numpad4", &[cpc(2, 4)]),
+    ("Numpad5", &[cpc(1, 4)]),
+    ("Numpad6", &[cpc(0, 4)]),
+    ("Numpad7", &[cpc(1, 2)]),
+    ("Numpad8", &[cpc(1, 3)]),
+    ("Numpad9", &[cpc(0, 3)]),
+    ("NumpadDecimal", &[cpc(0, 7)]),
+    ("NumpadEnter", &[cpc(0, 6)]), // ENTER
+    ("F1", &[cpc(1, 5)]),
+    ("F2", &[cpc(1, 6)]),
+    ("F3", &[cpc(0, 5)]),
+    ("F4", &[cpc(2, 4)]),
+    ("F5", &[cpc(1, 4)]),
+    ("F6", &[cpc(0, 4)]),
+    ("F7", &[cpc(1, 2)]),
+    ("F8", &[cpc(1, 3)]),
+    ("F9", &[cpc(0, 3)]),
+    ("F10", &[cpc(1, 7)]),
+];
+
+pub static CPC: Keymap = Keymap {
+    machine: "cpc",
+    entries: CPC_POSITIONAL,
+};
+
 /// The positional keymap for a machine id.
 pub fn positional(machine: &str) -> Option<&'static Keymap> {
     match machine {
@@ -575,6 +679,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "pet" => Some(&PET),
         "plus4" | "c16" => Some(&TED),
         "atari800xl" => Some(&ATARI),
+        "cpc" => Some(&CPC),
         _ => None,
     }
 }
@@ -599,6 +704,20 @@ mod tests {
             assert!(seen.contains_key(&k), "key code {k:#04x} unreachable");
         }
         assert_eq!(positional("atari800xl").unwrap().machine, "atari800xl");
+    }
+
+    #[test]
+    fn cpc_keys_are_reachable() {
+        let mut seen = std::collections::BTreeSet::new();
+        for (_, keys) in CPC_POSITIONAL {
+            seen.extend(keys.iter().copied());
+        }
+        for code in 0..80u16 {
+            // Line 9 bits 0-6 are joystick 0 (fire 3 included).
+            let joystick = code / 8 == 9 && code % 8 < 7;
+            assert_eq!(seen.contains(&code), !joystick, "key {code}");
+        }
+        assert_eq!(positional("cpc").unwrap().machine, "cpc");
     }
 
     type Entries = &'static [(&'static str, &'static [u16])];
