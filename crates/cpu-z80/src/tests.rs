@@ -156,6 +156,23 @@ fn nmi_is_edge_triggered_and_keeps_iff2() {
 }
 
 #[test]
+fn interrupt_after_ld_a_i_clears_pv() {
+    // LD A,I twice at $0000; the interrupt follows the first.
+    let mut bus = TestBus::with(&[(0, &[0xed, 0x57, 0xed, 0x57]), (0x38, &[0xc9])]);
+    let mut cpu = Z80::new();
+    cpu.sp = 0x9000;
+    cpu.im = 1;
+    cpu.iff1 = true;
+    cpu.iff2 = true;
+    instr(&mut cpu, &mut bus);
+    assert_ne!(cpu.f & flag::PV, 0, "P/V = IFF2");
+    cpu.set_int(true);
+    instr(&mut cpu, &mut bus);
+    assert_eq!(cpu.pc, 0x38);
+    assert_eq!(cpu.f & flag::PV, 0, "interrupt right after LD A,I");
+}
+
+#[test]
 fn no_interrupt_between_prefix_and_instruction() {
     // DD DD 21 34 12: the first DD acts alone, the second loads IX.
     let mut bus = TestBus::with(&[(0, &[0xdd, 0xdd, 0x21, 0x34, 0x12])]);

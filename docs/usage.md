@@ -1,0 +1,456 @@
+# polytrace – Bauen, Benutzen, Debuggen
+
+polytrace ist ein zyklengenauer Emulator für mehrere Heimcomputer auf einem
+gemeinsamen Kern. Jede Maschine bekommt automatisch denselben Remote-Debugger
+und einen Live-Bildstream.
+
+Inhalt:
+
+1. [Voraussetzungen](#1-voraussetzungen)
+2. [Bauen](#2-bauen)
+3. [ROMs](#3-roms)
+4. [Maschinen, Modelle und Optionen](#4-maschinen-modelle-und-optionen)
+5. [Desktop-Frontend `emu-desktop`](#5-desktop-frontend-emu-desktop)
+6. [Kommandozeilen-Frontend `emu-headless`](#6-kommandozeilen-frontend-emu-headless)
+7. [Medien: Disketten, Bänder, Module, Programme](#7-medien-disketten-bänder-module-programme)
+8. [Monitorprofile (CRT)](#8-monitorprofile-crt)
+9. [Live-Preview im Browser](#9-live-preview-im-browser)
+10. [Debug-Schnittstelle](#10-debug-schnittstelle)
+11. [Python-Client `polydbg`](#11-python-client-polydbg)
+12. [VICE-Binary-Monitor (VS64 & Co.)](#12-vice-binary-monitor-vs64--co)
+13. [Tests und Testdaten](#13-tests-und-testdaten)
+
+---
+
+## 1. Voraussetzungen
+
+- **Rust** (stable, Edition 2021) mit `cargo`.
+- **Linux:** für das Desktop-Frontend die Pakete `libasound2-dev` und
+  `libudev-dev`.
+- **Optional:** Python 3 für den Debug-Client `tools/polydbg.py` (nur
+  Standardbibliothek), `bash` und `curl` für das Testdaten-Skript, 7z/bsdtar
+  für Acid800, ein C++-Compiler für die CPC-Testsuite (baut den Assembler
+  pasmo).
+- **WASM-Build:** das Target `wasm32-unknown-unknown`
+  (`rustup target add wasm32-unknown-unknown`).
+
+## 2. Bauen
+
+```bash
+cargo build --workspace                 # alles (Debug)
+cargo build --release -p emu-desktop    # Desktop-Emulator, optimiert
+cargo build --release -p emu-headless   # Kommandozeilen-Frontend
+cargo build -p emu-web --target wasm32-unknown-unknown
+```
+
+Für flüssiges Arbeiten immer `--release` verwenden; der Debug-Build ist
+deutlich langsamer als Echtzeit.
+
+Prüfungen vor einem Commit:
+
+```bash
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+python tools/check-deps.py              # Abhängigkeitsrichtung der Crates
+```
+
+## 3. ROMs
+
+ROMs sind **nicht** im Repository und werden auch nie eingecheckt. Lege sie
+in einen Ordner und gib ihn mit `--rom-dir DIR` an oder setze
+`EMU_ROM_DIR`. Gesucht wird zuerst im Unterordner der Maschine, dann in
+`drives/`, dann im Ordner selbst. Dateien werden über den **Namensanfang**
+(ohne Groß-/Kleinschreibung, `.` und `_` zählen als `-`) und die **exakte
+Größe** erkannt.
+
+| Unterordner | Maschine | Rollen (Beispielnamen) |
+| --- | --- | --- |
+| `c64/` | C64 | `kernal` (8 KB), `basic` (8 KB), `chargen`/`characters` (4 KB) |
+| `vic20/` | VIC-20 | KERNAL, BASIC, Zeichensatz |
+| `pet/` | PET | BASIC, Editor, KERNAL, Zeichensatz je Modell |
+| `plus4/` (auch für `c16`) | C16/Plus/4 | KERNAL, BASIC, optional 3-plus-1 |
+| `c128/` | C128 | KERNAL, BASIC, Zeichensatz, optional Funktions-ROM |
+| `atari/` (`atari8/`, `atari800xl/`) | Atari 800XL | XL-OS (`atarixl.rom`, 16 KB), BASIC (`ataribas.rom`, 8 KB) |
+| `cpc/` (`amstrad/`) | Amstrad CPC | `os464`/`basic1-0`, `os664`/`basic664`, `os6128`/`basic1-1` (je 16 KB) oder 32-KB-Kombidateien `cpc464`/`cpc664`/`cpc6128`; `amsdos`, optional `parados` |
+| `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
+
+Fehlt ein ROM, nennt die Fehlermeldung Rolle, erwartete Größe und Namen.
+Einzelne ROMs lassen sich im Headless-Frontend auch direkt angeben:
+`--rom kernal=pfad/kernal.bin`.
+
+Viele Maschinen haben die Option `roms=stub`: ein winziges eingebautes
+Programm statt der echten ROMs, nur für Tests.
+
+## 4. Maschinen, Modelle und Optionen
+
+`cargo run --release -p emu-headless -- --list` zeigt alle Maschinen:
+
+| ID | Maschine | Modelle (`--model`) |
+| --- | --- | --- |
+| `c64` | Commodore 64 | `pal` (Standard), `ntsc` |
+| `vic20` | VIC-20 | `pal`, `ntsc` |
+| `pet` | PET | `4032` (Standard), `2001`, `3032`, `8032` |
+| `c16`, `plus4` | C16, Plus/4 | `pal`, `ntsc` |
+| `c128` | C128 | `pal`, `ntsc` |
+| `atari800xl` | Atari 800XL | `pal`, `ntsc` |
+| `cpc` | Amstrad CPC | `6128` (Standard), `664`, `464` |
+| `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
+
+Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
+
+| Maschine | Optionen |
+| --- | --- |
+| C64 | `sid=6581\|8580`, `cia=6526\|6526a`, `drive8=1541\|1571\|1581\|virtual\|none`, `drive8_ppm=N`, `port1`/`port2=joystick\|paddles\|mouse1351\|none`, `autostart=on` |
+| VIC-20 | `ram=none\|3k\|8k\|16k\|24k\|all`, `port1=joystick\|none`, `drive8=…`, `autostart=on` |
+| PET | `ram=8k\|16k\|32k`, `keyboard=graphics\|business`, `hz=50\|60`, `drive8=virtual\|none` |
+| C16/Plus/4 | `ram=16k\|64k`, `drive8=…`, `port1=joystick\|none`, `autostart=on` |
+| C128 | `display=40\|80`, `vdc_ram=16k\|64k`, `sid=…`, `drive8=1571\|1541\|1581\|virtual\|none`, `port2=…`, `autostart=on` |
+| Atari 800XL | `port1`/`port2=joystick\|paddles\|none`, `basic=on\|off`, `drives=0..4`, `drive=1050\|810\|xf551` |
+| CPC | `crtc=0\|1\|2` (Standard 464: 0, sonst 1), `dos=amsdos\|parados\|none`, `joy1=joystick\|amx\|none`, `joy2=joystick\|none` |
+
+`drive8=virtual` bedient Laufwerk 8 auf Protokollebene (schnell, nur
+KERNAL-LOAD/SAVE), die anderen Werte emulieren das echte Laufwerk mit eigener
+CPU (nötig für Schnelllader und Kopierschutz). Ein Ordner kann als virtuelle
+Diskette dienen (`--disk ./ordner`).
+
+## 5. Desktop-Frontend `emu-desktop`
+
+```bash
+cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms
+cargo run --release -p emu-desktop -- --machine c64 --disk spiel.d64 --autostart
+cargo run --release -p emu-desktop -- --machine vic20 --tape spiel.tap
+cargo run --release -p emu-desktop -- --machine atari800xl --disk spiel.atr
+cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
+cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
+```
+
+Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
+`--cart`, `--autostart`, `--rom-dir`, `--option KEY=WERT`,
+`--crt PROFIL` (Monitor, Standard: der der Maschine), `--scale N`,
+`--debug [ADR]`, `--preview [ADR]`, `--vice [ADR]` (siehe unten).
+`--help` zeigt alles.
+
+**Tastatur.** Die Tasten liegen nach **Position** auf einer PC-Tastatur
+(US-Belegung), nicht nach Aufdruck:
+
+- C64: Esc = RUN/STOP, Tab = CTRL, linke Strg = C=, Einfg = £, Entf = ↑,
+  Bild↑ = RESTORE, Pos1 = CLR/HOME, F2/F4/F6/F8 = Shift+F1/F3/F5/F7.
+- Atari: `< >` auf `- =`, `- =` auf `[ ]`, `+ *` auf `' \`, rechte Alt =
+  Atari-Taste, Pfeile = CONTROL + `- = + *`; F2 START, F3 SELECT, F4 OPTION,
+  F5 RESET, F6 HELP, F7/Pause BREAK.
+- CPC: `- ^` auf `- =`, `@ [` auf `[ ]`, `: ;` auf `; '`, `]` auf `\`,
+  Rücktaste = DEL, Entf = CLR, linke Alt = COPY, Ziffernblock und F1–F10 =
+  Funktionstasten f0–f9 und f., Ziffernblock-Enter = ENTER.
+
+**Weitere Tasten:** F12 wechselt zwischen den Bildschirmen einer Maschine
+(C128: VIC und VDC). Datasette/Kassette: F9 PLAY, Shift+F9 RECORD, F10 STOP,
+F11 REWIND.
+
+**Joystick:** Erster Gamepad, beim C64/C128 zusätzlich Ziffernblock
+8/2/4/6 + 0 bzw. rechte Strg (Port 2), bei VIC-20, C16/Plus/4 und Atari
+Port 1. Beim CPC nur Gamepad (der Ziffernblock sind dort Funktionstasten).
+
+**Maus/Paddles:** Mit `--option port1=mouse1351` (oder `paddles`, auch
+`port2`) bzw. beim CPC `--option joy1=amx` fängt ein Klick ins Fenster die
+Maus ein; die mittlere Maustaste gibt sie frei.
+
+`EMU_DESKTOP_DEBUG=1` gibt alle 5 Sekunden Bild- und Audio-Statistik aus.
+
+## 6. Kommandozeilen-Frontend `emu-headless`
+
+Ohne Fenster und Ton – für Skripte, CI und als Debug-Server.
+
+```bash
+# 300 Bilder laufen lassen und das letzte als PNG speichern
+cargo run --release -p emu-headless -- --machine c64 --rom-dir roms \
+    --prg demo.prg --frames 300 --snapshot out.png
+
+# C128 im 80-Zeichen-Modus, Bild des VDC
+cargo run --release -p emu-headless -- --machine c128 --option display=80 \
+    --rom-dir roms --frames 600 --screen vdc --snapshot c128.png
+
+# Bild durch ein Monitorprofil, Ton als WAV, Savestate schreiben
+cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
+    --frames 150 --crt ctm644 --snapshot cpc.png --wav cpc.wav --save-state cpc.state
+```
+
+| Option | Bedeutung |
+| --- | --- |
+| `--frames N` | Bilder (Felder) emulieren, Standard 1 |
+| `--snapshot F.png`, `--snapshot-every N` | letztes Bild bzw. jedes N-te speichern |
+| `--screen vic\|vdc` | welcher Bildschirm (C128) |
+| `--crt PROFIL[:N]` | Snapshot durch ein Monitorprofil, N Pixelzeilen pro Rasterzeile |
+| `--wav F.wav` | Ton des Laufs als 16-Bit-PCM |
+| `--load-state F`, `--save-state F` | Savestate laden/schreiben |
+| `--debug [ADR]` | Debug-Server statt Bilder laufen lassen (Standard `127.0.0.1:6510`) |
+| `--preview [ADR]` | Live-Preview (Standard `127.0.0.1:6580`), schließt `--debug` ein |
+| `--vice [ADR]` | VICE-Binary-Monitor (Standard `127.0.0.1:6502`), schließt `--debug` ein |
+| `--run` | mit `--debug`: gleich laufen statt angehalten starten |
+| `--no-realtime` | mit `--debug`: so schnell wie möglich |
+
+## 7. Medien: Disketten, Bänder, Module, Programme
+
+| Art | Formate | Frontend-Option |
+| --- | --- | --- |
+| Diskette | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC); ein **Ordner** als virtuelle Diskette | `--disk` |
+| Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
+| Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari) | `--cart` |
+| Programm | PRG, T64, XEX | `--prg` |
+
+Images werden standardmäßig über einen **Copy-on-Write-Overlay** geöffnet: das
+Original bleibt unverändert, bis Änderungen ausdrücklich zurückgeschrieben
+werden (`flush_media` im Debugger). Beim CPC 664/6128 werden Disketten an
+Laufwerk A und B angeboten; auf dem 464 gibt es nur Kassette. Auf dem
+664/6128 schaltet `|TAPE` (in BASIC) auf Kassette um.
+
+## 8. Monitorprofile (CRT)
+
+Maschinen liefern immer das rohe Bild; Monitor- und Signaleffekte (Composite,
+S-Video, PAL-Laufzeitleitung, NTSC-Artefaktfarben, Scanlines) entstehen
+nachgelagert.
+
+| Profil | Verwendung |
+| --- | --- |
+| `raw` | scharfe Pixel, keine Effekte (Regressionstests) |
+| `1702`, `1084s` | Commodore-Monitore (S-Video) |
+| `1084s-rgb` | RGB-Eingang des 1084S (C128-VDC) |
+| `tv`, `pal-tv`, `ntsc-tv` | Fernseher über Composite (Atari-Standard) |
+| `pet-white`, `pet-green` | PET-Monitore |
+| `ctm644` | Amstrad-Farbmonitor (CPC-Standard) |
+| `gt65` | Amstrad-Grünmonitor |
+
+Eigene Profile sind TOML-Dateien mit `base = "<preset>"` und überschriebenen
+Werten (`--crt meinprofil.toml`).
+
+## 9. Live-Preview im Browser
+
+```bash
+cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --preview
+# Browser: http://127.0.0.1:6580/
+```
+
+| Anfrage | Antwort |
+| --- | --- |
+| `GET /` | Viewer-Seite mit Live-Bild |
+| `GET /snapshot.png` | aktuelles Bild als PNG (Header `X-Beam-Frame/Line/Cycle`, `X-Paused`) |
+| `GET /preview` (WebSocket) | Bildstrom |
+
+Parameter (Query-String): `filter=raw|crt`, `profile=<name>`,
+`scale=1..4`, für den Strom `fps=1..50` (Standard 25), `format=png|qoi`,
+`delta=0|1`; der Snapshot zusätzlich `machine=<id>` und `screen=vic|vdc`.
+
+Der Viewer schickt Tastatur-, Gamepad- und Mauseingaben als JSON zurück
+(`{"type": "key", "code": "KeyA", "down": true}` usw.), dadurch ist das
+Vorschaubild bedienbar. Der Server läuft nur auf `127.0.0.1`.
+
+## 10. Debug-Schnittstelle
+
+### 10.1 Aufbau
+
+```
+ Werkzeug (polydbg, eigenes Skript, VS64 …)
+        │  TCP: JSON-Zeilen (nativ) / VICE-Binary-Monitor
+        ▼
+ Debug-Server (emu-debug)  ──Befehlswarteschlange──►  Emulations-Thread
+        ▲                   ◄──Ereigniskanal───────   (Machine + DebugHooks)
+```
+
+- Die Emulation läuft in einem eigenen Thread. Netzwerk-Tasks sperren ihn nie;
+  Befehle gehen über eine Warteschlange, Ergebnisse und Ereignisse über einen
+  Kanal zurück.
+- Der Debugger kennt **keine konkrete Maschine**. Er spricht nur die
+  Kern-Traits an (Register, Speicherräume, Chips, Geräte). Darum funktioniert
+  er für jede Maschine gleich, auch für Zweit-CPUs (1541-Laufwerk, Z80 im
+  C128) als eigene „Devices“.
+- Speicherzugriffe des Debuggers sind immer **seiteneffektfrei** (`peek`): ein
+  Blick auf ein Interruptregister löscht nichts.
+- Ohne gesetzte Haltepunkte kostet der Debugger praktisch keine Zeit
+  (Haltepunkte über Bitmaps je Speicherraum).
+- Der Server lauscht nur auf `127.0.0.1`.
+
+Starten:
+
+```bash
+# angehalten starten, Debug-Server auf 127.0.0.1:6510
+cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --debug
+# mit Fenster und Ton, Debug-Server zusätzlich
+cargo run --release -p emu-desktop -- --machine c64 --debug
+# alles: nativ + VICE-Monitor + Live-Bild, sofort laufen lassen
+cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --vice --preview --run
+```
+
+### 10.2 Protokoll (nativ, JSON-Zeilen)
+
+Ein JSON-Objekt pro Zeile in beide Richtungen, Protokollname
+`polytrace-debug`, aktuelle Version **6**. Anfragen haben eine `id` und einen
+`cmd`; jede bekommt genau eine Antwort, in Reihenfolge:
+
+```json
+→ {"id": 1, "cmd": "regs", "device": "cpu"}
+← {"id": 1, "ok": true, "result": {"PC": 2048, "A": 0, "X": 0, "Y": 0, "S": 255, "P": 36}}
+→ {"id": 2, "cmd": "regs", "device": "z80"}
+← {"id": 2, "ok": false, "error": "unknown device 'z80'"}
+```
+
+Ohne `device` gilt der Haupt-Prozessor, ohne `space` der erste
+Speicherraum (die Sicht der Haupt-CPU). Mit `info` erfährt man Geräte und
+Speicherräume der Maschine; `capabilities` listet alle unterstützten
+Befehle, Haltepunktarten und Ereignisse.
+
+Beispiel mit Python (ohne Client):
+
+```python
+import json, socket
+s = socket.create_connection(("127.0.0.1", 6510))
+f = s.makefile("rw")
+print(f.readline())                      # hello-Ereignis
+f.write(json.dumps({"id": 1, "cmd": "peek", "addr": 0xD020, "len": 1}) + "\n"); f.flush()
+print(f.readline())
+```
+
+**Ereignisse** tragen `event` statt `id`:
+
+| Ereignis | Wann |
+| --- | --- |
+| `hello` | beim Verbinden: Protokoll, Version, Maschine |
+| `resumed` | Emulation läuft los |
+| `stopped` | Lauf endet (Haltepunkt, Watchpoint, Schritt fertig, Absturz, `pause`) |
+| `frame_ready` | nach jedem Bild, nur nach `subscribe` |
+| `media_changed`, `device_connected` | Medium/Gerät über das Protokoll gewechselt |
+| `freeze_blocked_write` | Schreibzugriff auf eine eingefrorene Adresse unterdrückt (nach `subscribe`) |
+
+### 10.3 Befehle
+
+**Ausführung.** `step_instr` (`count`), `step_cycle`, `step_line`,
+`step_frame`, `pause`, `reset` (`kind: soft|hard`) antworten synchron mit dem
+Haltezustand (`reason`, `pc`, `beam`). `resume`, `step_over`, `step_out`,
+`run_to` (`addr` oder `symbol`) antworten mit `{"running": true}`; das Ende
+meldet ein `stopped`-Ereignis.
+
+**Ansehen und Ändern.** `info`, `regs`, `set_reg`, `peek` (`addr`, `len`,
+max. 64 KB), `poke` (`bytes`), `disasm` (`addr`, `count`), `beam`
+(Bild/Zeile/Zyklus), `chips` (Registerdumps aller Chips, z. B. VIC-II, SID,
+CIA, ANTIC, CRTC, Gate Array, FDC).
+
+**Haltepunkte.** `break_add` mit `kind`:
+
+| `kind` | Felder |
+| --- | --- |
+| `exec` (Standard) | `addr` oder `symbol` |
+| `read`, `write` | Watchpoint: `addr`/`symbol`, `len` |
+| `raster` | `line`, `cycle` |
+| `irq`, `nmi` | – |
+
+Zusätzlich bei allen: `condition` (Ausdruck), `ignore` (Treffer überspringen),
+`enabled`. Weitere Befehle: `break_list`, `break_remove`, `break_enable`,
+`break_condition`.
+
+Bedingungen sind kleine Ausdrücke:
+
+```text
+A == $FF && [$D012] > 100
+(P & %00000010) != 0 || line == 51
+```
+
+Zahlen dezimal, `$hex`, `0xhex`, `%binär`; Bezeichner sind Registernamen des
+Geräts sowie `line`, `cycle`, `frame`; `[expr]` liest ein Byte (seiteneffektfrei).
+Operatoren: `|| && == != < <= > >= | ^ & + - * / %` und unär `! - ~`.
+Ein Auswertungsfehler zählt als „wahr“, damit ein kaputter Haltepunkt anhält.
+
+**Symbole.** `symbols_load` (`path` oder `text`, Format `vice` oder
+`kickass`, sonst automatisch erkannt), `symbols_list`, `symbols_clear`.
+Symbole erscheinen in `disasm` und sind in `break_add`/`run_to` nutzbar.
+
+**Zustände und Trace.** `save_state`/`load_state` (Base64), `trace_start`
+(`instructions`, `reads`/`writes` als Bereiche, `capacity`), `trace_read`,
+`trace_stop`. Trace-Einträge tragen Bild, Zeile und Zyklus.
+
+**Freezer und Cheats.** `freeze_add` (`addr`/`symbol`, `size`, `value`,
+`mode`: `block_writes` – Standard, `reapply_per_frame`, `reapply_on_read`;
+`label`), `freeze_list`, `freeze_toggle`, `freeze_remove`. Cheat-Suche:
+`search_start` (`size`, Bereich), `search_next` (`op`: `eq ne lt gt` gegen
+`value`, `increased decreased unchanged changed`, `increased_by
+decreased_by`), `search_results`. Cheat-Dateien (TOML): `cheats_load`,
+`cheats_save`.
+
+**Geräte, Medien, Eingaben.** `list_ports`, `connect_device`,
+`disconnect_device`; `list_media_slots`, `insert_media` (Datei auf dem Host,
+Copy-on-Write), `eject_media`, `flush_media`, `set_drive_mode`
+(`true`/`virtual`), `media_control` (z. B. Datasette `play`, `record`,
+`stop`, `rewind`, `forward`); `input` (zeitgestempelte Eingaben an Tastatur
+oder Port), `record_start`/`record_stop`/`replay_input` (Eingaben
+aufzeichnen und reproduzierbar abspielen).
+
+## 11. Python-Client `polydbg`
+
+`tools/polydbg.py` braucht nur die Python-Standardbibliothek:
+
+```bash
+python tools/polydbg.py info
+python tools/polydbg.py regs
+python tools/polydbg.py disasm
+python tools/polydbg.py break '$0810'          # Haltepunkt
+python tools/polydbg.py resume --wait          # bis zum Halt laufen
+python tools/polydbg.py peek '$d000' 64
+python tools/polydbg.py chips vic2             # Chipregister
+python tools/polydbg.py dlist                  # Atari: Display-List dekodieren
+python tools/polydbg.py symbols game.sym
+python tools/polydbg.py freeze '$0400' 9       # Adresse einfrieren
+python tools/polydbg.py search start           # Cheat-Suche
+python tools/polydbg.py save state.bin
+python tools/polydbg.py shell                  # interaktive Eingabe
+```
+
+`--host`/`--port` wählen den Server, `--json` gibt die rohen Antworten aus,
+`raw CMD '{...}'` schickt beliebige Befehle. `python tools/polydbg.py --help`
+listet alle Unterbefehle.
+
+## 12. VICE-Binary-Monitor (VS64 & Co.)
+
+Mit `--vice` spricht polytrace zusätzlich das Binärprotokoll des VICE-Monitors
+(API-Version 2). Werkzeuge wie **VS64** (VS Code), C64 Studio oder IceBro
+Lite debuggen damit jede Maschine – nicht nur den C64.
+
+```bash
+cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --vice --preview --run
+```
+
+VS64 `launch.json`:
+
+```json
+{ "type": "vice", "request": "attach", "name": "polytrace",
+  "hostname": "127.0.0.1", "port": 6502 }
+```
+
+Wichtig: `127.0.0.1`, nicht `localhost` – der Server lauscht nur auf IPv4.
+Speicherraum 0 ist die Haupt-CPU, 1–4 sind die Laufwerke 8–11; Speicherlesen
+ist immer seiteneffektfrei; `LIN`/`CYC` liefern die Strahlposition.
+
+Geplant (Phase 8): GDB-Remote-Protokoll mit Live-Bild-Erweiterung und
+Debug-Adapter-Protokoll (DAP).
+
+## 13. Tests und Testdaten
+
+```bash
+cargo test --workspace                                   # ohne ROMs/Testdaten
+EMU_ROM_DIR=~/roms cargo test --workspace -- --include-ignored   # mit ROMs
+bash tools/fetch-testdata.sh                             # Testsuites nach testdata/
+export EMU_TESTDATA_DIR=$PWD/testdata
+```
+
+`fetch-testdata.sh` lädt gepinnte, prüfsummengesicherte Testsuites (Tom Harte
+6502/Z80, Klaus Dormann, ZEXDOC/ZEXALL, Lorenz, Acid800, Arnold-Acid-Tests für
+den CPC). Sie werden nur ausgeführt, nie eingecheckt.
+
+| Suite | Befehl |
+| --- | --- |
+| 6502 Harte (jeder 10. Test) | `cargo test -p cpu-6502 --release -- --ignored` |
+| Z80 Harte | `cargo test -p cpu-z80 --release --test harte -- --ignored` |
+| ZEXDOC/ZEXALL | `cargo test -p cpu-z80 --release --test zex -- --ignored --nocapture` |
+| Lorenz (C64, mit ROMs) | `cargo test -p emu-tests --release --test lorenz lorenz_suite -- --ignored --exact` |
+| Acid800 (Atari) | `cargo test -p emu-tests --release --test acid800 -- --ignored --nocapture` |
+| Arnold-Acid-Tests (CPC; Fetch braucht einen C++-Compiler für pasmo) | `cargo test -p emu-tests --release --test cpc_acid -- --ignored --nocapture` (ca. 10 min; `EMU_CPC_FILTER=ppi`, `EMU_CPC_CRTC=0`, `EMU_CPC_FRAMES=<Felder>`, `EMU_CPC_TAIL=<Zeichen>`; Bericht in `target/tmp/cpc-acid.txt`) |
+
+Referenzbilder liegen in `tests/reference/`; `EMU_UPDATE_REFERENCE=1`
+erzeugt sie neu (nur mit Begründung im Commit).

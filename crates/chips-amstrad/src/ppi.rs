@@ -8,7 +8,11 @@
 //! | &F6xx | C (output): 7–6 AY BDIR/BC1, 5 cassette out, 4 motor, 3–0 keyboard line |
 //! | &F7xx | control: bit 7 = 1 mode set (bit 4 port A input, 1 port B input, 3/0 port C upper/lower input; resets the output latches), bit 7 = 0 sets (bit 0) port C bit 3–1 |
 //!
-//! Reading an output port returns its latch.
+//! Reading an output port returns its latch. Port C pins that are inputs
+//! are not driven by the PPI: they read (and the CPC's chips see) the
+//! levels the board's pull-ups and pull-downs give them, [`Ppi::c_pulls`];
+//! on the CPC &2F (keyboard line 15, cassette out high, motor off, AY
+//! inactive; Arnold acid test `ppi`, `port_c_input`).
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -20,6 +24,8 @@ pub struct Ppi {
     pub c: u8,
     /// Last mode-set control word.
     pub control: u8,
+    /// Levels of undriven port C pins (wiring, not state).
+    pub c_pulls: u8,
 }
 
 impl Default for Ppi {
@@ -29,34 +35,40 @@ impl Default for Ppi {
 }
 
 impl Ppi {
-    /// After reset all ports are inputs.
+    /// After reset all ports are inputs; undriven port C pins float high.
     pub fn new() -> Self {
+        Self::with_c_pulls(0xff)
+    }
+
+    /// A PPI whose undriven port C pins read `c_pulls`.
+    pub fn with_c_pulls(c_pulls: u8) -> Self {
         Self {
             a: 0,
             b: 0,
             c: 0,
             control: 0x9b,
+            c_pulls,
         }
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new();
+        *self = Self::with_c_pulls(self.c_pulls);
     }
 
     pub fn a_is_input(&self) -> bool {
         self.control & 0x10 != 0
     }
 
-    /// Port C as the pins see it: outputs drive, inputs float high.
+    /// Port C as the pins see it: outputs drive, inputs take the pulls.
     pub fn c_pins(&self) -> u8 {
-        let mut v = self.c;
+        let mut inputs = 0;
         if self.control & 0x08 != 0 {
-            v |= 0xf0;
+            inputs |= 0xf0;
         }
         if self.control & 0x01 != 0 {
-            v |= 0x0f;
+            inputs |= 0x0f;
         }
-        v
+        self.c & !inputs | self.c_pulls & inputs
     }
 
     /// Port A's pins when it is an output.
@@ -134,6 +146,7 @@ impl Savestate for Ppi {
             b: c.u8()?,
             c: c.u8()?,
             control: c.u8()?,
+            c_pulls: self.c_pulls,
         };
         *self = n;
         Ok(())
@@ -161,6 +174,17 @@ mod tests {
         p.write(3, 0x92); // A in: latches reset
         assert_eq!((p.a, p.c), (0, 0));
         assert_eq!(p.read(0, 0xfe, 0), 0xfe);
+    }
+
+    #[test]
+    fn port_c_inputs_read_the_pulls() {
+        let mut p = Ppi::with_c_pulls(0x2f);
+        p.write(3, 0x89); // C upper and lower input
+        p.write(2, 0xd0);
+        assert_eq!(p.read(2, 0, 0), 0x2f);
+        p.write(3, 0x88); // C lower output
+        p.write(2, 0xd5);
+        assert_eq!(p.read(2, 0, 0), 0x25);
     }
 
     #[test]

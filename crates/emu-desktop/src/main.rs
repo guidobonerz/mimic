@@ -53,7 +53,7 @@ usage: emu-desktop [options]
   --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
   --crt PROFILE         monitor: raw, 1702, 1084s, 1084s-rgb, tv, pal-tv, ntsc-tv,
-                        pet-white, pet-green or a .toml file
+                        pet-white, pet-green, ctm644, gt65 or a .toml file
                         (default: the machine's own monitor)
   --scale N             initial window size in rows per line (default 2)
   --debug [ADDR]        serve the debug protocol (default 127.0.0.1:6510)

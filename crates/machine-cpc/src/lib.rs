@@ -98,12 +98,17 @@ pub const CPU_HZ: u32 = 4_000_000;
 /// T-states per microsecond (one CRTC character).
 const T_PER_US: u64 = 4;
 /// The T-state of each microsecond on which the CRTC and the Gate Array
-/// advance.
-const CHIP_PHASE: u64 = 3;
+/// advance: its first, where the Gate Array also releases /WAIT. Checked
+/// by the Arnold acid tests "ld a,r/ld a,i p/v int test" (an interrupt
+/// right after LD A,I hits on exactly two NOP positions) and "CPC int
+/// (HSYNC width)"; phase 3 failed both.
+const CHIP_PHASE: u64 = 0;
 
 /// PPI port B inputs other than VSYNC and the cassette (7): printer not
 /// ready (6), no expansion (5), 50 Hz (4), distributor Amstrad (3–1).
 const PORT_B: u8 = 0x7e;
+/// PPI port C pins when nothing drives them (Arnold acid test `ppi`).
+const PORT_C_PULLS: u8 = 0x2f;
 
 pub fn entry() -> MachineEntry {
     MachineEntry {
@@ -416,6 +421,9 @@ impl CpcBus<'_> {
         if addr >= IO_BASE {
             let port = addr as u16;
             let v = self.io.read(port);
+            if port & 0x4300 == 0x0300 {
+                self.io.crtc.after_read();
+            }
             if self.io.has_fdc && fdc_port(port) == Some(2) {
                 // The read itself moves the FDC on (the value is the same
                 // as the peek above).
@@ -571,7 +579,7 @@ impl Cpc {
             io: Io {
                 crtc: Crtc::new(crtc),
                 ga: GateArray::new(),
-                ppi: Ppi::new(),
+                ppi: Ppi::with_c_pulls(PORT_C_PULLS),
                 ay: Ay::new(),
                 fdc: Fdc::new(),
                 has_fdc: model != Model::Cpc464,

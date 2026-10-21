@@ -41,8 +41,9 @@ usage: emu-headless [options]
   --wav FILE.wav        write the audio of the run (16-bit PCM)
   --screen NAME         snapshot this screen (C128: vic or vdc; default: main)
   --crt PROFILE[:N]     snapshot through a monitor profile (raw, 1702, 1084s,
-                        1084s-rgb, tv, pal-tv, ntsc-tv, pet-white, pet-green or a
-                        .toml file) at N rows per line (default 2)
+                        1084s-rgb, tv, pal-tv, ntsc-tv, pet-white, pet-green,
+                        ctm644, gt65 or a .toml file) at N rows per line
+                        (default 2)
   --load-state FILE     restore a savestate before running
   --save-state FILE     write a savestate after running
   --debug [ADDR]        serve the debug protocol instead of running frames

@@ -117,6 +117,8 @@ committed), pinned to exact versions and checked by hash where possible.
 | ZEXDOC / ZEXALL (Frank Cringle) | https://github.com/agn453/ZEXALL | commit `8f71d418bae69a476a5a0e5c6e122c8801b8d9f4`, SHA-256 checked | GPL-2.0; run only |
 | Wolfgang Lorenz C64 Emulator Test Suite 2.15 | VICE test programs, https://svn.code.sf.net/p/vice-emu/code/ (`testprogs/general/Lorenz-2.15`) | SVN revision 46290 | public domain |
 | Acid800 (Avery Lee) — Phase 5 gate | https://www.virtualdub.org/downloads/Acid800-1.2.7z (listed on https://virtualdub.org/altirra) | 1.2, SHA-256 `4074e6a40db1833e97603e334ca130f5923bff34a0d4f8a83e2ecf9617de1b20` | MIT (per the test sources' headers); run only, not committed |
+| Arnold "Acid tests" for the CPC (Kevin Thacker) — Phase 6 gate | ColinPitrat/CPCMisc, `assembly/007_arnold_acid` (https://github.com/ColinPitrat/CPCMisc), assembled locally with pasmo | commit `9e0ad714baee3548c6effc22044861a3f401799b`, SHA-256 `6342175d5694a2cce734bbc311c526160e5bcdb761dabc3e90e81e7c16cac7f7` | test headers: "free to distribute without modification, this copyright header must be retained" (repository GPL-3.0); run only, not committed |
+| pasmo Z80 assembler (Julián Albo), to assemble the CPC tests | Debian source package, https://deb.debian.org/debian/pool/main/p/pasmo/pasmo_0.5.3.orig.tar.gz | 0.5.3, SHA-256 `db3c41cac16df5966fcca4719bb218af78224de13785b222d1d8e292fc87f1eb` | GPL-3.0; built and run as a tool only |
 
 ## Pages consulted during development
 
@@ -125,6 +127,9 @@ Pages fetched or searched while building (beyond the documents above):
 - https://virtualdub.org/altirra — Acid800 releases and archive names.
 - AtariAge forum, "Acid800 - an Atari test suite" (https://forums.atariage.com/topic/171296-acid800-an-atari-test-suite/) — how the suite is run (search result).
 - Searches for the CPC wait-state rule: cpcwiki forum threads (not readable, HTTP 403) and the CLK wiki page "Amstrad CPC Timing" (HTTP 502); only their search summaries were used.
+- Arnold acid test sources (CPCMisc, see above) as hardware measurements: expected values and comments of `ppi` (port C pull levels &2F, `port_c_input`; port reset by mode set), `psg` (register numbers ≥ 16 deselect the AY), `type1ctrl` (UM6845R status bit 6 after power-on, cleared by reading R16/R17), `cpctest` (RMR ignores bit 5 on the CPC; interrupt timing) and `z80tests/cpu` (LD A,I/LD A,R P/V when an interrupt follows). No test code was copied; the runner patches two test bugs (`crtctest` CRTC-type prompt, `cpctest` GA I/O decode entry without BC) and documents them in `tests/src/cpc_acid.rs`.
+- The ACE emulator's published CPC test results (search summary) — note that `crtctest` ignores the typed CRTC type.
+- Searches about PPI port B bit 5 (/EXP) on the 6128 (cpcwiki pages HTTP 403; only search summaries): not conclusive, port B kept at &7E.
 - Harte Z80 per-T-state bus traces (`cycles` in the test data) — the M-cycle placement of `Z80::step_timed` is checked against them.
 - The Acid800 1.2 archive's own `README.html` and test sources — how standalone tests report pass/fail (`_testPassed`, `_testFailed`, `_testSkipped` labels in the `.lab` files).
 - Acid800 test sources (MIT) as hardware measurements: the expected values and cycle comments of `antic_dmapattern` (playfield and refresh DMA slots), `antic_pfstarttiming`/`antic_pfstoptiming` (DMA window edges), `antic_vscroll`/`antic_vscroldli`, `antic_dlitiming`, `antic_blockednmi`, `antic_linebuffering`, `gtia_pmresize`/`gtia_pmoverlap`/`gtia_pmretrigger` (player width logic and retrigger) and `pokey_sertiming`. The models in `chips-atari` and `cpu-6502` were fitted to these results; no test code was copied.

@@ -19,7 +19,9 @@
 //!
 //! Ports: &BCxx selects a register, &BDxx writes it, &BExx reads the type
 //! 1 status (bit 5: vertical blanking, set while the row counter is at or
-//! past R6, cleared at row 0), &BFxx reads the selected register.
+//! past R6, cleared at row 0; bit 6: light pen strobe, set at power-on and
+//! cleared by reading R16 or R17, Arnold acid test `type1ctrl`), &BFxx
+//! reads the selected register. No light pen is fitted, so R16/R17 stay 0.
 //!
 //! [`Crtc::tick`] is one character clock (1 µs on the CPC). Type 1 reloads
 //! the start address at the start of every line of row 0; types 0 and 2
@@ -96,6 +98,8 @@ pub struct Crtc {
     ma_next: u16,
     /// Type 1 status bit 5.
     vblank: bool,
+    /// Type 1 status bit 6 (light pen register full).
+    lpen_full: bool,
 }
 
 impl Crtc {
@@ -116,6 +120,7 @@ impl Crtc {
             ma_row: 0,
             ma_next: 0,
             vblank: false,
+            lpen_full: true,
         }
     }
 
@@ -158,16 +163,18 @@ impl Crtc {
         }
     }
 
+    /// What a CPU read of &BFxx changes besides returning [`Crtc::read`]:
+    /// reading R16 or R17 clears the light pen strobe.
+    pub fn after_read(&mut self) {
+        if matches!(self.addr, 16 | 17) {
+            self.lpen_full = false;
+        }
+    }
+
     /// Port &BExx (no side effects).
     pub fn status(&self) -> u8 {
         match self.kind {
-            CrtcType::T1 => {
-                if self.vblank {
-                    0x20
-                } else {
-                    0
-                }
-            }
+            CrtcType::T1 => u8::from(self.vblank) << 5 | u8::from(self.lpen_full) << 6,
             _ => 0xff,
         }
     }
@@ -279,7 +286,7 @@ impl Crtc {
 }
 
 const TAG: [u8; 4] = *b"CRTC";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Crtc {
     fn save(&self, w: &mut StateWriter) {
@@ -291,7 +298,13 @@ impl Savestate for Crtc {
             ] {
                 w.u8(v);
             }
-            for v in [self.adjusting, self.h_disp, self.v_disp, self.vblank] {
+            for v in [
+                self.adjusting,
+                self.h_disp,
+                self.v_disp,
+                self.vblank,
+                self.lpen_full,
+            ] {
                 w.bool(v);
             }
             w.u16(self.ma_row);
@@ -322,6 +335,7 @@ impl Savestate for Crtc {
             &mut n.h_disp,
             &mut n.v_disp,
             &mut n.vblank,
+            &mut n.lpen_full,
         ] {
             *v = c.bool()?;
         }
@@ -428,6 +442,19 @@ mod tests {
         c.select(31);
         assert_eq!(c.read(), 0xff);
         assert_eq!(c.status() & 0x20, 0);
+    }
+
+    #[test]
+    fn type1_light_pen_strobe_until_r16_is_read() {
+        let mut c = cpc(CrtcType::T1);
+        assert_eq!(c.status() & 0x40, 0x40, "set at power-on");
+        c.select(15);
+        c.after_read();
+        assert_eq!(c.status() & 0x40, 0x40);
+        c.select(16);
+        assert_eq!(c.read(), 0);
+        c.after_read();
+        assert_eq!(c.status() & 0x40, 0);
     }
 
     #[test]

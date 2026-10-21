@@ -166,4 +166,63 @@ if [ ! -s "$DEST/acid800/standalone/cpu_insn.xex" ]; then
   echo "1.2" > "$DEST/acid800/VERSION"
 fi
 
+# Kevin Thacker's Arnold "Acid tests" for the Amstrad CPC: the Phase 6 gate.
+# "(c) Kevin Thacker, part of the Arnold emulator distribution, free to
+# distribute without modification" -- run only, never committed. Sources
+# only: taken from ColinPitrat/CPCMisc (pinned commit) and assembled with
+# pasmo 0.5.3 (GPL; Debian's original source tarball, built here with the
+# host's C++ compiler). Without a compiler the suite is skipped.
+CPCMISC_COMMIT=9e0ad714baee3548c6effc22044861a3f401799b
+CPCMISC_URL="https://codeload.github.com/ColinPitrat/CPCMisc/tar.gz/$CPCMISC_COMMIT"
+CPCMISC_SHA256=6342175d5694a2cce734bbc311c526160e5bcdb761dabc3e90e81e7c16cac7f7
+PASMO_URL="https://deb.debian.org/debian/pool/main/p/pasmo/pasmo_0.5.3.orig.tar.gz"
+PASMO_SHA256=db3c41cac16df5966fcca4719bb218af78224de13785b222d1d8e292fc87f1eb
+# Suites with a files.txt (asm, binary name[, disc]) and their pasmo options.
+CPC_ACID_SUITES="cpc: cpcrom: crtc: ppi: psg:--equ,CPC=1,--equ,SPEC=0 z80tests: disc/fdc:"
+
+echo "CPC Acid tests -> $DEST/cpc-acid"
+CXX_BIN="${CXX:-}"
+if [ -z "$CXX_BIN" ]; then
+  for c in c++ g++ clang++; do
+    if command -v "$c" >/dev/null; then CXX_BIN="$c"; break; fi
+  done
+fi
+if [ -z "$CXX_BIN" ]; then
+  echo "warning: no C++ compiler for pasmo: CPC Acid tests skipped" >&2
+elif [ ! -s "$DEST/cpc-acid/COMMIT" ] || [ "$(cat "$DEST/cpc-acid/COMMIT")" != "$CPCMISC_COMMIT" ]; then
+  work="$DEST/cpc-acid/work"
+  rm -rf "$DEST/cpc-acid"
+  mkdir -p "$work"
+  fetch "$PASMO_URL" "$work/pasmo.tar.gz"
+  [ "$(sha256 "$work/pasmo.tar.gz")" = "$PASMO_SHA256" ] || {
+    echo "error: pasmo source checksum mismatch" >&2; exit 1; }
+  tar -xzf "$work/pasmo.tar.gz" -C "$work"
+  pasmo="$work/pasmo"
+  (cd "$work/pasmo-0.5.3" && "$CXX_BIN" -O2 -std=c++11 -DVERSION='"0.5.3"' -o "$pasmo" ./*.cpp)
+  fetch "$CPCMISC_URL" "$work/cpcmisc.tar.gz"
+  [ "$(sha256 "$work/cpcmisc.tar.gz")" = "$CPCMISC_SHA256" ] || {
+    echo "error: CPCMisc archive checksum mismatch" >&2; exit 1; }
+  tar -xzf "$work/cpcmisc.tar.gz" -C "$work" "CPCMisc-$CPCMISC_COMMIT/assembly/007_arnold_acid"
+  src="$work/CPCMisc-$CPCMISC_COMMIT/assembly/007_arnold_acid"
+  for entry in $CPC_ACID_SUITES; do
+    suite="${entry%%:*}"
+    opts="$(echo "${entry#*:}" | tr ',' ' ')"
+    out="$DEST/cpc-acid/$(echo "$suite" | tr '/' '_')"
+    mkdir -p "$out"
+    while IFS=, read -r asm name _; do
+      asm="$(echo "$asm" | tr -d '\r ')"
+      name="$(echo "$name" | tr -d '\r ')"
+      [ -n "$asm" ] || continue
+      # shellcheck disable=SC2086
+      if ! (cd "$src/$suite" && "$pasmo" --amsdos $opts "$asm.asm" "$out/$name.bin" "$out/$name.sym" >/dev/null 2>&1); then
+        echo "  $suite/$asm: does not assemble, skipped" >&2
+        rm -f "$out/$name.bin" "$out/$name.sym"
+      fi
+    done < "$src/$suite/files.txt"
+  done
+  cp "$src/readme.txt" "$DEST/cpc-acid/README.txt"
+  rm -rf "$work"
+  echo "$CPCMISC_COMMIT" > "$DEST/cpc-acid/COMMIT"
+fi
+
 echo "done. export EMU_TESTDATA_DIR=$DEST"

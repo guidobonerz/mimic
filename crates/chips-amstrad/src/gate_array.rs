@@ -8,7 +8,7 @@
 //! | -------- | -------- | ------------------------------------------------- |
 //! | 00       | PENR     | bit 4 = 1 border, else bits 3–0 pen               |
 //! | 01       | INKR     | bits 4–0 hardware colour of the selected pen      |
-//! | 10       | RMR      | bits 1–0 mode, 2 lower ROM off, 3 upper ROM off, 4 reset the interrupt counter (bit 5 must be 0) |
+//! | 10       | RMR      | bits 1–0 mode, 2 lower ROM off, 3 upper ROM off, 4 reset the interrupt counter; bit 5 is ignored (only the Plus ASIC decodes it; Arnold acid test cpctest "MRER … bit 5=1") |
 //! | 11       | MMR      | RAM configuration — the 6128's PAL, not the Gate Array ([`GateArray::write`] returns it) |
 //!
 //! **Video.** Each microsecond the Gate Array fetches two bytes from the
@@ -160,12 +160,10 @@ impl GateArray {
             }
             1 => self.inks[usize::from(self.pen)] = v & 0x1f,
             2 => {
-                if v & 0x20 == 0 {
-                    self.rmr = v & 0x1f;
-                    if v & 0x10 != 0 {
-                        self.int_counter = 0;
-                        self.int_pending = false;
-                    }
+                self.rmr = v & 0x1f;
+                if v & 0x10 != 0 {
+                    self.int_counter = 0;
+                    self.int_pending = false;
                 }
             }
             _ => return Some(v),
@@ -367,6 +365,14 @@ mod tests {
         assert_eq!(cpu_wait_states(9), 3);
         assert_eq!(cpu_wait_states(10), 2);
         assert_eq!(cpu_wait_states(11), 1);
+    }
+
+    #[test]
+    fn rmr_ignores_bit_5() {
+        let mut ga = GateArray::new();
+        ga.write(0b1000_1100);
+        ga.write(0b1010_0001);
+        assert_eq!(ga.rmr, 0b0_0001, "ROMs back on, mode 1");
     }
 
     fn cpc_crtc() -> Crtc {

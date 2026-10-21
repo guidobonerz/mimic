@@ -301,7 +301,18 @@ impl Z80 {
         t
     }
 
+    /// NMOS Z80: an interrupt accepted right after LD A,I or LD A,R reads
+    /// IFF2 after it has been cleared, so P/V ends up 0 (Sean Young, "The
+    /// Undocumented Z80 Documented"; Arnold acid test "ld a,r/ld a,i p/v
+    /// int test").
+    fn ld_a_ir_quirk(&mut self) {
+        if self.p {
+            self.f &= !flag::PV;
+        }
+    }
+
     fn nmi(&mut self, bus: &mut dyn TimedBus) -> u32 {
+        self.ld_a_ir_quirk();
         self.halted = false;
         self.iff1 = false;
         // An opcode fetch whose byte is ignored, one T-state longer.
@@ -319,6 +330,7 @@ impl Z80 {
     }
 
     fn irq(&mut self, bus: &mut dyn TimedBus) -> u32 {
+        self.ld_a_ir_quirk();
         self.halted = false;
         self.iff1 = false;
         self.iff2 = false;

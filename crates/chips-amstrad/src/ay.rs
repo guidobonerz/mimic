@@ -11,7 +11,10 @@
 //! |       |                                  | 14    | I/O port A                  |
 //!
 //! The bus is driven by BDIR/BC1 (BC2 tied high on the CPC): 11 latches
-//! the register number, 10 writes, 01 reads, 00 is inactive. On the CPC
+//! the register number, 10 writes, 01 reads, 00 is inactive. A latched
+//! number with any of the upper four bits set does not match the chip's
+//! address (A7–A4 = 0000) and deselects it: writes are ignored and reads
+//! leave the bus floating until a valid number is latched. On the CPC
 //! port A is the keyboard's column input and the chip is clocked at 1 MHz.
 //!
 //! Sound: the tone and noise counters run at clock / 8; a tone output
@@ -37,7 +40,7 @@ const VOLUME: [u16; 16] = [
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ay {
     pub regs: [u8; 16],
-    /// Latched register number.
+    /// Latched register number (all eight bits; 16 and up deselect).
     pub addr: u8,
     /// Clock / 8 prescaler.
     prescale: u8,
@@ -87,8 +90,8 @@ impl Ay {
     /// bus (writes and latches).
     pub fn bus_write(&mut self, function: u8, data: u8) {
         match function & 3 {
-            3 => self.addr = data & 0x0f,
-            2 => {
+            3 => self.addr = data,
+            2 if self.addr < 16 => {
                 let a = usize::from(self.addr);
                 self.regs[a] = data & MASKS[a];
                 if a == 13 {
@@ -105,7 +108,8 @@ impl Ay {
         match self.addr {
             14 if self.regs[7] & 0x40 == 0 => port_a,
             14 => self.regs[14] & port_a,
-            a => self.regs[usize::from(a)],
+            a @ 0..=15 => self.regs[usize::from(a)],
+            _ => 0xff,
         }
     }
 
@@ -244,7 +248,7 @@ impl Savestate for Ay {
         let (_, mut c) = r.chunk(TAG, VERSION)?;
         let mut n = Self::new();
         c.raw_into(&mut n.regs)?;
-        n.addr = c.u8()? & 0x0f;
+        n.addr = c.u8()?;
         for (v, m) in n.regs.iter_mut().zip(MASKS) {
             *v &= m;
         }
@@ -289,6 +293,17 @@ mod tests {
         assert_eq!(ay.read(0xbf), 0xbf, "port A input");
         ay.bus_write(0, 0x55);
         assert_eq!(ay.addr, 14, "inactive cycle changes nothing");
+    }
+
+    #[test]
+    fn register_numbers_above_15_deselect() {
+        let mut ay = Ay::new();
+        write(&mut ay, 0, 0x12);
+        write(&mut ay, 0x10, 0x33);
+        assert_eq!(ay.regs[0], 0x12, "register 16 is not register 0");
+        assert_eq!(ay.read(0x00), 0xff, "deselected: the bus floats");
+        ay.bus_write(3, 0);
+        assert_eq!(ay.read(0x00), 0x12);
     }
 
     #[test]
