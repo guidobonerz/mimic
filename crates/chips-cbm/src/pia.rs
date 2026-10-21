@@ -1,4 +1,5 @@
-//! MOS 6520 / Motorola 6820 Peripheral Interface Adapter (PET).
+//! MOS 6520 / Motorola 6820 Peripheral Interface Adapter (PET; also the
+//! Atari 800XL's PIA, wired in `machine-atari8`).
 //!
 //! | Reg | CRx bit 2 = 0     | CRx bit 2 = 1                       |
 //! | --- | ----------------- | ----------------------------------- |

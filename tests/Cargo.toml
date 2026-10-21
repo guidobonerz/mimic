@@ -16,6 +16,7 @@ machine-vic20.workspace = true
 machine-pet.workspace = true
 machine-ted.workspace = true
 machine-c128.workspace = true
+machine-atari8.workspace = true
 
 [dev-dependencies]
 emu-debug.workspace = true

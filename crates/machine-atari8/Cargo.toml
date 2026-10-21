@@ -12,6 +12,7 @@ workspace = true
 emu-core.workspace = true
 cpu-6502.workspace = true
 chips-atari.workspace = true
+chips-cbm.workspace = true
 drives-other.workspace = true
 devices-input.workspace = true
 media.workspace = true

@@ -114,10 +114,11 @@ impl Profile {
     /// control port 2 on the numeric keypad and on the first gamepad.
     pub fn default_for(machine: &str) -> Self {
         // The C64's game port is control port 2; the VIC-20 has one port; the
-        // C16/Plus/4 joystick comes plugged into port 1.
+        // C16/Plus/4 joystick comes plugged into port 1, as do most Atari
+        // games' joysticks.
         let port = match machine {
             "c64" | "c128" => Some(1),
-            "vic20" | "c16" | "plus4" => Some(0),
+            "vic20" | "c16" | "plus4" | "atari800xl" => Some(0),
             _ => None,
         };
         let joystick = match port {

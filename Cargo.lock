@@ -832,6 +832,7 @@ dependencies = [
  "emu-debug",
  "emu-machines",
  "emu-preview",
+ "machine-atari8",
  "machine-c128",
  "machine-c64",
  "machine-pet",
@@ -1460,6 +1461,7 @@ name = "machine-atari8"
 version = "0.1.0"
 dependencies = [
  "chips-atari",
+ "chips-cbm",
  "cpu-6502",
  "devices-input",
  "drives-other",
