@@ -19,7 +19,7 @@ use emu_core::frame::SignalInfo;
 use emu_core::input::{InputEvent, InputTarget, TimedInput};
 use emu_core::{ControlId, ControlInfo, Machine, ScreenId, StopReason};
 use emu_debug::{Endpoint, Service, Session};
-use emu_input::{HostEvent, Mapper};
+use emu_input::{HostEvent, JoyKeys, Mapper};
 use emu_preview::server::FrameTap;
 
 use crate::footer::{Footer, Tracker};
@@ -78,6 +78,13 @@ pub struct Shared {
     pub controls: Mutex<Vec<ControlInfo>>,
     /// Panel clicks from the window, (control, value); queued as input.
     pub panel_events: Mutex<Vec<(u16, u8)>>,
+    /// Which host keys play the joystick (index into `JoyKeys::ALL`); set by
+    /// the window's panel, applied to the mapper by the emulation thread.
+    pub joy_keys: AtomicU8,
+    /// The port the joysticks play (0-based), and how many joystick ports
+    /// the machine has (the panel offers the switch from two on).
+    pub joy_port: AtomicU8,
+    pub joy_ports: AtomicU8,
 }
 
 /// Datasette keys from the window.
@@ -134,6 +141,9 @@ impl Shared {
             panel_on: AtomicBool::new(false),
             controls: Mutex::default(),
             panel_events: Mutex::default(),
+            joy_keys: AtomicU8::new(0),
+            joy_port: AtomicU8::new(0),
+            joy_ports: AtomicU8::new(0),
         }
     }
 }
@@ -326,6 +336,25 @@ pub fn spawn(
                 let controls = session.machine().controls();
                 if let Ok(mut c) = shared.controls.lock() {
                     *c = controls;
+                }
+            }
+            let wanted = JoyKeys::ALL
+                .get(usize::from(shared.joy_keys.load(Ordering::Relaxed)))
+                .copied()
+                .unwrap_or(JoyKeys::Off);
+            let port = shared.joy_port.load(Ordering::Relaxed);
+            if mapper.joy_port().is_some_and(|p| p != port) {
+                let now = session.machine().now();
+                for e in mapper.set_joy_port(port, now) {
+                    tracker.observe(&e);
+                    session.input(e);
+                }
+            }
+            if wanted != mapper.joy_keys() {
+                let now = session.machine().now();
+                for e in mapper.set_joy_keys(wanted, now) {
+                    tracker.observe(&e);
+                    session.input(e);
                 }
             }
             let screen = shown_screen(session.machine(), chosen);

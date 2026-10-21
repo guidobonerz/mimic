@@ -185,9 +185,14 @@ Browser-Viewer; der Debugger bedient sie mit `controls`/`set_control`
 (C128: VIC und VDC). Datasette/Kassette: F9 PLAY, Shift+F9 RECORD, F10 STOP,
 F11 REWIND.
 
-**Joystick:** Erster Gamepad, beim C64/C128 zusätzlich Ziffernblock
-8/2/4/6 + 0 bzw. rechte Strg (Port 2), bei VIC-20, C16/Plus/4 und Atari
-Port 1. Beim CPC nur Gamepad (der Ziffernblock sind dort Funktionstasten).
+**Joystick:** Erster Gamepad und eine Tastatur-Belegung (beim C64/C128
+Port 2, bei VIC-20, C16/Plus/4, Atari und CPC Port 1). Welche Tasten den
+Joystick spielen, stellt der Schalter **JOY KEYS** in der Konsolen-Leiste um
+(oder `--joykeys`): **CURSOR** = Cursortasten, Leertaste = Feuer (Standard
+beim Atari 2600, der keine Tastatur hat), **NUMPAD** = Ziffernblock 8/2/4/6,
+Feuer 0 oder rechte Strg (Standard bei den Computern), **OFF** = nur Gamepad
+(Standard beim CPC, dessen Ziffernblock die Funktionstasten sind). Bei CURSOR
+spielen die Cursortasten und die Leertaste den Joystick statt zu tippen.
 
 **Maus/Paddles:** Mit `--option port1=mouse1351` (oder `paddles`, beim
 Atari 2600 auch `driving`, jeweils auch `port2`) bzw. beim CPC

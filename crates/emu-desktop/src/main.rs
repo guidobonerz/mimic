@@ -24,10 +24,11 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 
 use emu_core::media::{MediaKind, SlotId};
+use emu_core::port::PortKind;
 use emu_core::registry::MachineConfig;
 use emu_core::Machine;
 use emu_debug::{DebugServer, ServerConfig};
-use emu_input::{Axis, Button, HostEvent, Mapper, Profile as InputProfile};
+use emu_input::{Axis, Button, HostEvent, JoyKeys, Mapper, Profile as InputProfile};
 use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer};
 use video_crt::Profile;
 use winit::application::ApplicationHandler;
@@ -94,12 +95,20 @@ usage: mimic-desktop [options]
                         (default 127.0.0.1:6502); implies --debug
   --footer              start with the status footer shown (Ctrl+Space)
   --no-panel            start with the console panel hidden (Ctrl+P)
+  --joykeys KEYS        keys that play the joystick: cursor (cursor keys,
+                        Space fires; default on the Atari 2600), numpad
+                        (8/2/4/6, 0 or right Ctrl fire; default elsewhere)
+                        or off; also a switch on the console panel
+  --joyport N           the port the joysticks (keys and gamepad) play,
+                        1-based (default: the machine's game port); also a
+                        switch on the panel when there are several ports
   --help
 
 C64 keys by position on a PC keyboard: Esc = RUN/STOP, Tab = CTRL,
 left Ctrl = C=, Insert = £, Delete = ↑, Page Up = RESTORE, Home = CLR/HOME,
 F2/F4/F6/F8 = shifted F1/F3/F5/F7. Joystick (port 2): numeric keypad
-8/2/4/6 + 0 or right Ctrl, or the first gamepad.
+8/2/4/6 + 0 or right Ctrl (or cursor keys + Space, see --joykeys), or the
+first gamepad.
 
 Atari 800XL keys by position: < > on - =, - = on [ ], + * on ' \\, Tab, Esc,
 CapsLock, right Alt = Atari key, arrows = CONTROL + - = + *; F2 START,
@@ -114,7 +123,10 @@ F12 switches between a machine's screens (C128: 40-column VIC and
 Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
 Ctrl+P shows or hides the console panel: the machine's buttons and
 switches (power, reset, Atari console switches, RESTORE …); click a button
-(held while the mouse button is down) or a switch position.
+(held while the mouse button is down) or a switch position. Its JOY KEYS
+switch picks the keys that play the joystick: CURSOR (cursor keys, Space
+fires), NUMPAD or OFF; JOY PORT (machines with several joystick ports)
+moves the joysticks to another port.
 Ctrl+Space shows or hides the status footer: mouse pointer position in
 frame pixels, joystick directions and drive activity/errors.
 With --option port1=mouse1351 (or paddles, driving, also port2) a click into the
@@ -137,6 +149,8 @@ struct Args {
     preview: Option<SocketAddr>,
     footer: bool,
     panel: bool,
+    joykeys: Option<JoyKeys>,
+    joyport: Option<u8>,
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
@@ -159,6 +173,8 @@ fn parse_args() -> Result<Option<Args>, String> {
         preview: None,
         footer: false,
         panel: true,
+        joykeys: None,
+        joyport: None,
     };
     let mut it = std::env::args().skip(1).peekable();
     while let Some(flag) = it.next() {
@@ -172,6 +188,22 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--cart" => a.cart = Some(value("--cart")?),
             "--footer" => a.footer = true,
             "--no-panel" => a.panel = false,
+            "--joyport" => {
+                let v = value("--joyport")?;
+                let n = v
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|&n| n >= 1)
+                    .ok_or_else(|| format!("--joyport {v}: a port number from 1"))?;
+                a.joyport = Some(n - 1);
+            }
+            "--joykeys" => {
+                let v = value("--joykeys")?;
+                a.joykeys = Some(
+                    JoyKeys::from_name(&v)
+                        .ok_or_else(|| format!("--joykeys {v}: cursor, numpad or off"))?,
+                );
+            }
             "--autostart" => {
                 a.config.options.insert("autostart".into(), "on".into());
             }
@@ -342,10 +374,12 @@ struct App {
     /// The P of a Ctrl+P is down; its release is not sent either.
     swallow_p: bool,
     panel_on: bool,
-    /// The panel's clickable areas, its top (window pixels) and height.
+    /// The panel's clickable areas, its top and row height (window
+    /// pixels) and number of rows.
     panel_hits: Vec<panel::Hit>,
     panel_top: f64,
-    panel_height: f64,
+    panel_row: f64,
+    panel_rows: usize,
     /// The panel button held with the mouse.
     panel_held: Option<u16>,
     /// Host pointer in window pixels, while over the window.
@@ -358,13 +392,24 @@ impl App {
     /// The panel control under the pointer, if the panel is shown.
     fn over_panel(&self) -> Option<panel::Hit> {
         let (x, y) = self.cursor?;
-        let inside = y >= self.panel_top && y < self.panel_top + self.panel_height;
-        (self.panel_on && inside)
-            .then(|| panel::hit(&self.panel_hits, x as usize))
+        if !self.panel_on || y < self.panel_top {
+            return None;
+        }
+        let row = ((y - self.panel_top) / self.panel_row) as usize;
+        (row < self.panel_rows)
+            .then(|| panel::hit(&self.panel_hits, row, x as usize))
             .flatten()
     }
 
     fn panel_send(&self, id: u16, value: u8) {
+        if id == panel::JOY_KEYS {
+            self.shared.joy_keys.store(value, Ordering::Relaxed);
+            return;
+        }
+        if id == panel::JOY_PORT {
+            self.shared.joy_port.store(value, Ordering::Relaxed);
+            return;
+        }
         if let Ok(mut e) = self.shared.panel_events.lock() {
             e.push((id, value));
         }
@@ -702,16 +747,27 @@ impl ApplicationHandler for App {
                     let mut strip = Vec::new();
                     let mut rows = 0;
                     if self.panel_on {
-                        let controls = self
+                        let mut controls = self
                             .shared
                             .controls
                             .lock()
                             .map(|c| c.clone())
                             .unwrap_or_default();
-                        let (rgba, hits) = panel::render(&controls, width, size);
+                        controls.push(panel::joy_keys_control(
+                            self.shared.joy_keys.load(Ordering::Relaxed),
+                        ));
+                        let ports = self.shared.joy_ports.load(Ordering::Relaxed);
+                        if ports > 1 {
+                            controls.push(panel::joy_port_control(
+                                ports,
+                                self.shared.joy_port.load(Ordering::Relaxed),
+                            ));
+                        }
+                        let (rgba, hits, n) = panel::render(&controls, width, size);
                         strip.extend_from_slice(&rgba);
                         self.panel_hits = hits;
-                        rows += row;
+                        self.panel_rows = n;
+                        rows += row * n as u32;
                     }
                     if self.footer_on {
                         let mouse = if self.mouse_captured {
@@ -738,7 +794,10 @@ impl ApplicationHandler for App {
                     }
                     let window_height = self.window.as_ref().map_or(0, |w| w.inner_size().height);
                     self.panel_top = f64::from(window_height.saturating_sub(rows));
-                    self.panel_height = if self.panel_on { f64::from(row) } else { 0.0 };
+                    self.panel_row = f64::from(row);
+                    if !self.panel_on {
+                        self.panel_rows = 0;
+                    }
                     g.render();
                 }
                 if let (Some(w), Ok(status)) = (&self.window, self.shared.status.lock()) {
@@ -788,11 +847,46 @@ fn run() -> Result<(), String> {
         }
     }
     let wants_mouse = !input_profile.mouse.is_empty();
-    let mapper = Mapper::new(input_profile);
+    let mut mapper = Mapper::new(input_profile);
+    if let Some(keys) = args.joykeys {
+        mapper.set_joy_keys(keys, emu_core::Cycle(0));
+    }
+    // Joystick ports of the machine (not the user port, IEC …).
+    let joy_ports = machine
+        .ports()
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.kind,
+                PortKind::CbmControl
+                    | PortKind::AtariJoy
+                    | PortKind::CpcJoy
+                    | PortKind::AmigaGameport
+            )
+        })
+        .count()
+        .min(4) as u8;
+    if let Some(port) = args.joyport {
+        if port >= joy_ports {
+            return Err(format!(
+                "--joyport {}: the machine has {joy_ports} joystick port(s)",
+                port + 1
+            ));
+        }
+        mapper.set_joy_port(port, emu_core::Cycle(0));
+    }
+    let joy_port = mapper.joy_port().unwrap_or(0);
+    let joy_keys = JoyKeys::ALL
+        .iter()
+        .position(|&k| k == mapper.joy_keys())
+        .unwrap_or(0) as u8;
 
     let shared = Arc::new(Shared::new());
     shared.footer_on.store(args.footer, Ordering::Relaxed);
     shared.panel_on.store(args.panel, Ordering::Relaxed);
+    shared.joy_keys.store(joy_keys, Ordering::Relaxed);
+    shared.joy_port.store(joy_port, Ordering::Relaxed);
+    shared.joy_ports.store(joy_ports, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel();
     let _stream = audio::start(shared.clone());
     if _stream.is_none() {
@@ -882,7 +976,8 @@ fn run() -> Result<(), String> {
         panel_on: args.panel,
         panel_hits: Vec::new(),
         panel_top: 0.0,
-        panel_height: 0.0,
+        panel_row: 1.0,
+        panel_rows: 0,
         panel_held: None,
         cursor: None,
         mouse_sum: (0, 0),

@@ -68,6 +68,73 @@ fn default_deadzone() -> f32 {
     0.5
 }
 
+/// Which host keys play the keyboard joystick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum JoyKeys {
+    Off,
+    /// Numeric keypad 8/2/4/6, fire on 0 or right Ctrl.
+    Numpad,
+    /// Cursor keys, fire on Space.
+    Cursor,
+}
+
+impl JoyKeys {
+    pub const ALL: [JoyKeys; 3] = [JoyKeys::Off, JoyKeys::Numpad, JoyKeys::Cursor];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            JoyKeys::Off => "off",
+            JoyKeys::Numpad => "numpad",
+            JoyKeys::Cursor => "cursor",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+
+    /// The key source, `None` for [`JoyKeys::Off`].
+    pub fn source(self) -> Option<JoystickSource> {
+        let keys = |up: &str, down: &str, left: &str, right: &str, fire: &[&str]| {
+            Some(JoystickSource::Keys {
+                up: up.into(),
+                down: down.into(),
+                left: left.into(),
+                right: right.into(),
+                fire: fire.iter().map(|f| (*f).into()).collect(),
+            })
+        };
+        match self {
+            JoyKeys::Off => None,
+            JoyKeys::Numpad => keys(
+                "Numpad8",
+                "Numpad2",
+                "Numpad4",
+                "Numpad6",
+                &["Numpad0", "ControlRight"],
+            ),
+            JoyKeys::Cursor => keys(
+                "ArrowUp",
+                "ArrowDown",
+                "ArrowLeft",
+                "ArrowRight",
+                &["Space"],
+            ),
+        }
+    }
+
+    /// The default for a machine: cursor keys where there is no keyboard to
+    /// type on (Atari 2600), none on the CPC (its numeric keypad is the
+    /// function keys), the numeric keypad elsewhere.
+    pub fn default_for(machine: &str) -> Self {
+        match machine {
+            "atari2600" => JoyKeys::Cursor,
+            "cpc" => JoyKeys::Off,
+            _ => JoyKeys::Numpad,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct JoystickMap {
     /// Target port (`PortId`) of the machine.
@@ -110,8 +177,9 @@ impl Profile {
         toml::from_str(text).map_err(|e| e.to_string())
     }
 
-    /// Built-in default: positional keyboard; for the C64 a joystick in
-    /// control port 2 on the numeric keypad and on the first gamepad.
+    /// Built-in default: positional keyboard; a joystick (for the C64 in
+    /// control port 2) on the first gamepad and on the keys of
+    /// [`JoyKeys::default_for`].
     pub fn default_for(machine: &str) -> Self {
         // The C64's game port is control port 2; the VIC-20 has one port; the
         // C16/Plus/4 joystick comes plugged into port 1, as do most Atari
@@ -121,33 +189,19 @@ impl Profile {
             "vic20" | "c16" | "plus4" | "atari800xl" | "atari2600" | "cpc" => Some(0),
             _ => None,
         };
-        // The CPC's numeric keypad is its function keys: gamepad only.
-        let keys = machine != "cpc";
-        let mut joystick = match port {
-            Some(port) => vec![
-                JoystickMap {
-                    port,
-                    source: JoystickSource::Keys {
-                        up: "Numpad8".into(),
-                        down: "Numpad2".into(),
-                        left: "Numpad4".into(),
-                        right: "Numpad6".into(),
-                        fire: vec!["Numpad0".into(), "ControlRight".into()],
-                    },
+        let mut joystick = Vec::new();
+        if let Some(port) = port {
+            if let Some(source) = JoyKeys::default_for(machine).source() {
+                joystick.push(JoystickMap { port, source });
+            }
+            joystick.push(JoystickMap {
+                port,
+                source: JoystickSource::Gamepad {
+                    pad: 0,
+                    fire: default_fire(),
+                    deadzone: default_deadzone(),
                 },
-                JoystickMap {
-                    port,
-                    source: JoystickSource::Gamepad {
-                        pad: 0,
-                        fire: default_fire(),
-                        deadzone: default_deadzone(),
-                    },
-                },
-            ],
-            None => Vec::new(),
-        };
-        if !keys {
-            joystick.retain(|j| !matches!(j.source, JoystickSource::Keys { .. }));
+            });
         }
         Self {
             machine: machine.into(),

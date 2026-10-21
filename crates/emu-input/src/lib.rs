@@ -27,7 +27,7 @@ pub mod profile;
 use serde::Deserialize;
 
 pub use mapper::Mapper;
-pub use profile::Profile;
+pub use profile::{JoyKeys, Profile};
 
 /// Gamepad buttons in a layout-neutral naming (position, not label).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]

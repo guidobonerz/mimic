@@ -11,7 +11,7 @@ use emu_core::port::PortId;
 use emu_core::Cycle;
 
 use crate::keymap::{self, Keymap};
-use crate::profile::{JoystickSource, KeyboardMode, Profile};
+use crate::profile::{JoyKeys, JoystickMap, JoystickSource, KeyboardMode, Profile};
 use crate::{Axis, Button, HostEvent};
 
 #[derive(Debug, Default)]
@@ -78,6 +78,83 @@ impl Mapper {
 
     pub fn profile(&self) -> &Profile {
         &self.profile
+    }
+
+    /// The keys playing the keyboard joystick now.
+    pub fn joy_keys(&self) -> JoyKeys {
+        let keys = self
+            .profile
+            .joystick
+            .iter()
+            .find(|j| matches!(j.source, JoystickSource::Keys { .. }));
+        match keys {
+            None => JoyKeys::Off,
+            Some(j) => JoyKeys::ALL
+                .into_iter()
+                .find(|k| k.source().as_ref() == Some(&j.source))
+                .unwrap_or(JoyKeys::Numpad),
+        }
+    }
+
+    /// The port the joysticks (keyboard and gamepad) play; `None` without
+    /// any.
+    pub fn joy_port(&self) -> Option<u8> {
+        self.profile.joystick.first().map(|j| j.port)
+    }
+
+    /// Move every joystick (keyboard and gamepad) to `port`. The old port
+    /// is released; returns the events for that and for the new port's
+    /// state, at `now`.
+    pub fn set_joy_port(&mut self, port: u8, now: Cycle) -> Vec<TimedInput> {
+        let mut out = Vec::new();
+        let old: BTreeSet<u8> = self.profile.joystick.iter().map(|j| j.port).collect();
+        if old.is_empty() || old.iter().all(|&p| p == port) {
+            return out;
+        }
+        for p in old.into_iter().filter(|&p| p != port) {
+            out.push(TimedInput {
+                at: now,
+                target: InputTarget::Port(PortId(p)),
+                event: InputEvent::Digital {
+                    dirs: Dirs::NONE,
+                    buttons: 0,
+                },
+            });
+        }
+        for (map, joy) in self.profile.joystick.iter_mut().zip(&mut self.joys) {
+            map.port = port;
+            // The new port has not heard from this joystick yet.
+            joy.sent = (Dirs(0xff), 0xff);
+        }
+        self.flush_joysticks(now, &mut out);
+        out
+    }
+
+    /// Let other keys play the keyboard joystick (on the port of the
+    /// profile's first joystick). Directions and fire held on the old keys
+    /// are released; returns the events for that, at `now`.
+    pub fn set_joy_keys(&mut self, keys: JoyKeys, now: Cycle) -> Vec<TimedInput> {
+        let mut out = Vec::new();
+        let Some(port) = self.profile.joystick.first().map(|j| j.port) else {
+            return out;
+        };
+        let mut i = 0;
+        while i < self.profile.joystick.len() {
+            if matches!(self.profile.joystick[i].source, JoystickSource::Keys { .. }) {
+                self.profile.joystick.remove(i);
+                self.joys.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+        if let Some(source) = keys.source() {
+            self.profile
+                .joystick
+                .insert(0, JoystickMap { port, source });
+            self.joys.insert(0, JoyState::default());
+        }
+        self.flush_joysticks(now, &mut out);
+        out
     }
 
     /// Map one host event; returns the machine events to queue at `now`.
@@ -320,6 +397,108 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn joystick_keys_switch_between_numpad_cursor_and_off() {
+        let mut m = Mapper::new(Profile::default_for("atari2600"));
+        assert_eq!(m.joy_keys(), JoyKeys::Cursor, "no keyboard: cursor keys");
+        let t = Cycle(1);
+        let ev = m.handle(&key("ArrowLeft", true), t);
+        assert_eq!(
+            ev[0].event,
+            InputEvent::Digital {
+                dirs: Dirs::LEFT,
+                buttons: 0
+            }
+        );
+        let ev = m.handle(&key("Space", true), t);
+        assert_eq!(
+            ev[0].event,
+            InputEvent::Digital {
+                dirs: Dirs::LEFT,
+                buttons: 1
+            }
+        );
+        // Switching releases what the old keys held.
+        let ev = m.set_joy_keys(JoyKeys::Numpad, t);
+        assert_eq!(
+            ev[0].event,
+            InputEvent::Digital {
+                dirs: Dirs::NONE,
+                buttons: 0
+            }
+        );
+        assert_eq!(m.joy_keys(), JoyKeys::Numpad);
+        assert!(
+            m.handle(&key("ArrowUp", true), t).is_empty(),
+            "the 2600 has no keyboard"
+        );
+        let ev = m.handle(&key("Numpad8", true), t);
+        assert_eq!(
+            ev[0].event,
+            InputEvent::Digital {
+                dirs: Dirs::UP,
+                buttons: 0
+            }
+        );
+        m.set_joy_keys(JoyKeys::Off, t);
+        assert_eq!(m.joy_keys(), JoyKeys::Off);
+        assert!(m.handle(&key("Numpad2", true), t).is_empty());
+        // On a computer the cursor keys type until they play the joystick.
+        let mut c64 = Mapper::new(Profile::default_for("c64"));
+        assert_eq!(c64.joy_keys(), JoyKeys::Numpad);
+        assert!(!keys_of(&c64.handle(&key("ArrowDown", true), t)).is_empty());
+        c64.handle(&key("ArrowDown", false), t);
+        c64.set_joy_keys(JoyKeys::Cursor, t);
+        let ev = c64.handle(&key("ArrowDown", true), t);
+        assert_eq!(ev[0].target, InputTarget::Port(PortId(1)), "control port 2");
+        assert_eq!(
+            Mapper::new(Profile::default_for("cpc")).joy_keys(),
+            JoyKeys::Off
+        );
+    }
+
+    #[test]
+    fn joysticks_move_to_another_port() {
+        let mut m = Mapper::new(Profile::default_for("c64"));
+        assert_eq!(m.joy_port(), Some(1), "control port 2");
+        let t = Cycle(5);
+        m.handle(&key("Numpad8", true), t);
+        let ev = m.set_joy_port(0, t);
+        let released = TimedInput {
+            at: t,
+            target: InputTarget::Port(PortId(1)),
+            event: InputEvent::Digital {
+                dirs: Dirs::NONE,
+                buttons: 0,
+            },
+        };
+        assert_eq!(ev[0], released, "the old port is let go");
+        assert_eq!(ev[1].target, InputTarget::Port(PortId(0)));
+        assert_eq!(
+            ev[1].event,
+            InputEvent::Digital {
+                dirs: Dirs::UP,
+                buttons: 0
+            },
+            "still held"
+        );
+        assert_eq!(m.joy_port(), Some(0));
+        assert!(m.set_joy_port(0, t).is_empty(), "already there");
+        let ev = m.handle(
+            &HostEvent::Button {
+                pad: 0,
+                button: Button::South,
+                down: true,
+            },
+            t,
+        );
+        assert_eq!(
+            ev[0].target,
+            InputTarget::Port(PortId(0)),
+            "the gamepad moved too"
+        );
     }
 
     #[test]
