@@ -197,3 +197,34 @@ fn savestate_round_trip_mid_blit() {
     let c = Blitter::load(&mut StateReader::new(&data)).unwrap();
     assert_eq!(c, b);
 }
+
+#[test]
+fn cycle_counts_follow_the_channels() {
+    // (BLTCON0 channel bits, colour clocks per word): 4 clocks, +2 for B,
+    // +2 for C and D together (HRM "Blitter speed").
+    for (use_bits, per_word) in [
+        (0x0900, 2),
+        (0x0500, 3),
+        (0x0700, 4),
+        (0x0f00, 4),
+        (0x0100, 2),
+    ] {
+        let mut chip = ChipRam::new(0x1_0000);
+        let mut b = Blitter::new();
+        b.con0 = use_bits | 0xf0;
+        b.afwm = 0xffff;
+        b.alwm = 0xffff;
+        b.start(2 << 6 | 3);
+        let mut slots = 0;
+        loop {
+            b.tick();
+            if b.wants_slot() {
+                slots += 1;
+                if b.cycle(&mut chip) {
+                    break;
+                }
+            }
+        }
+        assert_eq!(slots, 6 * per_word, "channels {use_bits:04x}");
+    }
+}

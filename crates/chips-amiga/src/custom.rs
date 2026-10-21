@@ -12,9 +12,11 @@
 //! **DMA slots** (HRM chapter 7, "DMA time slot allocation"): odd slots
 //! $01–$07 refresh, $09–$0D disk, $0F–$15 audio, $17–$35 sprites; bitplanes
 //! in their fetch window; the Copper takes even free slots, the Blitter any
-//! free slot, the CPU what is left. Without BLTPRI the Blitter leaves every
-//! fourth slot to a waiting CPU. Disk, audio and sprite DMA follow in later
-//! milestones; their slots stay free until then.
+//! free slot, the CPU what is left — and only even-numbered slots (HRM
+//! chapter 6, "Blitter DMA"). Without BLTPRI (BLITHOG) the Blitter leaves
+//! the next slot to the CPU after the CPU went without one for three of its
+//! cycles. Disk and audio DMA follow in later milestones; their slots stay
+//! free until then.
 //!
 //! **Bitplane fetch.** Inside the vertical display window and between
 //! DDFSTRT and DDFSTOP, eight-slot groups fetch the planes in the order
@@ -131,7 +133,6 @@ pub struct Custom {
     pub bpl1mod: u16,
     pub bpl2mod: u16,
     pub sprpt: [u32; 8],
-    pub clxcon: u16,
     /// JOY0DAT/JOY1DAT, supplied by the machine's game ports.
     pub joydat: [u16; 2],
     /// POT pins pulled low by the game ports (POTGOR data bit positions).
@@ -144,8 +145,8 @@ pub struct Custom {
     bpl_vertical: bool,
     /// Planes were fetched on this line (modulos are due).
     fetched: bool,
-    /// Consecutive slots the Blitter took while the CPU waited.
-    blit_streak: u8,
+    /// Even slots in a row the waiting CPU did not get.
+    cpu_starved: u8,
     spr_dma: [SprDma; 8],
     frame: Vec<Rgb8>,
     lut: Vec<Rgb8>,
@@ -170,7 +171,6 @@ impl Custom {
             bpl1mod: 0,
             bpl2mod: 0,
             sprpt: [0; 8],
-            clxcon: 0,
             joydat: [0; 2],
             pot_low: 0,
             copper: Copper::new(),
@@ -179,7 +179,7 @@ impl Custom {
             paula: Paula::new(),
             bpl_vertical: false,
             fetched: false,
-            blit_streak: 0,
+            cpu_starved: 0,
             spr_dma: [SprDma::Off; 8],
             frame: vec![Rgb8::default(); (WIDTH * standard.height()) as usize],
             lut: (0..4096u16).map(denise::rgb12).collect(),
@@ -311,7 +311,8 @@ impl Custom {
         self.blitter.tick();
         self.copper.check_wait(v, h, self.blitter.busy);
 
-        let mut blitter_slot = false;
+        // The CPU uses even slots only.
+        let cpu_turn = cpu_wants && h & 1 == 0;
         match self.slot(h) {
             Slot::Fixed => {}
             Slot::Sprite(n, first) => {
@@ -337,24 +338,23 @@ impl Custom {
                         self.write(r, val);
                     }
                 } else if self.blitter.wants_slot() && self.dma_on(dma::BLTEN) {
-                    if cpu_wants && self.dmacon & dma::BLTPRI == 0 && self.blit_streak >= 3 {
+                    if cpu_turn && self.dmacon & dma::BLTPRI == 0 && self.cpu_starved >= 3 {
                         out.cpu_slot = true;
-                    } else {
-                        blitter_slot = true;
-                        if self.blitter.cycle(chip) {
-                            self.paula.request(int::BLIT);
-                        }
+                    } else if self.blitter.cycle(chip) {
+                        self.paula.request(int::BLIT);
                     }
-                } else if cpu_wants {
+                } else if cpu_turn {
                     out.cpu_slot = true;
                 }
             }
         }
-        self.blit_streak = if blitter_slot && cpu_wants {
-            self.blit_streak + 1
-        } else {
-            0
-        };
+        if cpu_turn {
+            self.cpu_starved = if out.cpu_slot {
+                0
+            } else {
+                self.cpu_starved.saturating_add(1)
+            };
+        }
         if self.fetched && h == self.fetch_window().1 {
             self.add_modulos();
             self.fetched = false;
@@ -505,7 +505,7 @@ impl Custom {
             reg::DDFSTRT => self.ddfstrt = v & 0xfc,
             reg::DDFSTOP => self.ddfstop = v & 0xfc,
             reg::DMACON => set_clr(&mut self.dmacon, v & 0x87ff),
-            reg::CLXCON => self.clxcon = v,
+            reg::CLXCON => self.denise.clxcon = v,
             reg::INTENA => self.paula.write_intena(v),
             reg::INTREQ => self.paula.write_intreq(v),
             reg::ADKCON => self.paula.write_adkcon(v),
@@ -538,9 +538,13 @@ impl Custom {
         }
     }
 
-    /// A register read by the CPU.
+    /// A register read by the CPU: reading CLXDAT clears it.
     pub fn read(&mut self, r: u16) -> u16 {
-        self.peek(r)
+        let v = self.peek(r);
+        if r & 0x1fe == reg::CLXDAT {
+            self.denise.clxdat = 0;
+        }
+        v
     }
 
     /// Side-effect-free register read; write-only registers read $FFFF.
@@ -556,7 +560,7 @@ impl Custom {
             reg::DSKDATR => 0,
             reg::JOY0DAT => self.joydat[0],
             reg::JOY1DAT => self.joydat[1],
-            reg::CLXDAT => 0x8000,
+            reg::CLXDAT => 0x8000 | self.denise.clxdat,
             reg::ADKCONR => self.paula.adkcon,
             reg::POT0DAT | reg::POT1DAT => 0,
             reg::POTGOR => self.paula.potgor(self.pot_low),
@@ -594,7 +598,6 @@ impl Savestate for Custom {
                 self.ddfstop,
                 self.bpl1mod,
                 self.bpl2mod,
-                self.clxcon,
                 self.pot_low,
             ] {
                 w.u16(v);
@@ -609,7 +612,7 @@ impl Savestate for Custom {
             }
             w.bool(self.bpl_vertical);
             w.bool(self.fetched);
-            w.u8(self.blit_streak);
+            w.u8(self.cpu_starved);
             for s in self.spr_dma {
                 w.u8(s as u8);
             }
@@ -642,7 +645,6 @@ impl Savestate for Custom {
             &mut n.ddfstop,
             &mut n.bpl1mod,
             &mut n.bpl2mod,
-            &mut n.clxcon,
             &mut n.pot_low,
         ] {
             *v = c.u16()?;
@@ -656,7 +658,7 @@ impl Savestate for Custom {
         }
         n.bpl_vertical = c.bool()?;
         n.fetched = c.bool()?;
-        n.blit_streak = c.u8()?;
+        n.cpu_starved = c.u8()?;
         for s in &mut n.spr_dma {
             *s = match c.u8()? {
                 0 => SprDma::Off,

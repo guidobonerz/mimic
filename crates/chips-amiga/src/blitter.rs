@@ -23,9 +23,12 @@
 //! BLTCMOD is the row width in bytes. The first pixel goes to BLTDPT, the
 //! others to the C address.
 //!
-//! **Timing.** Each word takes as many DMA slots as it uses channels (at
-//! least two); a line pixel four. Words are computed when their last slot
-//! is granted, so CPU reads during a blit see the progress word by word.
+//! **Timing** (HRM chapter 6, "Blitter speed"): a blitter cycle takes four
+//! clocks (two colour clocks) plus two when B is used and two more when
+//! both C and D are; a line pixel takes eight. Here every colour clock of a
+//! blitter cycle occupies a DMA slot (on the chip some of them are idle
+//! bus cycles). Words are computed when their last slot is granted, so CPU
+//! reads during a blit see the progress word by word.
 
 use emu_core::{StateError, StateReader, StateWriter};
 
@@ -171,8 +174,7 @@ impl Blitter {
         if self.line_mode() {
             return 4;
         }
-        let n = (0..4).filter(|&ch| self.uses(ch)).count() as u8;
-        n.max(2)
+        2 + u8::from(self.uses(B)) + u8::from(self.uses(C) && self.uses(D))
     }
 
     /// One granted DMA slot. Returns true when the blit finished in it.

@@ -199,3 +199,59 @@ fn sprite_dma_fetches_control_and_data_words() {
     assert_eq!(pixel(&c, x, y + 2), black, "VSTOP");
     assert_eq!(pixel(&c, x, y - 1), black);
 }
+
+/// Six lowres planes at $10000 + plane · $2800, first word of line $2C
+/// only; returns the first two lowres pixels of the line as RGB.
+fn six_planes(bplcon0: u16, words: [u16; 6], colors: &[(usize, u16)]) -> [Rgb8; 3] {
+    let (mut c, mut chip) = setup();
+    for (p, w) in words.iter().enumerate() {
+        chip.set_word(0x1_0000 + 0x2800 * p as u32, *w);
+    }
+    let mut regs = vec![
+        (reg::BPLCON0, bplcon0),
+        (reg::DIWSTRT, 0x2c81),
+        (reg::DIWSTOP, 0x2dc1),
+        (reg::DDFSTRT, 0x38),
+        (reg::DDFSTOP, 0xd0),
+        (reg::DMACON, 0x8000 | dma::DMAEN | dma::BPLEN),
+    ];
+    for p in 0..6u16 {
+        let addr = 0x1_0000 + 0x2800 * u32::from(p);
+        regs.push((reg::BPL1PTH + 4 * p, (addr >> 16) as u16));
+        regs.push((reg::BPL1PTH + 4 * p + 2, addr as u16));
+    }
+    for &(i, col) in colors {
+        regs.push((reg::COLOR00 + 2 * i as u16, col));
+    }
+    for (r, v) in regs {
+        c.write(r, v);
+    }
+    field(&mut c, &mut chip);
+    let (x, y) = (2 * 0x81 - 4 * FIRST_CCK, 0x2c - 26);
+    [pixel(&c, x, y), pixel(&c, x + 2, y), pixel(&c, x + 4, y)]
+}
+
+#[test]
+fn ham_holds_and_modifies_through_dma() {
+    // Pixel 0: palette 3; pixel 1: modify red to $F; pixel 2: modify blue.
+    let px = six_planes(
+        0x6a00,
+        [0xe000, 0xc000, 0x6000, 0x6000, 0x2000, 0x4000],
+        &[(3, 0x123), (12, 0)],
+    );
+    let rgb = |c: u16| crate::denise::rgb12(c);
+    assert_eq!(px, [rgb(0x123), rgb(0xf23), rgb(0xf2d)]);
+}
+
+#[test]
+fn dual_playfield_through_dma() {
+    // Pixel 0: PF1 colour 1 and PF2 colour 1 (PF1 in front); pixel 1: PF2
+    // only (colour 9); pixel 2: neither.
+    let px = six_planes(
+        0x4600,
+        [0x8000, 0xc000, 0, 0, 0, 0],
+        &[(1, 0xf00), (9, 0x0f0), (0, 0x00f)],
+    );
+    let rgb = |c: u16| crate::denise::rgb12(c);
+    assert_eq!(px, [rgb(0xf00), rgb(0x0f0), rgb(0x00f)]);
+}

@@ -106,6 +106,8 @@ own section.
 | Sprite DMA and display, attached sprites, priorities | HRM chapter 4 "Sprite hardware" | `chips-amiga/src/custom.rs`, `denise.rs` |
 | Blitter area, fill and line modes, minterms | HRM chapter 6 "Blitter hardware" | `chips-amiga/src/blitter.rs` |
 | 8520 CIA (TOD event counter, one-shot start), CIA port assignments, floppy control and status lines, drive identification | HRM appendix F "8520 CIA"; HRM chapter 8 "Disk" | `chips-cbm/src/cia.rs`, `machine-amiga`, `drives-other/src/amiga_drive.rs` |
+| Collision detection (CLXCON, CLXDAT) | HRM chapter 7 "Collision detection" | `chips-amiga/src/denise.rs` |
+| Blitter cycle lengths by channel, line-mode pixel time; CPU on even slots, BLITHOG and the three-cycle rule | HRM chapter 6 "Blitter speed" and "Blitter DMA" (read via the Amiga Developer CD 2.1 HTML copy, see below) | `chips-amiga/src/blitter.rs`, `custom.rs` |
 | Joystick bits in JOYxDAT, POTGO/POTGOR | HRM chapter 8 "Interface hardware" | `machine-amiga`, `chips-amiga/src/paula.rs` |
 | VPA/E-clock bus cycles (CIA accesses, autovector acknowledge) | Motorola, *M68000 User's Manual*, "Synchronous operation" | `machine-amiga` (`e_clock_waits`) |
 
@@ -151,6 +153,7 @@ Pages fetched or searched while building (beyond the documents above):
 - Arnold acid test sources (CPCMisc, see above) as hardware measurements: expected values and comments of `ppi` (port C pull levels &2F, `port_c_input`; port reset by mode set), `psg` (register numbers ≥ 16 deselect the AY), `type1ctrl` (UM6845R status bit 6 after power-on, cleared by reading R16/R17), `cpctest` (RMR ignores bit 5 on the CPC; interrupt timing) and `z80tests/cpu` (LD A,I/LD A,R P/V when an interrupt follows). No test code was copied; the runner patches two test bugs (`crtctest` CRTC-type prompt, `cpctest` GA I/O decode entry without BC) and documents them in `tests/src/cpc_acid.rs`.
 - The ACE emulator's published CPC test results (search summary) — note that `crtctest` ignores the typed CRTC type.
 - Searches about PPI port B bit 5 (/EXP) on the 6128 (cpcwiki pages HTTP 403; only search summaries): not conclusive, port B kept at &7E.
+- Amiga Hardware Reference Manual, blitter chapter pages of the Amiga Developer CD 2.1 HTML copy (https://discmaster.textfiles.com/file/18/Amiga%20Developer%20CD%20v2.1.iso/Reference/HTML/Hardware_Manual_guide/node012A.html and node012B.html) — blitter cycle lengths, BLITHOG, CPU on even cycles.
 - Harte 68000 bus transactions (`transactions` in the test data) — the cycle order of `M68000::step_timed`, the address-error and exception frames, and the DIVU/DIVS internal clock counts were fitted to them.
 - Harte Z80 per-T-state bus traces (`cycles` in the test data) — the M-cycle placement of `Z80::step_timed` is checked against them.
 - The Acid800 1.2 archive's own `README.html` and test sources — how standalone tests report pass/fail (`_testPassed`, `_testFailed`, `_testSkipped` labels in the `.lab` files).

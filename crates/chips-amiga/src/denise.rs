@@ -29,6 +29,14 @@
 //! and PF2P (5–3) put playfield 1/2 behind the sprite pairs below the
 //! value (single playfield: PF2P).
 //!
+//! **Collisions** (HRM chapter 7, "Collision detection"): CLXCON bits 15–12
+//! ENSP7/5/3/1 include odd sprites in their pair, 11–6 ENBP6–1 select the
+//! planes compared with the match values MVBP6–1 (5–0); a disabled plane
+//! always matches. CLXDAT (cleared by reading; bit 15 reads 1): 14–9
+//! sprite pairs 4–6, 2–6, 2–4, 0–6, 0–4, 0–2; 8–5 even planes with pairs
+//! 6, 4, 2, 0; 4–1 odd planes with pairs 6, 4, 2, 0; 0 even with odd
+//! planes. Collisions count inside the horizontal display window.
+//!
 //! **Coordinates.** Positions are low-resolution pixels as DIWSTRT counts
 //! them: colour clock `h` covers pixels `2h` and `2h + 1`; data fetched in
 //! slot `h` loads at pixel `2h + 3` (so DDFSTRT $38 lines up with DIWSTRT
@@ -74,6 +82,9 @@ pub struct Denise {
     /// HAM: the colour of the previous pixel.
     ham: u16,
     pub sprites: [Sprite; 8],
+    pub clxcon: u16,
+    /// Collisions seen since CLXDAT was last read (bits 14–0).
+    pub clxdat: u16,
 }
 
 /// One sprite's registers and shifter.
@@ -137,7 +148,36 @@ impl Denise {
             armed: false,
             ham: 0,
             sprites: [Sprite::default(); 8],
+            clxcon: 0,
+            clxdat: 0,
         }
+    }
+
+    /// Collision bits for one pixel: playfield `index`, sprite values.
+    fn collisions(&self, index: u8, vals: &[u8; 8]) -> u16 {
+        let enable = (self.clxcon >> 6) as u8 & 0x3f;
+        let matchv = self.clxcon as u8 & 0x3f;
+        let matches = |planes: u8| (index ^ matchv) & enable & planes == 0;
+        let odd = matches(0b01_0101);
+        let even = matches(0b10_1010);
+        let mut group = [false; 4];
+        for (g, on) in group.iter_mut().enumerate() {
+            let odd_on = self.clxcon & (0x1000 << g) != 0;
+            *on = vals[2 * g] != 0 || (odd_on && vals[2 * g + 1] != 0);
+        }
+        let mut v = u16::from(odd && even);
+        for (g, &on) in group.iter().enumerate() {
+            if on {
+                v |= u16::from(odd) << (1 + g) | u16::from(even) << (5 + g);
+            }
+        }
+        const PAIRS: [(usize, usize); 6] = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
+        for (i, &(a, b)) in PAIRS.iter().enumerate() {
+            if group[a] && group[b] {
+                v |= 1 << (9 + i);
+            }
+        }
+        v
     }
 
     /// SPRxPOS (0), SPRxCTL (1), SPRxDATA (2), SPRxDATB (3).
@@ -157,8 +197,9 @@ impl Denise {
         }
     }
 
-    /// The frontmost sprite colour at this pixel: (pair, colour register).
-    fn sprite_pixel(&mut self, x: u32) -> Option<(u8, u8)> {
+    /// The frontmost sprite colour at this pixel (pair, colour register)
+    /// and every sprite's value.
+    fn sprite_pixel(&mut self, x: u32) -> (Option<(u8, u8)>, [u8; 8]) {
         let lx = x / 2;
         let mut vals = [0u8; 8];
         for (n, s) in self.sprites.iter_mut().enumerate() {
@@ -176,7 +217,7 @@ impl Denise {
                 }
             }
         }
-        (0..4u8).find_map(|pair| {
+        let front = (0..4u8).find_map(|pair| {
             let (even, odd) = (vals[2 * pair as usize], vals[2 * pair as usize + 1]);
             if self.sprites[2 * pair as usize + 1].ctl & 0x80 != 0 {
                 let v = odd << 2 | even;
@@ -188,7 +229,8 @@ impl Denise {
             } else {
                 None
             }
-        })
+        });
+        (front, vals)
     }
 
     pub fn hires(&self) -> bool {
@@ -244,6 +286,7 @@ impl Denise {
         let (start, stop) = self.window();
         let hires = self.hires();
         let planes = self.planes();
+        let sprites_live = self.sprites.iter().any(|s| s.armed || s.count > 0);
         for (i, px) in out.iter_mut().enumerate() {
             let x = 4 * h + i as u32;
             for g in 0..2 {
@@ -281,7 +324,21 @@ impl Denise {
             } else {
                 (self.colors[0], None)
             };
-            let sprite = self.sprite_pixel(x).filter(|_| inside);
+            let (sprite, vals) = if sprites_live {
+                self.sprite_pixel(x)
+            } else {
+                (None, [0; 8])
+            };
+            let sprite = sprite.filter(|_| inside);
+            if inside {
+                let pf_index = if self.armed { index } else { 0 };
+                if vals != [0; 8] {
+                    self.clxdat |= self.collisions(pf_index, &vals);
+                } else if self.clxdat & 1 == 0 {
+                    // Without sprites only even-to-odd planes can collide.
+                    self.clxdat |= self.collisions(pf_index, &vals) & 1;
+                }
+            }
             *px = match (sprite, front) {
                 (Some((pair, c)), Some(pf_no)) => {
                     let prio = if pf_no == 1 {
@@ -367,6 +424,8 @@ impl Denise {
         }
         w.raw(&self.phase);
         w.bool(self.armed);
+        w.u16(self.clxcon);
+        w.u16(self.clxdat);
         for s in &self.sprites {
             for v in [s.pos, s.ctl, s.data, s.datb, s.a, s.b] {
                 w.u16(v);
@@ -407,6 +466,8 @@ impl Denise {
         }
         r.raw_into(&mut d.phase)?;
         d.armed = r.bool()?;
+        d.clxcon = r.u16()?;
+        d.clxdat = r.u16()? & 0x7fff;
         for s in &mut d.sprites {
             for v in [
                 &mut s.pos,
@@ -494,6 +555,24 @@ mod tests {
         assert_eq!(d.color(0b11, 2), (0x900, Some(2)), "PF2PRI");
         assert_eq!(d.color(0b10, 2).0, 0x900);
         assert_eq!(d.color(0, 2), (0, None));
+    }
+
+    #[test]
+    fn collision_bits() {
+        let mut d = Denise::new();
+        let mut vals = [0u8; 8];
+        vals[0] = 1;
+        vals[3] = 2;
+        // Nothing enabled: every plane matches, so sprite 0 collides with
+        // both playfields, and odd with even planes.
+        assert_eq!(d.collisions(0, &vals), 0b10_0011);
+        // ENSP3 puts sprite 3 into pair 1: pair 0 with pair 1.
+        d.clxcon = 0x2000;
+        assert_eq!(d.collisions(0, &vals) & 0x7e00, 1 << 9);
+        // Plane 1 enabled, match value 1: odd planes match only where set.
+        d.clxcon = 0x0041;
+        assert_eq!(d.collisions(0, &vals) & 0x1f, 0b0_0000, "even ok, odd not");
+        assert_eq!(d.collisions(1, &vals) & 0x1f, 0b0_0011);
     }
 
     #[test]
