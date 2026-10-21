@@ -26,6 +26,14 @@
 //! notch: the decoded chroma is modulated again and subtracted. Colour
 //! space is ITU-R BT.601 YUV. The carrier phase restarts every field (no
 //! dot crawl), which keeps the stage a pure function of the field.
+//!
+//! Phase reference: frame column 0 of line 0 starts at subcarrier phase
+//! 180° (the burst, −U). Machines whose pixel clock is locked to the
+//! carrier put their colour-clock boundaries there — the Atari's colour
+//! clock is the carrier, and hue 1 is the colour clock undelayed (in phase
+//! with the burst) — so a luma pattern lit in the first half of each colour
+//! clock shows hue 1 as its artifact colour, the shifted pattern the
+//! complementary one.
 
 use emu_core::frame::{
     FrameRef, LumaChroma, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
@@ -37,16 +45,11 @@ const PAL_FSC: f64 = 4_433_618.75;
 const NTSC_FSC: f64 = 315.0e6 / 88.0;
 /// Samples per subcarrier cycle.
 const PHASES: usize = 8;
-const SIN: [f32; PHASES] = [
-    0.0,
-    std::f32::consts::FRAC_1_SQRT_2,
-    1.0,
-    std::f32::consts::FRAC_1_SQRT_2,
-    0.0,
-    -std::f32::consts::FRAC_1_SQRT_2,
-    -1.0,
-    -std::f32::consts::FRAC_1_SQRT_2,
-];
+/// sin(22.5° + k·45°): each sample holds the signal for a whole eighth of
+/// a cycle, so the carrier is taken at the middle of that interval.
+const S1: f32 = 0.382_683_43; // sin 22.5°
+const S2: f32 = 0.923_879_5; // sin 67.5°
+const SIN: [f32; PHASES] = [S1, S2, S2, S1, -S1, -S2, -S2, -S1];
 
 fn cos(i: usize) -> f32 {
     SIN[(i + 2) % PHASES]
@@ -224,7 +227,8 @@ impl Decoder {
         let k0 = start.ceil();
         let offset = k0 - start;
         let n = ((w as f64 * self.per_pixel - offset).ceil().max(1.0) as usize).min(self.max_n);
-        let phase0 = (k0 as u64 % PHASES as u64) as usize;
+        // + half a cycle: see "Phase reference" above.
+        let phase0 = ((k0 as u64 + PHASES as u64 / 2) % PHASES as u64) as usize;
         // The line plus `pad` samples of its edge pixels on both sides, so
         // the filters see whole windows up to the edges. `pad` is whole
         // subcarrier cycles: sample `pad` keeps the phase of `k0`.

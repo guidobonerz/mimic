@@ -1,7 +1,9 @@
 //! Signal and CRT stage on the machines' real palettes and timings: PAL
 //! colour mixing with VIC-II colour pairs of equal luma, NTSC artifact
-//! colours, the VDC staying clean, PET monochrome; plus every monitor
-//! profile against a reference image (tolerance-based, CPU path).
+//! colours (C64 hires stripes, and the Atari 800XL's — its hires pixels are
+//! half a colour-carrier cycle, the classic artifacting), the VDC staying
+//! clean, PET monochrome; plus every monitor profile against a reference
+//! image (tolerance-based, CPU path).
 //!
 //! Regenerate the references after an intended change with
 //! `EMU_UPDATE_REFERENCE=1 cargo test -p emu-tests --test crt_profiles`
@@ -153,6 +155,137 @@ fn pet_card() -> Pattern {
     }
 }
 
+/// The Atari 800XL (built-in stub OS, no ROMs) showing a mode F screen:
+/// 50 lines of `$AA` (pixels on at even positions), then 50 of `$55`, white
+/// luminance on black — as the machine itself renders it.
+fn atari_card(model: &str) -> Pattern {
+    use emu_core::machine::Machine;
+    use emu_core::{DebugHooks, DeviceId, Size};
+    let mut config = emu_core::registry::MachineConfig {
+        model: Some(model.into()),
+        ..Default::default()
+    };
+    config.options.insert("roms".into(), "stub".into());
+    let mut m = emu_machines::registry()
+        .create("atari800xl", &config)
+        .unwrap();
+    let mut dbg = DebugHooks::new();
+    for _ in 0..2 {
+        m.run_frame(&mut dbg);
+    }
+    let poke = |m: &mut Box<dyn Machine>, addr: u32, v: u8| {
+        m.debug_target(DeviceId("cpu")).unwrap().poke(
+            machine_atari8::CPU_SPACE,
+            addr,
+            Size::Byte,
+            u32::from(v),
+        );
+    };
+    // Display list at $3000: 24 blank lines, 100 mode F lines from $4000.
+    let mut dl = vec![0x70, 0x70, 0x70, 0x4f, 0x00, 0x40];
+    dl.extend([0x0f; 99]);
+    dl.extend([0x41, 0x00, 0x30]);
+    for (i, &b) in dl.iter().enumerate() {
+        poke(&mut m, 0x3000 + i as u32, b);
+    }
+    for i in 0..4000u32 {
+        poke(&mut m, 0x4000 + i, if i < 2000 { 0xaa } else { 0x55 });
+    }
+    for (addr, v) in [
+        (0xd402, 0x00), // DLISTL
+        (0xd403, 0x30), // DLISTH
+        (0xd017, 0x0e), // COLPF1: white luminance
+        (0xd018, 0x00), // COLPF2: black
+        (0xd01a, 0x00), // COLBK
+    ] {
+        poke(&mut m, addr, v);
+    }
+    for _ in 0..2 {
+        m.run_frame(&mut dbg);
+    }
+    let f = m.framebuffer();
+    let PixelData::Indexed { pixels, palette } = f.pixels else {
+        panic!("indexed frame");
+    };
+    Pattern {
+        w: f.width,
+        h: f.height,
+        pixels: pixels.to_vec(),
+        palette: palette.to_vec(),
+        signal: f.signal,
+    }
+}
+
+/// Mean colour over the middle of the playfield on `line`.
+fn mean(card: &Pattern, out: &[Rgb8], line: u32) -> (f64, f64, f64) {
+    let xs = 120..280u32;
+    let n = xs.len() as f64;
+    let (mut r, mut g, mut b) = (0.0, 0.0, 0.0);
+    for x in xs {
+        let c = card.at(out, x, line);
+        r += f64::from(c.r);
+        g += f64::from(c.g);
+        b += f64::from(c.b);
+    }
+    (r / n, g / n, b / n)
+}
+
+/// U and V of an RGB colour (BT.601).
+fn uv((r, g, b): (f64, f64, f64)) -> (f64, f64) {
+    let y = 0.299 * r + 0.587 * g + 0.114 * b;
+    (0.492 * (b - y), 0.877 * (r - y))
+}
+
+#[test]
+fn atari_ntsc_hires_stripes_show_artifact_colours() {
+    let card = atari_card("ntsc");
+    // Mode F starts at scan line 32 = frame row 24.
+    let (aa, x55) = (24 + 25, 24 + 75);
+    // The raw frame is white on black only.
+    for line in [aa, x55] {
+        for x in 120..280 {
+            let i = card.pixels[(line * card.w + x) as usize];
+            assert!(i == 0x00 || i == 0x0e, "raw pixel {i:02X}");
+        }
+    }
+    let tv = signal::process(&card.frame(), &Profile::preset("tv").unwrap()).unwrap();
+    let (ua, va) = uv(mean(&card, &tv, aa));
+    let (ub, vb) = uv(mean(&card, &tv, x55));
+    let sat = |u: f64, v: f64| (u * u + v * v).sqrt();
+    assert!(sat(ua, va) > 20.0, "$AA stripes coloured: {ua:.1},{va:.1}");
+    assert!(sat(ub, vb) > 20.0, "$55 stripes coloured: {ub:.1},{vb:.1}");
+    // Shifting the pattern by one pixel turns the phase by 180°: the two
+    // artifact colours are complementary.
+    let cos = (ua * ub + va * vb) / (sat(ua, va) * sat(ub, vb));
+    assert!(cos < -0.8, "complementary hues: cos {cos:.2}");
+    // $AA lights the first half of every colour clock: the phase of hue 1,
+    // the colour burst (−U).
+    let (u1, v1) = (-1.0, 0.0);
+    let cos1 = (ua * u1 + va * v1) / sat(ua, va);
+    assert!(cos1 > 0.8, "$AA has hue 1's phase: cos {cos1:.2}");
+    // S-Video (luma/chroma cable) shows the true picture: grey stripes.
+    let sv = signal::process(&card.frame(), &Profile::preset("1702").unwrap()).unwrap();
+    let (u, v) = uv(mean(&card, &sv, aa));
+    assert!(sat(u, v) < 4.0, "S-Video stays grey: {u:.1},{v:.1}");
+}
+
+#[test]
+fn atari_pal_has_no_stable_artifact_colours() {
+    // PAL machines' hires pixels are not locked to the colour carrier and
+    // the delay line averages what cross-colour remains.
+    let ntsc = atari_card("ntsc");
+    let pal = atari_card("pal");
+    let tv = Profile::preset("tv").unwrap();
+    let n = signal::process(&ntsc.frame(), &tv).unwrap();
+    let p = signal::process(&pal.frame(), &tv).unwrap();
+    let sat = |c: (f64, f64, f64)| {
+        let (u, v) = uv(c);
+        (u * u + v * v).sqrt()
+    };
+    let (sn, sp) = (sat(mean(&ntsc, &n, 49)), sat(mean(&pal, &p, 49)));
+    assert!(sp < sn / 2.0, "PAL {sp:.1} vs NTSC {sn:.1}");
+}
+
 fn dist(a: Rgb8, b: Rgb8) -> i32 {
     [
         (i32::from(a.r) - i32::from(b.r)).abs(),
@@ -277,7 +410,9 @@ fn profiles_match_reference_images() {
     let c64_ntsc = c64_card(VideoStandard::Ntsc);
     let vdc = vdc_card();
     let pet = pet_card();
-    let cases: [(&str, &Pattern, &str); 9] = [
+    let atari_ntsc = atari_card("ntsc");
+    let atari_pal = atari_card("pal");
+    let cases: [(&str, &Pattern, &str); 12] = [
         ("raw", &c64_pal, "c64-pal-raw"),
         ("1702", &c64_pal, "c64-pal-1702"),
         ("1084s", &c64_pal, "c64-pal-1084s"),
@@ -287,6 +422,9 @@ fn profiles_match_reference_images() {
         ("1084s-rgb", &vdc, "vdc-1084s-rgb"),
         ("pet-white", &pet, "pet-white"),
         ("pet-green", &pet, "pet-green"),
+        ("tv", &atari_ntsc, "atari-ntsc-tv"),
+        ("1702", &atari_ntsc, "atari-ntsc-1702"),
+        ("tv", &atari_pal, "atari-pal-tv"),
     ];
     let mut failures = Vec::new();
     for (profile, card, name) in cases {

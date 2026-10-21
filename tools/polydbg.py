@@ -67,6 +67,67 @@ def address_args(text):
         return {"symbol": text}
 
 
+# Scan lines per mode line of ANTIC modes 2-F (Atari 8-bit).
+ANTIC_LINES = {2: 8, 3: 10, 4: 8, 5: 16, 6: 8, 7: 16, 8: 8, 9: 4, 10: 4,
+               11: 2, 12: 1, 13: 2, 14: 1, 15: 1}
+
+
+def decode_display_list(read, start, max_lines=240):
+    """An ANTIC display list from `start` as (addr, bytes, text) entries.
+
+    `read(addr)` returns one byte. Runs of the same instruction without LMS
+    are merged ("MODE 2 x23"). Stops after a JVB, a JMP back into the
+    list, or `max_lines` scan lines.
+    """
+    entries = []
+    addr = start
+    lines = 0
+    seen = set()
+    while lines < max_lines and addr not in seen:
+        seen.add(addr)
+        ir = read(addr)
+        mode = ir & 0x0F
+        dli = " DLI" if ir & 0x80 else ""
+        if mode == 0:
+            n = ((ir >> 4) & 7) + 1
+            entries.append((addr, [ir], "BLANK %d%s" % (n, dli)))
+            lines += n
+            addr = (addr & 0xFC00) | ((addr + 1) & 0x03FF)
+        elif mode == 1:
+            target = read(addr + 1) | (read(addr + 2) << 8)
+            jvb = ir & 0x40
+            entries.append((addr, [ir, read(addr + 1), read(addr + 2)],
+                            "%s $%04x%s" % ("JVB" if jvb else "JMP", target, dli)))
+            if jvb or target in seen:
+                break
+            addr = target
+            lines += 1
+        else:
+            flags = dli
+            if ir & 0x20:
+                flags += " VSCROL"
+            if ir & 0x10:
+                flags += " HSCROL"
+            if ir & 0x40:
+                lms = read(addr + 1) | (read(addr + 2) << 8)
+                data = [ir, read(addr + 1), read(addr + 2)]
+                text = "MODE %X LMS $%04x%s" % (mode, lms, flags)
+                nxt = addr + 3
+            else:
+                data = [ir]
+                text = "MODE %X%s" % (mode, flags)
+                nxt = addr + 1
+            prev = entries[-1] if entries else None
+            if not (ir & 0x40) and prev and prev[1][0] == ir and len(prev[1]) == 1:
+                count = int(prev[2].split(" x")[1]) + 1 if " x" in prev[2] else 2
+                entries[-1] = (prev[0], prev[1], "MODE %X%s x%d" % (mode, flags, count))
+            else:
+                entries.append((addr, data, text))
+            lines += ANTIC_LINES[mode]
+            addr = (addr & 0xFC00) | (nxt & 0x03FF)
+    return entries
+
+
 def hexdump(addr, data, frozen=(), width=16):
     """Lines of `addr: hex bytes  ascii`; frozen offsets are marked with *."""
     frozen = set(frozen)
@@ -278,6 +339,45 @@ def cmd_disasm(c, args):
         code = " ".join("%02x" % b for b in l["bytes"])
         text.append("%-12s %04x  %-9s %s%s" % (label, l["addr"], code, l["text"], target))
     out(args, lines, text)
+
+
+def cmd_chips(c, args):
+    chips = c.call("chips")
+    if args.name:
+        chips = [x for x in chips if x["name"] == args.name]
+        if not chips:
+            raise ValueError("no chip %r" % args.name)
+    text = []
+    for chip in chips:
+        text.append("%s:" % chip["name"])
+        for r in chip["regs"]:
+            where = "$%04x" % r["addr"] if r.get("addr") is not None else "     "
+            text.append("  %s %-8s $%0*x" % (where, r["name"], (r["bits"] + 3) // 4, r["value"]))
+    out(args, chips, text)
+
+
+def cmd_dlist(c, args):
+    """Atari 8-bit: the ANTIC display list (from DLISTL/H unless given)."""
+    if args.addr:
+        start = parse_number(args.addr)
+    else:
+        antic = [x for x in c.call("chips") if x["name"] == "antic"]
+        if not antic:
+            raise ValueError("this machine has no ANTIC")
+        regs = {r["name"]: r["value"] for r in antic[0]["regs"]}
+        start = regs["DLISTL"] | (regs["DLISTH"] << 8)
+    cache = {}
+
+    def read(a):
+        a &= 0xFFFF
+        page = a & 0xFF00
+        if page not in cache:
+            cache[page] = c.peek(page, 256)
+        return cache[page][a & 0xFF]
+
+    entries = decode_display_list(read, start)
+    out(args, [{"addr": a, "bytes": b, "text": t} for a, b, t in entries],
+        ["%04x  %-9s %s" % (a, " ".join("%02x" % x for x in b), t) for a, b, t in entries])
 
 
 def cmd_break(c, args):
@@ -528,6 +628,10 @@ def build_parser(shell=False):
     sp.add_argument("addr", nargs="?")
     sp.add_argument("-n", "--count", type=int, default=10)
     sp.add_argument("--device")
+    sp = add("chips", cmd_chips, "chip registers (all, or one chip by name)")
+    sp.add_argument("name", nargs="?")
+    sp = add("dlist", cmd_dlist, "Atari: decode the ANTIC display list (default: at DLIST)")
+    sp.add_argument("addr", nargs="?")
     sp = add("break", cmd_break, "add a breakpoint: address/symbol, raster line, or irq/nmi")
     sp.add_argument("where", nargs="?", default="0")
     sp.add_argument("--kind", default="exec", choices=["exec", "read", "write", "raster", "irq", "nmi"])

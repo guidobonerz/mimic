@@ -327,6 +327,11 @@ The web frontend uses these over WebSocket to forward browser keyboard/gamepad/m
   - `monitor preview` starts (or names) the live preview server for this session and prints its URL (`/preview` WebSocket stream, `/snapshot.png`); `monitor snapshot <file> [crt]` writes a PNG; `monitor screen vic|vdc` picks the screen.
   - `tools/gdb/polytrace.py` (GDB Python extension, stdlib only) shows the live picture: opens the preview URL in a browser, or refreshes a PNG on every stop (`polytrace frame`, `polytrace live on|off`); the same packets let other GDB front ends (VS Code via native-debug / cortex-debug style adapters) embed it.
   - Contract test like the native protocol's; the picture path uses `emu-preview` encoders only (golden rule 1: still no machine crate in `emu-debug`).
+- **Graphics data views** (Phase 8; needs a core trait extension, ask before changing the trait): where a machine has them, the debugger also delivers the graphics the video chip works from, decoded and raw, without the debugger knowing the chip:
+  - `Machine::gfx_views() -> Vec<GfxViewInfo>` (default: none) and `Machine::gfx_view(id, opts) -> Option<GfxView>`; a view is a kind (`sprites`, `charset`, `bitmap`, `screen`, `tiles`), a name ("VIC-II sprites", "ANTIC charset $E000", "GTIA players", "Amiga bitplanes"), the source memory space and address range, its parameters (size, colours, multicolour/hires, current bank/pointer) and a picture as indexed pixels + palette (same type as `FrameRef`), plus the raw bytes.
+  - Examples: C64 VIC-II — 8 sprites (pointers, positions, colours, multicolour, expansion) and the current charset/bitmap/screen RAM by bank; C128 VDC charset; TED/VIC charsets; Atari — players/missiles, the character set at CHBASE, the display list's playfield memory; Amiga — sprites, bitplanes, Copper-set palettes; CPC — screen memory in the current mode.
+  - Options select what a view shows (e.g. a different charset address, colours, sprite number), so a debugger can browse memory as graphics.
+  - Native protocol: `gfx_list`, `gfx_get {view, format=png|qoi|indexed, scale, options}`; the preview server serves the same as `/gfx/<view>.png`; the GDB stub as `qPolytrace.gfx…` and `monitor gfx <view>`; `polydbg gfx`. Contract tests for each.
 - Machine-specific extensions are negotiated via `capabilities`; generic clients must work without them.
 - Every protocol change needs a contract test and a version bump in the handshake.
 
@@ -365,7 +370,7 @@ cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --frames 350 --
 cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --disk game.atr --frames 600 --snapshot a.png   # also --prg game.xex, --tape game.cas, --cart game.car; --option drives=0..4, drive=810|1050|xf551
 cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines debug protocol on 127.0.0.1:6510
 cargo run -p emu-headless -- --machine c64 --vice --preview --run   # + VICE binary monitor (6502), live preview http://127.0.0.1:6580/
-python tools/polydbg.py regs                 # Python debug client (stdlib only): --help, or `shell` for a prompt
+python tools/polydbg.py regs                 # Python debug client (stdlib only): --help, or `shell` for a prompt; `chips`, Atari `dlist`
 python -m unittest discover -s tools         # its unit tests
 cargo run --release -p emu-desktop -- --machine c64 --disk game.d64 --autostart   # window, sound, keyboard, gamepad
 cargo run --release -p emu-desktop -- --machine c64 --option drive8=virtual --disk ./myprgs --autostart   # virtual drive; a folder of PRGs as disk
@@ -399,7 +404,7 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 5.**
 | 5 | Atari 800XL: ANTIC, GTIA, POKEY, PIA, ATR/XEX/CAS — debugger unchanged | 8 wk | Acid800 mostly green |
 | 6 | CPC 464, 664, 6128 (models of one machine): reuse Z80, CRTC, Gate Array, AY, FDC, DSK/CDT | 6 wk | BASIC + disk work |
 | 7 | Amiga 500 (OCS): 68000, Agnus DMA slots, Copper, Blitter, Denise, Paula, ADF via MFM, Copper debugger | 20 wk | Workbench 1.3 boots |
-| 8 | Expansion: GDB stub with live-picture extension, DAP, overlays, rewind, partial frames, A1200 (AGA), web frontend | 10 wk | Release 1.0 |
+| 8 | Expansion: GDB stub with live-picture extension, graphics data views (sprites/chars/bitmaps), DAP, overlays, rewind, partial frames, A1200 (AGA), web frontend | 10 wk | Release 1.0 |
 
 Device work by phase (part of each gate):
 

@@ -32,6 +32,33 @@ class Parsing(unittest.TestCase):
         self.assertTrue(lines[0].startswith("0400: 41 00*ff "), lines[0])
         self.assertTrue(lines[0].endswith("A.."), lines[0])
 
+    def test_display_list_decoding(self):
+        mem = {}
+
+        def put(addr, data):
+            for i, b in enumerate(data):
+                mem[addr + i] = b
+
+        # The OS's BASIC screen: 3 x 8 blank, mode 2 with LMS, 23 x mode 2
+        # (one with a DLI), JVB.
+        put(0x9C20, [0x70, 0x70, 0x70, 0x42, 0x40, 0x9C] + [0x02] * 21 + [0x82, 0x02]
+            + [0x41, 0x20, 0x9C])
+        entries = polydbg.decode_display_list(lambda a: mem.get(a, 0), 0x9C20)
+        texts = [t for _, _, t in entries]
+        self.assertEqual(texts, ["BLANK 8", "BLANK 8", "BLANK 8", "MODE 2 LMS $9c40",
+                                 "MODE 2 x21", "MODE 2 DLI", "MODE 2", "JVB $9c20"])
+        self.assertEqual(entries[3][0], 0x9C23)
+        self.assertEqual(entries[3][1], [0x42, 0x40, 0x9C])
+
+    def test_display_list_without_jvb_stops(self):
+        # Mode F lines forever: stops after 240 scan lines.
+        entries = polydbg.decode_display_list(lambda a: 0x0F, 0x1000)
+        self.assertEqual(entries[-1][2], "MODE F x240")
+        # A JMP loop stops too.
+        entries = polydbg.decode_display_list(
+            lambda a: {0x2000: 0x01, 0x2001: 0x00, 0x2002: 0x20}.get(a, 0), 0x2000)
+        self.assertEqual([t for _, _, t in entries], ["JMP $2000"])
+
     def test_json_flag_before_or_after_the_command(self):
         parser = polydbg.build_parser()
         self.assertTrue(parser.parse_args(["--json", "regs"]).json)

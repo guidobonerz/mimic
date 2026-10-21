@@ -899,19 +899,31 @@ impl Machine for Atari800Xl {
             ("", 0),
             ("CONSOL", g.peek(0x1f)),
         ];
+        // Read side: collisions, triggers, PAL (same addresses).
+        const GTIA_R: [&str; 21] = [
+            "M0PF", "M1PF", "M2PF", "M3PF", "P0PF", "P1PF", "P2PF", "P3PF", "M0PL", "M1PL", "M2PL",
+            "M3PL", "P0PL", "P1PL", "P2PL", "P3PL", "TRIG0", "TRIG1", "TRIG2", "TRIG3", "PAL",
+        ];
+        let mut gtia_regs: Vec<ChipReg> = gtia_w
+            .into_iter()
+            .enumerate()
+            .filter(|(_, (n, _))| !n.is_empty())
+            .map(|(i, (name, v))| ChipReg {
+                name,
+                addr: Some(0xd000 + i as u32),
+                value: u32::from(v),
+                bits: 8,
+            })
+            .collect();
+        gtia_regs.extend(GTIA_R.iter().enumerate().map(|(i, &name)| ChipReg {
+            name,
+            addr: Some(0xd000 + i as u32),
+            value: u32::from(g.peek(i as u8)),
+            bits: 8,
+        }));
         let gtia = ChipInfo {
             name: "gtia",
-            regs: gtia_w
-                .into_iter()
-                .enumerate()
-                .filter(|(_, (n, _))| !n.is_empty())
-                .map(|(i, (name, v))| ChipReg {
-                    name,
-                    addr: Some(0xd000 + i as u32),
-                    value: u32::from(v),
-                    bits: 8,
-                })
-                .collect(),
+            regs: gtia_regs,
         };
         let p = &io.pokey;
         let pokey = ChipInfo {
@@ -933,6 +945,15 @@ impl Machine for Atari800Xl {
                 ("IRQST", 0xe, p.peek(0xe)),
                 ("SKCTL", 0xf, p.skctl),
                 ("SKSTAT", 0xf, p.peek(0xf)),
+                ("POT0", 0x0, p.peek(0x0)),
+                ("POT1", 0x1, p.peek(0x1)),
+                ("POT2", 0x2, p.peek(0x2)),
+                ("POT3", 0x3, p.peek(0x3)),
+                ("POT4", 0x4, p.peek(0x4)),
+                ("POT5", 0x5, p.peek(0x5)),
+                ("POT6", 0x6, p.peek(0x6)),
+                ("POT7", 0x7, p.peek(0x7)),
+                ("ALLPOT", 0x8, p.peek(0x8)),
             ]
             .into_iter()
             .map(|(name, off, v)| ChipReg {

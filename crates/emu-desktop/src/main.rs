@@ -52,7 +52,7 @@ usage: emu-desktop [options]
   --autostart           load and run the disk after boot
   --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
-  --crt PROFILE         monitor: raw, 1702, 1084s, 1084s-rgb, pal-tv, ntsc-tv,
+  --crt PROFILE         monitor: raw, 1702, 1084s, 1084s-rgb, tv, pal-tv, ntsc-tv,
                         pet-white, pet-green or a .toml file
                         (default: the machine's own monitor)
   --scale N             initial window size in rows per line (default 2)

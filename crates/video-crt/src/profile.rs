@@ -95,7 +95,9 @@ impl Profile {
                 gamma: 1.1,
                 ..base
             },
-            "pal-tv" | "ntsc-tv" => Self {
+            // A TV on composite (or RF); PAL or NTSC decoding follows the
+            // frame. "tv" is the Atari 8-bit default.
+            "pal-tv" | "ntsc-tv" | "tv" => Self {
                 signal: Signal::Composite,
                 aspect: true,
                 scanlines: 0.25,
@@ -122,11 +124,12 @@ impl Profile {
         })
     }
 
-    pub const PRESETS: [&'static str; 8] = [
+    pub const PRESETS: [&'static str; 9] = [
         "raw",
         "1702",
         "1084s",
         "1084s-rgb",
+        "tv",
         "pal-tv",
         "ntsc-tv",
         "pet-white",
@@ -166,6 +169,7 @@ impl Profile {
         let name = match machine {
             "c64" | "c128" | "vic20" | "c16" | "plus4" => "1702",
             "pet" => "pet-green",
+            "atari800xl" => "tv",
             _ => "raw",
         };
         Self::preset(name).unwrap_or_default()

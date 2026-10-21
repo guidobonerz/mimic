@@ -336,3 +336,24 @@ fn cartridge_maps_banks_and_drives_trig3() {
     assert_eq!(byte(&m, 0xd013), 0);
     assert_eq!(byte(&m, 0xa000), 0x00, "RAM again (cleared by power-up)");
 }
+
+#[test]
+fn chips_show_both_register_sides() {
+    let mut m = stub("pal");
+    frames(&mut m, 1);
+    poke(&mut m, 0xd012, 0x46);
+    let chips = m.chips();
+    let find = |chip: &str, reg: &str| {
+        chips
+            .iter()
+            .find(|c| c.name == chip)
+            .and_then(|c| c.regs.iter().find(|r| r.name == reg))
+            .map(|r| (r.addr, r.value))
+    };
+    assert_eq!(find("gtia", "COLPM0"), Some((Some(0xd012), 0x46)));
+    assert_eq!(find("gtia", "PAL"), Some((Some(0xd014), 0x01)));
+    assert_eq!(find("gtia", "TRIG3"), Some((Some(0xd013), 0)));
+    assert_eq!(find("pokey", "POT0"), Some((Some(0xd200), 228)));
+    assert_eq!(find("antic", "DMACTL"), Some((Some(0xd400), 0x22)));
+    assert!(find("pia", "PORTB").is_some());
+}
