@@ -20,18 +20,22 @@ jobs:
       matrix:
         include:
           - name: linux-x86_64
+            upx: true
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             exe: ""
           - name: windows-x86_64
+            upx: true
             os: windows-latest
             target: x86_64-pc-windows-msvc
             exe: .exe
           - name: macos-arm64
+            upx: false
             os: macos-latest
             target: aarch64-apple-darwin
             exe: ""
           - name: macos-x86_64
+            upx: false
             os: macos-latest
             target: x86_64-apple-darwin
             exe: ""
@@ -53,15 +57,31 @@ jobs:
       - name: Version from the tag (v0.2.0 → 0.2.0)
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-      - name: Package
+      - name: Collect files
         shell: bash
         run: |
           dir="mimic-$VERSION-${{ matrix.name }}"
+          echo "DIR=$dir" >> "$GITHUB_ENV"
           mkdir "$dir"
           for bin in mimic-desktop mimic-headless; do
             cp "target/${{ matrix.target }}/release/$bin${{ matrix.exe }}" "$dir/"
           done
           cp README.md "$dir/"
+      # Linux and Windows only: UPX leaves macOS binaries unsupported (macOS
+      # packing is off by default in UPX and breaks code signing).
+      - name: Compress with UPX
+        if: matrix.upx
+        uses: crazy-max/ghaction-upx@v4
+        with:
+          version: latest
+          files: |
+            ${{ env.DIR }}/mimic-desktop${{ matrix.exe }}
+            ${{ env.DIR }}/mimic-headless${{ matrix.exe }}
+          args: --best --lzma
+      - name: Package
+        shell: bash
+        run: |
+          dir="$DIR"
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a "$dir.zip" "$dir" > /dev/null
             echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
