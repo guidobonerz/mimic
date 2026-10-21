@@ -546,6 +546,9 @@ name = "cpu-m68k"
 version = "0.1.0"
 dependencies = [
  "emu-core",
+ "flate2",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

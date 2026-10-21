@@ -26,6 +26,9 @@ own section.
 | 6510 I/O port | MOS 6510 data sheet | `cpu-6502/src/io_port.rs` |
 | 6502C SALLY HALT | Avery Lee, *Altirra Hardware Reference Manual*, "6502C" | `cpu-6502/src/lib.rs` |
 | Z80 | Zilog, *Z80 CPU User Manual* (UM0080); Sean Young, *The Undocumented Z80 Documented*; boo_boo & Vladimir Kladov, *MEMPTR, esoteric register of the Z80*; David Banks and Peter Helcmanovsky on the Q register / SCF/CCF flags | `cpu-z80` |
+| 68000 instruction set, exceptions, bus cycles, prefetch | Motorola, *M68000 Family Programmer's Reference Manual* (M68000PM/AD); Motorola, *M68000 8-/16-/32-Bit Microprocessors User's Manual* (M68000UM/AD, timing tables) | `cpu-m68k` |
+| 68000 per-cycle bus order of every instruction (reads, writes, internal clocks, prefetch) | "YACHT — Yet Another Cycle Hunting Table" (https://gist.github.com/cbmeeks/e759c7061d61ec4ac354a7df44a4a8f1) | `cpu-m68k/src/exec.rs`, `ea.rs` |
+| 68000 ABCD/SBCD/NBCD flags and undefined V | Flamewing, analysis of the 68000 BCD instructions (as published with his test ROM, 2014) | `cpu-m68k/src/exec.rs` |
 
 ### Commodore chips and machines
 
@@ -113,6 +116,7 @@ committed), pinned to exact versions and checked by hash where possible.
 | --- | --- | --- | --- |
 | Tom Harte SingleStepTests, 6502 | https://github.com/SingleStepTests/65x02 | commit `2f6980a2d95757486c7bee24355c360e40e2a224` | MIT |
 | Tom Harte SingleStepTests, Z80 | https://github.com/SingleStepTests/z80 | commit `ebe1875d48f374bcfd4b505d8eb8ee751568b5f7` | MIT |
+| Tom Harte SingleStepTests, 68000 (`68000/v1`) | https://github.com/SingleStepTests/680x0 | commit `e0d5ece9670205cc84a0101081837deb446f86a3` | MIT; three cases skipped as contradictory (`cpu-m68k/tests/harte.rs`, `BROKEN`) |
 | Klaus Dormann 6502 functional test | https://github.com/Klaus2m5/6502_65C02_functional_tests | commit `7954e2dbb49c469ea286070bf46cdd71aeb29e4b`, SHA-256 checked | GPL-3.0; run only |
 | ZEXDOC / ZEXALL (Frank Cringle) | https://github.com/agn453/ZEXALL | commit `8f71d418bae69a476a5a0e5c6e122c8801b8d9f4`, SHA-256 checked | GPL-2.0; run only |
 | Wolfgang Lorenz C64 Emulator Test Suite 2.15 | VICE test programs, https://svn.code.sf.net/p/vice-emu/code/ (`testprogs/general/Lorenz-2.15`) | SVN revision 46290 | public domain |
@@ -133,6 +137,7 @@ Pages fetched or searched while building (beyond the documents above):
 - Arnold acid test sources (CPCMisc, see above) as hardware measurements: expected values and comments of `ppi` (port C pull levels &2F, `port_c_input`; port reset by mode set), `psg` (register numbers ≥ 16 deselect the AY), `type1ctrl` (UM6845R status bit 6 after power-on, cleared by reading R16/R17), `cpctest` (RMR ignores bit 5 on the CPC; interrupt timing) and `z80tests/cpu` (LD A,I/LD A,R P/V when an interrupt follows). No test code was copied; the runner patches two test bugs (`crtctest` CRTC-type prompt, `cpctest` GA I/O decode entry without BC) and documents them in `tests/src/cpc_acid.rs`.
 - The ACE emulator's published CPC test results (search summary) — note that `crtctest` ignores the typed CRTC type.
 - Searches about PPI port B bit 5 (/EXP) on the 6128 (cpcwiki pages HTTP 403; only search summaries): not conclusive, port B kept at &7E.
+- Harte 68000 bus transactions (`transactions` in the test data) — the cycle order of `M68000::step_timed`, the address-error and exception frames, and the DIVU/DIVS internal clock counts were fitted to them.
 - Harte Z80 per-T-state bus traces (`cycles` in the test data) — the M-cycle placement of `Z80::step_timed` is checked against them.
 - The Acid800 1.2 archive's own `README.html` and test sources — how standalone tests report pass/fail (`_testPassed`, `_testFailed`, `_testSkipped` labels in the `.lab` files).
 - Acid800 test sources (MIT) as hardware measurements: the expected values and cycle comments of `antic_dmapattern` (playfield and refresh DMA slots), `antic_pfstarttiming`/`antic_pfstoptiming` (DMA window edges), `antic_vscroll`/`antic_vscroldli`, `antic_dlitiming`, `antic_blockednmi`, `antic_linebuffering`, `gtia_pmresize`/`gtia_pmoverlap`/`gtia_pmretrigger` (player width logic and retrigger) and `pokey_sertiming`. The models in `chips-atari` and `cpu-6502` were fitted to these results; no test code was copied.
@@ -142,7 +147,7 @@ Pages fetched or searched while building (beyond the documents above):
 Third-party Rust crates (see `Cargo.toml` for exact versions): `winit`
 (windowing), `wgpu` (GPU rendering), `naga` (WGSL validation in tests),
 `cpal` (audio), `gilrs` (gamepads), `tokio` and `tokio-tungstenite` (debug
-and preview servers), `futures-util`, `serde`, `serde_json`, `toml`, `png`,
+and preview servers), `futures-util`, `serde`, `serde_json`, `toml`, `png`, `flate2` (gzip test data),
 `qoi`, `pollster`, `criterion` (benchmarks). The Python debug client uses
 the Python standard library only.
 

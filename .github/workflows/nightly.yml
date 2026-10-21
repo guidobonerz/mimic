@@ -29,3 +29,4 @@ jobs:
         run: |
           cargo test -p cpu-6502 --release -- --ignored
           cargo test -p cpu-z80 --release -- --ignored
+          cargo test -p cpu-m68k --release -- --ignored

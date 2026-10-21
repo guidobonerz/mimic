@@ -76,6 +76,32 @@ for prefix in "" "cb " "dd " "ed " "fd " "dd cb __ " "fd cb __ "; do
 done
 echo "$Z80_COMMIT" > "$DEST/z80/COMMIT"
 
+# Tom Harte SingleStepTests 68000 (MIT), ~190 MB: 125 gzipped JSON files,
+# one per instruction (and size), 8000+ tests each with bus transactions.
+M68K_COMMIT=e0d5ece9670205cc84a0101081837deb446f86a3
+M68K_URL="https://raw.githubusercontent.com/SingleStepTests/680x0/$M68K_COMMIT/68000/v1"
+M68K_FILES="
+ABCD ADD.b ADD.l ADD.w ADDA.l ADDA.w ADDX.b ADDX.l ADDX.w AND.b AND.l
+AND.w ANDItoCCR ANDItoSR ASL.b ASL.l ASL.w ASR.b ASR.l ASR.w BCHG BCLR
+BSET BSR BTST Bcc CHK CLR.b CLR.l CLR.w CMP.b CMP.l CMP.w CMPA.l CMPA.w
+DBcc DIVS DIVU EOR.b EOR.l EOR.w EORItoCCR EORItoSR EXG EXT.l EXT.w JMP
+JSR LEA LINK LSL.b LSL.l LSL.w LSR.b LSR.l LSR.w MOVE.b MOVE.l MOVE.q
+MOVE.w MOVEA.l MOVEA.w MOVEM.l MOVEM.w MOVEP.l MOVEP.w MOVEfromSR
+MOVEfromUSP MOVEtoCCR MOVEtoSR MOVEtoUSP MULS MULU NBCD NEG.b NEG.l
+NEG.w NEGX.b NEGX.l NEGX.w NOP NOT.b NOT.l NOT.w OR.b OR.l OR.w ORItoCCR
+ORItoSR PEA README.md RESET ROL.b ROL.l ROL.w ROR.b ROR.l ROR.w ROXL.b
+ROXL.l ROXL.w ROXR.b ROXR.l ROXR.w RTE RTR RTS SBCD SUB.b SUB.l SUB.w
+SUBA.l SUBA.w SUBX.b SUBX.l SUBX.w SWAP Scc TAS TRAP TRAPV TST.b TST.l
+TST.w UNLINK
+"
+
+echo "Tom Harte 68000 tests -> $DEST/680x0/68000/v1"
+mkdir -p "$DEST/680x0/68000/v1"
+for name in $M68K_FILES; do
+  fetch "$M68K_URL/$name.json.gz" "$DEST/680x0/68000/v1/$name.json.gz"
+done
+echo "$M68K_COMMIT" > "$DEST/680x0/COMMIT"
+
 # ZEXDOC/ZEXALL Z80 instruction exercisers (Frank Cringle, GPL-2.0 test
 # programs; run, never committed), CP/M .COM files, checked by SHA-256.
 ZEX_COMMIT=8f71d418bae69a476a5a0e5c6e122c8801b8d9f4
