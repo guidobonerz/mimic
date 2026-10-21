@@ -14,7 +14,12 @@
 //!   (port 2); their buttons are the stick's left/right lines.
 //! - `basic`: "on" (default) or "off" — holds OPTION while the OS boots,
 //!   like the real machine.
+//! - `drives`: SIO disk drives D1:… connected, "0"–"4" (default "1");
+//!   `drive`: their model, "1050" (default), "810" or "xf551".
 //! - `roms`: "stub" uses a tiny built-in OS, for tests without ROMs.
+//!
+//! Media slots: "D1:"–"D4:" (ATR disks on the SIO drives) and "program"
+//! (XEX files, see [`loader`]).
 //!
 //! ROMs come from `MachineConfig::roms`: "os" (16 KB XL/XE OS), "basic"
 //! (8 KB, optional). User-supplied, never in the repository.
@@ -26,6 +31,7 @@
 #![forbid(unsafe_code)]
 
 pub mod keyboard;
+pub mod loader;
 pub mod memory;
 pub mod stub;
 
@@ -41,7 +47,7 @@ use emu_core::frame::{
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
-use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
@@ -51,7 +57,10 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
+use drives_other::sio::{DriveModel, Sio, SioDrive};
 use keyboard::keys;
+use loader::{Loader, Phase, ProgramSlot, INIT_TRAP};
+use media::xex::{INITAD, RUNAD};
 use memory::{Area, Memory, Roms, BASIC_SIZE, OS_SIZE};
 
 pub const CPU: DeviceId = DeviceId("cpu");
@@ -61,6 +70,11 @@ pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 /// Joystick ports 1 and 2.
 pub const PORT1: PortId = PortId(0);
 pub const PORT2: PortId = PortId(1);
+
+/// Disk drives D1:–D4: (`SlotId` 0–3) and the program slot.
+pub const SLOT_D1: SlotId = SlotId(0);
+pub const SLOT_PROGRAM: SlotId = SlotId(4);
+const DRIVE_NAMES: [&str; 4] = ["D1:", "D2:", "D3:", "D4:"];
 
 /// Fields the OPTION key is held after power-up for `basic=off`.
 const OPTION_HOLD_FIELDS: u64 = 100;
@@ -283,6 +297,9 @@ pub struct Atari800Xl {
     basic_off: bool,
     /// The OPTION key as the user holds it (separate from the boot hold).
     option_key: bool,
+    sio: Sio,
+    program: ProgramSlot,
+    loader: Option<Loader>,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -314,6 +331,24 @@ impl Atari800Xl {
         {
             ports[i] = port_option(config, key, default)?;
         }
+        let drives = match config.options.get("drives").map(String::as_str) {
+            None => 1,
+            Some(n) => n
+                .parse::<usize>()
+                .ok()
+                .filter(|&n| n <= 4)
+                .ok_or_else(|| ConfigError::Invalid(format!("drives option '{n}' (0-4)")))?,
+        };
+        let model = match config.options.get("drive").map(String::as_str) {
+            None => DriveModel::A1050,
+            Some(m) => DriveModel::from_option(m).ok_or_else(|| {
+                ConfigError::Invalid(format!("drive option '{m}' (810, 1050 or xf551)"))
+            })?,
+        };
+        let mut sio = Sio::new(cpu_hz(standard));
+        for d in sio.drives.iter_mut().take(drives) {
+            *d = Some(SioDrive::new(model));
+        }
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Sally,
             ..CpuConfig::default()
@@ -342,6 +377,9 @@ impl Atari800Xl {
             option_until: if basic_off { OPTION_HOLD_FIELDS } else { 0 },
             basic_off,
             option_key: false,
+            sio,
+            program: ProgramSlot::default(),
+            loader: None,
         };
         m.refresh_ports();
         m.refresh_console();
@@ -360,8 +398,22 @@ impl Atari800Xl {
 
     /// One CPU cycle. Returns `Some` if emulation must stop.
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        // A program went in: power up and boot it.
+        if self.program.take_changed() {
+            if let Some(xex) = self.program.pending.take() {
+                self.loader = Some(Loader::new(xex));
+                self.reset(ResetKind::Hard);
+            }
+        }
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
+        }
+        if self
+            .loader
+            .as_ref()
+            .is_some_and(|l| self.cpu.at_instruction_boundary() && self.cpu.pc() == l.trap())
+        {
+            self.load_step();
         }
         // ANTIC's DMA comes first and decides whether the CPU runs.
         let out = self.io.antic.tick(&DmaView(&self.mem));
@@ -396,6 +448,18 @@ impl Atari800Xl {
         ];
         self.io.gtia.render_cycle(line, c, pf);
         self.io.pokey.tick();
+        // SIO: bytes POKEY sent, the COMMAND line (PIA CB2, low =
+        // asserted), and what the devices send back.
+        let now = self.sched.now().0;
+        for b in self.io.pokey.take_sent() {
+            self.sio.byte_from_computer(b, now);
+        }
+        self.sio.set_command(!self.io.pia.cb2_out(), now);
+        let serial = self.sio.tick(now);
+        self.io.pokey.set_serial_line(serial.level, serial.busy);
+        if let Some(b) = serial.byte {
+            self.io.pokey.receive(b);
+        }
         let level =
             i32::from(self.io.pokey.output()) * 400 + if self.io.gtia.speaker() { 3000 } else { 0 };
         if let Some(s) = self.audio.push(level) {
@@ -515,6 +579,67 @@ impl Atari800Xl {
         self.io.porta = porta;
     }
 
+    /// The CPU reached the loader's trap: load segments until one asks
+    /// for its INITAD routine (called, returning to [`INIT_TRAP`]), then
+    /// start the program.
+    fn load_step(&mut self) {
+        let Some(mut l) = self.loader.take() else {
+            return;
+        };
+        if l.phase == Phase::Boot {
+            self.write_word(RUNAD, 0);
+        }
+        while l.next < l.segments.len() {
+            let seg = l.segments[l.next].clone();
+            l.next += 1;
+            self.write_word(INITAD, 0);
+            for (i, &b) in seg.data.iter().enumerate() {
+                let addr = u32::from(seg.start) + i as u32;
+                AtariBus {
+                    mem: &mut self.mem,
+                    io: &mut self.io,
+                }
+                .write(addr & 0xffff, Size::Byte, u32::from(b));
+            }
+            let init = self.read_word(INITAD);
+            if seg.covers(INITAD) && init != 0 {
+                // JSR init: RTS returns to INIT_TRAP.
+                let ret = INIT_TRAP - 1;
+                let sp = self.cpu.regs().get("S").unwrap_or(0xff) as u8;
+                self.mem.ram[0x100 + usize::from(sp)] = (ret >> 8) as u8;
+                self.mem.ram[0x100 + usize::from(sp.wrapping_sub(1))] = ret as u8;
+                self.cpu.set_reg("S", u32::from(sp.wrapping_sub(2)));
+                self.cpu.set_reg("PC", u32::from(init));
+                l.phase = Phase::Init;
+                self.loader = Some(l);
+                return;
+            }
+        }
+        let run = match self.read_word(RUNAD) {
+            0 => l.segments.first().map_or(0, |s| s.start),
+            a => a,
+        };
+        self.cpu.set_reg("PC", u32::from(run));
+        self.sio.set_boot_sector(None);
+    }
+
+    fn read_word(&self, addr: u16) -> u16 {
+        u16::from_le_bytes([
+            peek(&self.mem, &self.io, addr),
+            peek(&self.mem, &self.io, addr.wrapping_add(1)),
+        ])
+    }
+
+    fn write_word(&mut self, addr: u16, v: u16) {
+        for (i, b) in v.to_le_bytes().into_iter().enumerate() {
+            AtariBus {
+                mem: &mut self.mem,
+                io: &mut self.io,
+            }
+            .write(u32::from(addr) + i as u32, Size::Byte, u32::from(b));
+        }
+    }
+
     fn type_text(&mut self, text: &str) {
         let (events, _) = keyboard::typed_events(text, self.sched.now().0);
         for e in events {
@@ -617,11 +742,19 @@ impl Machine for Atari800Xl {
             self.io.antic = Antic::new(s);
             self.io.gtia = Gtia::new(s);
             self.io.pokey = Pokey::new();
-            self.option_until = if self.basic_off {
+            // A program boots without BASIC, like with OPTION held.
+            self.option_until = if self.basic_off || self.loader.is_some() {
                 OPTION_HOLD_FIELDS
             } else {
                 0
             };
+            self.sio.power_on();
+            self.sio
+                .set_boot_sector(self.loader.as_ref().map(|_| loader::boot_sector()));
+            if let Some(l) = &mut self.loader {
+                l.next = 0;
+                l.phase = Phase::Boot;
+            }
         }
         self.input.clear();
         self.field_done_pending = false;
@@ -829,16 +962,42 @@ impl Machine for Atari800Xl {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        Vec::new()
+        let mut slots: Vec<MediaSlotInfo> = self
+            .sio
+            .drives
+            .iter()
+            .enumerate()
+            .filter_map(|(i, d)| {
+                d.as_ref().map(|d| MediaSlotInfo {
+                    id: SlotId(i as u8),
+                    name: DRIVE_NAMES[i],
+                    kind: MediaKind::Disk,
+                    inserted: d.has_disk(),
+                })
+            })
+            .collect();
+        slots.push(MediaSlotInfo {
+            id: SLOT_PROGRAM,
+            name: "program",
+            kind: MediaKind::Program,
+            inserted: self.program.inserted(),
+        });
+        slots
     }
 
-    fn media_slot(&mut self, _slot: SlotId) -> Option<&mut dyn MediaSlot> {
-        None
+    fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
+        match slot {
+            SLOT_PROGRAM => Some(&mut self.program),
+            SlotId(i @ 0..=3) => self.sio.drives[usize::from(i)]
+                .as_mut()
+                .map(|d| d as &mut dyn MediaSlot),
+            _ => None,
+        }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"A8XL", 1, |w| {
+        w.chunk(*b"A8XL", 2, |w| {
             w.bool(self.field_done_pending);
             w.u64(self.option_until);
             w.bool(self.option_key);
@@ -863,6 +1022,8 @@ impl Machine for Atari800Xl {
                 );
             });
         }
+        self.sio.save(&mut w);
+        Loader::save(&self.loader, &mut w);
         w.into_bytes()
     }
 
@@ -878,7 +1039,7 @@ impl Machine for Atari800Xl {
             audio: self.audio,
         };
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"A8XL", 1)?;
+        let (version, mut c) = r.chunk(*b"A8XL", 2)?;
         let field_done_pending = c.bool()?;
         let option_until = c.u64()?;
         let option_key = c.bool()?;
@@ -897,6 +1058,21 @@ impl Machine for Atari800Xl {
             let (_, mut c) = r.chunk(tag, 1)?;
             port_states.push(c.bytes()?.to_vec());
         }
+        // Version 2: the SIO bus and the program loader. The bus loads
+        // last (it has no copy), after everything that can fail.
+        let (sio_state, loader) = if version >= 2 {
+            let start = r.remaining();
+            let mut probe = Sio::new(cpu_hz(self.standard));
+            for (p, d) in probe.drives.iter_mut().zip(&self.sio.drives) {
+                *p = d.as_ref().map(|d| SioDrive::new(d.model()));
+            }
+            probe.load(&mut r)?;
+            let used = start - r.remaining();
+            let loader = Loader::load(&mut r)?;
+            (Some((s.len() - start, used)), loader)
+        } else {
+            (None, None)
+        };
         let backups: Vec<Option<Vec<u8>>> = self
             .ports
             .iter()
@@ -914,6 +1090,10 @@ impl Machine for Atari800Xl {
                 }
             }
         }
+        if let Some((at, len)) = sio_state {
+            self.sio.load(&mut StateReader::new(&s[at..at + len]))?;
+        }
+        self.loader = loader;
         // PORTB banking follows the restored PIA.
         next.mem.portb = next.io.portb();
         self.cpu = next.cpu;

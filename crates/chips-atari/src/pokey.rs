@@ -112,6 +112,9 @@ pub struct Pokey {
     sent: Vec<u8>,
     pub serin: u8,
     serial_overrun: bool,
+    /// Serial input line (true = mark) and a byte being received.
+    serial_line: bool,
+    serial_busy: bool,
 }
 
 impl Default for Pokey {
@@ -157,6 +160,8 @@ impl Pokey {
             sent: Vec::new(),
             serin: 0xff,
             serial_overrun: false,
+            serial_line: true,
+            serial_busy: false,
         }
     }
 
@@ -272,6 +277,14 @@ impl Pokey {
     /// Bytes shifted out completely since the last call.
     pub fn take_sent(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.sent)
+    }
+
+    /// The serial input line as the sender drives it (SKSTAT bit 4) and
+    /// whether a byte is being shifted in (SKSTAT bit 1 low). The cassette
+    /// handler measures the baud rate from the line's edges.
+    pub fn set_serial_line(&mut self, level: bool, busy: bool) {
+        self.serial_line = level;
+        self.serial_busy = busy;
     }
 
     /// A byte arrived on the serial input (SIO device → computer).
@@ -506,6 +519,12 @@ impl Pokey {
                 if self.key_down {
                     v &= !0x04;
                 }
+                if !self.serial_line {
+                    v &= !0x10;
+                }
+                if self.serial_busy {
+                    v &= !0x02;
+                }
                 v
             }
             _ => 0xff,
@@ -556,8 +575,9 @@ impl Pokey {
 }
 
 const TAG: [u8; 4] = *b"POKY";
-/// Version 2: sound polynomials, high-pass latches, pots.
-const VERSION: u16 = 2;
+/// Version 2: sound polynomials, high-pass latches, pots; 3: serial input
+/// line.
+const VERSION: u16 = 3;
 
 impl Savestate for Pokey {
     fn save(&self, w: &mut StateWriter) {
@@ -607,6 +627,8 @@ impl Savestate for Pokey {
             w.raw(&self.pots);
             w.u8(self.pot_counter);
             w.u8(self.allpot);
+            w.bool(self.serial_line);
+            w.bool(self.serial_busy);
         });
     }
 
@@ -654,6 +676,10 @@ impl Savestate for Pokey {
             c.raw_into(&mut n.pots)?;
             n.pot_counter = c.u8()?;
             n.allpot = c.u8()?;
+        }
+        if version >= 3 {
+            n.serial_line = c.bool()?;
+            n.serial_busy = c.bool()?;
         }
         if n.prescale64 >= 28 || n.prescale15 >= 114 || n.shift_bits > SERIAL_BITS {
             return Err(StateError::Invalid("POKEY counters"));

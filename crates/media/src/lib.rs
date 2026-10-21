@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod atr;
 pub mod crt;
 pub mod d64;
 pub mod gcr;
@@ -12,6 +13,7 @@ pub mod mfm;
 pub mod prg;
 pub mod t64;
 pub mod tap;
+pub mod xex;
 
 pub use d64::{Format, D64};
 pub use prg::Prg;

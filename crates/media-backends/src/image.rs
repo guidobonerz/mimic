@@ -179,10 +179,10 @@ impl MediaBackend for CowOverlay {
 pub fn kind_for(path: &Path) -> Option<MediaKind> {
     let ext = path.extension()?.to_string_lossy().to_lowercase();
     match ext.as_str() {
-        "d64" | "d71" | "d81" | "g64" => Some(MediaKind::Disk),
-        "prg" | "p00" | "t64" => Some(MediaKind::Program),
-        "tap" => Some(MediaKind::Tape),
-        "crt" => Some(MediaKind::Cartridge),
+        "d64" | "d71" | "d81" | "d80" | "d82" | "g64" | "atr" => Some(MediaKind::Disk),
+        "prg" | "p00" | "t64" | "xex" | "com" | "exe" => Some(MediaKind::Program),
+        "tap" | "cas" => Some(MediaKind::Tape),
+        "crt" | "car" => Some(MediaKind::Cartridge),
         _ => None,
     }
 }

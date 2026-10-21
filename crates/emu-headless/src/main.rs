@@ -22,9 +22,9 @@ usage: emu-headless [options]
 
   --machine ID          machine id (default: sim6502); see --list
   --model NAME          model variant
-  --prg FILE            program (PRG/T64) into the machine's program slot,
+  --prg FILE            program (PRG/T64, Atari XEX) into the machine's program slot,
                         or as its \"program\" ROM role (sim6502)
-  --disk FILE           disk image into the first disk drive (drive 8)
+  --disk FILE           disk image into the first disk drive (drive 8, Atari D1: ATR)
   --tape FILE           TAP image into the datasette (PLAY pressed); a PRG
                         is recorded in the machine's tape format first
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address

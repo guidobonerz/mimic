@@ -42,8 +42,8 @@ usage: emu-desktop [options]
 
   --machine ID          machine id (default: c64)
   --model NAME          model variant (C64: pal, ntsc)
-  --prg FILE            program (PRG/T64) to load and run
-  --disk FILE           disk image for drive 8
+  --prg FILE            program (PRG/T64, Atari XEX) to load and run
+  --disk FILE           disk image for drive 8 (Atari: ATR for D1:)
   --tape FILE           TAP image for the datasette (a PRG is recorded in the
                         machine's tape format)
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address

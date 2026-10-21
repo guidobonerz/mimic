@@ -3,5 +3,6 @@
 #![forbid(unsafe_code)]
 
 pub mod datasette;
+pub mod sio;
 
 pub use datasette::Datasette;

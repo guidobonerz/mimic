@@ -247,3 +247,60 @@ fn paddles_turn_pokey_pots() {
     poke(&mut m, 0xd302, 0x34);
     assert_eq!(byte(&m, 0xd300), 0xbf, "paddle 2's button: stick 1 left");
 }
+
+#[test]
+fn drive_slots_and_options() {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("drives".into(), "2".into());
+    config.options.insert("drive".into(), "810".into());
+    let mut m = Atari800Xl::new(&config).unwrap();
+    let names: Vec<_> = m.media_slots().iter().map(|s| s.name).collect();
+    assert_eq!(names, ["D1:", "D2:", "program"]);
+    assert!(m.media_slot(SlotId(2)).is_none(), "no D3:");
+    let disk_as_program = emu_core::media::Media {
+        name: "x.atr".into(),
+        kind: MediaKind::Disk,
+        backend: Box::new(media_backends_free::Bytes(media::atr::blank(720))),
+    };
+    assert!(m
+        .media_slot(SLOT_PROGRAM)
+        .unwrap()
+        .insert(disk_as_program)
+        .is_err());
+    for (k, v) in [("drives", "5"), ("drive", "1541")] {
+        let mut c = config.clone();
+        c.options.insert(k.into(), v.into());
+        assert!(Atari800Xl::new(&c).is_err(), "{k}={v}");
+    }
+    // Savestates carry the drive configuration.
+    let state = m.save_state();
+    config.options.insert("drives".into(), "1".into());
+    let mut other = Atari800Xl::new(&config).unwrap();
+    assert!(other.load_state(&state).is_err());
+}
+
+/// A minimal in-memory backend for tests (media-backends is a frontend
+/// crate).
+mod media_backends_free {
+    use emu_core::media::{MediaBackend, MediaError};
+
+    pub struct Bytes(pub Vec<u8>);
+
+    impl MediaBackend for Bytes {
+        fn len(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), MediaError> {
+            let o = offset as usize;
+            buf.copy_from_slice(self.0.get(o..o + buf.len()).ok_or(MediaError::OutOfRange)?);
+            Ok(())
+        }
+        fn write(&mut self, _offset: u64, _data: &[u8]) -> Result<(), MediaError> {
+            Err(MediaError::WriteProtected)
+        }
+        fn commit(&mut self) -> Result<(), MediaError> {
+            Ok(())
+        }
+    }
+}
