@@ -15,4 +15,5 @@ chips-atari.workspace = true
 chips-cbm.workspace = true
 drives-other.workspace = true
 devices-input.workspace = true
+devices-cartridge.workspace = true
 media.workspace = true

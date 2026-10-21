@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 
 pub mod atr;
+pub mod car;
+pub mod cas;
 pub mod crt;
 pub mod d64;
 pub mod gcr;

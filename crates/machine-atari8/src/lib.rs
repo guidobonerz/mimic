@@ -18,8 +18,10 @@
 //!   `drive`: their model, "1050" (default), "810" or "xf551".
 //! - `roms`: "stub" uses a tiny built-in OS, for tests without ROMs.
 //!
-//! Media slots: "D1:"–"D4:" (ATR disks on the SIO drives) and "program"
-//! (XEX files, see [`loader`]).
+//! Media slots: "D1:"–"D4:" (ATR disks on the SIO drives), "program"
+//! (XEX files, see [`loader`]), "tape" (CAS on the 410/1010 program
+//! recorder, motor on PIA CA2) and "cartridge" (CAR or raw 8/16 KB ROM;
+//! inserting or removing one powers the machine up again).
 //!
 //! ROMs come from `MachineConfig::roms`: "os" (16 KB XL/XE OS), "basic"
 //! (8 KB, optional). User-supplied, never in the repository.
@@ -57,7 +59,10 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
-use drives_other::sio::{DriveModel, Sio, SioDrive};
+use devices_cartridge::atari::AtariCart;
+use devices_cartridge::CartSlot;
+use drives_other::recorder::Recorder;
+use drives_other::sio::{DriveModel, SerialIn, Sio, SioDrive};
 use keyboard::keys;
 use loader::{Loader, Phase, ProgramSlot, INIT_TRAP};
 use media::xex::{INITAD, RUNAD};
@@ -74,6 +79,8 @@ pub const PORT2: PortId = PortId(1);
 /// Disk drives D1:–D4: (`SlotId` 0–3) and the program slot.
 pub const SLOT_D1: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(4);
+pub const SLOT_TAPE: SlotId = SlotId(5);
+pub const SLOT_CARTRIDGE: SlotId = SlotId(6);
 const DRIVE_NAMES: [&str; 4] = ["D1:", "D2:", "D3:", "D4:"];
 
 /// Fields the OPTION key is held after power-up for `basic=off`.
@@ -170,6 +177,13 @@ impl Bus for AtariBus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
         let a = addr as u16;
         u32::from(match self.mem.area(a) {
+            Area::Io if a >> 8 == 0xd5 => {
+                // CCTL: some cartridges switch banks on reads.
+                if let Some(c) = &mut self.mem.cart {
+                    c.access(a, None);
+                }
+                0xff
+            }
             Area::Io => self.io.read(a),
             _ => self.mem.read_plain(a),
         })
@@ -182,6 +196,11 @@ impl Bus for AtariBus<'_> {
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
         let a = addr as u16;
         match self.mem.area(a) {
+            Area::Io if a >> 8 == 0xd5 => {
+                if let Some(c) = &mut self.mem.cart {
+                    c.access(a, Some(v as u8));
+                }
+            }
             Area::Io => {
                 if let Some(portb) = self.io.write(a, v as u8) {
                     self.mem.portb = portb;
@@ -300,6 +319,9 @@ pub struct Atari800Xl {
     sio: Sio,
     program: ProgramSlot,
     loader: Option<Loader>,
+    recorder: Recorder,
+    /// The cartridge as inserted; `mem.cart` is the working copy.
+    cart: CartSlot<AtariCart>,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -380,6 +402,8 @@ impl Atari800Xl {
             sio,
             program: ProgramSlot::default(),
             loader: None,
+            recorder: Recorder::new(hz),
+            cart: devices_cartridge::atari::slot(),
         };
         m.refresh_ports();
         m.refresh_console();
@@ -398,6 +422,11 @@ impl Atari800Xl {
 
     /// One CPU cycle. Returns `Some` if emulation must stop.
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        // A cartridge went in or out: power up again.
+        if self.cart.take_changed() {
+            self.mem.cart = self.cart.cart().cloned();
+            self.reset(ResetKind::Hard);
+        }
         // A program went in: power up and boot it.
         if self.program.take_changed() {
             if let Some(xex) = self.program.pending.take() {
@@ -451,15 +480,26 @@ impl Atari800Xl {
         // SIO: bytes POKEY sent, the COMMAND line (PIA CB2, low =
         // asserted), and what the devices send back.
         let now = self.sched.now().0;
+        // The program recorder's motor: PIA CA2 low.
+        self.recorder.set_motor(!self.io.pia.ca2_out(), now);
         for b in self.io.pokey.take_sent() {
             self.sio.byte_from_computer(b, now);
+            self.recorder.byte_from_computer(b, now);
         }
         self.sio.set_command(!self.io.pia.cb2_out(), now);
-        let serial = self.sio.tick(now);
+        let (a, b) = (self.sio.tick(now), self.recorder.tick(now));
+        let serial = SerialIn {
+            level: a.level && b.level,
+            busy: a.busy || b.busy,
+            byte: a.byte.or(b.byte),
+        };
         self.io.pokey.set_serial_line(serial.level, serial.busy);
         if let Some(b) = serial.byte {
             self.io.pokey.receive(b);
         }
+        self.io
+            .gtia
+            .set_cartridge(self.mem.cart.as_ref().is_some_and(AtariCart::rd5));
         let level =
             i32::from(self.io.pokey.output()) * 400 + if self.io.gtia.speaker() { 3000 } else { 0 };
         if let Some(s) = self.audio.push(level) {
@@ -982,12 +1022,26 @@ impl Machine for Atari800Xl {
             kind: MediaKind::Program,
             inserted: self.program.inserted(),
         });
+        slots.push(MediaSlotInfo {
+            id: SLOT_TAPE,
+            name: "tape",
+            kind: MediaKind::Tape,
+            inserted: self.recorder.has_tape(),
+        });
+        slots.push(MediaSlotInfo {
+            id: SLOT_CARTRIDGE,
+            name: "cartridge",
+            kind: MediaKind::Cartridge,
+            inserted: self.cart.is_inserted(),
+        });
         slots
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
         match slot {
             SLOT_PROGRAM => Some(&mut self.program),
+            SLOT_TAPE => Some(&mut self.recorder),
+            SLOT_CARTRIDGE => Some(&mut self.cart),
             SlotId(i @ 0..=3) => self.sio.drives[usize::from(i)]
                 .as_mut()
                 .map(|d| d as &mut dyn MediaSlot),
@@ -997,7 +1051,7 @@ impl Machine for Atari800Xl {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"A8XL", 2, |w| {
+        w.chunk(*b"A8XL", 3, |w| {
             w.bool(self.field_done_pending);
             w.u64(self.option_until);
             w.bool(self.option_key);
@@ -1024,6 +1078,11 @@ impl Machine for Atari800Xl {
         }
         self.sio.save(&mut w);
         Loader::save(&self.loader, &mut w);
+        self.recorder.save(&mut w);
+        w.chunk(*b"CART", 1, |w| w.bool(self.mem.cart.is_some()));
+        if let Some(c) = &self.mem.cart {
+            c.save(&mut w);
+        }
         w.into_bytes()
     }
 
@@ -1039,7 +1098,7 @@ impl Machine for Atari800Xl {
             audio: self.audio,
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"A8XL", 2)?;
+        let (version, mut c) = r.chunk(*b"A8XL", 3)?;
         let field_done_pending = c.bool()?;
         let option_until = c.u64()?;
         let option_key = c.bool()?;
@@ -1073,6 +1132,23 @@ impl Machine for Atari800Xl {
         } else {
             (None, None)
         };
+        // Version 3: the program recorder and the cartridge's banking.
+        let recorder_state = if version >= 3 {
+            let start = r.remaining();
+            let mut probe = Recorder::new(cpu_hz(self.standard));
+            probe.load(&mut r)?;
+            let at = s.len() - start;
+            let has_cart = r.chunk(*b"CART", 1).and_then(|(_, mut c)| c.bool())?;
+            if has_cart != next.mem.cart.is_some() {
+                return Err(StateError::Invalid("cartridge differs"));
+            }
+            if let Some(cart) = &mut next.mem.cart {
+                cart.load(&mut r)?;
+            }
+            Some((at, start - r.remaining()))
+        } else {
+            None
+        };
         let backups: Vec<Option<Vec<u8>>> = self
             .ports
             .iter()
@@ -1092,6 +1168,10 @@ impl Machine for Atari800Xl {
         }
         if let Some((at, len)) = sio_state {
             self.sio.load(&mut StateReader::new(&s[at..at + len]))?;
+        }
+        if let Some((at, len)) = recorder_state {
+            self.recorder
+                .load(&mut StateReader::new(&s[at..at + len]))?;
         }
         self.loader = loader;
         // PORTB banking follows the restored PIA.

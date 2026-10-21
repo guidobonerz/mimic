@@ -220,3 +220,26 @@ fn pots_count_lines_after_potgo() {
     }
     assert_eq!(p.peek(0x00), 100);
 }
+
+#[test]
+fn skctl_write_drops_the_byte_coming_in() {
+    let mut p = pokey();
+    p.write(0x0e, IRQ_SERIN);
+    p.write(0x0f, 0x2b);
+    p.set_serial_line(false, true);
+    // The same mode again does not disturb the receiver.
+    p.write(0x0f, 0x2b);
+    p.set_serial_line(true, false);
+    p.receive(0x01);
+    assert_eq!(p.peek(0x0d), 0x01);
+    p.write(0x0e, 0);
+    p.write(0x0e, IRQ_SERIN);
+    p.set_serial_line(false, true);
+    p.write(0x0f, 0x13);
+    p.set_serial_line(true, false);
+    p.receive(0x55);
+    assert_eq!(p.peek(0x0e) & IRQ_SERIN, IRQ_SERIN, "lost");
+    p.receive(0xfa);
+    assert_eq!(p.peek(0x0e) & IRQ_SERIN, 0);
+    assert_eq!(p.peek(0x0d), 0xfa);
+}

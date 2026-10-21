@@ -1463,6 +1463,7 @@ dependencies = [
  "chips-atari",
  "chips-cbm",
  "cpu-6502",
+ "devices-cartridge",
  "devices-input",
  "drives-other",
  "emu-core",

@@ -321,6 +321,12 @@ The web frontend uses these over WebSocket to forward browser keyboard/gamepad/m
   - Push events: `stopped`, `breakpoint_hit`, `frame_ready`, trace stream, `media_changed`, `device_connected`
   - Devices: see "Remote control of devices"
 - **Adapters** translate to: VICE binary monitor (port 6502, all Commodore 8-bit machines), GDB Remote Serial Protocol (esp. m68k), Debug Adapter Protocol (VS Code).
+- **GDB stub with live picture** (Phase 8): besides registers, memory, breakpoints and stepping for every CPU device (one GDB "thread"/inferior per `devices()` entry, target XML per CPU: 6502, Z80, 68000), the stub carries the machine's picture as a protocol extension that plain GDB clients ignore:
+  - `qSupported` advertises `polytrace-frame+`; `qPolytrace.frame[:screen=<name>;format=png|qoi;scale=<n>;filter=raw|crt]` returns the current (partial) frame, binary-escaped as in `vFile`/`qXfer` replies; `qPolytrace.beam` returns frame/line/cycle.
+  - Stop replies (`T` packets) carry `beam:<frame>,<line>,<cycle>;` — GDB ignores unknown keys.
+  - `monitor preview` starts (or names) the live preview server for this session and prints its URL (`/preview` WebSocket stream, `/snapshot.png`); `monitor snapshot <file> [crt]` writes a PNG; `monitor screen vic|vdc` picks the screen.
+  - `tools/gdb/polytrace.py` (GDB Python extension, stdlib only) shows the live picture: opens the preview URL in a browser, or refreshes a PNG on every stop (`polytrace frame`, `polytrace live on|off`); the same packets let other GDB front ends (VS Code via native-debug / cortex-debug style adapters) embed it.
+  - Contract test like the native protocol's; the picture path uses `emu-preview` encoders only (golden rule 1: still no machine crate in `emu-debug`).
 - Machine-specific extensions are negotiated via `capabilities`; generic clients must work without them.
 - Every protocol change needs a contract test and a version bump in the handshake.
 
@@ -356,7 +362,7 @@ cargo run -p emu-headless -- --machine pet --model 8032 --option hz=50 --rom-dir
 cargo run -p emu-headless -- --machine plus4 --rom-dir roms --frames 200 --snapshot plus4.png   # also --machine c16, --model ntsc
 cargo run -p emu-headless -- --machine c128 --option display=80 --rom-dir roms --frames 600 --screen vdc --snapshot c128.png   # --screen vic|vdc
 cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --frames 350 --snapshot atari.png   # ROMs in roms/atari/; --model ntsc, --option basic=off (self-test)
-cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --disk game.atr --frames 600 --snapshot a.png   # also --prg game.xex; --option drives=0..4, drive=810|1050|xf551
+cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --disk game.atr --frames 600 --snapshot a.png   # also --prg game.xex, --tape game.cas, --cart game.car; --option drives=0..4, drive=810|1050|xf551
 cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines debug protocol on 127.0.0.1:6510
 cargo run -p emu-headless -- --machine c64 --vice --preview --run   # + VICE binary monitor (6502), live preview http://127.0.0.1:6580/
 python tools/polydbg.py regs                 # Python debug client (stdlib only): --help, or `shell` for a prompt
@@ -393,7 +399,7 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 5.**
 | 5 | Atari 800XL: ANTIC, GTIA, POKEY, PIA, ATR/XEX/CAS — debugger unchanged | 8 wk | Acid800 mostly green |
 | 6 | CPC 464, 664, 6128 (models of one machine): reuse Z80, CRTC, Gate Array, AY, FDC, DSK/CDT | 6 wk | BASIC + disk work |
 | 7 | Amiga 500 (OCS): 68000, Agnus DMA slots, Copper, Blitter, Denise, Paula, ADF via MFM, Copper debugger | 20 wk | Workbench 1.3 boots |
-| 8 | Expansion: GDB stub, DAP, overlays, rewind, partial frames, A1200 (AGA), web frontend | 10 wk | Release 1.0 |
+| 8 | Expansion: GDB stub with live-picture extension, DAP, overlays, rewind, partial frames, A1200 (AGA), web frontend | 10 wk | Release 1.0 |
 
 Device work by phase (part of each gate):
 

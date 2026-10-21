@@ -4,8 +4,9 @@
 //! | ------------- | -------------------------------------------------- |
 //! | `$0000–$4FFF` | RAM                                                |
 //! | `$5000–$57FF` | self-test ROM if PORTB bit 7 = 0 and bit 0 = 1, else RAM |
-//! | `$5800–$9FFF` | RAM                                                |
-//! | `$A000–$BFFF` | BASIC ROM if PORTB bit 1 = 0, else RAM             |
+//! | `$5800–$7FFF` | RAM                                                |
+//! | `$8000–$9FFF` | cartridge (RD4), else RAM                           |
+//! | `$A000–$BFFF` | cartridge (RD5), else BASIC ROM if PORTB bit 1 = 0, else RAM |
 //! | `$C000–$CFFF` | OS ROM if PORTB bit 0 = 1, else RAM                |
 //! | `$D000–$D7FF` | I/O: GTIA, PBI, POKEY, PIA, ANTIC, cartridge control |
 //! | `$D800–$FFFF` | OS ROM (floating point, OS) if PORTB bit 0 = 1, else RAM |
@@ -16,6 +17,7 @@
 //! Source: Atari 800XL Field Service Manual; Altirra Hardware Reference
 //! Manual, "Memory map".
 
+use devices_cartridge::atari::AtariCart;
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const OS_SIZE: usize = 0x4000;
@@ -34,6 +36,7 @@ pub enum Area {
     /// Offset into the OS ROM image.
     Os(u16),
     Basic,
+    Cart,
     Io,
 }
 
@@ -43,6 +46,8 @@ pub struct Memory {
     pub roms: Roms,
     /// PIA port B pin levels (inputs pulled up): the banking bits.
     pub portb: u8,
+    /// The cartridge in the slot, with its banking state.
+    pub cart: Option<AtariCart>,
 }
 
 impl Memory {
@@ -51,6 +56,7 @@ impl Memory {
             ram: Box::new([0; 0x10000]),
             roms,
             portb: 0xff,
+            cart: None,
         }
     }
 
@@ -61,6 +67,11 @@ impl Memory {
             self.ram.fill(0);
         }
         self.portb = 0xff;
+        if hard {
+            if let Some(c) = &mut self.cart {
+                c.reset();
+            }
+        }
     }
 
     fn os_on(&self) -> bool {
@@ -70,6 +81,8 @@ impl Memory {
     pub fn area(&self, addr: u16) -> Area {
         match addr {
             0x5000..=0x57ff if self.os_on() && self.portb & 0x80 == 0 => Area::Os(addr - 0x4000),
+            0x8000..=0x9fff if self.cart.as_ref().is_some_and(AtariCart::rd4) => Area::Cart,
+            0xa000..=0xbfff if self.cart.as_ref().is_some_and(AtariCart::rd5) => Area::Cart,
             0xa000..=0xbfff if self.portb & 0x02 == 0 => Area::Basic,
             0xc000..=0xcfff if self.os_on() => Area::Os(addr - 0xc000),
             0xd000..=0xd7ff => Area::Io,
@@ -88,6 +101,11 @@ impl Memory {
                 .basic
                 .as_ref()
                 .map_or(0xff, |b| b[usize::from(addr - 0xa000)]),
+            Area::Cart => self
+                .cart
+                .as_ref()
+                .and_then(|c| c.read(addr))
+                .unwrap_or(0xff),
             Area::Io => 0xff,
         }
     }

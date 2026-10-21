@@ -256,7 +256,7 @@ fn drive_slots_and_options() {
     config.options.insert("drive".into(), "810".into());
     let mut m = Atari800Xl::new(&config).unwrap();
     let names: Vec<_> = m.media_slots().iter().map(|s| s.name).collect();
-    assert_eq!(names, ["D1:", "D2:", "program"]);
+    assert_eq!(names, ["D1:", "D2:", "program", "tape", "cartridge"]);
     assert!(m.media_slot(SlotId(2)).is_none(), "no D3:");
     let disk_as_program = emu_core::media::Media {
         name: "x.atr".into(),
@@ -303,4 +303,36 @@ mod media_backends_free {
             Ok(())
         }
     }
+}
+
+#[test]
+fn cartridge_maps_banks_and_drives_trig3() {
+    let mut m = stub("pal");
+    frames(&mut m, 1);
+    assert_eq!(byte(&m, 0xd013), 0, "TRIG3: no cartridge");
+    m.mem.ram[0x8000] = 0x11;
+    // XEGS 32K: four banks whose bytes name the bank.
+    let rom: Vec<u8> = (0..0x8000).map(|i| (i / 0x2000) as u8 + 0xc0).collect();
+    let car = media::car::Car { kind: 12, rom };
+    let media = emu_core::media::Media {
+        name: "x.car".into(),
+        kind: MediaKind::Cartridge,
+        backend: Box::new(media_backends_free::Bytes(car.to_bytes())),
+    };
+    m.media_slot(SLOT_CARTRIDGE).unwrap().insert(media).unwrap();
+    frames(&mut m, 1); // the change powers the machine up
+    assert_eq!(byte(&m, 0xd013), 1, "TRIG3: RD5");
+    assert_eq!(byte(&m, 0x8000), 0xc0, "bank 0 at $8000");
+    assert_eq!(byte(&m, 0xa000), 0xc3, "last bank at $A000");
+    poke(&mut m, 0xd500, 2);
+    assert_eq!(byte(&m, 0x8000), 0xc2);
+    // State round trip keeps the bank.
+    let state = m.save_state();
+    poke(&mut m, 0xd500, 1);
+    m.load_state(&state).unwrap();
+    assert_eq!(byte(&m, 0x8000), 0xc2);
+    assert!(m.media_slot(SLOT_CARTRIDGE).unwrap().eject().is_some());
+    frames(&mut m, 1);
+    assert_eq!(byte(&m, 0xd013), 0);
+    assert_eq!(byte(&m, 0xa000), 0x00, "RAM again (cleared by power-up)");
 }

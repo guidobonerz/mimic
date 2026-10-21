@@ -25,10 +25,12 @@ usage: emu-headless [options]
   --prg FILE            program (PRG/T64, Atari XEX) into the machine's program slot,
                         or as its \"program\" ROM role (sim6502)
   --disk FILE           disk image into the first disk drive (drive 8, Atari D1: ATR)
-  --tape FILE           TAP image into the datasette (PLAY pressed); a PRG
-                        is recorded in the machine's tape format first
+  --tape FILE           TAP image into the datasette, CAS into the Atari
+                        program recorder (PLAY pressed); a PRG is recorded
+                        in the machine's tape format first
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
-                        + ROM) or C16/Plus/4 (16/32 KB) dump
+                        + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
+                        raw 8/16 KB ROM
   --autostart           load and run the disk after boot (C64)
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
   --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR)

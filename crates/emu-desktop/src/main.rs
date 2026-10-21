@@ -44,10 +44,11 @@ usage: emu-desktop [options]
   --model NAME          model variant (C64: pal, ntsc)
   --prg FILE            program (PRG/T64, Atari XEX) to load and run
   --disk FILE           disk image for drive 8 (Atari: ATR for D1:)
-  --tape FILE           TAP image for the datasette (a PRG is recorded in the
-                        machine's tape format)
+  --tape FILE           TAP image for the datasette, CAS for the Atari program
+                        recorder (a PRG is recorded in the machine's tape format)
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
-                        + ROM) or C16/Plus/4 (16/32 KB) dump
+                        + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
+                        raw 8/16 KB ROM
   --autostart           load and run the disk after boot
   --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)

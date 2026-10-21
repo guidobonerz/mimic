@@ -115,6 +115,9 @@ pub struct Pokey {
     /// Serial input line (true = mark) and a byte being received.
     serial_line: bool,
     serial_busy: bool,
+    /// SKCTL was written while a byte came in: its receive logic restarted
+    /// and that byte is lost.
+    rx_discard: bool,
 }
 
 impl Default for Pokey {
@@ -162,6 +165,7 @@ impl Pokey {
             serial_overrun: false,
             serial_line: true,
             serial_busy: false,
+            rx_discard: false,
         }
     }
 
@@ -289,6 +293,9 @@ impl Pokey {
 
     /// A byte arrived on the serial input (SIO device → computer).
     pub fn receive(&mut self, v: u8) {
+        if std::mem::take(&mut self.rx_discard) {
+            return;
+        }
         if self.pending & IRQ_SERIN != 0 {
             self.serial_overrun = true;
         }
@@ -557,6 +564,12 @@ impl Pokey {
                 self.pending &= v;
             }
             0x0f => {
+                // A new serial mode (bits 4–6) restarts the receiver: a
+                // byte in progress is lost (the cassette handler switches
+                // modes after measuring the baud rate on the sync bytes).
+                if self.serial_busy && (self.skctl ^ v) & 0x70 != 0 {
+                    self.rx_discard = true;
+                }
                 self.skctl = v;
                 if v & 0x03 == 0 {
                     self.poly4 = 0x0f;
@@ -576,8 +589,8 @@ impl Pokey {
 
 const TAG: [u8; 4] = *b"POKY";
 /// Version 2: sound polynomials, high-pass latches, pots; 3: serial input
-/// line.
-const VERSION: u16 = 3;
+/// line; 4: receiver restart.
+const VERSION: u16 = 4;
 
 impl Savestate for Pokey {
     fn save(&self, w: &mut StateWriter) {
@@ -629,6 +642,7 @@ impl Savestate for Pokey {
             w.u8(self.allpot);
             w.bool(self.serial_line);
             w.bool(self.serial_busy);
+            w.bool(self.rx_discard);
         });
     }
 
@@ -680,6 +694,9 @@ impl Savestate for Pokey {
         if version >= 3 {
             n.serial_line = c.bool()?;
             n.serial_busy = c.bool()?;
+        }
+        if version >= 4 {
+            n.rx_discard = c.bool()?;
         }
         if n.prescale64 >= 28 || n.prescale15 >= 114 || n.shift_bits > SERIAL_BITS {
             return Err(StateError::Invalid("POKEY counters"));

@@ -68,6 +68,8 @@ pub struct Gtia {
     /// Joystick triggers held down (TRIG0–3), and latched presses.
     trig_down: [bool; 4],
     trig_latched: [bool; 4],
+    /// XL/XE: TRIG3 reads the cartridge's RD5 line (1 = cartridge present).
+    cartridge: bool,
     /// Console keys held down: bit 0 START, 1 SELECT, 2 OPTION.
     pub console_keys: u8,
     pixels: Vec<u8>,
@@ -106,6 +108,7 @@ impl Gtia {
             p_pl: [0; 4],
             trig_down: [false; 4],
             trig_latched: [false; 4],
+            cartridge: false,
             console_keys: 0,
             pixels: vec![0; (WIDTH * HEIGHT) as usize],
         }
@@ -125,6 +128,11 @@ impl Gtia {
         self.consol_out & 0x08 != 0
     }
 
+    /// The XL/XE cartridge's RD5 line, read as TRIG3.
+    pub fn set_cartridge(&mut self, rd5: bool) {
+        self.cartridge = rd5;
+    }
+
     pub fn set_trigger(&mut self, n: usize, down: bool) {
         if let Some(t) = self.trig_down.get_mut(n) {
             *t = down;
@@ -141,7 +149,8 @@ impl Gtia {
             0x04..=0x07 => self.p_pf[r - 4],
             0x08..=0x0b => self.m_pl[r - 8],
             0x0c..=0x0f => self.p_pl[r - 0x0c],
-            0x10..=0x13 => {
+            0x13 => u8::from(self.cartridge),
+            0x10..=0x12 => {
                 let n = r - 0x10;
                 u8::from(!(self.trig_down[n] || self.trig_latched[n]))
             }

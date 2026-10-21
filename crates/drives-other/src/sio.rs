@@ -229,23 +229,43 @@ pub struct SerialIn {
 }
 
 /// Bytes from a device to the computer, each with the cycle its start bit
-/// begins; 8N1 at [`BAUD`].
+/// begins; 8N1 at [`BAUD`] (SIO) or another rate (cassette).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SerialTx {
     hz: u64,
+    baud: u64,
     queue: VecDeque<(u64, u8)>,
 }
 
 impl SerialTx {
     pub fn new(hz: u32) -> Self {
+        Self::with_baud(hz, BAUD as u32)
+    }
+
+    pub fn with_baud(hz: u32, baud: u32) -> Self {
         Self {
             hz: u64::from(hz),
+            baud: u64::from(baud.max(1)),
             queue: VecDeque::new(),
         }
     }
 
+    /// Change the rate for bytes queued from now on (only while idle).
+    pub fn set_baud(&mut self, baud: u32) {
+        self.baud = u64::from(baud.max(1));
+    }
+
     fn byte_cycles(&self) -> u64 {
-        10 * self.hz / BAUD
+        10 * self.hz / self.baud
+    }
+
+    /// Queued bytes with their start cycles (for savestates).
+    pub fn queued(&self) -> impl Iterator<Item = (u64, u8)> + '_ {
+        self.queue.iter().copied()
+    }
+
+    pub fn clear(&mut self) {
+        self.queue.clear();
     }
 
     /// Queue `bytes` back to back from `at` (or after what is queued);
@@ -285,7 +305,7 @@ impl SerialTx {
                 byte: Some(b),
             };
         }
-        let bit = (now - start) * BAUD / self.hz;
+        let bit = (now - start) * self.baud / self.hz;
         let level = match bit {
             0 => false,
             1..=8 => b >> (bit - 1) & 1 != 0,
