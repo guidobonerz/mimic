@@ -186,6 +186,14 @@ impl Gfx {
             });
             self.texture = Some((texture, bind, frame.width, frame.height));
         }
+        // Signal stage on the CPU, CRT stage in the shader.
+        let decoded = video_crt::signal::process_rgba(
+            frame.width,
+            frame.height,
+            &frame.rgba,
+            frame.signal,
+            &self.profile,
+        );
         if let Some((texture, ..)) = &self.texture {
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -194,7 +202,7 @@ impl Gfx {
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
-                &frame.rgba,
+                decoded.as_deref().unwrap_or(&frame.rgba),
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(frame.width * 4),

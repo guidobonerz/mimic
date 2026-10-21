@@ -498,13 +498,14 @@ pub const SLOT_TAPE: SlotId = SlotId(1);
 /// The virtual IEEE-488 drive, device 8.
 pub const SLOT_DRIVE8: SlotId = SlotId(2);
 
-/// Phosphor colours of the monochrome monitor: off, green.
+/// Video levels: off, on. The phosphor colour (white 2001, green later
+/// models) comes from the monitor profile (`pet-white`, `pet-green`).
 const PALETTE: [Rgb8; 2] = [
     Rgb8 { r: 0, g: 0, b: 0 },
     Rgb8 {
-        r: 0x41,
+        r: 0xff,
         g: 0xff,
-        b: 0x00,
+        b: 0xff,
     },
 ];
 

@@ -1,8 +1,10 @@
-//! CRT/monitor emulation as post-processing (golden rule 9): aspect
-//! correction, scaling, scanlines, gamma; later the composite/PAL/NTSC
-//! signal stage, field handling and the full CRT stage.
+//! CRT/monitor emulation as post-processing (golden rule 9): the signal
+//! stage ([`signal`]: composite PAL/NTSC, S-Video, PAL delay line,
+//! monochrome), then aspect correction, scaling, scanlines, gamma; later
+//! field handling and the full CRT stage.
 //!
-//! Two paths with the same model: [`cpu::render`] (deterministic, for
+//! The signal stage runs on the CPU for every frontend. The CRT stage has
+//! two paths with the same model: [`cpu::render`] (deterministic, for
 //! headless, preview snapshots and CI) and the WGSL shader [`gpu::SHADER`]
 //! used by the desktop and web frontends.
 
@@ -10,6 +12,7 @@
 
 pub mod cpu;
 pub mod profile;
+pub mod signal;
 
 pub use cpu::{render, Image};
 pub use profile::{Profile, Signal};

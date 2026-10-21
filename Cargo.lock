@@ -825,6 +825,7 @@ dependencies = [
 name = "emu-tests"
 version = "0.1.0"
 dependencies = [
+ "chips-cbm",
  "devices-cartridge",
  "drives-other",
  "emu-core",
@@ -842,6 +843,7 @@ dependencies = [
  "qoi",
  "serde_json",
  "tokio-tungstenite",
+ "video-crt",
 ]
 
 [[package]]

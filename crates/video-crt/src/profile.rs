@@ -9,16 +9,18 @@
 
 use serde::Deserialize;
 
-/// The connection a profile models. Phase 2 implements none of the signal
-/// stages yet; composite profiles render like RGB until they arrive.
+/// The connection a profile models (see [`crate::signal`]). PAL or NTSC
+/// decoding follows the frame's video standard.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Signal {
+    /// Clean RGB: no signal stage.
     #[default]
     Rgb,
-    CompositePal,
-    CompositeNtsc,
+    #[serde(alias = "composite-pal", alias = "composite-ntsc")]
+    Composite,
     SVideo,
+    /// Luma only, coloured by `tint`.
     Monochrome,
 }
 
@@ -36,6 +38,14 @@ pub struct Profile {
     pub gamma: f32,
     /// Tint for monochrome monitors (linear RGB multipliers).
     pub tint: [f32; 3],
+    /// Luma bandwidth in MHz (0 = unlimited).
+    pub luma_bandwidth: f32,
+    /// Chroma bandwidth in MHz.
+    pub chroma_bandwidth: f32,
+    /// PAL decoders average chroma with the previous line.
+    pub delay_line: bool,
+    /// Colour knob: chroma gain after decoding.
+    pub saturation: f32,
 }
 
 impl Default for Profile {
@@ -47,6 +57,10 @@ impl Default for Profile {
             scanlines: 0.0,
             gamma: 1.0,
             tint: [1.0; 3],
+            luma_bandwidth: 0.0,
+            chroma_bandwidth: 1.3,
+            delay_line: true,
+            saturation: 1.0,
         }
     }
 }
@@ -74,18 +88,50 @@ impl Profile {
                 gamma: 1.1,
                 ..base
             },
-            "pal-tv" => Self {
-                signal: Signal::CompositePal,
+            // RGB input of the 1084S (C128 VDC, Amiga).
+            "1084s-rgb" => Self {
+                aspect: true,
+                scanlines: 0.45,
+                gamma: 1.1,
+                ..base
+            },
+            "pal-tv" | "ntsc-tv" => Self {
+                signal: Signal::Composite,
                 aspect: true,
                 scanlines: 0.25,
                 gamma: 1.15,
+                luma_bandwidth: 4.2,
+                ..base
+            },
+            // PET built-in monitors: white phosphor (2001), green (later).
+            "pet-white" => Self {
+                signal: Signal::Monochrome,
+                aspect: true,
+                scanlines: 0.3,
+                tint: [0.85, 0.92, 1.0],
+                ..base
+            },
+            "pet-green" => Self {
+                signal: Signal::Monochrome,
+                aspect: true,
+                scanlines: 0.3,
+                tint: [0.26, 1.0, 0.0],
                 ..base
             },
             _ => return None,
         })
     }
 
-    pub const PRESETS: [&'static str; 4] = ["raw", "1702", "1084s", "pal-tv"];
+    pub const PRESETS: [&'static str; 8] = [
+        "raw",
+        "1702",
+        "1084s",
+        "1084s-rgb",
+        "pal-tv",
+        "ntsc-tv",
+        "pet-white",
+        "pet-green",
+    ];
 
     /// Parse a TOML profile; `base = "<preset>"` starts from a preset.
     pub fn from_toml(text: &str) -> Result<Self, String> {
@@ -119,6 +165,7 @@ impl Profile {
     pub fn default_for(machine: &str) -> Self {
         let name = match machine {
             "c64" | "c128" | "vic20" | "c16" | "plus4" => "1702",
+            "pet" => "pet-green",
             _ => "raw",
         };
         Self::preset(name).unwrap_or_default()
@@ -134,6 +181,10 @@ struct Serialized<'a> {
     scanlines: f32,
     gamma: f32,
     tint: [f32; 3],
+    luma_bandwidth: f32,
+    chroma_bandwidth: f32,
+    delay_line: bool,
+    saturation: f32,
 }
 
 impl<'a> From<&'a Profile> for Serialized<'a> {
@@ -142,8 +193,7 @@ impl<'a> From<&'a Profile> for Serialized<'a> {
             name: &p.name,
             signal: match p.signal {
                 Signal::Rgb => "rgb",
-                Signal::CompositePal => "composite-pal",
-                Signal::CompositeNtsc => "composite-ntsc",
+                Signal::Composite => "composite",
                 Signal::SVideo => "s-video",
                 Signal::Monochrome => "monochrome",
             },
@@ -151,6 +201,10 @@ impl<'a> From<&'a Profile> for Serialized<'a> {
             scanlines: p.scanlines,
             gamma: p.gamma,
             tint: p.tint,
+            luma_bandwidth: p.luma_bandwidth,
+            chroma_bandwidth: p.chroma_bandwidth,
+            delay_line: p.delay_line,
+            saturation: p.saturation,
         }
     }
 }
@@ -176,5 +230,12 @@ mod tests {
         assert!(p.aspect, "inherited from 1084s");
         assert!(Profile::from_toml("scanline = 1").is_err(), "typo");
         assert!(Profile::from_toml("base = \"x\"").is_err());
+        let p = Profile::from_toml(
+            "signal = \"composite-ntsc\"
+delay_line = false",
+        )
+        .unwrap();
+        assert_eq!(p.signal, Signal::Composite, "old names still parse");
+        assert!(!p.delay_line);
     }
 }

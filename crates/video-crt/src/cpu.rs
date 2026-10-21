@@ -9,7 +9,7 @@
 //! 14.75 MHz, NTSC 12.2727 MHz for 576/480 lines): for the C64 PAL
 //! (7.882 MHz) that is 0.936.
 
-use emu_core::frame::{FieldParity, FrameRef, VideoStandard};
+use emu_core::frame::{FieldParity, FrameRef, PixelData, VideoStandard};
 
 use crate::profile::Profile;
 
@@ -71,6 +71,19 @@ fn gamma_lut(gamma: f32) -> [u8; 256] {
 }
 
 pub fn render(frame: &FrameRef<'_>, profile: &Profile, scale: u32) -> Image {
+    let decoded = crate::signal::process(frame, profile);
+    let decoded_frame;
+    let frame = match &decoded {
+        Some(pixels) => {
+            decoded_frame = FrameRef {
+                pixels: PixelData::Rgb(pixels),
+                luma_chroma: None,
+                ..*frame
+            };
+            &decoded_frame
+        }
+        None => frame,
+    };
     let scale = scale.max(1);
     let (width, height) = output_size(frame, profile, scale);
 
@@ -126,7 +139,7 @@ pub fn render(frame: &FrameRef<'_>, profile: &Profile, scale: u32) -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::frame::{OutputType, PixelData, Rgb8, SignalInfo};
+    use emu_core::frame::{OutputType, Rgb8, SignalInfo};
 
     const PALETTE: [Rgb8; 2] = [
         Rgb8 { r: 0, g: 0, b: 0 },
