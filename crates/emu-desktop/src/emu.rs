@@ -21,6 +21,7 @@ use emu_core::{ControlId, ControlInfo, Machine, ScreenId, StopReason};
 use emu_debug::{Endpoint, Service, Session};
 use emu_input::{HostEvent, JoyKeys, Mapper};
 use emu_preview::server::FrameTap;
+use video_crt::field::FieldStage;
 
 use crate::footer::{Footer, Tracker};
 
@@ -41,6 +42,8 @@ pub struct Shared {
     pub last_vsync_ns: AtomicU64,
     /// Finished frames in order; the window shows each once.
     pub frames: Mutex<VecDeque<Frame>>,
+    /// Interlace weaving for [`Shared::frames`].
+    pub fields: Mutex<FieldStage>,
     pub audio: Mutex<VecDeque<i16>>,
     /// Set by the audio thread when a device is running.
     pub audio_live: AtomicBool,
@@ -124,6 +127,7 @@ impl Shared {
             epoch: Instant::now(),
             last_vsync_ns: AtomicU64::new(0),
             frames: Mutex::default(),
+            fields: Mutex::default(),
             audio: Mutex::default(),
             audio_live: AtomicBool::new(false),
             quit: AtomicBool::new(false),
@@ -210,10 +214,22 @@ fn next_screen(m: &dyn Machine, current: ScreenId) -> ScreenId {
     screens[(i + 1) % screens.len()].id
 }
 
-fn to_frame(m: &dyn Machine, screen: ScreenId) -> Frame {
+fn to_frame(m: &dyn Machine, screen: ScreenId, fields: &mut FieldStage) -> Frame {
     let Some(f) = m.screen(screen) else {
-        return to_frame(m, ScreenId::MAIN);
+        return to_frame(m, ScreenId::MAIN, fields);
     };
+    // Interlaced fields (Amiga LACE) are woven into full frames; the
+    // field parity stays in the signal, so the aspect counts one row per
+    // line.
+    if let Some((width, height, px)) = fields.process(&f) {
+        let rgba = px.iter().flat_map(|c| [c.r, c.g, c.b, 255]).collect();
+        return Frame {
+            width,
+            height,
+            rgba,
+            signal: f.signal,
+        };
+    }
     let mut rgba = Vec::with_capacity(f.width as usize * f.height as usize * 4);
     for y in 0..f.height {
         for x in 0..f.width {
@@ -448,7 +464,10 @@ pub fn spawn(
 }
 
 fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {
-    let frame = to_frame(machine, screen);
+    let frame = match shared.fields.lock() {
+        Ok(mut fields) => to_frame(machine, screen, &mut fields),
+        Err(_) => return,
+    };
     if let Ok(mut q) = shared.frames.lock() {
         q.push_back(frame);
         while q.len() > MAX_QUEUED_FRAMES {

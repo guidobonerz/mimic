@@ -505,7 +505,12 @@ impl Custom {
             reg::SERDAT => self.paula.request(int::TBE),
             reg::SERPER => self.paula.serper = v,
             reg::POTGO => self.paula.potgo = v,
-            reg::JOYTEST => self.joydat = [v & 0xfcfc; 2],
+            // The counters' upper six bits of both ports.
+            reg::JOYTEST => {
+                for j in &mut self.joydat {
+                    *j = (*j & 0x0303) | (v & 0xfcfc);
+                }
+            }
             reg::BLTCON0 => self.blitter.con0 = v,
             reg::BLTCON1 => self.blitter.con1 = v,
             reg::BLTAFWM => self.blitter.afwm = v,
@@ -648,6 +653,27 @@ impl Custom {
             reg::INTREQR => self.paula.requests(),
             _ => 0xffff,
         }
+    }
+
+    /// Denise's game port counters (JOY0DAT/JOY1DAT): the two-bit phases
+    /// `x`, `y` the port's lines show now. The low bits follow the lines;
+    /// a step 3 → 0 counts the upper six bits up, 0 → 3 down; a jump by two
+    /// (a missed phase) does not count (HRM chapter 8, "Reading the mouse").
+    pub fn port_phases(&mut self, port: usize, x: u8, y: u8) {
+        let mut v = self.joydat[port];
+        for (shift, phase) in [(0, x), (8, y)] {
+            let old = (v >> shift) as u8;
+            let new_lo = phase & 3;
+            let mut hi = old >> 2;
+            match new_lo.wrapping_sub(old & 3) & 3 {
+                1 if old & 3 == 3 => hi = hi.wrapping_add(1),
+                3 if old & 3 == 0 => hi = hi.wrapping_sub(1),
+                _ => {}
+            }
+            let byte = (hi & 0x3f) << 2 | new_lo;
+            v = (v & !(0xff << shift)) | u16::from(byte) << shift;
+        }
+        self.joydat[port] = v;
     }
 
     /// The interrupt level Paula drives on IPL0–2.

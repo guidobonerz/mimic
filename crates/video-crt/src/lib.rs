@@ -1,7 +1,7 @@
 //! CRT/monitor emulation as post-processing (golden rule 9): the signal
 //! stage ([`signal`]: composite PAL/NTSC, S-Video, PAL delay line,
-//! monochrome), then aspect correction, scaling, scanlines, gamma; later
-//! field handling and the full CRT stage.
+//! monochrome), the field stage ([`field`]: interlace weave/bob), then
+//! aspect correction, scaling, scanlines, gamma; later the full CRT stage.
 //!
 //! The signal stage runs on the CPU for every frontend. The CRT stage has
 //! two paths with the same model: [`cpu::render`] (deterministic, for
@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cpu;
+pub mod field;
 pub mod profile;
 pub mod signal;
 

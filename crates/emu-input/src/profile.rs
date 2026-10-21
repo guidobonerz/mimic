@@ -209,7 +209,12 @@ impl Profile {
             machine: machine.into(),
             keyboard: KeyboardMode::Positional,
             joystick,
-            mouse: Vec::new(),
+            // The Amiga's mouse sits in game port 0.
+            mouse: if machine == "amiga" {
+                vec![MouseMap { port: 0 }]
+            } else {
+                Vec::new()
+            },
             paddles: Vec::new(),
         }
     }

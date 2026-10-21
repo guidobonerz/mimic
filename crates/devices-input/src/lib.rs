@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod amiga_mouse;
 pub mod amx_mouse;
 pub mod driving;
 pub mod joystick;
@@ -9,6 +10,7 @@ pub mod keypad;
 pub mod mouse1351;
 pub mod paddles;
 
+pub use amiga_mouse::AmigaMouse;
 pub use amx_mouse::AmxMouse;
 pub use driving::Driving;
 pub use joystick::Joystick;

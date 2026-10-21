@@ -112,6 +112,9 @@ own section.
 | Audio channels: registers, DMA, block-start interrupts, left/right assignment, output filters | HRM chapter 5 "Audio hardware" | `chips-amiga/src/audio.rs`, `machine-amiga` |
 | Disk controller: DSKLEN double write, WORDSYNC, DSKSYNC, DSKBYTR, FIFO, ADKCON FAST; drive lines, index | HRM chapter 8 "Disk", appendix A | `chips-amiga/src/disk.rs`, `drives-other/src/amiga_drive.rs` |
 | ADF images, AmigaDOS track and sector format (odd/even MFM longs, header and data checksums), boot block checksum | Laurent Clévy, "The .ADF (Amiga Disk File) format FAQ" | `media/src/adf.rs`, `tests/tests/amiga_boot.rs` |
+| Keyboard: serial protocol to CIA-A (KCLK/KDAT, bit order, inversion), handshake, power-up stream, raw key codes | HRM chapter 8 "Keyboard", keyboard appendix | `machine-amiga/src/keyboard.rs`, `emu-input` keymap `amiga` |
+| Mouse quadrature signals, game port pinout, JOYxDAT counters, JOYTEST | HRM chapter 8 "Controller ports", "Reading the mouse" | `devices-input/src/amiga_mouse.rs`, `chips-amiga/src/custom.rs` |
+| Interlace: long/short fields (LOF), field order | HRM chapter 3 "Interlaced mode" | `chips-amiga/src/custom.rs`, `video-crt/src/field.rs` |
 | VPA/E-clock bus cycles (CIA accesses, autovector acknowledge) | Motorola, *M68000 User's Manual*, "Synchronous operation" | `machine-amiga` (`e_clock_waits`) |
 
 ### Video, colour and host conventions

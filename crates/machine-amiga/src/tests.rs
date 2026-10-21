@@ -172,7 +172,7 @@ fn debugger_sees_registers_memory_and_disassembly() {
     let names: Vec<&str> = m.chips().iter().map(|c| c.name).collect();
     assert_eq!(
         names,
-        ["agnus", "copper", "blitter", "denise", "paula", "cia_a", "cia_b", "floppy"]
+        ["agnus", "copper", "blitter", "denise", "paula", "cia_a", "cia_b", "keyboard", "floppy"]
     );
 }
 
@@ -310,4 +310,77 @@ mod disk {
         assert!(m.media_slot(SlotId(0)).unwrap().eject().is_some());
         assert!(!m.media_slots()[0].inserted);
     }
+}
+
+#[test]
+fn mouse_motion_counts_into_joy0dat() {
+    let mut m = stub();
+    frames(&mut m, 1);
+    m.input(TimedInput {
+        at: m.now(),
+        target: InputTarget::Port(PORT0),
+        event: InputEvent::MouseRel {
+            dx: 10,
+            dy: -3,
+            buttons: 3,
+        },
+    });
+    frames(&mut m, 2);
+    let joy0 = m.board.custom.peek(chips_amiga::reg::JOY0DAT);
+    assert_eq!((joy0 & 0xff, joy0 >> 8), (10, 0xfd));
+    // Left button on CIA-A /FIR0, right button on POTGOR DATLY.
+    assert_eq!(m.board.read(0xbf_e001, Size::Byte, true) as u8 & 0x40, 0);
+    assert_eq!(m.board.custom.peek(chips_amiga::reg::POTGOR) & 0x0400, 0);
+}
+
+#[test]
+fn keys_arrive_at_cia_a() {
+    use emu_core::input::MachineKey;
+    let mut m = stub();
+    frames(&mut m, 12); // past the power-up stream ($FD, $FE): no handshake
+                        // Handshake the power-up codes away by hand.
+    for _ in 0..2 {
+        m.board.write(0xbf_ee01, Size::Byte, 0x40);
+        frames(&mut m, 1);
+        m.board.write(0xbf_ee01, Size::Byte, 0x00);
+        frames(&mut m, 1);
+    }
+    m.board.cia_a.read(0x0d, 0xff, 0xff);
+    m.input(TimedInput {
+        at: m.now(),
+        target: InputTarget::Keyboard,
+        event: InputEvent::Key {
+            machine_key: MachineKey(0x20),
+            down: true,
+        },
+    });
+    frames(&mut m, 2);
+    assert_ne!(
+        m.board.cia_a.peek(0x0d, 0xff, 0xff) & 0x08,
+        0,
+        "SP interrupt"
+    );
+    let sdr = !m.board.cia_a.peek(0x0c, 0xff, 0xff);
+    assert_eq!(sdr.rotate_right(1), 0x20, "A pressed");
+}
+
+#[test]
+fn interlace_alternates_long_and_short_fields() {
+    let mut m = stub();
+    frames(&mut m, 2);
+    m.board.write(0xdf_f100, Size::Word, 0x0204); // BPLCON0: COLOR, LACE
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        let t0 = m.now().0;
+        frames(&mut m, 1);
+        let lines = (m.now().0 - t0) / (2 * 227);
+        seen.push((lines, m.framebuffer().signal.field));
+    }
+    use emu_core::frame::FieldParity::{Even, Odd};
+    let pattern: Vec<_> = seen.iter().map(|&(_, f)| f).collect();
+    assert!(
+        pattern == [Odd, Even, Odd, Even] || pattern == [Even, Odd, Even, Odd],
+        "{seen:?}"
+    );
+    assert!(seen.iter().any(|&(l, _)| l == 312) && seen.iter().any(|&(l, _)| l == 313));
 }

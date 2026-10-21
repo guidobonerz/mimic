@@ -10,6 +10,10 @@
 //! time: every 2 µs with ADKCON FAST, else every 4 µs. The index hole
 //! pulses CIA-B /FLAG.
 //!
+//! **Keyboard.** [`keyboard::Keyboard`] sends raw key codes
+//! ([`emu_core::input::MachineKey`] = the raw code, 0–$67) to CIA-A's
+//! serial port; Ctrl + both Amiga keys reset the machine (RAM stays).
+//!
 //! **Audio.** Paula's channels 0+3 (left) and 1+2 (right) at the colour
 //! clock, averaged down to 48 kHz stereo, then the A500's output filters:
 //! a fixed low-pass (about 4.9 kHz) and the "LED" filter (about 3.3 kHz),
@@ -22,8 +26,9 @@
 //!   use (`kick13` …, 256 or 512 KB images).
 //! - `slow`: slow RAM, "512k" (default) or "0".
 //! - `drives`: floppy drives fitted, "1" (default) to "4".
-//! - `port0` / `port1`: game port devices, "joystick" or "none" (defaults:
-//!   none in port 0 — the mouse comes in M4 — and a joystick in port 1).
+//! - `port0` / `port1`: game port devices, "mouse", "joystick" or "none"
+//!   (defaults: the mouse in port 0, a joystick in port 1). The ports are
+//!   sampled once a raster line; Denise counts mouse steps into JOYxDAT.
 //! - `roms`: "stub" runs a tiny built-in program instead of Kickstart
 //!   ([`stub`]; tests without ROMs).
 //!
@@ -49,6 +54,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod keyboard;
 pub mod memory;
 pub mod stub;
 
@@ -68,6 +74,7 @@ use emu_core::{
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
+use keyboard::Keyboard;
 use memory::{Memory, Region};
 
 pub const CPU: DeviceId = DeviceId("cpu");
@@ -151,25 +158,30 @@ fn port_option(
         "joystick" => Ok(Some(Box::new(devices_input::Joystick::new(
             PortKind::AmigaGameport,
         )))),
+        // At most one step per 1000 clocks: sampled every line (454), no
+        // phase is missed.
+        "mouse" => Ok(Some(Box::new(devices_input::AmigaMouse::new(1000)))),
         "none" => Ok(None),
         other => Err(ConfigError::Invalid(format!(
-            "{key} option '{other}' (joystick or none)"
+            "{key} option '{other}' (mouse, joystick or none)"
         ))),
     }
 }
 
-/// JOYxDAT for a digital joystick: right sets bit 1, left bit 9; bit 0 is
-/// right XOR down, bit 8 left XOR up (HRM chapter 8, "Joysticks").
-fn joydat(lines: PortLines) -> u16 {
+/// The two-bit counter phases (x, y) a port's lines give: right (pin 4)
+/// is X1, right XOR down (pin 2) X0; left (pin 3) Y1, left XOR up (pin 1)
+/// Y0 — a joystick's directions as the HRM reads them, and a mouse's
+/// quadrature phases (HRM chapter 8, "Joysticks", "Mouse").
+fn phases(lines: PortLines) -> (u8, u8) {
     use devices_input::joystick::pin;
-    let low = |p: u32| lines.pulled_low & p != 0;
+    let low = |p: u32| u8::from(lines.pulled_low & p != 0);
     let (right, left) = (low(pin::RIGHT), low(pin::LEFT));
     let (down, up) = (low(pin::DOWN), low(pin::UP));
-    u16::from(right) << 1
-        | u16::from(right ^ down)
-        | u16::from(left) << 9
-        | u16::from(left ^ up) << 8
+    (right << 1 | (right ^ down), left << 1 | (left ^ up))
 }
+
+/// CPU clocks between port samples (one raster line).
+const PORT_SAMPLE: u64 = 2 * custom::PAL_LINE as u64;
 
 /// Everything on the boards' buses except the CPU and the port devices.
 #[derive(Clone, Debug)]
@@ -193,6 +205,7 @@ struct Board {
     filter: [[i32; 2]; 2],
     /// Interleaved stereo samples since the last `audio` call.
     samples: Vec<i16>,
+    keyboard: Keyboard,
 }
 
 /// One-pole low-pass coefficients at 48 kHz (16-bit fraction):
@@ -205,6 +218,7 @@ impl Board {
     fn tick(&mut self, cpu_wants: bool) -> bool {
         let out = self.custom.tick(&mut self.mem.chip, cpu_wants);
         if self.cck.is_multiple_of(5) {
+            self.keyboard.tick(&mut self.cia_a);
             self.cia_a.tick();
             self.cia_b.tick();
         }
@@ -627,6 +641,8 @@ pub struct Amiga {
     input: InputQueue,
     ports: [Option<Box<dyn PortDevice>>; 2],
     jam_reported: bool,
+    /// CPU clock of the next game port sample.
+    ports_due: u64,
 }
 
 impl Amiga {
@@ -673,14 +689,16 @@ impl Amiga {
                     2],
                 filter: [[0; 2]; 2],
                 samples: Vec::new(),
+                keyboard: Keyboard::new(),
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
             ports: [
-                port_option(config, "port0", "none")?,
+                port_option(config, "port0", "mouse")?,
                 port_option(config, "port1", "joystick")?,
             ],
             jam_reported: false,
+            ports_due: 0,
         };
         m.power_on();
         Ok(m)
@@ -720,12 +738,17 @@ impl Amiga {
                 }
                 None => PortLines::default(),
             };
-            self.board.custom.joydat[i] = joydat(lines);
+            let (x, y) = phases(lines);
+            self.board.custom.port_phases(i, x, y);
             if lines.pulled_low & pin::FIRE != 0 {
                 fire |= 0x40 << i;
             }
+            // Second button on pin 9 (POTY), third on pin 5 (POTX).
             if lines.pulled_low & pin::BUTTON2 != 0 {
                 pot |= 0x0400 << (4 * i);
+            }
+            if lines.pulled_low & pin::BUTTON3 != 0 {
+                pot |= 0x0100 << (4 * i);
             }
         }
         self.board.fire_low = fire;
@@ -737,6 +760,11 @@ impl Amiga {
     fn instruction(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
+        }
+        let now = self.sched.now().0;
+        if now >= self.ports_due && self.ports.iter().any(Option::is_some) {
+            self.ports_due = now + PORT_SAMPLE;
+            self.refresh_ports();
         }
         self.cpu.set_ipl(self.board.custom.ipl());
         let start = self.sched.now().0;
@@ -801,6 +829,11 @@ impl Amiga {
 
     fn apply_input(&mut self, ev: TimedInput) {
         match (ev.target, ev.event) {
+            (InputTarget::Keyboard, InputEvent::Key { machine_key, down }) => {
+                if self.board.keyboard.key(machine_key.0 as u8, down) {
+                    Machine::reset(self, ResetKind::Soft);
+                }
+            }
             (InputTarget::Port(p), event) => {
                 if let Some(Some(dev)) = self.ports.get_mut(usize::from(p.0)) {
                     dev.input(&event);
@@ -926,6 +959,7 @@ impl Machine for Amiga {
     /// reset): CPU, CIAs and custom chips restart, RAM keeps its contents.
     fn reset(&mut self, kind: ResetKind) {
         self.board.custom.reset();
+        self.board.keyboard = Keyboard::new();
         if kind == ResetKind::Hard {
             self.board.mem.clear();
             // The mechanics restart; a disk stays in its drive.
@@ -1059,6 +1093,10 @@ impl Machine for Amiga {
             cia_info("cia_a", &self.board.cia_a, 0xbf_e001, 0x100),
             cia_info("cia_b", &self.board.cia_b, 0xbf_d000, 0x100),
             chip_regs(
+                "keyboard",
+                &[("PENDING", None, self.board.keyboard.pending() as u32, 8)],
+            ),
+            chip_regs(
                 "floppy",
                 &self
                     .board
@@ -1165,7 +1203,7 @@ impl Machine for Amiga {
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         let b = &self.board;
-        w.chunk(*b"A500", 2, |w| {
+        w.chunk(*b"A500", 3, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1175,6 +1213,7 @@ impl Machine for Amiga {
             w.bool(b.field_done);
             w.u8(b.fire_low);
             w.bool(self.jam_reported);
+            w.u64(self.ports_due);
             w.u32(b.disk_acc);
             for d in &b.decimators {
                 d.save(w);
@@ -1191,6 +1230,7 @@ impl Machine for Amiga {
         for d in &b.drives {
             d.save(&mut w);
         }
+        b.keyboard.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
         for (i, tag) in [*b"GPT0", *b"GPT1"].into_iter().enumerate() {
@@ -1209,7 +1249,7 @@ impl Machine for Amiga {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"A500", 2)?;
+        let (_, mut c) = r.chunk(*b"A500", 3)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -1226,6 +1266,7 @@ impl Machine for Amiga {
         board.field_done = c.bool()?;
         board.fire_low = c.u8()? & 0xc0;
         let jam_reported = c.bool()?;
+        let ports_due = c.u64()?;
         board.disk_acc = c.u32()?;
         if board.disk_acc >= board.cck_hz {
             return Err(StateError::Invalid("disk clock"));
@@ -1248,6 +1289,7 @@ impl Machine for Amiga {
         for d in &mut board.drives {
             d.load(&mut r)?;
         }
+        board.keyboard.load(&mut r)?;
         sched.load(&mut r)?;
         input.load(&mut r)?;
         let mut port_states = Vec::new();
@@ -1281,6 +1323,7 @@ impl Machine for Amiga {
         self.sched = sched;
         self.input = input;
         self.jam_reported = jam_reported;
+        self.ports_due = ports_due;
         Ok(())
     }
 }
