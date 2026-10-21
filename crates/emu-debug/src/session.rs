@@ -122,8 +122,9 @@ pub struct Session {
 /// Called with the machine whenever its picture may have changed: after
 /// every frame while running (`true`), and after stops and commands while
 /// paused (`false`; the frame may be partial). The live preview feeds its
-/// frame copies from here.
-pub type FrameHook = Box<dyn FnMut(&dyn Machine, bool) + Send>;
+/// frame copies from here; a frontend without its own audio output may also
+/// collect the machine's samples here.
+pub type FrameHook = Box<dyn FnMut(&mut dyn Machine, bool) + Send>;
 
 impl Session {
     pub fn new(machine: Box<dyn Machine>, machine_id: impl Into<String>) -> Self {
@@ -182,7 +183,7 @@ impl Session {
     /// bypass [`Session::handle`]).
     pub fn notify_frame(&mut self) {
         if let Some(hook) = &mut self.frame_hook {
-            hook(self.machine.as_ref(), self.running);
+            hook(self.machine.as_mut(), self.running);
         }
     }
 

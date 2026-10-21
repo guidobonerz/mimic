@@ -23,7 +23,8 @@
   <strong>mimic preview</strong>
   <label>Filter <select id="filter"><option value="raw">raw</option><option value="crt">CRT</option></select></label>
   <label>Scale <select id="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
-  <label>FPS <select id="fps"><option>10</option><option selected>25</option><option>50</option></select></label>
+  <label>FPS <select id="fps"><option>10</option><option>25</option><option selected>50</option></select></label>
+  <label title="Sound of the machine (raw filter only)"><input type="checkbox" id="sound"> Sound</label>
   <label title="Keys and gamepads go to the emulated machine (C64: Esc = RUN/STOP, numeric keypad = joystick)"><input type="checkbox" id="input" checked> Input</label>
 </header>
 <main><canvas id="screen" width="384" height="272"></canvas></main>
@@ -34,17 +35,118 @@ const canvas = document.getElementById("screen");
 const ctx = canvas.getContext("2d");
 const status = document.getElementById("status");
 const controls = ["filter", "scale", "fps"].map((id) => document.getElementById(id));
+const [filter, scale, fps] = controls;
+const sound = document.getElementById("sound");
 let socket = null;
 let chain = Promise.resolve();
 
+// raw: the /stream endpoint (palette indices, changed lines, audio), coloured
+// and scaled here; crt: server-rendered PNGs from /preview.
 function connect() {
-  if (socket) socket.close();
-  const q = controls.map((c) => `${c.id}=${c.value}`).join("&");
-  socket = new WebSocket(`ws://${location.host}/preview?format=png&${q}`);
+  if (socket) { socket.onclose = null; socket.close(); }
+  const raw = filter.value === "raw";
+  const url = raw
+    ? `/stream?fps=${fps.value}&audio=${audio ? 1 : 0}`
+    : `/preview?format=png&${controls.map((c) => `${c.id}=${c.value}`).join("&")}`;
+  pic = null;
+  socket = new WebSocket(`ws://${location.host}${url}`);
   socket.binaryType = "arraybuffer";
-  socket.onmessage = (ev) => { chain = chain.then(() => draw(ev.data)); };
+  socket.onmessage = raw ? (ev) => onRaw(ev.data) : (ev) => { chain = chain.then(() => draw(ev.data)); };
   socket.onclose = () => { status.textContent = "disconnected – retrying"; setTimeout(connect, 1000); };
 }
+
+function fit() {
+  canvas.style.width = filter.value === "raw" ? `${canvas.width * scale.value}px` : "";
+}
+
+// Raw picture: indices (or RGB) as the server sent them, the palette as
+// 32-bit pixels, and an ImageData that is put once per animation frame.
+let pic = null, shown = true;
+function onRaw(buffer) {
+  const v = new DataView(buffer), bytes = new Uint8Array(buffer);
+  const magic = String.fromCharCode(...bytes.subarray(0, 4));
+  if (magic === "PTRA") return play(v, buffer);
+  if (magic !== "PTRV") return;
+  const flags = v.getUint8(5), bpp = v.getUint8(6);
+  const frame = Number(v.getBigUint64(8, true)), line = v.getUint16(16, true), cycle = v.getUint16(18, true);
+  const [w, h, entries, runs] = [20, 22, 24, 26].map((o) => v.getUint16(o, true));
+  if (flags & 1 || !pic) {
+    const img = ctx.createImageData(w, h);
+    pic = { w, h, bpp, idx: new Uint8Array(w * h), pal: new Uint32Array(256), img, px: new Uint32Array(img.data.buffer), top: h, bottom: 0 };
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    fit();
+  }
+  let o = 32, all = false;
+  if (flags & 4) {
+    pic.pal.fill(0xff000000);
+    for (let i = 0; i < entries; i++, o += 3) pic.pal[i] = 0xff000000 | bytes[o + 2] << 16 | bytes[o + 1] << 8 | bytes[o];
+    all = true;
+  }
+  const len = bpp === 4 ? (w + 1) >> 1 : bpp === 8 ? w : 3 * w;
+  for (let r = 0; r < runs; r++) {
+    const first = v.getUint16(o, true), count = v.getUint16(o + 2, true);
+    o += 4;
+    for (let y = first; y < first + count && y < h; y++, o += len) {
+      const row = y * w;
+      if (bpp === 4) {
+        for (let x = 0; x < w; x++) pic.idx[row + x] = x & 1 ? bytes[o + (x >> 1)] >> 4 : bytes[o + (x >> 1)] & 15;
+      } else if (bpp === 8) {
+        pic.idx.set(bytes.subarray(o, o + w), row);
+      } else {
+        for (let x = 0; x < w; x++) pic.px[row + x] = 0xff000000 | bytes[o + 3 * x + 2] << 16 | bytes[o + 3 * x + 1] << 8 | bytes[o + 3 * x];
+      }
+      if (bpp !== 24 && !all) paint(y, y + 1);
+    }
+  }
+  if (all && bpp !== 24) paint(0, h);
+  else if (bpp === 24 && runs) { pic.top = 0; pic.bottom = h; }
+  const beam = line === 0xffff ? "" : ` · line ${line} cycle ${cycle}`;
+  status.innerHTML = `frame ${frame}${beam} ` + (flags & 2 ? '<span class="paused">· paused (partial frame)</span>' : "");
+  if (shown) { shown = false; requestAnimationFrame(show); }
+}
+
+function paint(from, to) {
+  for (let i = from * pic.w; i < to * pic.w; i++) pic.px[i] = pic.pal[pic.idx[i]];
+  pic.top = Math.min(pic.top, from);
+  pic.bottom = Math.max(pic.bottom, to);
+}
+
+function show() {
+  shown = true;
+  if (!pic || pic.top >= pic.bottom) return;
+  ctx.putImageData(pic.img, 0, 0, 0, pic.top, pic.w, pic.bottom - pic.top);
+  pic.top = pic.h;
+  pic.bottom = 0;
+}
+
+// Sound: each message is scheduled right after the previous one, ≈ 60 ms
+// ahead; if playback runs dry or too far ahead, it starts over.
+let audio = null, playAt = 0;
+function play(v, buffer) {
+  if (!audio) return;
+  const channels = v.getUint8(5), rate = v.getUint32(8, true), n = v.getUint32(12, true);
+  const frames = Math.floor(n / channels);
+  if (!frames) return;
+  const samples = new Int16Array(buffer, 16, n);
+  const ab = audio.createBuffer(channels, frames, rate);
+  for (let c = 0; c < channels; c++) {
+    const data = ab.getChannelData(c);
+    for (let i = 0; i < frames; i++) data[i] = samples[i * channels + c] / 32768;
+  }
+  const now = audio.currentTime;
+  if (playAt < now + 0.02 || playAt > now + 0.25) playAt = now + 0.06;
+  const src = audio.createBufferSource();
+  src.buffer = ab;
+  src.connect(audio.destination);
+  src.start(playAt);
+  playAt += frames / rate;
+}
+
+sound.addEventListener("change", () => {
+  if (sound.checked) { audio = new AudioContext(); audio.resume(); }
+  else if (audio) { audio.close(); audio = null; }
+  if (filter.value === "raw") connect();
+});
 
 async function draw(buffer) {
   const v = new DataView(buffer);
@@ -52,7 +154,7 @@ async function draw(buffer) {
   const key = v.getUint8(5) === 0, paused = v.getUint8(7) & 1;
   const frame = Number(v.getBigUint64(8, true)), line = v.getUint16(16, true), cycle = v.getUint16(18, true);
   const [w, h, x, y] = [20, 22, 24, 26].map((o) => v.getUint16(o, true));
-  if (key && (canvas.width !== w || canvas.height !== h)) { canvas.width = w; canvas.height = h; }
+  if (key && (canvas.width !== w || canvas.height !== h)) { canvas.width = w; canvas.height = h; fit(); }
   if (buffer.byteLength > 32) {
     const bitmap = await createImageBitmap(new Blob([buffer.slice(32)], { type: "image/png" }));
     ctx.drawImage(bitmap, x, y);
@@ -61,7 +163,7 @@ async function draw(buffer) {
   status.innerHTML = `frame ${frame}${beam} ` + (paused ? '<span class="paused">· paused (partial frame)</span>' : "");
 }
 
-controls.forEach((c) => c.addEventListener("change", connect));
+controls.forEach((c) => c.addEventListener("change", () => { fit(); connect(); }));
 connect();
 
 // Input: physical keys (KeyboardEvent.code) and standard-mapping gamepads,

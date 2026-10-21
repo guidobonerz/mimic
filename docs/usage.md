@@ -253,11 +253,24 @@ cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --preview
 | --- | --- |
 | `GET /` | Viewer-Seite mit Live-Bild |
 | `GET /snapshot.png` | aktuelles Bild als PNG (Header `X-Beam-Frame/Line/Cycle`, `X-Paused`) |
-| `GET /preview` (WebSocket) | Bildstrom |
+| `GET /preview` (WebSocket) | Bildstrom als PNG/QOI (auch mit CRT-Filter) |
+| `GET /stream` (WebSocket) | Rohstrom: Farbindizes, nur geänderte Zeilen, optional Ton |
 
 Parameter (Query-String): `filter=raw|crt`, `profile=<name>`,
 `scale=1..4`, für den Strom `fps=1..50` (Standard 25), `format=png|qoi`,
 `delta=0|1`; der Snapshot zusätzlich `machine=<id>` und `screen=vic|vdc`.
+
+Der **Rohstrom** `/stream` (nach dem Vorbild des Video-Streams des
+Ultimate 64) kodiert keine Bilder: Er schickt die Farbindizes der Maschine
+(4 Bit pro Pixel bis 16 Farben, sonst 8 Bit, beim RGB-Bild 24 Bit) und nach
+dem ersten Bild nur die Zeilen, die sich geändert haben. Der Server braucht
+dafür etwa ein Achtel der Zeit des PNG-Stroms; 50 fps sind lokal und im LAN
+kein Problem. Parameter: `screen=`, `fps=1..50` (Standard 50), `audio=0|1`
+(Ton als 16-Bit-PCM, 48 kHz). Das Nachrichtenformat steht in
+`crates/emu-preview/src/raw.rs`. Der Viewer nutzt den Rohstrom beim Filter
+„raw“ und spielt den Ton ab, wenn „Sound“ angehakt ist. Für gleichmäßigen
+Ton muss die Maschine in Echtzeit laufen; das ist der Standard, nur
+`emu-headless --no-realtime` läuft schneller und der Ton stottert dann.
 
 Der Viewer schickt Tastatur-, Gamepad- und Mauseingaben als JSON zurück
 (`{"type": "key", "code": "KeyA", "down": true}` usw.), dadurch ist das

@@ -6,11 +6,14 @@
 //! | `GET /`                | a viewer page (live stream in the browser)              |
 //! | `GET /snapshot.png`    | the latest frame as PNG                                 |
 //! | `GET /preview` (WS)    | stream of [`crate::stream_message`] binary messages     |
+//! | `GET /stream` (WS)     | raw stream: [`crate::raw`] video and audio messages     |
 //!
 //! Parameters (query string): `filter=raw|crt` (default raw), `profile=`
 //! (CRT monitor profile, default the machine's), `scale=1..4` (raw: pixel
 //! factor, crt: rows per line), and for the stream `fps=1..50` (default
-//! 25), `format=png|qoi` (default png), `delta=0|1` (default 1). The
+//! 25), `format=png|qoi` (default png), `delta=0|1` (default 1). The raw
+//! stream takes `screen=`, `fps=1..50` (default 50) and `audio=0|1`
+//! (default 0); it never renders or encodes images. The
 //! snapshot also takes `machine=<id>` (404 if it is not this machine) and
 //! reports the beam in `X-Beam-Frame/Line/Cycle` and `X-Paused` headers.
 //!
@@ -22,7 +25,8 @@
 //! without one they are ignored.
 //!
 //! Frames reach the server through a [`FrameTap`]: the emulation thread
-//! publishes copies into a watch channel and never waits. Each connection
+//! publishes copies into a watch channel and never waits; audio goes into
+//! a broadcast channel only while a raw stream listens. Each connection
 //! renders and encodes the newest frame on the blocking pool, at its own
 //! rate; frames that arrive meanwhile are skipped (backpressure drops
 //! frames, never the emulator's time).
@@ -36,15 +40,16 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use video_crt::Profile;
 
-use emu_core::Machine;
+use emu_core::{AudioFormat, Machine};
 
+use crate::raw::{audio_message, RawEncoder};
 use crate::{dirty_rect, stream_message, Filter, Format, OwnedFrame, Rect, RgbImage};
 
 const VIEWER: &str = include_str!("viewer.html");
@@ -53,6 +58,9 @@ const MAX_HEAD: usize = 8 * 1024;
 /// A delta covering more than this share of the picture is sent as a key
 /// frame instead.
 const KEY_THRESHOLD: u64 = 2;
+/// Audio messages a raw stream may fall behind before it skips (one per
+/// emulated frame, so ≈ 0.6 s).
+const AUDIO_BACKLOG: usize = 32;
 
 /// Copies of every video output of one moment, by screen name; the first
 /// is the main output.
@@ -73,6 +81,7 @@ impl Screens {
 #[derive(Clone)]
 pub struct FrameTap {
     tx: Arc<watch::Sender<Option<Arc<Screens>>>>,
+    audio: Arc<broadcast::Sender<Arc<Vec<u8>>>>,
 }
 
 impl Default for FrameTap {
@@ -85,6 +94,7 @@ impl FrameTap {
     pub fn new() -> Self {
         Self {
             tx: Arc::new(watch::channel(None).0),
+            audio: Arc::new(broadcast::channel(AUDIO_BACKLOG).0),
         }
     }
 
@@ -97,6 +107,15 @@ impl FrameTap {
             .filter_map(|s| Some((s.name, OwnedFrame::from_screen(m, s.id, running)?)))
             .collect();
         self.tx.send_replace(Some(Arc::new(Screens(screens))));
+    }
+
+    /// Hand the samples the machine produced since the last call to raw
+    /// streams that asked for audio. Never blocks; a no-op without them.
+    pub fn publish_audio(&self, samples: &[i16], format: AudioFormat) {
+        if samples.is_empty() || self.audio.receiver_count() == 0 {
+            return;
+        }
+        let _ = self.audio.send(Arc::new(audio_message(samples, format)));
     }
 
     fn latest(&self) -> Option<Arc<Screens>> {
@@ -445,13 +464,32 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
             ];
             respond(&mut stream, "200 OK", &headers, &png).await;
         }
+        "/stream" => {
+            let audio = match head.param("audio").unwrap_or("0") {
+                "0" => false,
+                "1" => true,
+                other => {
+                    let msg = format!("audio must be 0 or 1, not '{other}'\n");
+                    return error(&mut stream, "400 Bad Request", &msg).await;
+                }
+            };
+            let fps = if head.param("fps").is_some() {
+                settings.fps
+            } else {
+                50
+            };
+            let Some(key) = head.ws_key.clone() else {
+                return error(&mut stream, "426 Upgrade Required", "WebSocket only\n").await;
+            };
+            if !upgrade(&mut stream, &key).await {
+                return;
+            }
+            let ws = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+            stream_raw(ws, &ctx, settings.screen, fps, audio).await;
+        }
         "/preview" => match head.ws_key.clone() {
             Some(key) => {
-                let accept = derive_accept_key(key.as_bytes());
-                let reply = format!(
-                    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
-                );
-                if stream.write_all(reply.as_bytes()).await.is_err() {
+                if !upgrade(&mut stream, &key).await {
                     return;
                 }
                 let ws = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
@@ -460,6 +498,96 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
             None => error(&mut stream, "426 Upgrade Required", "WebSocket only\n").await,
         },
         _ => error(&mut stream, "404 Not Found", "not found\n").await,
+    }
+}
+
+/// Switch the connection to WebSocket; false if the reply could not be sent.
+async fn upgrade(stream: &mut TcpStream, key: &str) -> bool {
+    let accept = derive_accept_key(key.as_bytes());
+    let reply = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+    );
+    stream.write_all(reply.as_bytes()).await.is_ok()
+}
+
+/// The next audio message, or never without an audio subscription.
+async fn next_audio(
+    rx: &mut Option<broadcast::Receiver<Arc<Vec<u8>>>>,
+) -> Result<Arc<Vec<u8>>, broadcast::error::RecvError> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Raw stream: every new frame (at most `fps` a second) as changed lines,
+/// audio as it comes. Nothing is rendered or compressed.
+async fn stream_raw(
+    mut ws: WebSocketStream<TcpStream>,
+    ctx: &Context,
+    screen: Option<String>,
+    fps: u32,
+    audio: bool,
+) {
+    let mut rx = ctx.tap.tx.subscribe();
+    let mut audio_rx = audio.then(|| ctx.tap.audio.subscribe());
+    let period = Duration::from_secs(1) / fps;
+    let mut encoder = Some(RawEncoder::new());
+    let mut last_sent: Option<Arc<Screens>> = None;
+    let mut due = tokio::time::Instant::now();
+    let mut pending = true;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(due), if pending => {
+                pending = false;
+                let Some(screens) = rx.borrow_and_update().clone() else { continue };
+                if last_sent.as_ref().is_some_and(|l| Arc::ptr_eq(l, &screens)) {
+                    continue;
+                }
+                let Some(frame) = screens.get(screen.as_deref()).cloned() else {
+                    return;
+                };
+                let Some(mut enc) = encoder.take() else { return };
+                let job = tokio::task::spawn_blocking(move || {
+                    let msg = enc.encode(&frame);
+                    (enc, msg)
+                });
+                let Ok((enc, msg)) = job.await else { return };
+                encoder = Some(enc);
+                last_sent = Some(screens);
+                due = tokio::time::Instant::now() + period;
+                if let Some(msg) = msg {
+                    if ws.send(Message::binary(msg)).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            changed = rx.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                pending = true;
+            }
+            samples = next_audio(&mut audio_rx) => match samples {
+                Ok(m) => {
+                    if ws.send(Message::binary(m.as_slice().to_vec())).await.is_err() {
+                        return;
+                    }
+                }
+                // Fell behind: the skipped audio is gone, go on with the newest.
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => return,
+            },
+            msg = ws.next() => match msg {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                Some(Ok(Message::Text(text))) => {
+                    if let (Some(sink), Some(ev)) = (&ctx.input, parse_remote_input(&text)) {
+                        sink(ev);
+                    }
+                }
+                Some(Ok(_)) => {}
+            },
+        }
     }
 }
 

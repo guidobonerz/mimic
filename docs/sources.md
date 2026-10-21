@@ -125,6 +125,7 @@ committed), pinned to exact versions and checked by hash where possible.
 Pages fetched or searched while building (beyond the documents above):
 
 - https://virtualdub.org/altirra — Acid800 releases and archive names.
+- Ultimate 64 "Data Streams" (https://1541u-documentation.readthedocs.io/en/latest/data_streams.html) and REST API (`api/api_calls.rst`) — the idea of an uncompressed indexed video stream with a separate audio stream; the preview's raw stream (`emu-preview::raw`) has its own layout, no compatibility.
 - AtariAge forum, "Acid800 - an Atari test suite" (https://forums.atariage.com/topic/171296-acid800-an-atari-test-suite/) — how the suite is run (search result).
 - Searches for the CPC wait-state rule: cpcwiki forum threads (not readable, HTTP 403) and the CLK wiki page "Amstrad CPC Timing" (HTTP 502); only their search summaries were used.
 - Arnold acid test sources (CPCMisc, see above) as hardware measurements: expected values and comments of `ppi` (port C pull levels &2F, `port_c_input`; port reset by mode set), `psg` (register numbers ≥ 16 deselect the AY), `type1ctrl` (UM6845R status bit 6 after power-on, cleared by reading R16/R17), `cpctest` (RMR ignores bit 5 on the CPC; interrupt timing) and `z80tests/cpu` (LD A,I/LD A,R P/V when an interrupt follows). No test code was copied; the runner patches two test bugs (`crtctest` CRTC-type prompt, `cpctest` GA I/O decode entry without BC) and documents them in `tests/src/cpc_acid.rs`.

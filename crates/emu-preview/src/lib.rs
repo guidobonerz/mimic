@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod raw;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;
 
@@ -47,13 +48,21 @@ fn png_rgb(width: u32, height: u32, rgb: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Pixels of an [`OwnedFrame`], as the machine delivered them (row-major).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OwnedPixels {
+    Indexed { pixels: Vec<u8>, palette: Vec<Rgb8> },
+    Rgb(Vec<Rgb8>),
+}
+
 /// A copy of one field, taken on the emulation thread and encoded elsewhere.
+/// Indexed frames stay indexed: the copy is cheap, colours are resolved by
+/// whoever encodes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnedFrame {
     pub width: u32,
     pub height: u32,
-    /// Resolved colours, row-major.
-    pub pixels: Vec<Rgb8>,
+    pub pixels: OwnedPixels,
     pub signal: SignalInfo,
     pub beam: Option<BeamPos>,
     /// False while a debugger holds the machine: the field may be partial
@@ -73,15 +82,23 @@ impl OwnedFrame {
     }
 
     fn from_frame(f: &FrameRef<'_>, beam: Option<BeamPos>, running: bool) -> Self {
-        let mut pixels = Vec::with_capacity(f.width as usize * f.height as usize);
-        match f.pixels {
-            PixelData::Indexed { pixels: p, palette } => pixels.extend(
-                p.iter()
-                    .map(|&i| palette.get(usize::from(i)).copied().unwrap_or_default()),
-            ),
-            PixelData::Rgb(p) => pixels.extend_from_slice(p),
-        }
-        pixels.resize(f.width as usize * f.height as usize, Rgb8::default());
+        let n = f.width as usize * f.height as usize;
+        let pixels = match f.pixels {
+            PixelData::Indexed { pixels: p, palette } => {
+                let mut pixels = p[..n.min(p.len())].to_vec();
+                // Missing pixels: an index without a colour (black).
+                pixels.resize(n, u8::MAX);
+                OwnedPixels::Indexed {
+                    pixels,
+                    palette: palette.to_vec(),
+                }
+            }
+            PixelData::Rgb(p) => {
+                let mut pixels = p[..n.min(p.len())].to_vec();
+                pixels.resize(n, Rgb8::default());
+                OwnedPixels::Rgb(pixels)
+            }
+        };
         Self {
             width: f.width,
             height: f.height,
@@ -96,7 +113,10 @@ impl OwnedFrame {
         FrameRef {
             width: self.width,
             height: self.height,
-            pixels: PixelData::Rgb(&self.pixels),
+            pixels: match &self.pixels {
+                OwnedPixels::Indexed { pixels, palette } => PixelData::Indexed { pixels, palette },
+                OwnedPixels::Rgb(pixels) => PixelData::Rgb(pixels),
+            },
             luma_chroma: None,
             signal: self.signal,
         }
@@ -113,13 +133,22 @@ pub struct RgbImage {
 
 impl RgbImage {
     pub fn from_frame(frame: &FrameRef<'_>) -> Self {
-        let mut data = Vec::with_capacity(frame.width as usize * frame.height as usize * 3);
-        for y in 0..frame.height {
-            for x in 0..frame.width {
-                let c = frame.rgb_at(x, y).unwrap_or_default();
-                data.extend_from_slice(&[c.r, c.g, c.b]);
+        let n = frame.width as usize * frame.height as usize;
+        let mut data = Vec::with_capacity(n * 3);
+        match frame.pixels {
+            PixelData::Indexed { pixels, palette } => {
+                // Colours as bytes once; invalid indices are black.
+                let mut lut = [[0u8; 3]; 256];
+                for (entry, c) in lut.iter_mut().zip(palette) {
+                    *entry = [c.r, c.g, c.b];
+                }
+                data.extend(pixels.iter().take(n).flat_map(|&i| lut[usize::from(i)]));
+            }
+            PixelData::Rgb(pixels) => {
+                data.extend(pixels.iter().take(n).flat_map(|c| [c.r, c.g, c.b]))
             }
         }
+        data.resize(n * 3, 0);
         Self {
             width: frame.width,
             height: frame.height,
@@ -423,7 +452,7 @@ mod tests {
         let frame = OwnedFrame {
             width: 2,
             height: 1,
-            pixels: vec![Rgb8::default(); 2],
+            pixels: OwnedPixels::Rgb(vec![Rgb8::default(); 2]),
             signal: signal(),
             beam: Some(BeamPos {
                 frame: 7,

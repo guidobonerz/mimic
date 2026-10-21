@@ -339,6 +339,7 @@ The web frontend uses these over WebSocket to forward browser keyboard/gamepad/m
 
 - `GET /snapshot.png?machine=<id>[&screen=vic|vdc]` — single frame on demand.
 - WebSocket `/preview` — configurable fps (1–50), scale, format (QOI/PNG, delta frames).
+- WebSocket `/stream` — raw stream for local viewers (idea from the Ultimate 64 video stream): palette indices at 4/8 bpp or RGB, only changed lines, no image encoding; optional audio (`audio=1`, 16-bit PCM). Layout in `emu-preview/src/raw.rs`; the bundled viewer uses it for `filter=raw`.
 - On `breakpoint_hit`, attach the current (partial) frame; partial frames mark current raster line/cycle.
 - Encoding runs on its own thread from a frame copy; the emulator never waits on the encoder — drop frames under backpressure.
 - Optional overlays: raster grid, bad lines, sprite boxes, Atari display-list modes, CPC CRTC changes, Amiga DMA slot map.

@@ -33,10 +33,39 @@ use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{CursorGrabMode, Window, WindowId};
+use winit::window::{CursorGrabMode, Icon, Window, WindowId};
 
 use emu::{Shared, TapeKey};
 use gfx::Gfx;
+
+/// The mimic logo (16×14 RGBA), shown as the window icon.
+const ICON_PNG: &[u8] = include_bytes!("../assets/mimic-icon.png");
+
+/// Decodes the logo and centres it on a square canvas, since some window
+/// managers stretch non-square icons. `None` (no icon) if decoding fails.
+/// macOS ignores window icons; there the Dock shows the app bundle's icon.
+fn window_icon() -> Option<Icon> {
+    let mut decoder = png::Decoder::new(ICON_PNG);
+    decoder.set_transformations(
+        png::Transformations::normalize_to_color8() | png::Transformations::ALPHA,
+    );
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.color_type != png::ColorType::Rgba {
+        return None;
+    }
+    let (w, h) = (info.width as usize, info.height as usize);
+    let side = w.max(h);
+    let (dx, dy) = ((side - w) / 2, (side - h) / 2);
+    let mut rgba = vec![0; side * side * 4];
+    for y in 0..h {
+        let src = &buf[y * info.line_size..][..w * 4];
+        let dst = ((y + dy) * side + dx) * 4;
+        rgba[dst..dst + w * 4].copy_from_slice(src);
+    }
+    Icon::from_rgba(rgba, side as u32, side as u32).ok()
+}
 
 const USAGE: &str = "\
 usage: mimic-desktop [options]
@@ -421,6 +450,7 @@ impl ApplicationHandler for App {
             .unwrap_or((768, 576));
         let attrs = Window::default_attributes()
             .with_title(&self.title)
+            .with_window_icon(window_icon())
             .with_inner_size(winit::dpi::LogicalSize::new(size.0, size.1));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -772,5 +802,13 @@ fn main() -> ExitCode {
             eprintln!("error: {e}\n\n{USAGE}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_icon_decodes() {
+        assert!(super::window_icon().is_some());
     }
 }

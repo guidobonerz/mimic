@@ -48,8 +48,9 @@ usage: mimic-headless [options]
   --save-state FILE     write a savestate after running
   --debug [ADDR]        serve the debug protocol instead of running frames
                         (default 127.0.0.1:6510; loopback only)
-  --preview [ADDR]      serve the live preview: viewer page, /snapshot.png and
-                        the /preview WebSocket stream (default 127.0.0.1:6580);
+  --preview [ADDR]      serve the live preview: viewer page, /snapshot.png,
+                        the /preview WebSocket stream and the raw /stream
+                        with audio (default 127.0.0.1:6580);
                         implies --debug, and --run unless --debug is given
   --vice [ADDR]         also serve the VICE binary monitor protocol (VS64,
                         C64 Studio …; default 127.0.0.1:6502); implies --debug
@@ -324,7 +325,14 @@ fn run(args: Args) -> Result<ExitCode, String> {
             let tap = FrameTap::new();
             tap.publish(session.machine(), args.run);
             let hook_tap = tap.clone();
-            session.set_frame_hook(Box::new(move |m, running| hook_tap.publish(m, running)));
+            // No audio device here: the samples go to raw streams only.
+            let mut samples = Vec::new();
+            session.set_frame_hook(Box::new(move |m, running| {
+                hook_tap.publish(m, running);
+                samples.clear();
+                let format = m.audio(&mut samples);
+                hook_tap.publish_audio(&samples, format);
+            }));
             tap
         });
         let server = DebugServer::start(

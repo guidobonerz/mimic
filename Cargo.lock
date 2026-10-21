@@ -764,6 +764,7 @@ dependencies = [
  "gilrs",
  "media-backends",
  "noto-sans-mono-bitmap",
+ "png",
  "pollster",
  "video-crt",
  "wgpu",

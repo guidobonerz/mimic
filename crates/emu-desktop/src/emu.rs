@@ -251,7 +251,7 @@ pub fn spawn(
         let mut session = Session::new(machine, machine_id);
         session.set_running(true);
         session.set_host(Box::new(crate::host::FrontendHost));
-        if let Some(tap) = preview {
+        if let Some(tap) = preview.clone() {
             session.set_frame_hook(Box::new(move |m, running| tap.publish(m, running)));
         }
         let mut samples = Vec::new();
@@ -357,7 +357,10 @@ pub fn spawn(
                 None => drop(session.take_events()),
             }
             samples.clear();
-            session.machine_mut().audio(&mut samples);
+            let format = session.machine_mut().audio(&mut samples);
+            if let Some(tap) = &preview {
+                tap.publish_audio(&samples, format);
+            }
             if let Ok(mut a) = shared.audio.lock() {
                 min_fill = min_fill.min(a.len());
                 a.extend(samples.iter().copied());
