@@ -19,7 +19,7 @@
 //! Keys ([`MediaSlot::control`]): "play", "record", "stop", "rewind",
 //! "forward". Inserting a tape presses PLAY.
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{StateError, StateReader, StateWriter};
 use media::cas::{self, Cas, Record};
 
@@ -306,6 +306,15 @@ impl MediaSlot for Recorder {
         }
     }
 
+    /// Active while the tape moves (motor on, PLAY or RECORD down).
+    fn status(&self) -> DriveStatus {
+        DriveStatus {
+            active: self.running(),
+            error: false,
+            track: None,
+        }
+    }
+
     fn control(&mut self, command: &str) -> Result<(), MediaError> {
         if self.tape.is_none() && command != "stop" {
             return Err(MediaError::NoMedia);
@@ -444,5 +453,17 @@ mod tests {
         assert!(r.control("eject").is_err());
         r.control("forward").unwrap();
         assert_eq!(r.counter(), (0, 0));
+    }
+
+    #[test]
+    fn status_shows_the_moving_tape() {
+        let mut r = Recorder::new(HZ);
+        assert_eq!(r.status(), DriveStatus::default());
+        r.insert(tape(cas::blank(100))).unwrap();
+        assert!(!r.status().active, "motor off");
+        r.set_motor(true, 0);
+        assert!(r.status().active);
+        r.control("stop").unwrap();
+        assert!(!r.status().active);
     }
 }

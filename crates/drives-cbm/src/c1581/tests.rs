@@ -172,3 +172,38 @@ fn savestate_round_trip() {
     assert_eq!(a.pc(), b.pc());
     assert!(b.load(&mut StateReader::new(&data[..50])).is_err());
 }
+
+#[test]
+fn status_shows_motor_led_error_and_cylinder() {
+    let mut d = drive_with(&[0x4c, 0x00, 0x80]);
+    // Port A outputs as the DOS sets them: motor off (PA2 high), LED off.
+    d.cia.write(0x2, 0x65);
+    d.cia.write(0x0, 0x04);
+    let idle = DriveStatus {
+        active: false,
+        error: false,
+        track: Some(1),
+    };
+    assert_eq!(d.status(), idle);
+    d.cia.write(0x0, 0x40);
+    assert_eq!(
+        d.status(),
+        DriveStatus {
+            active: true,
+            ..idle
+        },
+        "motor and LED on"
+    );
+    d.cia.write(0x0, 0x44);
+    assert_eq!(
+        d.status(),
+        DriveStatus {
+            active: true,
+            error: true,
+            ..idle
+        },
+        "LED lit with the motor off"
+    );
+    d.mech.cylinder = 39;
+    assert_eq!(d.status().track, Some(40));
+}

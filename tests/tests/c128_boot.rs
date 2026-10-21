@@ -207,7 +207,7 @@ fn autostart_with(drive: &str) {
         .find(|s| s.name == "drive 8")
         .expect("drive 8 present")
         .id;
-    let mut d = D64::blank(b"POLYTRACE", *b"PT");
+    let mut d = D64::blank(b"MIMIC", *b"PT");
     d.add_prg(b"HELLO", &PROGRAM).unwrap();
     let disk = Media {
         name: "hello.d64".into(),

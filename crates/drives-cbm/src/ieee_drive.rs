@@ -20,7 +20,7 @@
 //!
 //! [`IeeeDrive::tick`] is one microsecond.
 
-use emu_core::media::{Media, MediaError, MediaSlot};
+use emu_core::media::{DriveStatus, Media, MediaError, MediaSlot};
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
 use crate::dos::VirtualDos;
@@ -61,7 +61,7 @@ pub struct IeeeDrive {
 impl IeeeDrive {
     pub fn new(device: u8) -> Self {
         Self {
-            dos: VirtualDos::new(device, "POLYTRACE IEEE DRIVE"),
+            dos: VirtualDos::new(device, "MIMIC IEEE DRIVE"),
             out: IeeeLines::default(),
             state: State::Idle,
             prev_atn: false,
@@ -198,6 +198,11 @@ impl MediaSlot for IeeeDrive {
 
     fn flush(&mut self) -> Result<(), MediaError> {
         self.dos.flush()
+    }
+
+    /// From the [`VirtualDos`]: bus, open channels, error channel.
+    fn status(&self) -> DriveStatus {
+        self.dos.status()
     }
 }
 

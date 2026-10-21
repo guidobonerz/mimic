@@ -18,7 +18,7 @@ const PROGRAM: [u8; 15] = [
 ];
 
 fn disk() -> Media {
-    let mut d = D64::blank(b"POLYTRACE", *b"PT");
+    let mut d = D64::blank(b"MIMIC", *b"PT");
     d.add_prg(b"HELLO", &PROGRAM).unwrap();
     Media {
         name: "hello.d64".into(),

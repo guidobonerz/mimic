@@ -2,7 +2,7 @@
 //! shader, sound, keyboard and gamepads. No menus yet; everything comes
 //! from the command line.
 //!
-//!     emu-desktop --machine c64 --disk game.d64 --autostart
+//!     mimic-desktop --machine c64 --disk game.d64 --autostart
 //!
 //! Keys use the positional keymap of `emu-input` (see `--help`); the
 //! numeric keypad and the first gamepad act as the joystick in port 2.
@@ -11,6 +11,7 @@
 
 mod audio;
 mod emu;
+mod footer;
 mod gfx;
 mod host;
 
@@ -38,7 +39,7 @@ use emu::{Shared, TapeKey};
 use gfx::Gfx;
 
 const USAGE: &str = "\
-usage: emu-desktop [options]
+usage: mimic-desktop [options]
 
   --machine ID          machine id (default: c64)
   --model NAME          model variant (C64: pal, ntsc)
@@ -61,6 +62,7 @@ usage: emu-desktop [options]
                         (default 127.0.0.1:6580)
   --vice [ADDR]         serve the VICE binary monitor protocol for VS64 & co.
                         (default 127.0.0.1:6502); implies --debug
+  --footer              start with the status footer shown (Ctrl+Space)
   --help
 
 C64 keys by position on a PC keyboard: Esc = RUN/STOP, Tab = CTRL,
@@ -75,6 +77,8 @@ F3 SELECT, F4 OPTION, F5 RESET, F6 HELP, F7/Pause BREAK.
 F12 switches between a machine's screens (C128: 40-column VIC and
 80-column VDC; the window starts on the one the 40/80 key selects).
 Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
+Ctrl+Space shows or hides the status footer: mouse pointer position in
+frame pixels, joystick directions and drive activity/errors.
 With --option port1=mouse1351 (or paddles, also port2) a click into the
 window captures the mouse for the machine; the middle button releases it.
 
@@ -93,6 +97,7 @@ struct Args {
     debug: Option<SocketAddr>,
     vice: Option<SocketAddr>,
     preview: Option<SocketAddr>,
+    footer: bool,
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
@@ -113,6 +118,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         debug: None,
         vice: None,
         preview: None,
+        footer: false,
     };
     let mut it = std::env::args().skip(1).peekable();
     while let Some(flag) = it.next() {
@@ -124,6 +130,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--disk" => a.disk = Some(value("--disk")?),
             "--tape" => a.tape = Some(value("--tape")?),
             "--cart" => a.cart = Some(value("--cart")?),
+            "--footer" => a.footer = true,
             "--autostart" => {
                 a.config.options.insert("autostart".into(), "on".into());
             }
@@ -286,6 +293,15 @@ struct App {
     mouse_captured: bool,
     /// Host mouse buttons while captured (bit 0 left, bit 1 right).
     mouse_buttons: u8,
+    /// A control key is down (Ctrl+Space = status footer).
+    ctrl: bool,
+    /// The Space of a Ctrl+Space is down; its release is not sent either.
+    swallow_space: bool,
+    footer_on: bool,
+    /// Host pointer in window pixels, while over the window.
+    cursor: Option<(f64, f64)>,
+    /// Captured mouse movement summed since the capture (footer).
+    mouse_sum: (i32, i32),
 }
 
 impl App {
@@ -304,6 +320,7 @@ impl App {
         w.set_cursor_visible(!on);
         self.mouse_captured = on;
         self.mouse_buttons = 0;
+        self.mouse_sum = (0, 0);
     }
 
     fn send_mouse(&self, dx: i16, dy: i16) {
@@ -460,6 +477,8 @@ impl ApplicationHandler for App {
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
             if self.mouse_captured {
                 let c = |v: f64| v.round().clamp(-32768.0, 32767.0) as i16;
+                self.mouse_sum.0 = self.mouse_sum.0.wrapping_add(i32::from(c(dx)));
+                self.mouse_sum.1 = self.mouse_sum.1.wrapping_add(i32::from(c(dy)));
                 self.send_mouse(c(dx), c(dy));
             }
         }
@@ -486,6 +505,10 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(false) if self.mouse_captured => self.capture_mouse(false),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = Some((position.x, position.y));
+            }
+            WindowEvent::CursorLeft { .. } => self.cursor = None,
             WindowEvent::Resized(s) => {
                 if let Some(g) = &mut self.gfx {
                     g.resize(s.width, s.height);
@@ -498,6 +521,29 @@ impl ApplicationHandler for App {
                         self.shared.next_screen.store(true, Ordering::Relaxed);
                     }
                     return;
+                }
+                // Ctrl+Space shows or hides the status footer; the Space
+                // does not reach the machine (the Ctrl key does).
+                if event.physical_key == PhysicalKey::Code(KeyCode::Space)
+                    && (self.ctrl || self.swallow_space)
+                {
+                    if event.state == ElementState::Pressed {
+                        if !event.repeat {
+                            self.footer_on = !self.footer_on;
+                            self.shared
+                                .footer_on
+                                .store(self.footer_on, Ordering::Relaxed);
+                        }
+                        self.swallow_space = true;
+                    } else {
+                        self.swallow_space = false;
+                    }
+                    return;
+                }
+                if let PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) =
+                    event.physical_key
+                {
+                    self.ctrl = event.state == ElementState::Pressed;
                 }
                 // F9–F11 operate the datasette.
                 let tape_key = match event.physical_key {
@@ -546,6 +592,29 @@ impl ApplicationHandler for App {
                     if let Some(f) = frame {
                         g.upload(&f, self.scale);
                         self.shared.presented.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if self.footer_on {
+                        let mouse = if self.mouse_captured {
+                            footer::Mouse::Captured(self.mouse_sum.0, self.mouse_sum.1)
+                        } else {
+                            self.cursor
+                                .and_then(|(x, y)| g.frame_pos(x, y))
+                                .map_or(footer::Mouse::Outside, |(x, y)| footer::Mouse::At(x, y))
+                        };
+                        let info = self
+                            .shared
+                            .footer
+                            .lock()
+                            .map(|f| f.clone())
+                            .unwrap_or_default();
+                        let width = g.footer_width();
+                        let size = footer::font_size(
+                            self.window.as_ref().map_or(1.0, |w| w.scale_factor()),
+                        );
+                        let rgba = footer::render(&footer::segments(&info, mouse), width, size);
+                        g.set_footer(Some((&rgba, width, footer::height(size))));
+                    } else {
+                        g.set_footer(None);
                     }
                     g.render();
                 }
@@ -599,6 +668,7 @@ fn run() -> Result<(), String> {
     let mapper = Mapper::new(input_profile);
 
     let shared = Arc::new(Shared::new());
+    shared.footer_on.store(args.footer, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel();
     let _stream = audio::start(shared.clone());
     if _stream.is_none() {
@@ -660,7 +730,7 @@ fn run() -> Result<(), String> {
 
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     let mut app = App {
-        title: format!("polytrace — {}", args.machine),
+        title: format!("mimic — {}", args.machine),
         shown_title: String::new(),
         profile,
         scale: args.scale,
@@ -676,6 +746,11 @@ fn run() -> Result<(), String> {
         wants_mouse,
         mouse_captured: false,
         mouse_buttons: 0,
+        ctrl: false,
+        swallow_space: false,
+        footer_on: args.footer,
+        cursor: None,
+        mouse_sum: (0, 0),
     };
     let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
     shared.quit.store(true, Ordering::Relaxed);

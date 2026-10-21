@@ -48,6 +48,7 @@ emu-headless = { path = "crates/emu-headless" }
 cpal = "0.15"
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 gilrs = "0.11"
+noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = ["regular", "size_16", "size_20", "size_24", "unicode-basic-latin", "unicode-specials"] }
 png = "0.17"
 pollster = "0.4"
 serde = { version = "1", features = ["derive"] }

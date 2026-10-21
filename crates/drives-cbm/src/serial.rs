@@ -15,7 +15,7 @@
 //! race would hit at the same point every time; the drive therefore runs
 //! [`DEFAULT_CRYSTAL_PPM`] off nominal unless `drive8_ppm` says otherwise.
 
-use emu_core::media::MediaSlot;
+use emu_core::media::{DriveStatus, MediaSlot};
 use emu_core::registry::ConfigError;
 use emu_core::CycleResult as Cycle;
 use emu_core::{
@@ -262,6 +262,14 @@ impl SerialDrive {
         match &mut self.kind {
             DriveKind::True(d) => d.reset(hard),
             DriveKind::Virtual(d) => d.reset(),
+        }
+    }
+
+    /// The front panel of the drive behind [`SerialDrive::media_slot`].
+    pub fn status(&self) -> DriveStatus {
+        match &self.kind {
+            DriveKind::True(d) => d.status(),
+            DriveKind::Virtual(d) => d.status(),
         }
     }
 

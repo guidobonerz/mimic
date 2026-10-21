@@ -207,3 +207,24 @@ fn a_motor_stop_keeps_the_recording_going() {
     let back = Tap::parse(&image.lock().unwrap()).unwrap();
     assert_eq!(back.pulses, [200, 304, 400], "300 rounds to 304 in a TAP");
 }
+
+#[test]
+fn status_shows_the_moving_tape() {
+    let mut d = Datasette::new(TapMachine::C64, PAL);
+    assert_eq!(d.status(), Default::default());
+    insert(&mut d, &tape(&[100, 100]));
+    assert!(!d.status().active, "PLAY down, motor off");
+    d.set_motor(true);
+    assert!(d.status().active);
+    d.control("stop").unwrap();
+    assert!(!d.status().active);
+    d.control("record").unwrap();
+    assert_eq!(
+        d.status(),
+        DriveStatus {
+            active: true,
+            error: false,
+            track: None
+        }
+    );
+}

@@ -1,6 +1,6 @@
-# polytrace – Bauen, Benutzen, Debuggen
+# mimic – Bauen, Benutzen, Debuggen
 
-polytrace ist ein zyklengenauer Emulator für mehrere Heimcomputer auf einem
+mimic ist ein zyklengenauer Emulator für mehrere Heimcomputer auf einem
 gemeinsamen Kern. Jede Maschine bekommt automatisch denselben Remote-Debugger
 und einen Live-Bildstream.
 
@@ -45,6 +45,25 @@ cargo build -p emu-web --target wasm32-unknown-unknown
 
 Für flüssiges Arbeiten immer `--release` verwenden; der Debug-Build ist
 deutlich langsamer als Echtzeit.
+
+Die fertigen Programme liegen danach in `target/release/` (unter Windows mit
+`.exe`):
+
+| Programm | Crate | Zweck |
+| --- | --- | --- |
+| `mimic-desktop` | `emu-desktop` | Emulator mit Fenster, Ton, Tastatur und Gamepad; optional Debug-Server |
+| `mimic-headless` | `emu-headless` | ohne Fenster: Snapshots, Skripte, CI, Debug-Server |
+
+Sie lassen sich direkt starten oder an einen beliebigen Ort kopieren (keine
+weiteren Dateien nötig, ROMs über `--rom-dir` oder `EMU_ROM_DIR`):
+
+```powershell
+.\target\release\mimic-desktop.exe --machine c64 --rom-dir roms --disk spiel.d64 --autostart
+.\target\release\mimic-headless.exe --machine c64 --rom-dir roms --debug
+```
+
+`cargo run --release -p emu-desktop -- …` bzw. `-p emu-headless` startet
+dieselben Programme; die Beispiele unten nutzen diese Form.
 
 Prüfungen vor einem Commit:
 
@@ -283,7 +302,7 @@ cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --vice --pre
 ### 10.2 Protokoll (nativ, JSON-Zeilen)
 
 Ein JSON-Objekt pro Zeile in beide Richtungen, Protokollname
-`polytrace-debug`, aktuelle Version **6**. Anfragen haben eine `id` und einen
+`mimic-debug`, aktuelle Version **7**. Anfragen haben eine `id` und einen
 `cmd`; jede bekommt genau eine Antwort, in Reihenfolge:
 
 ```json
@@ -408,7 +427,7 @@ listet alle Unterbefehle.
 
 ## 12. VICE-Binary-Monitor (VS64 & Co.)
 
-Mit `--vice` spricht polytrace zusätzlich das Binärprotokoll des VICE-Monitors
+Mit `--vice` spricht mimic zusätzlich das Binärprotokoll des VICE-Monitors
 (API-Version 2). Werkzeuge wie **VS64** (VS Code), C64 Studio oder IceBro
 Lite debuggen damit jede Maschine – nicht nur den C64.
 
@@ -419,7 +438,7 @@ cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --vice --pre
 VS64 `launch.json`:
 
 ```json
-{ "type": "vice", "request": "attach", "name": "polytrace",
+{ "type": "vice", "request": "attach", "name": "mimic",
   "hostname": "127.0.0.1", "port": 6502 }
 ```
 

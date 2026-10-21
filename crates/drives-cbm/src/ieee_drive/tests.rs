@@ -232,3 +232,16 @@ fn no_byte_is_lost_when_the_pet_takes_the_bus_back() {
     }
     assert_eq!(got, [0x01, 0x04, 0xaa, 0xbb]);
 }
+
+#[test]
+fn status_follows_open_channels_and_the_error_channel() {
+    let mut p = Pet::new(disk());
+    assert_eq!(p.drive.status(), DriveStatus::default());
+    p.listen_send(0xf0, b"HELLO");
+    assert!(p.drive.status().active, "a file is open");
+    assert!(p.atn(&[0x28, 0xe0, 0x3f]));
+    p.release_atn();
+    assert!(!p.drive.status().active, "closed");
+    p.listen_send(0xf0, b"NOPE");
+    assert!(p.drive.status().error, "62, FILE NOT FOUND");
+}

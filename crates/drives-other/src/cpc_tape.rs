@@ -15,7 +15,7 @@
 //! "forward" (to the start or the end at once). Inserting a tape presses
 //! PLAY.
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 use media::cdt::{Segment, Tape};
 
@@ -216,6 +216,15 @@ impl MediaSlot for CpcTape {
         self.write_back()
     }
 
+    /// Active while the tape moves (motor on, PLAY or RECORD down).
+    fn status(&self) -> DriveStatus {
+        DriveStatus {
+            active: self.moving(),
+            error: false,
+            track: None,
+        }
+    }
+
     fn control(&mut self, command: &str) -> Result<(), MediaError> {
         if self.cassette.is_none() && command != "stop" {
             return Err(MediaError::NoMedia);
@@ -396,5 +405,17 @@ mod tests {
         let mut e = deck(blank_tape(1));
         e.load(&mut StateReader::new(&bytes)).unwrap();
         assert!(e.motor());
+    }
+
+    #[test]
+    fn status_shows_the_moving_tape() {
+        let mut d = deck(blank_tape(1));
+        assert!(!d.status().active, "motor off");
+        d.set_motor(true);
+        assert!(d.status().active);
+        assert_eq!(d.status().track, None);
+        d.control("stop").unwrap();
+        assert!(!d.status().active);
+        assert_eq!(CpcTape::new().status(), DriveStatus::default());
     }
 }

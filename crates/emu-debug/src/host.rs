@@ -166,7 +166,7 @@ impl Replay {
             .map(|e| json!({"at": e.at.0, "target": target_json(e.target), "event": event_json(&e.event)}))
             .collect();
         json!({
-            "format": "polytrace-replay",
+            "format": "mimic-replay",
             "version": REPLAY_VERSION,
             "machine": self.machine,
             "state": crate::protocol::base64_encode(&self.state),
@@ -177,8 +177,8 @@ impl Replay {
     }
 
     pub fn from_json(v: &Value) -> Result<Self, String> {
-        if v["format"] != "polytrace-replay" {
-            return Err("not a polytrace replay".into());
+        if v["format"] != "mimic-replay" {
+            return Err("not a mimic replay".into());
         }
         let version = v["version"].as_u64().unwrap_or(0);
         if version != u64::from(REPLAY_VERSION) {

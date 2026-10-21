@@ -8,7 +8,7 @@
 //! motor stops, on flush and on eject.
 
 use chips_amstrad::fdc::{FloppyDrive, SectorInfo};
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 use media::dsk::{Dsk, FormatId};
 
@@ -178,6 +178,17 @@ impl MediaSlot for CpcDrive {
     fn flush(&mut self) -> Result<(), MediaError> {
         self.write_back()
     }
+
+    /// Active while the motor turns a disc in this drive (the FDC's
+    /// commands are not tracked per drive, and the motor line is shared);
+    /// no error state; the cylinder under the head.
+    fn status(&self) -> DriveStatus {
+        DriveStatus {
+            active: self.ready(),
+            error: false,
+            track: Some(self.cylinder.saturating_add(1)),
+        }
+    }
 }
 
 const TAG: [u8; 4] = *b"CDRV";
@@ -277,5 +288,25 @@ mod tests {
         d.write_protect(true);
         assert!(d.write_protected());
         assert!(!d.write(0, 0, &[1; 512]));
+    }
+
+    #[test]
+    fn status_shows_motor_and_cylinder() {
+        let mut d = drive();
+        assert_eq!(
+            d.status(),
+            DriveStatus {
+                active: false,
+                error: false,
+                track: Some(1)
+            }
+        );
+        d.set_motor(true);
+        d.step(false);
+        d.step(false);
+        assert_eq!(d.status().track, Some(3));
+        assert!(d.status().active);
+        d.eject();
+        assert!(!d.status().active, "motor without a disc");
     }
 }

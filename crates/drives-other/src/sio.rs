@@ -28,7 +28,7 @@
 
 use std::collections::VecDeque;
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{StateError, StateReader, StateWriter};
 use media::atr::{self, Atr};
 
@@ -106,6 +106,9 @@ pub struct SioDrive {
     track: u16,
     /// The last command's result for the status byte.
     last_error: u8,
+    /// The bus is answering a command for this drive (the computer's data
+    /// frame or the drive's reply still to come); kept by [`Sio`].
+    busy: bool,
 }
 
 impl SioDrive {
@@ -117,6 +120,7 @@ impl SioDrive {
             write_protect: false,
             track: 0,
             last_error: 0,
+            busy: false,
         }
     }
 
@@ -140,7 +144,8 @@ impl SioDrive {
         }
     }
 
-    fn status(&self) -> [u8; 4] {
+    /// The 4 bytes of a status command's data frame.
+    fn status_frame(&self) -> [u8; 4] {
         let mut s = self.last_error;
         if self.write_protect {
             s |= 0x08;
@@ -213,6 +218,17 @@ impl MediaSlot for SioDrive {
         match &mut self.media {
             Some(m) => m.backend.commit(),
             None => Ok(()),
+        }
+    }
+
+    /// Busy while the bus serves a command for this drive; an error while
+    /// the last command failed (status bits 0–2: bad frame or sector, write
+    /// error, unreadable disk); the track of the last sector accessed.
+    fn status(&self) -> DriveStatus {
+        DriveStatus {
+            active: self.busy,
+            error: self.last_error & 0x07 != 0,
+            track: u8::try_from(self.track.saturating_add(1)).ok(),
         }
     }
 }
@@ -319,6 +335,9 @@ impl SerialTx {
     }
 }
 
+/// SIO savestate chunk version (2: per-drive busy flag).
+const SIO_VERSION: u16 = 2;
+
 /// A data frame the bus waits for from the computer (write commands).
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Pending {
@@ -370,6 +389,7 @@ impl Sio {
         self.frame.clear();
         self.pending = None;
         self.tx = SerialTx::new(self.hz);
+        self.end_busy();
     }
 
     /// The COMMAND line (true = asserted, low). The frame is processed when
@@ -378,6 +398,7 @@ impl Sio {
         if asserted && !self.command {
             self.frame.clear();
             self.pending = None;
+            self.end_busy();
         }
         if !asserted && self.command {
             let frame = std::mem::take(&mut self.frame);
@@ -403,7 +424,20 @@ impl Sio {
     }
 
     pub fn tick(&mut self, now: u64) -> SerialIn {
-        self.tx.tick(now)
+        let r = self.tx.tick(now);
+        if r.byte.is_some() {
+            self.end_busy();
+        }
+        r
+    }
+
+    /// Clears the drives' busy flags once the bus is idle.
+    fn end_busy(&mut self) {
+        if !self.busy() {
+            for d in self.drives.iter_mut().flatten() {
+                d.busy = false;
+            }
+        }
     }
 
     fn command_frame(&mut self, f: &[u8], now: u64) {
@@ -432,9 +466,10 @@ impl Sio {
         let Some(drive) = self.drives[unit].as_mut() else {
             return;
         };
+        drive.busy = true;
         match command {
             b'S' => {
-                let status = drive.status();
+                let status = drive.status_frame();
                 let done = self.tx.send(ack_at, &[ACK]);
                 self.send_frame(done + self.ms(1), COMPLETE, &status);
             }
@@ -593,7 +628,7 @@ impl Sio {
     }
 
     pub fn save(&self, w: &mut StateWriter) {
-        w.chunk(*b"SIO ", 1, |w| {
+        w.chunk(*b"SIO ", SIO_VERSION, |w| {
             w.bool(self.command);
             w.bytes(&self.frame);
             w.bool(self.pending.is_some());
@@ -618,6 +653,7 @@ impl Sio {
                     w.u16(d.track);
                     w.u8(d.last_error);
                     w.bool(d.write_protect);
+                    w.bool(d.busy);
                 }
             }
         });
@@ -626,7 +662,7 @@ impl Sio {
     /// Restores bus and drive mechanics; the disks stay as inserted. The
     /// drive configuration must match.
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(*b"SIO ", 1)?;
+        let (version, mut c) = r.chunk(*b"SIO ", SIO_VERSION)?;
         let command = c.bool()?;
         let frame = c.bytes()?.to_vec();
         let pending = if c.bool()? {
@@ -669,16 +705,24 @@ impl Sio {
                 if model != d.model.name() {
                     return Err(StateError::Invalid("SIO drive model differs"));
                 }
-                mech.push(Some((c.u16()?, c.u8()?, c.bool()?)));
+                let (track, err, wp) = (c.u16()?, c.u8()?, c.bool()?);
+                // Version 1 has no busy flag: busy while a data frame is due.
+                let busy = if version >= 2 {
+                    c.bool()?
+                } else {
+                    pending.as_ref().is_some_and(|p| p.unit == mech.len())
+                };
+                mech.push(Some((track, err, wp, busy)));
             } else {
                 mech.push(None);
             }
         }
         for (d, m) in self.drives.iter_mut().zip(mech) {
-            if let (Some(d), Some((track, err, wp))) = (d, m) {
+            if let (Some(d), Some((track, err, wp, busy))) = (d, m) {
                 d.track = track;
                 d.last_error = err;
                 d.write_protect = wp;
+                d.busy = busy;
             }
         }
         self.command = command;

@@ -381,7 +381,7 @@ fn reset_and_autostart_a_prg_like_vs64() {
     v.ok(cmd::BANKS_AVAILABLE, &[]);
 
     // A program at $C000 (not BASIC: injected, not RUN).
-    let dir = std::env::temp_dir().join(format!("polytrace-vice-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("mimic-vice-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("prog.prg");
     std::fs::write(&path, [0x00, 0xc0, 0xa9, 0x2a, 0x60]).unwrap();

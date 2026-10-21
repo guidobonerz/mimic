@@ -1,10 +1,10 @@
-//! Runs the emu-headless binary end to end.
+//! Runs the mimic-headless binary end to end.
 
 use std::path::PathBuf;
 use std::process::Command;
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_emu-headless"))
+    Command::new(env!("CARGO_BIN_EXE_mimic-headless"))
 }
 
 fn out_dir(name: &str) -> PathBuf {

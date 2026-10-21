@@ -34,7 +34,7 @@ use emu_core::media::MediaError;
 /// TZX T-states per second.
 pub const TZX_HZ: u32 = 3_500_000;
 const HEADER: &[u8; 8] = b"ZXTape!\x1a";
-const PAD_ID: &[u8; 16] = b"polytrace blank ";
+const PAD_ID: &[u8; 16] = b"mimic blank     ";
 /// T-states in a millisecond.
 const MS: u32 = TZX_HZ / 1000;
 

@@ -155,7 +155,7 @@ fn basic4_disk_commands_on_a_d80() {
     assert!(run_until(m.as_mut(), "READY.", 1, 300), "boot");
     command(m.as_mut(), "PRINT DS$\n");
     assert_eq!(
-        count(m.as_mut(), "73,POLYTRACE IEEE DRIVE"),
+        count(m.as_mut(), "73,MIMIC IEEE DRIVE"),
         1,
         "\n{}",
         text(m.as_mut())

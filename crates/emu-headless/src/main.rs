@@ -18,7 +18,7 @@ use emu_input::{Mapper, Profile as InputProfile};
 use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer};
 
 const USAGE: &str = "\
-usage: emu-headless [options]
+usage: mimic-headless [options]
 
   --machine ID          machine id (default: sim6502); see --list
   --model NAME          model variant

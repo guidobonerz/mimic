@@ -234,7 +234,7 @@ pub fn blank_data(tracks: u8) -> Vec<u8> {
     let track_size = 0x100 + 9 * 512;
     let mut out = vec![0u8; 0x100];
     out[..34].copy_from_slice(b"EXTENDED CPC DSK File\r\nDisk-Info\r\n");
-    out[0x22..0x30].copy_from_slice(b"polytrace     ");
+    out[0x22..0x30].copy_from_slice(b"mimic         ");
     out[0x30] = tracks;
     out[0x31] = 1;
     for t in 0..usize::from(tracks) {

@@ -47,7 +47,8 @@
 //! search (`search_start`/`next`/`results`), cheat files
 //! (`cheats_load`/`save`) and the optional `freeze_blocked_write` event.
 //! 6 adds `media_control` (a slot's own keys, e.g. a datasette's "play",
-//! "record", "stop", "rewind", "forward").
+//! "record", "stop", "rewind", "forward"). 7 renames the protocol from
+//! `polytrace-debug` to `mimic-debug` (and the replay format to `mimic-replay`).
 //!
 //! Every change to this message set needs a contract test and a bump of
 //! [`PROTOCOL_VERSION`].
@@ -57,8 +58,8 @@ use serde_json::{json, Value};
 
 use emu_core::{BeamPos, StopReason};
 
-pub const PROTOCOL_NAME: &str = "polytrace-debug";
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_NAME: &str = "mimic-debug";
+pub const PROTOCOL_VERSION: u32 = 7;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Request {

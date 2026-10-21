@@ -96,7 +96,7 @@ class FakeServer:
         conn, _ = self.listener.accept()
         self.listener.close()
         f = conn.makefile("rwb")
-        f.write(b'{"event":"hello","protocol":"polytrace-debug","version":5,"machine":"fake"}\n')
+        f.write(b'{"event":"hello","protocol":"mimic-debug","version":5,"machine":"fake"}\n')
         f.flush()
         for reply in self.replies:
             req = json.loads(f.readline())

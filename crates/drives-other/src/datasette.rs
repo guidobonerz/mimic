@@ -19,7 +19,7 @@
 //! "rewind" and "forward" (to the start or the end at once). Inserting a
 //! tape presses PLAY.
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 use media::tap::{Tap, TapMachine, Video};
 
@@ -249,6 +249,15 @@ impl MediaSlot for Datasette {
 
     fn flush(&mut self) -> Result<(), MediaError> {
         self.write_back()
+    }
+
+    /// Active while the tape moves (motor on, PLAY or RECORD down).
+    fn status(&self) -> DriveStatus {
+        DriveStatus {
+            active: self.moving(),
+            error: false,
+            track: None,
+        }
     }
 
     fn control(&mut self, command: &str) -> Result<(), MediaError> {

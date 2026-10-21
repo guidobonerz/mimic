@@ -254,3 +254,46 @@ fn savestate_round_trip() {
     let mut wrong = bus(DriveModel::A810);
     assert!(wrong.load(&mut StateReader::new(&state)).is_err());
 }
+
+#[test]
+fn drive_status_follows_the_transfer() {
+    let mut sio = bus(DriveModel::A1050);
+    let st = |sio: &Sio| MediaSlot::status(sio.drives[0].as_ref().unwrap());
+    assert_eq!(
+        st(&sio),
+        DriveStatus {
+            active: false,
+            error: false,
+            track: Some(1)
+        }
+    );
+    // Sector 360 is on track 19 (0-based): busy until the data frame ends.
+    let t = command(&mut sio, 0, 0x31, b'R', 360);
+    assert!(st(&sio).active);
+    let r = receive(&mut sio, t, 4_000_000);
+    assert_eq!(r.len(), 2 + 128 + 1);
+    assert_eq!(
+        st(&sio),
+        DriveStatus {
+            active: false,
+            error: false,
+            track: Some(20)
+        }
+    );
+    // Busy survives a savestate taken mid-transfer.
+    let t = command(&mut sio, 4_000_000, 0x31, b'R', 1);
+    let mut w = StateWriter::new();
+    sio.save(&mut w);
+    let state = w.into_bytes();
+    let mut other = bus(DriveModel::A1050);
+    other.load(&mut StateReader::new(&state)).unwrap();
+    assert!(st(&other).active);
+    receive(&mut sio, t, 4_000_000);
+    // A refused sector leaves an error until a command succeeds.
+    let t = command(&mut sio, 8_000_000, 0x31, b'R', 0);
+    receive(&mut sio, t, 100_000);
+    assert!(st(&sio).error && !st(&sio).active);
+    let t = command(&mut sio, 8_200_000, 0x31, b'R', 1);
+    receive(&mut sio, t, 4_000_000);
+    assert!(!st(&sio).error);
+}

@@ -21,6 +21,8 @@ use emu_debug::{Endpoint, Service, Session};
 use emu_input::{HostEvent, Mapper};
 use emu_preview::server::FrameTap;
 
+use crate::footer::{Footer, Tracker};
+
 /// A frame converted to RGBA for upload.
 pub struct Frame {
     pub width: u32,
@@ -65,6 +67,10 @@ pub struct Shared {
     pub next_screen: AtomicBool,
     /// Set by the window (F9–F11): a datasette key ([`TapeKey`]), 0 = none.
     pub tape_key: AtomicU8,
+    /// Set by the window (Ctrl+Space): the status footer is shown, so the
+    /// emulation publishes [`Shared::footer`] after every frame.
+    pub footer_on: AtomicBool,
+    pub footer: Mutex<Footer>,
 }
 
 /// Datasette keys from the window.
@@ -116,6 +122,8 @@ impl Shared {
             status: Mutex::default(),
             next_screen: AtomicBool::new(false),
             tape_key: AtomicU8::new(0),
+            footer_on: AtomicBool::new(false),
+            footer: Mutex::default(),
         }
     }
 }
@@ -253,6 +261,7 @@ pub fn spawn(
         let debug_stats = std::env::var_os("EMU_DESKTOP_DEBUG").is_some();
         let mut report = Instant::now();
         let mut chosen: Option<ScreenId> = None;
+        let mut tracker = Tracker::default();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
             loop {
@@ -260,6 +269,7 @@ pub fn spawn(
                     Ok(ev) => {
                         let now = session.machine().now();
                         for e in mapper.handle(&ev, now) {
+                            tracker.observe(&e);
                             session.input(e);
                         }
                     }
@@ -287,6 +297,12 @@ pub fn spawn(
                 shown_at = None;
             }
             let screen = shown_screen(session.machine(), chosen);
+            if shared.footer_on.load(Ordering::Relaxed) {
+                let f = tracker.snapshot(session.machine_mut());
+                if let Ok(mut s) = shared.footer.lock() {
+                    *s = f;
+                }
+            }
 
             let was_running = session.is_running();
             if let Some(ep) = &endpoint {

@@ -1,6 +1,6 @@
 # Sources
 
-All outside documents, data and software polytrace was built from. The
+All outside documents, data and software mimic was built from. The
 emulation code is this project's own: hardware behaviour comes from the
 documents below and from test suites run against the code, never from
 another emulator's source (CLAUDE.md, golden rule 7). Each module names

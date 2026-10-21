@@ -307,3 +307,26 @@ fn d81_images_load_and_format_as_d81() {
     assert_eq!(d.format, media::Format::D81);
     assert_eq!((d.id(), d.blocks_free()), (*b"NW", 3160));
 }
+
+#[test]
+fn status_follows_open_channels_and_the_error_channel() {
+    let mut h = Host::new(disk_with_file());
+    let idle = DriveStatus::default();
+    assert_eq!(h.drive.status(), idle, "73 at power-on is no error");
+    h.open(0, b"HELLO");
+    assert!(h.drive.status().active, "a file is open");
+    h.close(0);
+    assert_eq!(h.drive.status(), idle);
+    h.open(0, b"NOPE");
+    assert_eq!(
+        h.drive.status(),
+        DriveStatus {
+            error: true,
+            ..idle
+        },
+        "62, FILE NOT FOUND"
+    );
+    // Reading the message resets it to 00, OK.
+    h.talk_receive(0x6f);
+    assert_eq!(h.drive.status(), idle);
+}

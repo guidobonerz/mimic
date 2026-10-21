@@ -37,7 +37,7 @@
 use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::via::Via;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{
     Bus, Cpu, CycleResult, DebugHooks, DebugTarget, HookedBus, Instr, MemSpaceId, RegisterSet,
     Savestate, Size, StateError, StateReader, StateWriter,
@@ -723,6 +723,20 @@ impl MediaSlot for CbmDrive {
         match &mut self.disk {
             Some(d) => d.flush(),
             None => Ok(()),
+        }
+    }
+
+    /// Active: motor or LED on (VIA2 PB2, PB3). Error: the LED lit with the
+    /// motor off, as the DOS flashes it after an error (the frontend
+    /// latches the blinking). Track: the whole track under the head
+    /// (1-based); on side 1 of a 1571 counted on from 36, as its DOS does.
+    fn status(&self) -> DriveStatus {
+        let (motor, led) = (self.motor_on(), self.led_on());
+        let track = self.mech.half_track / 2 + 1 + self.side() * 35;
+        DriveStatus {
+            active: motor || led,
+            error: led && !motor,
+            track: Some(track),
         }
     }
 }

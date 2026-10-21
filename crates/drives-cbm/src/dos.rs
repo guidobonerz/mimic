@@ -10,7 +10,7 @@
 //! protocol hands over the bytes it receives ([`VirtualDos::received`])
 //! and takes the bytes to send ([`VirtualDos::next_byte`]).
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{StateError, StateReader, StateWriter};
 use media::{Format, D64};
 
@@ -97,6 +97,16 @@ impl VirtualDos {
     /// The command channel's current message (for tests and tools).
     pub fn status_text(&self) -> &str {
         &self.status
+    }
+
+    /// The error number at the start of the status message (`62` of
+    /// `62,FILE NOT FOUND,00,00`), `None` if it does not start with two
+    /// digits.
+    pub fn status_code(&self) -> Option<u8> {
+        match self.status.as_bytes() {
+            [a @ b'0'..=b'9', b @ b'0'..=b'9', ..] => Some((a - b'0') * 10 + (b - b'0')),
+            _ => None,
+        }
     }
 
     pub fn listening(&self) -> bool {
@@ -487,5 +497,21 @@ impl MediaSlot for VirtualDos {
     /// Files are written back when they are closed; nothing is pending.
     fn flush(&mut self) -> Result<(), MediaError> {
         Ok(())
+    }
+
+    /// Active while addressed on the bus (listening or talking) or while a
+    /// file channel (0–14) is open, as a real drive's LED stays lit with an
+    /// open file. Error: a status code of 20 or above, except 73 (the
+    /// power-on DOS version message, not an error). No track: the DOS
+    /// works on files, not blocks.
+    fn status(&self) -> DriveStatus {
+        let open = self.channels[..15]
+            .iter()
+            .any(|c| !matches!(c, Channel::Closed));
+        DriveStatus {
+            active: self.listening || self.talking || open,
+            error: self.status_code().is_some_and(|c| c >= 20 && c != 73),
+            track: None,
+        }
     }
 }

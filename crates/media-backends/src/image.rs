@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn tapes_from_tap_and_prg_files() {
-        let dir = std::env::temp_dir().join(format!("polytrace-tape-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mimic-tape-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let prg = dir.join("hello.prg");
         std::fs::write(&prg, [0x01, 0x08, 0x60]).unwrap();
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn file_backend_through_overlay() {
-        let dir = std::env::temp_dir().join(format!("polytrace-media-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mimic-media-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("game.d64");
         fs::write(&path, [1, 2, 3, 4]).unwrap();

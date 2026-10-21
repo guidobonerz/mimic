@@ -120,7 +120,7 @@ fn handshake_and_inspection() {
     let mut c = Client::connect(&server);
     assert_eq!(
         c.recv(),
-        json!({"event": "hello", "protocol": "polytrace-debug",
+        json!({"event": "hello", "protocol": "mimic-debug",
                "version": PROTOCOL_VERSION, "machine": "sim6502"})
     );
 
@@ -495,7 +495,7 @@ fn ports_devices_and_media() {
         .find(|s| s["kind"] == "Program")
         .unwrap()["id"]
         .clone();
-    let dir = std::env::temp_dir().join(format!("polytrace-media-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("mimic-media-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let prg = dir.join("t.prg");
     std::fs::write(&prg, [0x00, 0xc0, 0x60]).unwrap();
@@ -566,7 +566,7 @@ fn recorded_input_replays_bit_exactly() {
         c.ok(json!({"cmd": "step_frame"}));
     }
     let replay = c.ok(json!({"cmd": "record_stop"}));
-    assert_eq!(replay["format"], "polytrace-replay");
+    assert_eq!(replay["format"], "mimic-replay");
     assert_eq!(replay["events"].as_array().unwrap().len(), 2);
     let recorded_state = c.ok(json!({"cmd": "save_state"}))["data"].clone();
 

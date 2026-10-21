@@ -25,7 +25,7 @@
 
 use chips_cbm::cia::{Cia, CiaModel};
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{
     Bus, Cpu, CycleResult, DebugHooks, DebugTarget, HookedBus, Instr, MemSpaceId, RegisterSet,
     Savestate, Size, StateError, StateReader, StateWriter,
@@ -312,6 +312,11 @@ impl Drive1581 {
         self.cia.port_a_out() & 0x04 == 0
     }
 
+    /// The activity LED (CIA PA6, 1 = lit).
+    pub fn led_on(&self) -> bool {
+        self.cia.port_a_out() & 0x40 != 0
+    }
+
     fn side(&self) -> u8 {
         self.cia.port_a_out() & 0x01
     }
@@ -574,6 +579,18 @@ impl MediaSlot for Drive1581 {
         match &mut self.disk {
             Some(d) => d.flush(),
             None => Ok(()),
+        }
+    }
+
+    /// Active: motor or activity LED on. Error: the LED lit with the motor
+    /// off, as the DOS flashes it after an error. Track: the cylinder under
+    /// the head, 1-based like the DOS's tracks 1–80.
+    fn status(&self) -> DriveStatus {
+        let (motor, led) = (self.motor_on(), self.led_on());
+        DriveStatus {
+            active: motor || led,
+            error: led && !motor,
+            track: Some(self.mech.cylinder.saturating_add(1)),
         }
     }
 }

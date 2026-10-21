@@ -39,7 +39,7 @@ fn c64_with(autostart: bool, drive: &str) -> Box<dyn Machine> {
 }
 
 fn disk() -> Media {
-    let mut d = D64::blank(b"POLYTRACE", *b"PT");
+    let mut d = D64::blank(b"MIMIC", *b"PT");
     d.add_prg(b"HELLO", &PROGRAM).unwrap();
     // Also as a file, for trying the headless runner by hand.
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("hello.d64");
@@ -269,7 +269,7 @@ fn virtual_drive_autostart_directory_and_save() {
 #[test]
 #[ignore = "needs C64 ROMs in EMU_ROM_DIR"]
 fn host_folder_as_virtual_disk() {
-    let dir = std::env::temp_dir().join(format!("polytrace-folder-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("mimic-folder-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("hello.prg"), PROGRAM).unwrap();

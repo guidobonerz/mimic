@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""polydbg: client for the polytrace native debug protocol.
+"""polydbg: client for the mimic native debug protocol.
 
 The protocol is JSON lines over TCP (see crates/emu-debug/src/protocol.rs).
 Start a machine with a debug server, e.g.
@@ -161,7 +161,7 @@ def format_stop(state):
 
 
 class Client:
-    """A connection to a polytrace debug server.
+    """A connection to a mimic debug server.
 
     `call` sends one command and returns its `result`; events pushed in the
     meantime are queued and read with `wait_event` or `take_events`.
@@ -592,7 +592,7 @@ def cmd_shell(c, args):
 def build_parser(shell=False):
     p = argparse.ArgumentParser(
         prog="polydbg" if shell else None,
-        description="Client for the polytrace debug protocol.",
+        description="Client for the mimic debug protocol.",
         add_help=not shell)
     if not shell:
         p.add_argument("--host", default=DEFAULT_HOST)

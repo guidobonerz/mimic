@@ -385,3 +385,48 @@ fn d81_does_not_fit_a_1541() {
     };
     assert!(d.insert(d81).is_err());
 }
+
+#[test]
+fn status_shows_motor_led_error_and_track() {
+    let mut d = drive_with(&[0x4c, 0x00, 0xc0]);
+    d.insert(disk()).unwrap();
+    // VIA2 port B as outputs, motor (PB2) and LED (PB3) off.
+    d.via2.write(0x2, 0x6f);
+    d.via2.write(0x0, 0x00);
+    let idle = DriveStatus {
+        active: false,
+        error: false,
+        track: Some(18),
+    };
+    assert_eq!(d.status(), idle);
+    d.via2.write(0x0, 0x0c);
+    assert_eq!(
+        d.status(),
+        DriveStatus {
+            active: true,
+            ..idle
+        },
+        "reading"
+    );
+    d.via2.write(0x0, 0x08);
+    assert_eq!(
+        d.status(),
+        DriveStatus {
+            active: true,
+            error: true,
+            ..idle
+        },
+        "LED lit with the motor off: the DOS flashes an error"
+    );
+    d.mech.half_track = 69;
+    assert_eq!(d.status().track, Some(35), "half track 35.5");
+}
+
+#[test]
+fn c1571_status_counts_side_1_from_track_36() {
+    let mut d = c1571_with(&[0x4c, 0x00, 0x80]);
+    d.via1.write(0x3, 0x66);
+    d.via1.write(0x1, 0x04);
+    d.mech.half_track = 0;
+    assert_eq!(d.status().track, Some(36));
+}

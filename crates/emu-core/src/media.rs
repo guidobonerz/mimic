@@ -91,6 +91,27 @@ pub trait MediaSlot {
             "'{command}': this slot has no controls"
         )))
     }
+
+    /// What the drive shows right now (activity LED, motor, error), for
+    /// status displays. Side-effect free. Slots without a drive report
+    /// [`DriveStatus::default`].
+    fn status(&self) -> DriveStatus {
+        DriveStatus::default()
+    }
+}
+
+/// A drive's front panel at one moment: derived from emulated hardware
+/// (LED and motor lines, a virtual drive's error channel), never stored.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DriveStatus {
+    /// Reading, writing or seeking: the activity LED is lit or the motor
+    /// runs (tape: the motor runs).
+    pub active: bool,
+    /// The drive signals an error: a flashing LED, or an error code (20 or
+    /// above) in a virtual drive's status channel.
+    pub error: bool,
+    /// Track under the head (1-based), where the drive has one.
+    pub track: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
