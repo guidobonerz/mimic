@@ -15,7 +15,7 @@ use emu_core::registry::MachineConfig;
 use emu_core::{DebugHooks, Machine, StopReason};
 use emu_debug::{DebugServer, ServerConfig, Session};
 use emu_input::{Mapper, Profile as InputProfile};
-use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer};
+use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer, RemoteInput};
 
 const USAGE: &str = "\
 usage: mimic-headless [options]
@@ -354,6 +354,20 @@ fn run(args: Args) -> Result<ExitCode, String> {
                 ))));
                 let control = server.control();
                 let sink: InputSink = Arc::new(move |input| {
+                    if let RemoteInput::Control { id, value } = input {
+                        control.exec(move |s| {
+                            let at = s.machine().now();
+                            s.input(emu_core::input::TimedInput {
+                                at,
+                                target: emu_core::input::InputTarget::Panel,
+                                event: emu_core::input::InputEvent::Control {
+                                    id: emu_core::ControlId(id),
+                                    value,
+                                },
+                            });
+                        });
+                        return;
+                    }
                     let Some(ev) = host::host_event(input) else {
                         return;
                     };

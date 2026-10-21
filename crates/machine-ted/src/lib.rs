@@ -606,6 +606,20 @@ impl TedMachine {
                 }
                 self.refresh_port(p);
             }
+            InputTarget::Panel => {
+                if let emu_core::input::InputEvent::Control { id, value } = ev.event {
+                    self.control(id.0, value);
+                }
+            }
+        }
+    }
+
+    /// A console control from the panel (power, the reset button).
+    fn control(&mut self, id: u16, value: u8) {
+        match id {
+            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
+            1 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Soft),
+            _ => {}
         }
     }
 
@@ -848,6 +862,14 @@ impl Machine for TedMachine {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+        use emu_core::ControlInfo;
+        vec![
+            ControlInfo::button(0, "POWER", false),
+            ControlInfo::button(1, "RESET", false),
+        ]
     }
 
     fn ports(&self) -> Vec<PortInfo> {

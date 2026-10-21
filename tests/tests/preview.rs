@@ -305,6 +305,10 @@ fn raw_stream_sends_indices_changed_lines_and_audio() {
     let s = start();
     let addr = s.preview.addr();
     assert!(get(addr, "/stream").0.contains("426"));
+    let (status, headers, body) = get(addr, "/controls");
+    assert!(status.contains("200"));
+    assert_eq!(header(&headers, "content-type"), "application/json");
+    assert_eq!(body, b"[]", "sim6502 has no console controls");
     assert!(get(addr, "/stream?audio=2").0.contains("400"));
     let mut ws = ws_open(addr, "/stream?audio=1");
 

@@ -185,9 +185,8 @@ fn savestate_round_trip() {
 }
 
 #[test]
-fn display_offsets_keep_whole_cycles() {
+fn display_offsets_stay_inside_the_line() {
     for t in [&PAL, &NTSC] {
-        assert_eq!(t.x_offset % 4, 0);
         assert!(t.x_offset < t.width());
     }
 }

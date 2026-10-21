@@ -6,6 +6,7 @@
 use std::collections::VecDeque;
 use std::ops::BitOr;
 
+use crate::controls::ControlId;
 use crate::cycle::Cycle;
 use crate::port::PortId;
 use crate::savestate::{Savestate, StateError, StateReader, StateWriter};
@@ -65,6 +66,12 @@ pub enum InputEvent {
         machine_key: MachineKey,
         down: bool,
     },
+    /// A console button or switch set to `value` (see
+    /// [`crate::controls`]); goes to [`InputTarget::Panel`].
+    Control {
+        id: ControlId,
+        value: u8,
+    },
 }
 
 /// Where an event goes.
@@ -72,6 +79,8 @@ pub enum InputEvent {
 pub enum InputTarget {
     Port(PortId),
     Keyboard,
+    /// The console's buttons and switches.
+    Panel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -128,7 +137,8 @@ fn write_event(w: &mut StateWriter, e: &TimedInput) {
     w.u64(e.at.0);
     match e.target {
         InputTarget::Keyboard => w.u8(0xff),
-        InputTarget::Port(p) => w.u8(p.0.min(0xfe)),
+        InputTarget::Panel => w.u8(0xfe),
+        InputTarget::Port(p) => w.u8(p.0.min(0xfd)),
     }
     match e.event {
         InputEvent::Digital { dirs, buttons } => {
@@ -158,6 +168,11 @@ fn write_event(w: &mut StateWriter, e: &TimedInput) {
             w.u16(machine_key.0);
             w.bool(down);
         }
+        InputEvent::Control { id, value } => {
+            w.u8(5);
+            w.u16(id.0);
+            w.u8(value);
+        }
     }
 }
 
@@ -165,6 +180,7 @@ fn read_event(r: &mut StateReader<'_>) -> Result<TimedInput, StateError> {
     let at = Cycle(r.u64()?);
     let target = match r.u8()? {
         0xff => InputTarget::Keyboard,
+        0xfe => InputTarget::Panel,
         p => InputTarget::Port(PortId(p)),
     };
     let event = match r.u8()? {
@@ -189,6 +205,10 @@ fn read_event(r: &mut StateReader<'_>) -> Result<TimedInput, StateError> {
         4 => InputEvent::Key {
             machine_key: MachineKey(r.u16()?),
             down: r.bool()?,
+        },
+        5 => InputEvent::Control {
+            id: ControlId(r.u16()?),
+            value: r.u8()?,
         },
         _ => return Err(StateError::Invalid("input event kind")),
     };

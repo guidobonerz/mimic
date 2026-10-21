@@ -16,6 +16,10 @@
   canvas { max-width: 100%; image-rendering: pixelated; background: #000; }
   #status { font-variant-numeric: tabular-nums; color: var(--muted); padding: 0 16px 16px; text-align: center; }
   .paused { color: #c2410c; font-weight: 600; }
+  #panel { display: flex; flex-wrap: wrap; gap: 8px 14px; justify-content: center; align-items: center; padding: 0 16px 12px; }
+  #panel .switch { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
+  #panel button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 4px; border: 1px solid var(--muted); background: var(--panel); color: var(--fg); cursor: pointer; }
+  #panel button.on { background: #2e6b3a; border-color: #2e6b3a; color: #fff; }
 </style>
 </head>
 <body>
@@ -28,6 +32,7 @@
   <label title="Keys and gamepads go to the emulated machine (C64: Esc = RUN/STOP, numeric keypad = joystick)"><input type="checkbox" id="input" checked> Input</label>
 </header>
 <main><canvas id="screen" width="384" height="272"></canvas></main>
+<div id="panel" aria-label="Console controls"></div>
 <div id="status">connecting…</div>
 <script>
 "use strict";
@@ -207,6 +212,52 @@ function pollPads() {
   requestAnimationFrame(pollPads);
 }
 requestAnimationFrame(pollPads);
+
+// Console panel: the machine's buttons and switches from /controls; a
+// button is held while pressed, a click on a switch position sets it.
+const panel = document.getElementById("panel");
+let panelKey = "";
+function control(id, value) {
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "control", id, value }));
+}
+function renderPanel(controls) {
+  const key = JSON.stringify(controls);
+  if (key === panelKey) return;
+  panelKey = key;
+  panel.replaceChildren();
+  for (const c of controls) {
+    if (c.kind === "button") {
+      const b = document.createElement("button");
+      b.textContent = c.name;
+      b.classList.toggle("on", c.value === 1);
+      const release = () => control(c.id, 0);
+      b.addEventListener("pointerdown", (ev) => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); control(c.id, 1); });
+      b.addEventListener("pointerup", release);
+      b.addEventListener("pointercancel", release);
+      panel.append(b);
+    } else {
+      const group = document.createElement("span");
+      group.className = "switch";
+      group.append(c.name);
+      c.positions.forEach((p, i) => {
+        const b = document.createElement("button");
+        b.textContent = p;
+        b.classList.toggle("on", c.value === i);
+        b.addEventListener("click", () => control(c.id, i));
+        group.append(b);
+      });
+      panel.append(group);
+    }
+  }
+}
+async function pollPanel() {
+  try {
+    const r = await fetch("/controls", { cache: "no-store" });
+    if (r.ok) renderPanel(await r.json());
+  } catch (_) { /* server gone: keep the last state */ }
+  setTimeout(pollPanel, 500);
+}
+pollPanel();
 </script>
 </body>
 </html>

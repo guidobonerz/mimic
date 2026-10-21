@@ -568,6 +568,21 @@ impl Atari800Xl {
                 }
                 self.refresh_ports();
             }
+            InputTarget::Panel => {
+                if let emu_core::input::InputEvent::Control { id, value } = ev.event {
+                    self.control(id.0, value);
+                }
+            }
+        }
+    }
+
+    /// A console control from the panel (power, RESET, the START, SELECT and OPTION keys).
+    fn control(&mut self, id: u16, value: u8) {
+        match id {
+            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
+            1 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Soft),
+            2..=4 => self.key(keys::START.0 + id - 2, value == 1),
+            _ => {}
         }
     }
 
@@ -995,6 +1010,17 @@ impl Machine for Atari800Xl {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+        use emu_core::ControlInfo;
+        vec![
+            ControlInfo::button(0, "POWER", false),
+            ControlInfo::button(1, "RESET", false),
+            ControlInfo::button(2, "START", self.io.gtia.console_keys & 1 != 0),
+            ControlInfo::button(3, "SELECT", self.io.gtia.console_keys & 2 != 0),
+            ControlInfo::button(4, "OPTION", self.option_key),
+        ]
     }
 
     fn ports(&self) -> Vec<PortInfo> {

@@ -94,6 +94,8 @@ Größe** erkannt.
 | `cpc/` (`amstrad/`) | Amstrad CPC | `os464`/`basic1-0`, `os664`/`basic664`, `os6128`/`basic1-1` (je 16 KB) oder 32-KB-Kombidateien `cpc464`/`cpc664`/`cpc6128`; `amsdos`, optional `parados` |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
+Der Atari 2600 hat kein System-ROM: das Programm kommt vom Modul (`--cart`).
+
 Fehlt ein ROM, nennt die Fehlermeldung Rolle, erwartete Größe und Namen.
 Einzelne ROMs lassen sich im Headless-Frontend auch direkt angeben:
 `--rom kernal=pfad/kernal.bin`.
@@ -113,6 +115,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `c16`, `plus4` | C16, Plus/4 | `pal`, `ntsc` |
 | `c128` | C128 | `pal`, `ntsc` |
 | `atari800xl` | Atari 800XL | `pal`, `ntsc` |
+| `atari2600` | Atari 2600 (VCS) | `ntsc` (Standard), `pal` |
 | `cpc` | Amstrad CPC | `6128` (Standard), `664`, `464` |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
 
@@ -126,6 +129,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | C16/Plus/4 | `ram=16k\|64k`, `drive8=…`, `port1=joystick\|none`, `autostart=on` |
 | C128 | `display=40\|80`, `vdc_ram=16k\|64k`, `sid=…`, `drive8=1571\|1541\|1581\|virtual\|none`, `port2=…`, `autostart=on` |
 | Atari 800XL | `port1`/`port2=joystick\|paddles\|none`, `basic=on\|off`, `drives=0..4`, `drive=1050\|810\|xf551` |
+| Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`) |
 | CPC | `crtc=0\|1\|2` (Standard 464: 0, sonst 1), `dos=amsdos\|parados\|none`, `joy1=joystick\|amx\|none`, `joy2=joystick\|none` |
 
 `drive8=virtual` bedient Laufwerk 8 auf Protokollebene (schnell, nur
@@ -140,6 +144,8 @@ cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms
 cargo run --release -p emu-desktop -- --machine c64 --disk spiel.d64 --autostart
 cargo run --release -p emu-desktop -- --machine vic20 --tape spiel.tap
 cargo run --release -p emu-desktop -- --machine atari800xl --disk spiel.atr
+cargo run --release -p emu-desktop -- --machine atari2600 --cart spiel.a26
+cargo run --release -p emu-desktop -- --machine atari2600 --model pal --cart spiel.bin --option port1=paddles
 cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
 cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
 ```
@@ -158,9 +164,22 @@ Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
 - Atari: `< >` auf `- =`, `- =` auf `[ ]`, `+ *` auf `' \`, rechte Alt =
   Atari-Taste, Pfeile = CONTROL + `- = + *`; F2 START, F3 SELECT, F4 OPTION,
   F5 RESET, F6 HELP, F7/Pause BREAK.
+- Atari 2600: F1 SELECT, F2 RESET (beide solange gedrückt), F3 Farbe/Schwarzweiß,
+  F4/F5 Difficulty links/rechts A/B (jeweils umschalten). Keypads
+  (`port1=keypad`, `port2`): links `1 2 3 / Q W E / A S D / Z X C`, rechts
+  `8 9 0 / I O P / K L ; / , . /` (US-Positionen).
 - CPC: `- ^` auf `- =`, `@ [` auf `[ ]`, `: ;` auf `; '`, `]` auf `\`,
   Rücktaste = DEL, Entf = CLR, linke Alt = COPY, Ziffernblock und F1–F10 =
   Funktionstasten f0–f9 und f., Ziffernblock-Enter = ENTER.
+
+**Konsolen-Panel:** Unter dem Bild zeigt eine Leiste die Tasten und Schalter
+des Gehäuses (POWER, RESET, beim Atari 2600 die Konsolenschalter, beim 800XL
+START/SELECT/OPTION, beim C64/VIC-20 RESTORE, beim C128 auch 40/80 und CAPS
+LOCK). Eine Taste ist gedrückt, solange die Maustaste gehalten wird; ein Klick
+auf eine Schalterstellung stellt den Schalter um. Strg+P blendet die Leiste
+ein/aus, `--no-panel` startet ohne sie. Dieselbe Leiste hat der
+Browser-Viewer; der Debugger bedient sie mit `controls`/`set_control`
+(`polydbg panel`).
 
 **Weitere Tasten:** F12 wechselt zwischen den Bildschirmen einer Maschine
 (C128: VIC und VDC). Datasette/Kassette: F9 PLAY, Shift+F9 RECORD, F10 STOP,
@@ -170,9 +189,10 @@ F11 REWIND.
 8/2/4/6 + 0 bzw. rechte Strg (Port 2), bei VIC-20, C16/Plus/4 und Atari
 Port 1. Beim CPC nur Gamepad (der Ziffernblock sind dort Funktionstasten).
 
-**Maus/Paddles:** Mit `--option port1=mouse1351` (oder `paddles`, auch
-`port2`) bzw. beim CPC `--option joy1=amx` fängt ein Klick ins Fenster die
-Maus ein; die mittlere Maustaste gibt sie frei.
+**Maus/Paddles:** Mit `--option port1=mouse1351` (oder `paddles`, beim
+Atari 2600 auch `driving`, jeweils auch `port2`) bzw. beim CPC
+`--option joy1=amx` fängt ein Klick ins Fenster die Maus ein; die mittlere
+Maustaste gibt sie frei. Beim 2600 dreht die Maus Paddle 0 bzw. das Lenkrad.
 
 `EMU_DESKTOP_DEBUG=1` gibt alle 5 Sekunden Bild- und Audio-Statistik aus.
 
@@ -214,7 +234,7 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 | --- | --- | --- |
 | Diskette | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC); ein **Ordner** als virtuelle Diskette | `--disk` |
 | Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
-| Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari) | `--cart` |
+| Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt) | `--cart` |
 | Programm | PRG, T64, XEX | `--prg` |
 
 Images werden standardmäßig über einen **Copy-on-Write-Overlay** geöffnet: das

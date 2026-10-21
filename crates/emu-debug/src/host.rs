@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use emu_core::input::{Dirs, InputEvent, InputTarget, MachineKey, TimedInput};
 use emu_core::media::Media;
 use emu_core::port::{PortDevice, PortId, PortKind};
-use emu_core::Cycle;
+use emu_core::{ControlId, Cycle};
 
 /// Frontend services for device and media commands.
 pub trait HostServices: Send {
@@ -58,6 +58,7 @@ const DIR_NAMES: [(&str, Dirs); 4] = [
 pub fn target_json(t: InputTarget) -> Value {
     match t {
         InputTarget::Keyboard => json!("keyboard"),
+        InputTarget::Panel => json!("panel"),
         InputTarget::Port(p) => json!({"port": p.0}),
     }
 }
@@ -66,18 +67,24 @@ pub fn parse_target(v: &Value) -> Result<InputTarget, String> {
     if v == "keyboard" {
         return Ok(InputTarget::Keyboard);
     }
+    if v == "panel" {
+        return Ok(InputTarget::Panel);
+    }
     v["port"]
         .as_u64()
         .and_then(|p| u8::try_from(p).ok())
         .map(|p| InputTarget::Port(PortId(p)))
-        .ok_or_else(|| format!("target must be \"keyboard\" or {{\"port\": n}}, not {v}"))
+        .ok_or_else(|| {
+            format!("target must be \"keyboard\", \"panel\" or {{\"port\": n}}, not {v}")
+        })
 }
 
 /// JSON form of an event: `{"type": "key", "key": 7, "down": true}`,
 /// `{"type": "joystick", "dirs": ["up", "left"], "buttons": 1}`,
 /// `{"type": "analog", "axis": 0, "value": 128}`,
 /// `{"type": "mouse", "dx": 3, "dy": -1, "buttons": 0}`,
-/// `{"type": "lightpen", "x": 100, "y": 50, "trigger": true}`.
+/// `{"type": "lightpen", "x": 100, "y": 50, "trigger": true}`,
+/// `{"type": "control", "id": 1, "value": 1}` (console panel).
 pub fn event_json(e: &InputEvent) -> Value {
     match *e {
         InputEvent::Key { machine_key, down } => {
@@ -99,6 +106,9 @@ pub fn event_json(e: &InputEvent) -> Value {
         }
         InputEvent::LightPen { x, y, trigger } => {
             json!({"type": "lightpen", "x": x, "y": y, "trigger": trigger})
+        }
+        InputEvent::Control { id, value } => {
+            json!({"type": "control", "id": id.0, "value": value})
         }
     }
 }
@@ -153,6 +163,10 @@ pub fn parse_event(v: &Value) -> Result<InputEvent, String> {
             x: field(v, "x")?,
             y: field(v, "y")?,
             trigger: flag(v, "trigger")?,
+        },
+        "control" => InputEvent::Control {
+            id: ControlId(field(v, "id")?),
+            value: field(v, "value")?,
         },
         other => return Err(format!("unknown event type '{other}'")),
     })
@@ -234,6 +248,10 @@ mod tests {
                 x: 100,
                 y: 50,
                 trigger: false,
+            },
+            InputEvent::Control {
+                id: ControlId(3),
+                value: 1,
             },
         ];
         for e in events {

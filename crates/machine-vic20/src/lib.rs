@@ -411,6 +411,22 @@ impl Vic20 {
                 self.refresh_port();
             }
             InputTarget::Port(_) => {}
+            InputTarget::Panel => {
+                if let emu_core::input::InputEvent::Control { id, value } = ev.event {
+                    self.control(id.0, value);
+                }
+            }
+        }
+    }
+
+    /// A console control from the panel (power, RESTORE).
+    fn control(&mut self, id: u16, value: u8) {
+        match id {
+            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
+            1 => {
+                self.io.keyboard.set(keyboard::RESTORE, value == 1);
+            }
+            _ => {}
         }
     }
 
@@ -676,6 +692,14 @@ impl Machine for Vic20 {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+        use emu_core::ControlInfo;
+        vec![
+            ControlInfo::button(0, "POWER", false),
+            ControlInfo::button(1, "RESTORE", self.io.keyboard.restore),
+        ]
     }
 
     fn ports(&self) -> Vec<PortInfo> {

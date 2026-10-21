@@ -49,6 +49,9 @@
 //! 6 adds `media_control` (a slot's own keys, e.g. a datasette's "play",
 //! "record", "stop", "rewind", "forward"). 7 renames the protocol from
 //! `polytrace-debug` to `mimic-debug` (and the replay format to `mimic-replay`).
+//! 8 adds the console panel: `controls` (the machine's buttons and
+//! switches with their state) and `set_control`, and the `"panel"` input
+//! target with `{"type": "control", "id": n, "value": v}` events.
 //!
 //! Every change to this message set needs a contract test and a bump of
 //! [`PROTOCOL_VERSION`].
@@ -59,7 +62,7 @@ use serde_json::{json, Value};
 use emu_core::{BeamPos, StopReason};
 
 pub const PROTOCOL_NAME: &str = "mimic-debug";
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Request {
@@ -266,7 +269,17 @@ pub enum Command {
         slot: u8,
         command: String,
     },
-    /// Queue input events: `[{"target": "keyboard" | {"port": n},
+    /// The console's buttons and switches: `[{"id", "name", "kind":
+    /// "button" | "switch", "positions": [...], "value"}]`.
+    Controls,
+    /// Set a button (1 held, 0 released) or switch (position index); queued
+    /// like input, applied at the next emulated cycle.
+    SetControl {
+        /// The control's id (`id` is the request's).
+        control: u16,
+        value: u8,
+    },
+    /// Queue input events: `[{"target": "keyboard" | "panel" | {"port": n},
     /// "event": {...}, "delay": cycles}]` (see [`crate::host::event_json`]).
     Input {
         events: Vec<Value>,
@@ -359,6 +372,8 @@ pub const COMMANDS: &[&str] = &[
     "flush_media",
     "set_drive_mode",
     "media_control",
+    "controls",
+    "set_control",
     "input",
     "record_start",
     "record_stop",

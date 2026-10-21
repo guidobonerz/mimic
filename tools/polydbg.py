@@ -542,6 +542,57 @@ def cmd_input(c, args):
     c.call("input", events=[{"target": target, "event": event, "delay": args.delay}])
 
 
+def format_controls(controls):
+    """One line per console control: id, name, state."""
+    lines = []
+    for ctl in controls:
+        if ctl["kind"] == "switch":
+            state = "%s (%s)" % (ctl["positions"][ctl["value"]], "|".join(ctl["positions"]))
+        else:
+            state = "pressed" if ctl["value"] else "released"
+        lines.append("%3d  %-18s %s" % (ctl["id"], ctl["name"], state))
+    return lines
+
+
+def control_value(ctl, word):
+    """The value for 'press'/'release'/'tap' (buttons) or a position name
+    or index (switches); None for 'tap'."""
+    if ctl["kind"] == "button":
+        values = {"press": 1, "release": 0, "tap": None}
+        if word not in values:
+            raise ValueError("%s is a button: press, release or tap" % ctl["name"])
+        return values[word]
+    names = [p.lower() for p in ctl["positions"]]
+    if word.lower() in names:
+        return names.index(word.lower())
+    if word.isdigit() and int(word) < len(names):
+        return int(word)
+    raise ValueError("%s takes %s" % (ctl["name"], " or ".join(ctl["positions"])))
+
+
+def cmd_panel(c, args):
+    """panel: list the console's buttons and switches; panel CONTROL VALUE
+    sets one (CONTROL: id or name; VALUE: press/release/tap or a switch
+    position)."""
+    controls = c.call("controls")
+    if not args.control:
+        print("\n".join(format_controls(controls)) or "no console controls")
+        return
+    wanted = args.control.lower()
+    match = [k for k in controls if str(k["id"]) == wanted or k["name"].lower() == wanted]
+    if not match:
+        raise ValueError("no control '%s'" % args.control)
+    ctl = match[0]
+    value = control_value(ctl, args.value or "tap")
+    if value is None:
+        # Tap: held for about one frame (20 000 cycles), then released.
+        event = lambda v: {"type": "control", "id": ctl["id"], "value": v}
+        c.call("input", events=[{"target": "panel", "event": event(1)},
+                                {"target": "panel", "event": event(0), "delay": 20000}])
+    else:
+        c.call("set_control", control=ctl["id"], value=value)
+
+
 def cmd_events(c, args):
     if args.subscribe:
         c.call("subscribe", events=args.subscribe)
@@ -693,6 +744,10 @@ def build_parser(shell=False):
     sp.add_argument("what", choices=["joystick", "key"])
     sp.add_argument("values", nargs="+")
     sp.add_argument("--delay", type=int, default=0, help="cycles from now")
+    sp = add("panel", cmd_panel,
+             "console buttons and switches: list, or 'CONTROL press|release|tap|POSITION'")
+    sp.add_argument("control", nargs="?")
+    sp.add_argument("value", nargs="?")
     sp = add("events", cmd_events, "print pushed events until Ctrl-C")
     sp.add_argument("--subscribe", nargs="*", default=[],
                     help="optional events, e.g. frame_ready freeze_blocked_write")

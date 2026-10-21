@@ -40,6 +40,8 @@ pub fn host_event(input: RemoteInput) -> Option<HostEvent> {
             axis: Axis::from_name(&axis)?,
             value,
         },
+        // Panel controls bypass the host mapping (see the preview sinks).
+        RemoteInput::Control { .. } => return None,
     })
 }
 

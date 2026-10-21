@@ -665,6 +665,30 @@ impl C128 {
                 }
                 self.refresh_port(p);
             }
+            InputTarget::Panel => {
+                if let emu_core::input::InputEvent::Control { id, value } = ev.event {
+                    self.control(id.0, value);
+                }
+            }
+        }
+    }
+
+    /// A console control from the panel (power, reset, RESTORE, the locking 40/80 DISPLAY and CAPS LOCK keys).
+    fn control(&mut self, id: u16, value: u8) {
+        match id {
+            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
+            1 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Soft),
+            2 => {
+                self.io.keyboard.set(keyboard::RESTORE, value == 1);
+            }
+            3 if (value == 1) != self.io.keyboard.display_80 => {
+                self.io.keyboard.set(keyboard::DISPLAY_4080, true);
+            }
+            4 if (value == 1) != self.io.keyboard.caps_lock => {
+                self.io.keyboard.set(keyboard::CAPS_LOCK, true);
+                self.mem.caps_lock = self.io.keyboard.caps_lock;
+            }
+            _ => {}
         }
     }
 
@@ -1028,6 +1052,27 @@ impl Machine for C128 {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+        use emu_core::ControlInfo;
+        vec![
+            ControlInfo::button(0, "POWER", false),
+            ControlInfo::button(1, "RESET", false),
+            ControlInfo::button(2, "RESTORE", self.io.keyboard.restore),
+            ControlInfo::switch(
+                3,
+                "40/80 DISPLAY",
+                &["40", "80"],
+                self.io.keyboard.display_80 as u8,
+            ),
+            ControlInfo::switch(
+                4,
+                "CAPS LOCK",
+                &["OFF", "ON"],
+                self.io.keyboard.caps_lock as u8,
+            ),
+        ]
     }
 
     fn ports(&self) -> Vec<PortInfo> {

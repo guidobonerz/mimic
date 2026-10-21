@@ -59,10 +59,10 @@ pub struct Timing {
     /// Visible lines of the frame buffer (full overscan, not cropped).
     pub first_line: u16,
     pub height: u32,
-    /// Frame column of the first pixel of cycle 0 (a multiple of 4). The
-    /// line is shown rotated by this many pixels so the KERNAL's text
-    /// window sits in the middle like on a monitor (the end of the line
-    /// wraps to the left border).
+    /// Frame column of the first pixel of cycle 0. The line is shown
+    /// rotated by this many pixels so the KERNAL's text window sits in the
+    /// middle like on a monitor, with equal borders left and right (the end
+    /// of the line wraps to the left border).
     pub x_offset: u32,
     /// Dot clock; the CPU clock is a quarter of it.
     pub pixel_clock_hz: u32,
@@ -75,7 +75,7 @@ pub const PAL: Timing = Timing {
     cycles: 71,
     first_line: 28,
     height: 284,
-    x_offset: 8,
+    x_offset: 6,
     pixel_clock_hz: 4_433_618,
     standard: VideoStandard::Pal,
 };
@@ -86,7 +86,7 @@ pub const NTSC: Timing = Timing {
     cycles: 65,
     first_line: 22,
     height: 239,
-    x_offset: 24,
+    x_offset: 22,
     pixel_clock_hz: 4_090_909,
     standard: VideoStandard::Ntsc,
 };
@@ -354,9 +354,11 @@ impl Vic {
         };
         if let Some(y) = self.line.checked_sub(t.first_line) {
             if u32::from(y) < t.height {
-                let x = (u32::from(self.cycle) * 4 + t.x_offset) % t.width();
-                let at = (u32::from(y) * t.width() + x) as usize;
-                self.pixels[at..at + 4].copy_from_slice(&four);
+                let row = u32::from(y) * t.width();
+                for (i, p) in four.into_iter().enumerate() {
+                    let x = (u32::from(self.cycle) * 4 + i as u32 + t.x_offset) % t.width();
+                    self.pixels[(row + x) as usize] = p;
+                }
             }
         }
 

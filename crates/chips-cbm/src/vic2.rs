@@ -70,9 +70,12 @@ pub struct Timing {
     /// Linear position (`first_x` + pixel in line) from which the X counter
     /// repeats `$18C–$18F` for 8 extra pixels (6567R8 only).
     pub x_stall: Option<u16>,
-    /// Visible window of the frame buffer (full overscan, not cropped): first
-    /// pixel within the line, width, first raster line, height. The window
-    /// may wrap past the last raster line to line 0.
+    /// Visible window of the frame buffer: first pixel within the line,
+    /// width, first raster line, height. It is what a monitor shows of the
+    /// overscan, centred like VICE's normal border: 32 pixels of border
+    /// left and right of the 320-pixel display window; PAL 35 lines above
+    /// and 37 below the 200 display lines. The window may wrap past the last
+    /// raster line to line 0.
     pub visible_p0: u16,
     pub width: u32,
     pub first_line: u16,
@@ -88,10 +91,10 @@ pub const PAL: Timing = Timing {
     first_x: 0x194,
     x_wrap: 504,
     x_stall: None,
-    visible_p0: 76,
-    width: 404,
+    visible_p0: 92,
+    width: 384,
     first_line: 16,
-    height: 284,
+    height: 272,
     pixel_clock_hz: 7_881_984,
     standard: VideoStandard::Pal,
 };
@@ -104,8 +107,8 @@ pub const NTSC: Timing = Timing {
     first_x: 0x19c,
     x_wrap: 512,
     x_stall: Some(0x200 + 0x18c),
-    visible_p0: 76,
-    width: 420,
+    visible_p0: 92,
+    width: 384,
     first_line: 41,
     height: 235,
     pixel_clock_hz: 8_181_816,

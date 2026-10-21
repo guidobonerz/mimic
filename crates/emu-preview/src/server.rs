@@ -7,6 +7,7 @@
 //! | `GET /snapshot.png`    | the latest frame as PNG                                 |
 //! | `GET /preview` (WS)    | stream of [`crate::stream_message`] binary messages     |
 //! | `GET /stream` (WS)     | raw stream: [`crate::raw`] video and audio messages     |
+//! | `GET /controls`        | the console's buttons and switches as JSON              |
 //!
 //! Parameters (query string): `filter=raw|crt` (default raw), `profile=`
 //! (CRT monitor profile, default the machine's), `scale=1..4` (raw: pixel
@@ -20,7 +21,8 @@
 //! Viewers may send input back over the stream as JSON text messages
 //! (`{"type": "key", "code": "KeyA", "down": true}`, `{"type": "button",
 //! "pad": 0, "button": "South", "down": true}`, `{"type": "axis", "pad": 0,
-//! "axis": "LeftX", "value": -0.5}`). With an [`InputSink`] they reach the
+//! "axis": "LeftX", "value": -0.5}`, `{"type": "control", "id": 1,
+//! "value": 1}` for the console panel). With an [`InputSink`] they reach the
 //! frontend as [`RemoteInput`], which maps them like local host input;
 //! without one they are ignored.
 //!
@@ -47,7 +49,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use video_crt::Profile;
 
-use emu_core::{AudioFormat, Machine};
+use emu_core::{AudioFormat, ControlInfo, ControlKind, Machine};
 
 use crate::raw::{audio_message, RawEncoder};
 use crate::{dirty_rect, stream_message, Filter, Format, OwnedFrame, Rect, RgbImage};
@@ -63,9 +65,9 @@ const KEY_THRESHOLD: u64 = 2;
 const AUDIO_BACKLOG: usize = 32;
 
 /// Copies of every video output of one moment, by screen name; the first
-/// is the main output.
+/// is the main output; and the console controls of that moment.
 #[derive(Debug)]
-pub struct Screens(Vec<(&'static str, OwnedFrame)>);
+pub struct Screens(Vec<(&'static str, OwnedFrame)>, Vec<ControlInfo>);
 
 impl Screens {
     /// The named output, or the main one for `None`.
@@ -106,7 +108,8 @@ impl FrameTap {
             .into_iter()
             .filter_map(|s| Some((s.name, OwnedFrame::from_screen(m, s.id, running)?)))
             .collect();
-        self.tx.send_replace(Some(Arc::new(Screens(screens))));
+        self.tx
+            .send_replace(Some(Arc::new(Screens(screens, m.controls()))));
     }
 
     /// Hand the samples the machine produced since the last call to raw
@@ -147,6 +150,11 @@ pub enum RemoteInput {
         axis: String,
         value: f32,
     },
+    /// A console button (1 held, 0 released) or switch (position).
+    Control {
+        id: u16,
+        value: u8,
+    },
 }
 
 /// Where viewer input goes (the frontend's host input mapping).
@@ -182,6 +190,10 @@ pub fn parse_remote_input(text: &str) -> Option<RemoteInput> {
             pad: pad()?,
             axis: short_name(&v, "axis")?,
             value: (v["value"].as_f64()? as f32).clamp(-1.0, 1.0),
+        },
+        "control" => RemoteInput::Control {
+            id: u16::try_from(v["id"].as_u64()?).ok()?,
+            value: u8::try_from(v["value"].as_u64()?).ok()?,
         },
         _ => return None,
     })
@@ -436,6 +448,12 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
             let headers = [("Content-Type", "text/html; charset=utf-8".to_string())];
             respond(&mut stream, "200 OK", &headers, VIEWER.as_bytes()).await;
         }
+        "/controls" => {
+            let controls = ctx.tap.latest().map(|s| controls_json(&s.1));
+            let body = controls.unwrap_or_else(|| "[]".into());
+            let headers = [("Content-Type", "application/json".to_string())];
+            respond(&mut stream, "200 OK", &headers, body.as_bytes()).await;
+        }
         "/snapshot.png" => {
             if head.param("machine").is_some_and(|m| m != ctx.machine) {
                 return error(&mut stream, "404 Not Found", "no such machine\n").await;
@@ -499,6 +517,25 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
         },
         _ => error(&mut stream, "404 Not Found", "not found\n").await,
     }
+}
+
+/// `[{"id", "name", "kind": "button" | "switch", "positions", "value"}]`,
+/// as the debug protocol's `controls`.
+fn controls_json(controls: &[ControlInfo]) -> String {
+    let list: Vec<serde_json::Value> = controls
+        .iter()
+        .map(|c| {
+            let (kind, positions): (&str, &[&str]) = match c.kind {
+                ControlKind::Button => ("button", &[]),
+                ControlKind::Switch(p) => ("switch", p),
+            };
+            serde_json::json!({
+                "id": c.id.0, "name": c.name, "kind": kind,
+                "positions": positions, "value": c.value,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(list).to_string()
 }
 
 /// Switch the connection to WebSocket; false if the reply could not be sent.
@@ -709,6 +746,10 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_remote_input(r#"{"type":"control","id":3,"value":1}"#),
+            Some(RemoteInput::Control { id: 3, value: 1 })
+        );
+        assert_eq!(
             parse_remote_input(r#"{"type":"axis","pad":1,"axis":"LeftY","value":3}"#),
             Some(RemoteInput::Axis {
                 pad: 1,
@@ -721,6 +762,7 @@ mod tests {
             r#"{"type":"key","code":"a b","down":true}"#,
             r#"{"type":"button","pad":999,"button":"South","down":true}"#,
             r#"{"type":"jump"}"#,
+            r#"{"type":"control","id":70000,"value":1}"#,
             "not json",
         ] {
             assert_eq!(parse_remote_input(bad), None, "{bad}");

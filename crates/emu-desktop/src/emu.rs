@@ -16,7 +16,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use emu_core::frame::SignalInfo;
-use emu_core::{Machine, ScreenId, StopReason};
+use emu_core::input::{InputEvent, InputTarget, TimedInput};
+use emu_core::{ControlId, ControlInfo, Machine, ScreenId, StopReason};
 use emu_debug::{Endpoint, Service, Session};
 use emu_input::{HostEvent, Mapper};
 use emu_preview::server::FrameTap;
@@ -71,6 +72,12 @@ pub struct Shared {
     /// emulation publishes [`Shared::footer`] after every frame.
     pub footer_on: AtomicBool,
     pub footer: Mutex<Footer>,
+    /// Set by the window (Ctrl+P): the console panel is shown, so the
+    /// emulation publishes [`Shared::controls`] after every frame.
+    pub panel_on: AtomicBool,
+    pub controls: Mutex<Vec<ControlInfo>>,
+    /// Panel clicks from the window, (control, value); queued as input.
+    pub panel_events: Mutex<Vec<(u16, u8)>>,
 }
 
 /// Datasette keys from the window.
@@ -124,6 +131,9 @@ impl Shared {
             tape_key: AtomicU8::new(0),
             footer_on: AtomicBool::new(false),
             footer: Mutex::default(),
+            panel_on: AtomicBool::new(false),
+            controls: Mutex::default(),
+            panel_events: Mutex::default(),
         }
     }
 }
@@ -295,6 +305,28 @@ pub fn spawn(
                 let current = shown_screen(session.machine(), chosen);
                 chosen = Some(next_screen(session.machine(), current));
                 shown_at = None;
+            }
+            let clicks = shared
+                .panel_events
+                .lock()
+                .map(|mut e| std::mem::take(&mut *e))
+                .unwrap_or_default();
+            for (id, value) in clicks {
+                let at = session.machine().now();
+                session.input(TimedInput {
+                    at,
+                    target: InputTarget::Panel,
+                    event: InputEvent::Control {
+                        id: ControlId(id),
+                        value,
+                    },
+                });
+            }
+            if shared.panel_on.load(Ordering::Relaxed) {
+                let controls = session.machine().controls();
+                if let Ok(mut c) = shared.controls.lock() {
+                    *c = controls;
+                }
             }
             let screen = shown_screen(session.machine(), chosen);
             if shared.footer_on.load(Ordering::Relaxed) {

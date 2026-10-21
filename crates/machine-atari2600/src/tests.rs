@@ -1,6 +1,7 @@
 use super::*;
 use emu_core::input::Dirs;
 use emu_core::input::{InputEvent, MachineKey};
+use emu_core::media::MediaKind;
 
 fn stub(model: &str) -> Atari2600 {
     let mut config = MachineConfig {
@@ -349,4 +350,93 @@ fn driving_controller_gray_code() {
         },
     );
     assert_eq!(peek(&m, 0x0d) & 0x80, 0, "fire on INPT5");
+}
+
+/// A machine with `rom` in the cartridge slot (as a user inserts it).
+fn with_cart(rom: Vec<u8>, options: &[(&str, &str)]) -> Atari2600 {
+    use emu_core::media::{Media, MediaBackend, MediaError};
+    struct Mem(Vec<u8>);
+    impl MediaBackend for Mem {
+        fn len(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), MediaError> {
+            buf.copy_from_slice(&self.0[offset as usize..offset as usize + buf.len()]);
+            Ok(())
+        }
+        fn write(&mut self, _offset: u64, _data: &[u8]) -> Result<(), MediaError> {
+            Ok(())
+        }
+        fn commit(&mut self) -> Result<(), MediaError> {
+            Ok(())
+        }
+    }
+    let mut config = MachineConfig::default();
+    for (k, v) in options {
+        config.options.insert((*k).into(), (*v).into());
+    }
+    let mut m = Atari2600::new(&config).unwrap();
+    m.media_slot(SLOT_CARTRIDGE)
+        .unwrap()
+        .insert(Media {
+            kind: MediaKind::Cartridge,
+            name: "test.a26".into(),
+            backend: Box::new(Mem(rom)),
+        })
+        .unwrap();
+    m.step_cycle();
+    m
+}
+
+#[test]
+fn f8_program_switches_banks_and_uses_the_superchip() {
+    let mut rom = vec![0u8; 0x2000];
+    // Bank 1 (power-up), at $F100 (the first 256 bytes are the RAM ports):
+    // LDA $1FF8 switches to bank 0, which continues at the next address:
+    // store $42 into the Superchip and read it back.
+    rom[0x1100..0x1103].copy_from_slice(&[0xad, 0xf8, 0x1f]);
+    rom[0x1ffc..0x1ffe].copy_from_slice(&[0x00, 0xf1]);
+    rom[0x0103..0x0111].copy_from_slice(&[
+        0xa9, 0x42, // LDA #$42
+        0x8d, 0x05, 0xf0, // STA $F005 (Superchip write port)
+        0xad, 0x85, 0xf0, // LDA $F085 (read port)
+        0x85, 0x80, // STA $80
+        0x4c, 0x0d, 0xf1, // JMP *
+        0x00,
+    ]);
+    let mut m = with_cart(rom, &[("bank", "f8sc")]);
+    for _ in 0..100 {
+        m.step_cycle();
+    }
+    assert_eq!(peek(&m, 0x80), 0x42);
+    let state = m.save_state();
+    m.load_state(&state).unwrap();
+}
+
+#[test]
+fn bank_option_is_checked() {
+    let mut config = MachineConfig::default();
+    config.options.insert("bank".into(), "x9".into());
+    assert!(Atari2600::new(&config).is_err());
+}
+
+#[test]
+fn fe_switches_on_jsr_and_rts() {
+    let mut rom = vec![0u8; 0x2000];
+    // Bank 1 (power-up) runs at $Dxxx, bank 0 at $Fxxx.
+    rom[0x1000..0x100d].copy_from_slice(&[
+        0xa2, 0xff, // D000 LDX #$FF
+        0x9a, // D002 TXS
+        0x20, 0x10, 0xf0, // D003 JSR $F010: bank 0
+        0xa9, 0x66, // D006 LDA #$66 (back in bank 1)
+        0x85, 0x82, // D008 STA $82
+        0x4c, 0x0a, 0xd0, // D00A JMP *
+    ]);
+    rom[0x1ffc..0x1ffe].copy_from_slice(&[0x00, 0xd0]);
+    rom[0x0010..0x0015].copy_from_slice(&[0xa9, 0x55, 0x85, 0x81, 0x60]); // LDA #$55, STA $81, RTS
+    let mut m = with_cart(rom, &[("bank", "fe")]);
+    for _ in 0..100 {
+        m.step_cycle();
+    }
+    assert_eq!((peek(&m, 0x81), peek(&m, 0x82)), (0x55, 0x66));
 }

@@ -677,3 +677,62 @@ fn cheat_search_finds_the_counter_and_a_freeze_pins_it() {
     assert_eq!(list[0]["enabled"], true);
     server.shutdown();
 }
+
+#[test]
+fn console_panel_controls() {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    let machine = emu_machines::registry()
+        .create("atari2600", &config)
+        .unwrap();
+    let server = DebugServer::start(
+        Session::new(machine, "atari2600"),
+        ServerConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            vice: None,
+            run: false,
+            realtime: false,
+        },
+    )
+    .unwrap();
+    let mut c = Client::connect(&server);
+    c.recv();
+    let caps = c.ok(json!({"cmd": "capabilities"}));
+    for cmd in ["controls", "set_control"] {
+        assert!(caps["commands"].as_array().unwrap().contains(&json!(cmd)));
+    }
+    let controls = c.ok(json!({"cmd": "controls"}));
+    assert_eq!(
+        controls[0],
+        json!({"id": 0, "name": "POWER", "kind": "button", "positions": [], "value": 0})
+    );
+    assert_eq!(
+        controls[3],
+        json!({"id": 3, "name": "TV TYPE", "kind": "switch", "positions": ["COLOR", "B/W"], "value": 0})
+    );
+    // A switch moves once the machine runs a cycle; SWCHB D3 follows it.
+    c.ok(json!({"cmd": "set_control", "control": 3, "value": 1}));
+    c.ok(json!({"cmd": "step_cycle"}));
+    assert_eq!(c.ok(json!({"cmd": "controls"}))[3]["value"], 1);
+    let swchb = c.ok(json!({"cmd": "peek", "addr": 0x282, "len": 1}));
+    assert_eq!(
+        swchb["bytes"][0].as_u64().unwrap() & 0x08,
+        0,
+        "black and white"
+    );
+    // Through the generic input command too.
+    c.ok(json!({"cmd": "input", "events": [{"target": "panel", "event": {"type": "control", "id": 1, "value": 1}}]}));
+    c.ok(json!({"cmd": "step_cycle"}));
+    assert_eq!(
+        c.ok(json!({"cmd": "controls"}))[1]["value"],
+        1,
+        "RESET held"
+    );
+    for bad in [
+        json!({"cmd": "set_control", "control": 99, "value": 0}),
+        json!({"cmd": "set_control", "control": 3, "value": 2}),
+    ] {
+        assert_eq!(c.call(bad)["ok"], false);
+    }
+    server.shutdown();
+}

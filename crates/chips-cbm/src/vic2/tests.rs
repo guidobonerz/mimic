@@ -392,7 +392,7 @@ fn ntsc_frame_wraps_past_line_0() {
     sprite_setup(&mut v, &mut m, 3, 100, 100, 2);
     frame(&mut v, &m);
     frame(&mut v, &m);
-    assert_eq!(v.pixels().len(), 420 * 235);
+    assert_eq!(v.pixels().len(), 384 * 235);
     assert_eq!(px(&v, 24, 51), 1, "first cell, first pixel");
     assert_eq!(px(&v, 23, 51), 14, "left border");
     assert_eq!(px(&v, 343, 100), 6);

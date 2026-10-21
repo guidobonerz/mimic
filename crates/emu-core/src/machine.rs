@@ -3,6 +3,7 @@
 use crate::audio::AudioFormat;
 use crate::beam::BeamPos;
 use crate::bus::Size;
+use crate::controls::ControlInfo;
 use crate::cpu::{Instr, RegisterSet};
 use crate::cycle::Cycle;
 use crate::debug::{BpId, DebugHooks};
@@ -170,6 +171,13 @@ pub trait Machine: Send {
 
     /// Master cycles since power-on; the time base of [`TimedInput::at`].
     fn now(&self) -> Cycle;
+
+    /// The buttons and switches on the case with their current state, for
+    /// control panels; operated with [`crate::input::InputEvent::Control`]
+    /// on [`crate::input::InputTarget::Panel`]. Default: none.
+    fn controls(&self) -> Vec<ControlInfo> {
+        Vec::new()
+    }
 
     /// Physical connectors.
     fn ports(&self) -> Vec<PortInfo>;

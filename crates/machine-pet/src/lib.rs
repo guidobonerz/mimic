@@ -737,10 +737,22 @@ impl Pet {
     }
 
     fn apply_input(&mut self, ev: TimedInput) {
-        if let (InputTarget::Keyboard, emu_core::input::InputEvent::Key { machine_key, down }) =
-            (ev.target, ev.event)
-        {
-            self.io.keyboard.set(machine_key, down);
+        match (ev.target, ev.event) {
+            (InputTarget::Keyboard, emu_core::input::InputEvent::Key { machine_key, down }) => {
+                self.io.keyboard.set(machine_key, down);
+            }
+            (InputTarget::Panel, emu_core::input::InputEvent::Control { id, value }) => {
+                self.control(id.0, value);
+            }
+            _ => {}
+        }
+    }
+
+    /// A console control from the panel (power).
+    fn control(&mut self, id: u16, value: u8) {
+        match id {
+            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
+            _ => {}
         }
     }
 
@@ -957,6 +969,11 @@ impl Machine for Pet {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+        use emu_core::ControlInfo;
+        vec![ControlInfo::button(0, "POWER", false)]
     }
 
     fn ports(&self) -> Vec<PortInfo> {

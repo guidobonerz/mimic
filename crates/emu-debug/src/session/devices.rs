@@ -3,10 +3,10 @@
 
 use serde_json::{json, Value};
 
-use emu_core::input::TimedInput;
+use emu_core::input::{InputEvent, InputTarget, TimedInput};
 use emu_core::media::SlotId;
 use emu_core::port::PortId;
-use emu_core::Cycle;
+use emu_core::{ControlId, ControlKind, Cycle};
 
 use super::Session;
 use crate::host::{self, Replay};
@@ -181,6 +181,46 @@ impl Session {
             )),
             other => Err(format!("unknown drive mode '{other}'")),
         }
+    }
+
+    pub(super) fn controls(&self) -> Value {
+        let controls: Vec<Value> = self
+            .machine
+            .controls()
+            .iter()
+            .map(|c| {
+                let (kind, positions): (&str, &[&str]) = match c.kind {
+                    ControlKind::Button => ("button", &[]),
+                    ControlKind::Switch(p) => ("switch", p),
+                };
+                json!({
+                    "id": c.id.0, "name": c.name, "kind": kind,
+                    "positions": positions, "value": c.value,
+                })
+            })
+            .collect();
+        json!(controls)
+    }
+
+    pub(super) fn set_control(&mut self, id: u16, value: u8) -> Result<Value, String> {
+        let control = self
+            .machine
+            .controls()
+            .into_iter()
+            .find(|c| c.id.0 == id)
+            .ok_or_else(|| format!("no control {id}"))?;
+        if !control.accepts(value) {
+            return Err(format!("{} does not take the value {value}", control.name));
+        }
+        self.input(TimedInput {
+            at: self.machine.now(),
+            target: InputTarget::Panel,
+            event: InputEvent::Control {
+                id: ControlId(id),
+                value,
+            },
+        });
+        Ok(json!({"control": control.name, "value": value}))
     }
 
     /// `input`: events at `now + delay` (cycles), in order.

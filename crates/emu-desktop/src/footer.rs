@@ -167,11 +167,11 @@ fn held(hold: &mut (u32, u32), now: DriveStatus) -> DriveStatus {
 
 pub type Rgb = [u8; 3];
 
-const TEXT: Rgb = [0xC8, 0xC8, 0xC8];
-const DIM: Rgb = [0x70, 0x70, 0x70];
-const BUSY: Rgb = [0x50, 0xE0, 0x50];
+pub const TEXT: Rgb = [0xC8, 0xC8, 0xC8];
+pub const DIM: Rgb = [0x70, 0x70, 0x70];
+pub const BUSY: Rgb = [0x50, 0xE0, 0x50];
 const ERROR: Rgb = [0xFF, 0x50, 0x50];
-const BACKGROUND: Rgb = [0x18, 0x18, 0x18];
+pub const BACKGROUND: Rgb = [0x18, 0x18, 0x18];
 
 fn joy_text(j: &Joy) -> String {
     let mut parts = Vec::new();
@@ -231,46 +231,79 @@ pub fn segments(f: &Footer, mouse: Mouse) -> Vec<(String, Rgb)> {
 /// Draw `segments`, separated by " | ", into an RGBA strip `width` pixels
 /// wide and [`height`]`(size)` high; text beyond the width is cut off.
 pub fn render(segments: &[(String, Rgb)], width: u32, size: RasterHeight) -> Vec<u8> {
-    let width = width.max(1) as usize;
-    let rows = height(size) as usize;
-    let mut px = Vec::with_capacity(width * rows * 4);
-    for _ in 0..width * rows {
-        px.extend_from_slice(&[BACKGROUND[0], BACKGROUND[1], BACKGROUND[2], 255]);
-    }
-    let advance = get_raster_width(FontWeight::Regular, size);
+    let mut strip = Strip::new(width, size);
     let mut x = size.val() / 2;
-    let mut put = |text: &str, colour: Rgb, x: &mut usize| {
+    for (i, (text, colour)) in segments.iter().enumerate() {
+        if i > 0 {
+            x = strip.text(x, " | ", DIM);
+        }
+        x = strip.text(x, text, *colour);
+    }
+    strip.px
+}
+
+/// An RGBA strip one text line high at window resolution.
+pub struct Strip {
+    pub width: usize,
+    pub size: RasterHeight,
+    pub px: Vec<u8>,
+}
+
+impl Strip {
+    pub fn new(width: u32, size: RasterHeight) -> Self {
+        let width = width.max(1) as usize;
+        let rows = height(size) as usize;
+        let mut px = Vec::with_capacity(width * rows * 4);
+        for _ in 0..width * rows {
+            px.extend_from_slice(&[BACKGROUND[0], BACKGROUND[1], BACKGROUND[2], 255]);
+        }
+        Self { width, size, px }
+    }
+
+    /// Width of `text` in pixels.
+    pub fn text_width(&self, text: &str) -> usize {
+        text.chars().count() * get_raster_width(FontWeight::Regular, self.size)
+    }
+
+    /// Fill columns `x0..x1` of the strip, `inset` rows from top and bottom.
+    pub fn fill(&mut self, x0: usize, x1: usize, inset: usize, colour: Rgb) {
+        let rows = self.px.len() / 4 / self.width;
+        for y in inset..rows.saturating_sub(inset) {
+            for x in x0..x1.min(self.width) {
+                let i = (y * self.width + x) * 4;
+                self.px[i..i + 3].copy_from_slice(&colour);
+            }
+        }
+    }
+
+    /// Draw `text` from `x` on; returns the x after it. Text beyond the
+    /// width is cut off.
+    pub fn text(&mut self, mut x: usize, text: &str, colour: Rgb) -> usize {
+        let advance = get_raster_width(FontWeight::Regular, self.size);
         for ch in text.chars() {
-            let Some(glyph) = get_raster(ch, FontWeight::Regular, size)
-                .or_else(|| get_raster('?', FontWeight::Regular, size))
+            let Some(glyph) = get_raster(ch, FontWeight::Regular, self.size)
+                .or_else(|| get_raster('?', FontWeight::Regular, self.size))
             else {
                 continue;
             };
             for (row, line) in glyph.raster().iter().enumerate() {
                 for (col, &a) in line.iter().enumerate() {
-                    let gx = *x + col;
-                    if a == 0 || gx >= width {
+                    let gx = x + col;
+                    if a == 0 || gx >= self.width {
                         continue;
                     }
-                    // Glyph intensity blends the colour over the background.
-                    let i = ((row + PAD) * width + gx) * 4;
-                    for c in 0..3 {
-                        let (fg, bg) = (u16::from(colour[c]), u16::from(px[i + c]));
-                        let a = u16::from(a);
-                        px[i + c] = ((fg * a + bg * (255 - a)) / 255) as u8;
+                    // Glyph intensity blends the colour over what is there.
+                    let i = ((row + PAD) * self.width + gx) * 4;
+                    for (dst, &fg) in self.px[i..i + 3].iter_mut().zip(&colour) {
+                        let (fg, bg, a) = (u16::from(fg), u16::from(*dst), u16::from(a));
+                        *dst = ((fg * a + bg * (255 - a)) / 255) as u8;
                     }
                 }
             }
-            *x += advance;
+            x += advance;
         }
-    };
-    for (i, (text, colour)) in segments.iter().enumerate() {
-        if i > 0 {
-            put(" | ", DIM, &mut x);
-        }
-        put(text, *colour, &mut x);
+        x
     }
-    px
 }
 
 #[cfg(test)]

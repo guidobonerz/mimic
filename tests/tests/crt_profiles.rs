@@ -51,8 +51,8 @@ impl Pattern {
 /// hires stripes (1 and 2 pixels) in white on black.
 fn c64_card(standard: VideoStandard) -> Pattern {
     let (w, h, clock, cycles) = match standard {
-        VideoStandard::Pal => (404, 284, 7_881_984, 63),
-        VideoStandard::Ntsc => (420, 235, 8_181_816, 65),
+        VideoStandard::Pal => (384, 272, 7_881_984, 63),
+        VideoStandard::Ntsc => (384, 235, 8_181_816, 65),
     };
     let mut pixels = vec![0u8; (w * h) as usize];
     for y in 0..h {

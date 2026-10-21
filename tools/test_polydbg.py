@@ -79,6 +79,30 @@ class Parsing(unittest.TestCase):
         self.assertEqual(line, "watchpoint 1 (write $d020): pc=?")
 
 
+class Panel(unittest.TestCase):
+    CONTROLS = [
+        {"id": 1, "name": "RESET", "kind": "button", "positions": [], "value": 0},
+        {"id": 3, "name": "TV TYPE", "kind": "switch", "positions": ["COLOR", "B/W"], "value": 1},
+    ]
+
+    def test_listing(self):
+        lines = polydbg.format_controls(self.CONTROLS)
+        self.assertIn("RESET", lines[0])
+        self.assertTrue(lines[0].endswith("released"))
+        self.assertTrue(lines[1].endswith("B/W (COLOR|B/W)"))
+
+    def test_values(self):
+        reset, tv = self.CONTROLS
+        self.assertEqual(polydbg.control_value(reset, "press"), 1)
+        self.assertIsNone(polydbg.control_value(reset, "tap"))
+        self.assertEqual(polydbg.control_value(tv, "b/w"), 1)
+        self.assertEqual(polydbg.control_value(tv, "0"), 0)
+        with self.assertRaises(ValueError):
+            polydbg.control_value(tv, "press")
+        with self.assertRaises(ValueError):
+            polydbg.control_value(reset, "on")
+
+
 class FakeServer:
     """Speaks just enough of the protocol: hello, then scripted replies."""
 

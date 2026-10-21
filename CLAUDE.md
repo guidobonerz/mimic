@@ -92,6 +92,7 @@ pub trait Machine: Send {
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget>; // regs, set_reg, peek/poke per MemSpace, disassemble
     fn input(&mut self, ev: TimedInput);                // queued, applied exactly at ev.at (part of savestate)
     fn now(&self) -> Cycle;                             // master cycles since power-on, time base of TimedInput
+    fn controls(&self) -> Vec<ControlInfo> { vec![] }    // console buttons/switches (power, reset, 2600 switches …) for panels
     fn ports(&self) -> Vec<PortInfo>;                   // physical connectors (see "External devices and ports")
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError>;
     fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>>;
@@ -166,6 +167,7 @@ pub enum InputEvent {
     MouseRel { dx: i16, dy: i16, buttons: u8 },
     LightPen { x: u16, y: u16, trigger: bool },
     Key { machine_key: MachineKey, down: bool }, // keyboard matrix position, not host keycode
+    Control { id: ControlId, value: u8 },        // console panel (InputTarget::Panel): button 0/1, switch position
 }
 ```
 
@@ -202,7 +204,7 @@ pub trait MediaBackend: Send {                       // where bytes live
 
 Every machine delivers, per field:
 
-- the **full visible area including overscan/border** (not cropped), as indexed pixels + palette (8-bit machines) or RGB (Amiga);
+- the **visible area including overscan/border** as a monitor shows it, centred with equal borders left and right (VIC-II: VICE's normal border, 32 pixels each side; PAL 384×272), as indexed pixels + palette (8-bit machines) or RGB (Amiga);
 - **signal metadata**: pixel clock, active/total pixels per line, lines per field, field parity (interlace), video standard (PAL/NTSC), output type (composite, S-video/luma-chroma, RGB, monochrome);
 - optionally **per-line luma/chroma values** instead of palette indices, so the composite path can reproduce colors palettes cannot express.
 
@@ -304,6 +306,7 @@ The debug server exposes devices too, so tools, tests and the web preview can dr
 - `list_ports`, `connect_device`, `disconnect_device`
 - `list_media_slots`, `insert_media`, `eject_media`, `set_drive_mode`, `flush_media`
 - `input` (inject `InputEvent`s, timestamped), `record_input`, `replay_input`
+- `controls`, `set_control` (console panel: the machine's buttons and switches; protocol v8)
 
 The web frontend uses these over WebSocket to forward browser keyboard/gamepad/mouse input, making the live preview interactive.
 
@@ -340,6 +343,7 @@ The web frontend uses these over WebSocket to forward browser keyboard/gamepad/m
 
 - `GET /snapshot.png?machine=<id>[&screen=vic|vdc]` — single frame on demand.
 - WebSocket `/preview` — configurable fps (1–50), scale, format (QOI/PNG, delta frames).
+- `GET /controls` — the console's buttons and switches as JSON; the viewer shows them as a panel and sends `{"type": "control", "id", "value"}` back.
 - WebSocket `/stream` — raw stream for local viewers (idea from the Ultimate 64 video stream): palette indices at 4/8 bpp or RGB, only changed lines, no image encoding; optional audio (`audio=1`, 16-bit PCM). Layout in `emu-preview/src/raw.rs`; the bundled viewer uses it for `filter=raw`.
 - On `breakpoint_hit`, attach the current (partial) frame; partial frames mark current raster line/cycle.
 - Encoding runs on its own thread from a frame copy; the emulator never waits on the encoder — drop frames under backpressure.
@@ -454,6 +458,9 @@ Added 2026-10-21; not part of a phase gate yet, scheduled when a phase has room:
 - **Amstrad CPC Plus** (464+/6128+/GX4000): ASIC (hardware sprites, DMA sound, split screen, 4096-colour palette, soft scroll), CRTC types 3/4, CPR cartridges; as models of `machine-cpc` after Phase 6.
 - **Mattel Intellivision**: new CPU core `cpu-cp1610` (GI CP1610, 16-bit), STIC video (MOBs, GRAM/GROM), PSG AY-3-8914; Executive ROM and GROM user-supplied.
 - **Sinclair ZX81**: reuses `cpu-z80`; the CPU itself generates the display (NMI/HALT-driven, ULA counts lines), 1 KB/16 KB RAM, tape via ear/mic; ROM user-supplied.
+- **Nintendo NES (Famicom)**: new CPU variant 2A03 (6502 without decimal mode, APU on chip), PPU 2C02/2C07 with its own VRAM and OAM, cartridge mappers (NROM, MMC1, UxROM, CNROM, MMC3 …), controllers; console panel: POWER, RESET.
+- **ColecoVision**: reuses `cpu-z80`; TMS9918A video (16 KB VRAM, sprites), SN76489 sound, keypad controllers with joystick; BIOS user-supplied; console panel: POWER, RESET.
+- **Vectrex**: 6809 CPU (new `cpu-6809`), VIA 6522 (reuse from `chips-cbm`), AY-3-8912 (reuse from `chips-amstrad`), and a vector display: needs a vector frame type next to `FrameRef` (beam lines with intensity, phosphor decay in `video-crt`) — the debugger/preview contract then carries vectors or a rasterized picture; overlays; console panel: POWER, RESET.
 - **Tandy TRS-80 Model I/III**: reuses `cpu-z80`; memory-mapped text screen with block graphics, keyboard matrix in the address space, cassette, Expansion Interface / FDC 1771/1793 floppies (DMK/JV1/JV3 images); ROMs user-supplied.
 
 ### Deferred from Phase 4

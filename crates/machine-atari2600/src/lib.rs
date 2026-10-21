@@ -29,6 +29,10 @@
 //!   on pin 5), "keypad", "driving" or "none".
 //! - `tv`: "color" (default) or "bw"; `left`, `right`: difficulty switch
 //!   "b" (default) or "a".
+//! - `bank`: the cartridge's bank-switching scheme instead of the
+//!   detected one: 2k, 4k, f8, f6, f4 (each also with "sc" for the
+//!   Superchip, e.g. f8sc), fa, fe, e0, e7, 3f (see
+//!   [`devices_cartridge::atari2600`]).
 //! - `roms`: "stub" inserts a built-in test cartridge ([`stub`]).
 //!
 //! Controllers (pins of the 9-pin port → chips; left port / right port):
@@ -40,8 +44,9 @@
 //! (low while pressed), D3 colour (1) / black-and-white (0), D6 left and
 //! D7 right difficulty (1 = A).
 //!
-//! Media slot: "cartridge" (raw `.a26`/`.bin` dumps; inserting or removing
-//! one powers the console up again). Without a cartridge the CPU has no
+//! Media slot: "cartridge" (raw `.a26`/`.bin` dumps, 2 KB–512 KB, bank
+//! switching detected; inserting or removing one powers the console up
+//! again). Without a cartridge the CPU has no
 //! program and stays idle; the TIA free-runs a black picture.
 //!
 //! Sources: Steve Wright, "Stella Programmer's Guide" (1979); Kevin
@@ -56,7 +61,7 @@ pub mod stub;
 use chips_atari::riot::Riot;
 use chips_atari::tia::{self, Tia};
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use devices_cartridge::atari2600::Cart2600;
+use devices_cartridge::atari2600::{Cart2600, Scheme};
 use devices_cartridge::CartSlot;
 use devices_input::joystick::pin;
 use emu_core::audio::Decimator;
@@ -164,6 +169,9 @@ impl Board {
         } else {
             self.riot.read(a)
         };
+        if let Some(c) = &mut self.cart {
+            c.snoop(a, v);
+        }
         self.data_bus = v;
         v
     }
@@ -181,6 +189,9 @@ impl Board {
                 // A9 = 1, A2 = 0, A1 = 0: SWCHA or SWACNT.
                 self.porta_written |= a & 0x206 == 0x200;
             }
+        }
+        if let Some(c) = &mut self.cart {
+            c.snoop(a, v);
         }
         self.data_bus = v;
     }
@@ -268,6 +279,8 @@ pub struct Atari2600 {
     stub: Option<Cart2600>,
     /// Console switch levels (SWCHB inputs).
     switches: u8,
+    /// `bank` option: the scheme for inserted cartridges.
+    scheme: Option<(Scheme, bool)>,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -290,6 +303,14 @@ impl Atari2600 {
             None => false,
             Some("stub") => true,
             Some(other) => return Err(ConfigError::Invalid(format!("roms option '{other}'"))),
+        };
+        let scheme = match config.options.get("bank") {
+            None => None,
+            Some(name) => Some(Scheme::from_name(name).ok_or_else(|| {
+                ConfigError::Invalid(format!(
+                    "bank option '{name}' (2k, 4k, f8, f6, f4, f8sc, f6sc, f4sc, fa, fe, e0, e7, 3f)"
+                ))
+            })?),
         };
         let hz = cpu_hz(standard);
         let ports = [
@@ -328,6 +349,7 @@ impl Atari2600 {
             cart: devices_cartridge::atari2600::slot(),
             stub: None,
             switches,
+            scheme,
         };
         if stub {
             m.stub = Some(
@@ -340,9 +362,18 @@ impl Atari2600 {
         Ok(m)
     }
 
-    /// The cartridge at power-up: the inserted one, else the stub.
+    /// The cartridge at power-up: the inserted one (with the scheme of
+    /// the `bank` option, if it fits), else the stub.
     fn power_on_cart(&self) -> Option<Cart2600> {
-        self.cart.cart().or(self.stub.as_ref()).cloned()
+        let inserted = self.cart.cart().map(|c| {
+            let mut c = match self.scheme {
+                Some((s, sc)) => c.with_scheme(s, sc).unwrap_or_else(|_| c.clone()),
+                None => c.clone(),
+            };
+            c.power_on();
+            c
+        });
+        inserted.or_else(|| self.stub.clone())
     }
 
     fn beam_pos(&self) -> BeamPos {
@@ -438,8 +469,35 @@ impl Atari2600 {
                     self.key(machine_key, down);
                 }
             }
+            InputTarget::Panel => {
+                if let InputEvent::Control { id, value } = ev.event {
+                    self.control(id.0, value);
+                }
+            }
         }
         self.refresh_ports();
+    }
+
+    /// A console control from the panel: power, the RESET and SELECT
+    /// switches (held while `value` is 1), the TV type and difficulty
+    /// switches (set to position `value`).
+    fn control(&mut self, id: u16, value: u8) {
+        let set = |s: &mut u8, bit: u8, on: bool| {
+            if on {
+                *s |= bit;
+            } else {
+                *s &= !bit;
+            }
+        };
+        match id {
+            0 if value == 1 => emu_core::Machine::reset(self, ResetKind::Hard),
+            1 => set(&mut self.switches, 0x01, value == 0),
+            2 => set(&mut self.switches, 0x02, value == 0),
+            3 => set(&mut self.switches, SWCHB_COLOUR, value == 0),
+            4 => set(&mut self.switches, SWCHB_LEFT_A, value == 1),
+            5 => set(&mut self.switches, SWCHB_RIGHT_A, value == 1),
+            _ => {}
+        }
     }
 
     /// A console switch, or a key of a keypad in a port.
@@ -672,6 +730,33 @@ impl Machine for Atari2600 {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+        use emu_core::ControlInfo;
+        vec![
+            ControlInfo::button(0, "POWER", false),
+            ControlInfo::button(1, "RESET", self.switches & 0x01 == 0),
+            ControlInfo::button(2, "SELECT", self.switches & 0x02 == 0),
+            ControlInfo::switch(
+                3,
+                "TV TYPE",
+                &["COLOR", "B/W"],
+                u8::from(self.switches & SWCHB_COLOUR == 0),
+            ),
+            ControlInfo::switch(
+                4,
+                "LEFT DIFFICULTY",
+                &["B", "A"],
+                u8::from(self.switches & SWCHB_LEFT_A != 0),
+            ),
+            ControlInfo::switch(
+                5,
+                "RIGHT DIFFICULTY",
+                &["B", "A"],
+                u8::from(self.switches & SWCHB_RIGHT_A != 0),
+            ),
+        ]
     }
 
     fn ports(&self) -> Vec<PortInfo> {

@@ -8,6 +8,7 @@
 pub mod audio;
 pub mod beam;
 pub mod bus;
+pub mod controls;
 pub mod cpu;
 pub mod cycle;
 pub mod debug;
@@ -26,6 +27,7 @@ pub mod testing;
 pub use audio::{AudioFormat, Decimator, SAMPLE_RATE};
 pub use beam::{BeamPos, TraceConfig, TraceEntry, TraceEvent, TraceRange};
 pub use bus::{Bus, Size};
+pub use controls::{ControlId, ControlInfo, ControlKind};
 pub use cpu::{Cpu, CycleResult, Flow, Instr, Register, RegisterSet};
 pub use cycle::Cycle;
 pub use debug::{BpId, Breakpoint, BreakpointKind, DebugHooks, FreezeId, InterruptKind};

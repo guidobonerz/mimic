@@ -14,6 +14,7 @@ mod emu;
 mod footer;
 mod gfx;
 mod host;
+mod panel;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -92,6 +93,7 @@ usage: mimic-desktop [options]
   --vice [ADDR]         serve the VICE binary monitor protocol for VS64 & co.
                         (default 127.0.0.1:6502); implies --debug
   --footer              start with the status footer shown (Ctrl+Space)
+  --no-panel            start with the console panel hidden (Ctrl+P)
   --help
 
 C64 keys by position on a PC keyboard: Esc = RUN/STOP, Tab = CTRL,
@@ -110,6 +112,9 @@ left 1 2 3 / Q W E / A S D / Z X C, right 8 9 0 / I O P / K L ; / , . /.
 F12 switches between a machine's screens (C128: 40-column VIC and
 80-column VDC; the window starts on the one the 40/80 key selects).
 Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
+Ctrl+P shows or hides the console panel: the machine's buttons and
+switches (power, reset, Atari console switches, RESTORE …); click a button
+(held while the mouse button is down) or a switch position.
 Ctrl+Space shows or hides the status footer: mouse pointer position in
 frame pixels, joystick directions and drive activity/errors.
 With --option port1=mouse1351 (or paddles, driving, also port2) a click into the
@@ -131,6 +136,7 @@ struct Args {
     vice: Option<SocketAddr>,
     preview: Option<SocketAddr>,
     footer: bool,
+    panel: bool,
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
@@ -152,6 +158,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         vice: None,
         preview: None,
         footer: false,
+        panel: true,
     };
     let mut it = std::env::args().skip(1).peekable();
     while let Some(flag) = it.next() {
@@ -164,6 +171,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--tape" => a.tape = Some(value("--tape")?),
             "--cart" => a.cart = Some(value("--cart")?),
             "--footer" => a.footer = true,
+            "--no-panel" => a.panel = false,
             "--autostart" => {
                 a.config.options.insert("autostart".into(), "on".into());
             }
@@ -331,6 +339,15 @@ struct App {
     /// The Space of a Ctrl+Space is down; its release is not sent either.
     swallow_space: bool,
     footer_on: bool,
+    /// The P of a Ctrl+P is down; its release is not sent either.
+    swallow_p: bool,
+    panel_on: bool,
+    /// The panel's clickable areas, its top (window pixels) and height.
+    panel_hits: Vec<panel::Hit>,
+    panel_top: f64,
+    panel_height: f64,
+    /// The panel button held with the mouse.
+    panel_held: Option<u16>,
     /// Host pointer in window pixels, while over the window.
     cursor: Option<(f64, f64)>,
     /// Captured mouse movement summed since the capture (footer).
@@ -338,6 +355,21 @@ struct App {
 }
 
 impl App {
+    /// The panel control under the pointer, if the panel is shown.
+    fn over_panel(&self) -> Option<panel::Hit> {
+        let (x, y) = self.cursor?;
+        let inside = y >= self.panel_top && y < self.panel_top + self.panel_height;
+        (self.panel_on && inside)
+            .then(|| panel::hit(&self.panel_hits, x as usize))
+            .flatten()
+    }
+
+    fn panel_send(&self, id: u16, value: u8) {
+        if let Ok(mut e) = self.shared.panel_events.lock() {
+            e.push((id, value));
+        }
+    }
+
     fn capture_mouse(&mut self, on: bool) {
         let Some(w) = &self.window else { return };
         if on {
@@ -521,6 +553,26 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // The console panel: a button is held while the mouse button
+            // is down, a switch position is set by a click.
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } if !self.mouse_captured
+                && (self.panel_held.is_some() || self.over_panel().is_some()) =>
+            {
+                if state == ElementState::Pressed {
+                    if let Some(h) = self.over_panel() {
+                        if h.position.is_none() {
+                            self.panel_held = Some(h.id);
+                        }
+                        self.panel_send(h.id, h.position.unwrap_or(1));
+                    }
+                } else if let Some(id) = self.panel_held.take() {
+                    self.panel_send(id, 0);
+                }
+            }
             WindowEvent::MouseInput { state, button, .. } if self.wants_mouse => {
                 let down = state == ElementState::Pressed;
                 match (self.mouse_captured, button) {
@@ -571,6 +623,21 @@ impl ApplicationHandler for App {
                         self.swallow_space = true;
                     } else {
                         self.swallow_space = false;
+                    }
+                    return;
+                }
+                // Ctrl+P shows or hides the console panel.
+                if event.physical_key == PhysicalKey::Code(KeyCode::KeyP)
+                    && (self.ctrl || self.swallow_p)
+                {
+                    if event.state == ElementState::Pressed {
+                        if !event.repeat {
+                            self.panel_on = !self.panel_on;
+                            self.shared.panel_on.store(self.panel_on, Ordering::Relaxed);
+                        }
+                        self.swallow_p = true;
+                    } else {
+                        self.swallow_p = false;
                     }
                     return;
                 }
@@ -627,6 +694,25 @@ impl ApplicationHandler for App {
                         g.upload(&f, self.scale);
                         self.shared.presented.fetch_add(1, Ordering::Relaxed);
                     }
+                    let size =
+                        footer::font_size(self.window.as_ref().map_or(1.0, |w| w.scale_factor()));
+                    let width = g.footer_width();
+                    let row = footer::height(size);
+                    // The strip under the picture: the panel, then the footer.
+                    let mut strip = Vec::new();
+                    let mut rows = 0;
+                    if self.panel_on {
+                        let controls = self
+                            .shared
+                            .controls
+                            .lock()
+                            .map(|c| c.clone())
+                            .unwrap_or_default();
+                        let (rgba, hits) = panel::render(&controls, width, size);
+                        strip.extend_from_slice(&rgba);
+                        self.panel_hits = hits;
+                        rows += row;
+                    }
                     if self.footer_on {
                         let mouse = if self.mouse_captured {
                             footer::Mouse::Captured(self.mouse_sum.0, self.mouse_sum.1)
@@ -641,15 +727,18 @@ impl ApplicationHandler for App {
                             .lock()
                             .map(|f| f.clone())
                             .unwrap_or_default();
-                        let width = g.footer_width();
-                        let size = footer::font_size(
-                            self.window.as_ref().map_or(1.0, |w| w.scale_factor()),
-                        );
                         let rgba = footer::render(&footer::segments(&info, mouse), width, size);
-                        g.set_footer(Some((&rgba, width, footer::height(size))));
-                    } else {
-                        g.set_footer(None);
+                        strip.extend_from_slice(&rgba);
+                        rows += row;
                     }
+                    if rows == 0 {
+                        g.set_footer(None);
+                    } else {
+                        g.set_footer(Some((&strip, width, rows)));
+                    }
+                    let window_height = self.window.as_ref().map_or(0, |w| w.inner_size().height);
+                    self.panel_top = f64::from(window_height.saturating_sub(rows));
+                    self.panel_height = if self.panel_on { f64::from(row) } else { 0.0 };
                     g.render();
                 }
                 if let (Some(w), Ok(status)) = (&self.window, self.shared.status.lock()) {
@@ -703,6 +792,7 @@ fn run() -> Result<(), String> {
 
     let shared = Arc::new(Shared::new());
     shared.footer_on.store(args.footer, Ordering::Relaxed);
+    shared.panel_on.store(args.panel, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel();
     let _stream = audio::start(shared.clone());
     if _stream.is_none() {
@@ -734,8 +824,13 @@ fn run() -> Result<(), String> {
             let tap = FrameTap::new();
             // Viewer input joins the window's own keys and gamepads.
             let input = tx.clone();
+            let panel = shared.clone();
             let sink: InputSink = Arc::new(move |ev| {
-                if let Some(ev) = host::host_event(ev) {
+                if let emu_preview::server::RemoteInput::Control { id, value } = ev {
+                    if let Ok(mut e) = panel.panel_events.lock() {
+                        e.push((id, value));
+                    }
+                } else if let Some(ev) = host::host_event(ev) {
                     let _ = input.send(ev);
                 }
             });
@@ -783,6 +878,12 @@ fn run() -> Result<(), String> {
         ctrl: false,
         swallow_space: false,
         footer_on: args.footer,
+        swallow_p: false,
+        panel_on: args.panel,
+        panel_hits: Vec::new(),
+        panel_top: 0.0,
+        panel_height: 0.0,
+        panel_held: None,
         cursor: None,
         mouse_sum: (0, 0),
     };

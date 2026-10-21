@@ -124,7 +124,10 @@ impl Timing {
             total_pixels: u32::from(LINE_PIXELS),
             lines_per_field: u32::from(self.lines),
             standard: self.standard,
-            output: OutputType::Composite,
+            // The A/V socket of the C16, C116 and Plus/4 carries luminance
+            // and chroma separately besides composite (like the C64's 8-pin
+            // socket), so a 1702/1084S takes the separated signal.
+            output: OutputType::SVideo,
             field: FieldParity::Progressive,
         }
     }

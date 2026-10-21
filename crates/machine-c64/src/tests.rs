@@ -545,7 +545,7 @@ fn ntsc_model_frame_timing_and_signal() {
     assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
     assert_eq!(m.now().0 - start, 263 * 65);
     let f = m.framebuffer();
-    assert_eq!((f.width, f.height), (420, 235));
+    assert_eq!((f.width, f.height), (384, 235));
     assert_eq!(f.signal.standard, emu_core::frame::VideoStandard::Ntsc);
     assert_eq!(f.signal.pixel_clock_hz, 8 * 1_022_727);
 
