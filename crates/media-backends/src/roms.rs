@@ -241,7 +241,79 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("amsdos", &["amsdos"], 0x4000),
         optional("parados", &["parados"], 0x4000),
     ];
+    // Amiga Kickstart: 1.2 (33.180), 1.3 (34.5), 2.04 (37.175), 3.1 (40.63),
+    // as 256 KB images or 512 KB files that hold one twice. Common names:
+    // kick13.rom, "Kickstart 1.3.rom", kick34005.a500.
+    const AMIGA: &[RomSpec] = &[
+        optional(
+            "kick12",
+            &[
+                "kick12",
+                "kick-1-2",
+                "kickstart 1-2",
+                "kickstart-1-2",
+                "kick33180",
+            ],
+            0x8_0000,
+        ),
+        optional(
+            "kick12",
+            &[
+                "kick12",
+                "kick-1-2",
+                "kickstart 1-2",
+                "kickstart-1-2",
+                "kick33180",
+            ],
+            0x4_0000,
+        ),
+        optional(
+            "kick13",
+            &[
+                "kick13",
+                "kick-1-3",
+                "kickstart 1-3",
+                "kickstart-1-3",
+                "kick34005",
+            ],
+            0x8_0000,
+        ),
+        optional(
+            "kick13",
+            &[
+                "kick13",
+                "kick-1-3",
+                "kickstart 1-3",
+                "kickstart-1-3",
+                "kick34005",
+            ],
+            0x4_0000,
+        ),
+        optional(
+            "kick20",
+            &[
+                "kick20",
+                "kick-2-0",
+                "kickstart 2-0",
+                "kickstart-2-0",
+                "kick37175",
+            ],
+            0x8_0000,
+        ),
+        optional(
+            "kick31",
+            &[
+                "kick31",
+                "kick-3-1",
+                "kickstart 3-1",
+                "kickstart-3-1",
+                "kick40063",
+            ],
+            0x8_0000,
+        ),
+    ];
     match machine {
+        "amiga" => AMIGA,
         "atari800xl" => ATARI800XL,
         "cpc" => CPC,
         "c64" => C64,
@@ -265,6 +337,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "c16" => &["c16", "plus4"],
         "atari800xl" => &["atari800xl", "atari8", "atari"],
         "cpc" => &["cpc", "amstrad"],
+        "amiga" => &["amiga"],
         _ => &[],
     }
 }
@@ -312,6 +385,10 @@ pub fn load(dir: &Path, machine: &str) -> io::Result<BTreeMap<String, Vec<u8>>> 
 
     let mut roms = BTreeMap::new();
     for spec in specs(machine) {
+        // A role may be listed once per accepted size; the first found wins.
+        if roms.contains_key(spec.role) {
+            continue;
+        }
         let found = search.iter().find_map(|entries| {
             spec.prefixes.iter().find_map(|p| {
                 entries

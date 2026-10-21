@@ -320,3 +320,49 @@ fn savestate_round_trip_mid_count() {
         .is_err());
     assert_eq!(b, before);
 }
+
+#[test]
+fn mos8520_tod_is_a_24_bit_event_counter() {
+    let mut c = Cia::new(CiaModel::Mos8520);
+    c.write(0x0a, 0x00); // high byte: stops counting
+    c.write(0x09, 0xff);
+    c.tod_tick();
+    assert_eq!(c.peek(0x09, NONE, NONE), 0xff, "stopped until the low byte");
+    c.write(0x08, 0xff); // low byte: runs again
+    c.tod_tick();
+    assert_eq!(
+        [0x08, 0x09, 0x0a].map(|r| c.peek(r, NONE, NONE)),
+        [0x00, 0x00, 0x01]
+    );
+    // Reading the high byte latches until the low byte is read.
+    assert_eq!(c.read(0x0a, NONE, NONE), 0x01);
+    for _ in 0..3 {
+        c.tod_tick();
+    }
+    assert_eq!(c.read(0x09, NONE, NONE), 0x00);
+    assert_eq!(c.read(0x08, NONE, NONE), 0x00, "still latched");
+    assert_eq!(c.read(0x08, NONE, NONE), 0x03, "latch released");
+    assert_eq!(c.peek(0x0b, NONE, NONE), 0, "register B unused");
+}
+
+#[test]
+fn mos8520_alarm_and_oneshot_start() {
+    let mut c = Cia::new(CiaModel::Mos8520);
+    c.write(0x0d, 0x80 | icr::ALARM | icr::TA);
+    c.write(0x0f, 0x80); // alarm writes
+    c.write(0x08, 0x02);
+    c.write(0x0f, 0x00);
+    c.tod_tick();
+    assert!(!c.irq());
+    c.tod_tick();
+    assert!(c.irq(), "alarm at 2");
+    c.read(0x0d, NONE, NONE);
+    // One-shot: writing the high byte starts the timer.
+    c.write(0x0e, CR_ONESHOT);
+    c.write(0x04, 3);
+    c.write(0x05, 0);
+    assert_ne!(c.ta.cr & CR_START, 0);
+    idle(&mut c, 8);
+    assert!(c.irq(), "timer A underflow");
+    assert_eq!(c.ta.cr & CR_START, 0, "one-shot stops");
+}

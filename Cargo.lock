@@ -839,6 +839,7 @@ dependencies = [
  "emu-debug",
  "emu-machines",
  "emu-preview",
+ "machine-amiga",
  "machine-atari8",
  "machine-c128",
  "machine-c64",
@@ -1457,6 +1458,7 @@ name = "machine-amiga"
 version = "0.1.0"
 dependencies = [
  "chips-amiga",
+ "chips-cbm",
  "cpu-m68k",
  "devices-input",
  "drives-other",

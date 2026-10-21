@@ -189,6 +189,7 @@ impl Profile {
             "pet" => "pet-green",
             "atari800xl" | "atari2600" => "tv",
             "cpc" => "ctm644",
+            "amiga" => "1084s-rgb",
             _ => "raw",
         };
         Self::preset(name).unwrap_or_default()

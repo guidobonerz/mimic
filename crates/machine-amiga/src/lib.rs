@@ -1,3 +1,1184 @@
-//! Commodore Amiga (OCS, later AGA).
+//! Commodore Amiga 500 (OCS).
+//!
+//! 68000 at 7.09379 MHz (PAL; NTSC 7.15909 MHz), the OCS custom chips
+//! (`chips-amiga`: Agnus with Copper and Blitter, Denise, Paula), two 8520
+//! CIAs (`chips-cbm`, [`CiaModel::Mos8520`]), 512 KB chip RAM, 512 KB slow
+//! RAM, the Kickstart ROM (see [`memory`] for the map) and up to four
+//! floppy drives (mechanics only until milestone M3: no disks yet).
+//!
+//! Models: "pal" (default), "ntsc". Options:
+//! - `kickstart`: "1.3" (default), "1.2", "2.0", "3.1" — which ROM role to
+//!   use (`kick13` …, 256 or 512 KB images).
+//! - `slow`: slow RAM, "512k" (default) or "0".
+//! - `drives`: floppy drives fitted, "1" (default) to "4".
+//! - `port0` / `port1`: game port devices, "joystick" or "none" (defaults:
+//!   none in port 0 — the mouse comes in M4 — and a joystick in port 1).
+//! - `roms`: "stub" runs a tiny built-in program instead of Kickstart
+//!   ([`stub`]; tests without ROMs).
+//!
+//! **CIAs.** CIA-A ($BFE001, odd bytes): port A 0 OVL (out), 1 LED (out),
+//! 2 /CHNG, 3 /WPRO, 4 /TK0, 5 /RDY, 6 /FIR0, 7 /FIR1; port B the parallel
+//! port; TOD counts VSYNC; /INT → INTREQ PORTS (level 2). CIA-B ($BFD000,
+//! even bytes): port B the floppy control lines (see
+//! `drives_other::amiga_drive`); TOD counts HSYNC; /INT → EXTER (level 6).
+//! Both run on the E clock (CPU clock / 10); CPU accesses wait for it.
+//!
+//! **Timing.** The CPU runs whole instructions with
+//! [`M68000::step_timed`]; before each bus cycle the bus brings the custom
+//! chips and the CIAs up to that clock. Chip RAM, slow RAM and custom
+//! registers take one free DMA slot (colour clock = two CPU clocks): the
+//! CPU waits while DMA owns the bus. ROM accesses never wait.
+//! [`Machine::step_cycle`] runs one instruction. The time base
+//! ([`Machine::now`]) is CPU clocks.
+//!
+//! Sources: Amiga Hardware Reference Manual, 3rd edition (memory map,
+//! appendix F "8520 CIA", chapter 7 "System control hardware"); M68000
+//! User's Manual (VPA/E-clock cycles). The implementation is this
+//! project's own.
 
 #![forbid(unsafe_code)]
+
+pub mod memory;
+pub mod stub;
+
+use chips_amiga::custom::{self, Custom, Standard, FIRST_CCK, WIDTH};
+use chips_cbm::cia::{Cia, CiaModel};
+use cpu_m68k::{Access, Step, TimedBus68, M68000};
+use drives_other::amiga_drive::AmigaDrive;
+use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use emu_core::machine::ChipReg;
+use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
+use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use emu_core::{
+    BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
+    MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
+    StateReader, StateWriter, StopReason,
+};
+use memory::{Memory, Region};
+
+pub const CPU: DeviceId = DeviceId("cpu");
+/// The 68000's 24-bit view.
+pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
+/// Chip RAM as the DMA channels see it.
+pub const CHIP_SPACE: MemSpaceId = MemSpaceId(1);
+
+/// Game port 0 (mouse) and 1 (joystick).
+pub const PORT0: PortId = PortId(0);
+pub const PORT1: PortId = PortId(1);
+
+pub const CPU_HZ_PAL: u32 = 7_093_790;
+pub const CPU_HZ_NTSC: u32 = 7_159_090;
+
+const CHIP_RAM: usize = 0x8_0000;
+/// The OCS Agnus (8367/8361) addresses 512 KB.
+const PTR_MASK: u32 = 0x7_fffe;
+
+pub fn entry() -> MachineEntry {
+    MachineEntry {
+        id: "amiga",
+        name: "Commodore Amiga 500",
+        models: &["pal", "ntsc"],
+        create: |config| Ok(Box::new(Amiga::new(config)?)),
+    }
+}
+
+fn option<'a>(config: &'a MachineConfig, key: &str, default: &'a str) -> &'a str {
+    config
+        .options
+        .get(key)
+        .map(String::as_str)
+        .unwrap_or(default)
+}
+
+fn load_rom(config: &MachineConfig) -> Result<Vec<u8>, ConfigError> {
+    if let Some(v) = config.options.get("roms") {
+        return match v.as_str() {
+            "stub" => Ok(stub::rom()),
+            other => Err(ConfigError::Invalid(format!("roms option '{other}'"))),
+        };
+    }
+    let role = match option(config, "kickstart", "1.3") {
+        "1.2" => "kick12",
+        "1.3" => "kick13",
+        "2.0" => "kick20",
+        "3.1" => "kick31",
+        other => {
+            return Err(ConfigError::Invalid(format!(
+                "kickstart option '{other}' (1.2, 1.3, 2.0 or 3.1)"
+            )))
+        }
+    };
+    let rom = config
+        .roms
+        .get(role)
+        .ok_or_else(|| ConfigError::MissingRom(role.into()))?;
+    if rom.len() != 0x4_0000 && rom.len() != 0x8_0000 {
+        return Err(ConfigError::Invalid(format!(
+            "{role} ROM must be 256 or 512 KB, got {} bytes",
+            rom.len()
+        )));
+    }
+    Ok(rom.clone())
+}
+
+fn port_option(
+    config: &MachineConfig,
+    key: &str,
+    default: &str,
+) -> Result<Option<Box<dyn PortDevice>>, ConfigError> {
+    match option(config, key, default) {
+        "joystick" => Ok(Some(Box::new(devices_input::Joystick::new(
+            PortKind::AmigaGameport,
+        )))),
+        "none" => Ok(None),
+        other => Err(ConfigError::Invalid(format!(
+            "{key} option '{other}' (joystick or none)"
+        ))),
+    }
+}
+
+/// JOYxDAT for a digital joystick: right sets bit 1, left bit 9; bit 0 is
+/// right XOR down, bit 8 left XOR up (HRM chapter 8, "Joysticks").
+fn joydat(lines: PortLines) -> u16 {
+    use devices_input::joystick::pin;
+    let low = |p: u32| lines.pulled_low & p != 0;
+    let (right, left) = (low(pin::RIGHT), low(pin::LEFT));
+    let (down, up) = (low(pin::DOWN), low(pin::UP));
+    u16::from(right) << 1
+        | u16::from(right ^ down)
+        | u16::from(left) << 9
+        | u16::from(left ^ up) << 8
+}
+
+/// Everything on the boards' buses except the CPU and the port devices.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Board {
+    mem: Memory,
+    custom: Custom,
+    cia_a: Cia,
+    cia_b: Cia,
+    drives: Vec<AmigaDrive>,
+    /// Colour clocks the chips have run.
+    cck: u64,
+    /// A field ended since the last check.
+    field_done: bool,
+    /// /FIR0, /FIR1 pressed (CIA-A port A bits 6, 7).
+    fire_low: u8,
+}
+
+impl Board {
+    /// One colour clock. Returns true if a waiting CPU got the slot.
+    fn tick(&mut self, cpu_wants: bool) -> bool {
+        let out = self.custom.tick(&mut self.mem.chip, cpu_wants);
+        if self.cck.is_multiple_of(5) {
+            self.cia_a.tick();
+            self.cia_b.tick();
+        }
+        if out.hsync {
+            self.cia_b.tod_tick();
+        }
+        if out.vsync {
+            self.cia_a.tod_tick();
+        }
+        self.custom.paula.ports_line = self.cia_a.irq();
+        self.custom.paula.exter_line = self.cia_b.irq();
+        self.field_done |= out.field_done;
+        self.cck += 1;
+        out.cpu_slot
+    }
+
+    /// Run the chips up to (not including) colour clock `to`.
+    fn run_to(&mut self, to: u64) {
+        while self.cck < to {
+            self.tick(false);
+        }
+    }
+
+    fn cia_a_ext(&self) -> u8 {
+        let drives = self.drives.iter().fold(0, |v, d| v | d.pulled_low());
+        !(drives | self.fire_low)
+    }
+
+    /// CIA outputs changed: overlay and floppy lines.
+    fn cia_outputs(&mut self) {
+        self.mem.overlay = self.cia_a.port_a_out() & 1 != 0;
+        let prb = self.cia_b.port_b_out();
+        for (i, d) in self.drives.iter_mut().enumerate() {
+            d.write_prb(prb, 3 + i as u8);
+        }
+    }
+
+    /// /RSTO (68000 RESET instruction) or power-on: the CIAs reset.
+    fn reset_devices(&mut self) {
+        self.cia_a.reset();
+        self.cia_b.reset();
+        self.cia_outputs();
+    }
+
+    fn read_cia(&mut self, addr: u32, peek: bool) -> u8 {
+        let reg = ((addr >> 8) & 15) as u8;
+        let ext = self.cia_a_ext();
+        if addr & 1 == 1 {
+            if addr & 0x1000 != 0 {
+                return 0xff;
+            }
+            if peek {
+                self.cia_a.peek(reg, ext, 0xff)
+            } else {
+                self.cia_a.read(reg, ext, 0xff)
+            }
+        } else {
+            if addr & 0x2000 != 0 {
+                return 0xff;
+            }
+            if peek {
+                self.cia_b.peek(reg, 0xff, 0xff)
+            } else {
+                self.cia_b.read(reg, 0xff, 0xff)
+            }
+        }
+    }
+
+    fn write_cia(&mut self, addr: u32, v: u8) {
+        let reg = ((addr >> 8) & 15) as u8;
+        if addr & 0x1000 == 0 {
+            self.cia_a.write(reg, v);
+        }
+        if addr & 0x2000 == 0 {
+            self.cia_b.write(reg, v);
+        }
+        self.cia_outputs();
+    }
+
+    fn word(&mut self, region: Region, addr: u32, peek: bool) -> u16 {
+        match region {
+            Region::Chip => self.mem.chip.word(addr),
+            Region::Slow => self.mem.slow_word(addr),
+            Region::Rom => self.mem.rom_word(addr),
+            Region::Custom => {
+                if peek {
+                    self.custom.peek(addr as u16)
+                } else {
+                    self.custom.read(addr as u16)
+                }
+            }
+            Region::Cia => {
+                u16::from(self.read_cia(addr & !1, peek)) << 8
+                    | u16::from(self.read_cia(addr | 1, peek))
+            }
+            Region::Open => 0,
+        }
+    }
+
+    fn read(&mut self, addr: u32, size: Size, peek: bool) -> u32 {
+        let addr = addr & 0xff_ffff;
+        let region = self.mem.region(addr, false);
+        match size {
+            Size::Byte => match region {
+                Region::Chip => u32::from(self.mem.chip.byte(addr)),
+                Region::Cia => u32::from(self.read_cia(addr, peek)),
+                _ => {
+                    let w = self.word(region, addr & !1, peek);
+                    u32::from(if addr & 1 == 0 { w >> 8 } else { w & 0xff })
+                }
+            },
+            Size::Word => u32::from(self.word(region, addr, peek)),
+            Size::Long => {
+                let hi = self.word(region, addr, peek);
+                let lo_addr = addr.wrapping_add(2) & 0xff_ffff;
+                let lo = self.word(self.mem.region(lo_addr, false), lo_addr, peek);
+                u32::from(hi) << 16 | u32::from(lo)
+            }
+        }
+    }
+
+    fn write(&mut self, addr: u32, size: Size, v: u32) {
+        let addr = addr & 0xff_ffff;
+        match size {
+            Size::Byte => self.write_byte(addr, v as u8),
+            Size::Word => self.write_word(addr, v as u16),
+            Size::Long => {
+                self.write_word(addr, (v >> 16) as u16);
+                self.write_word(addr.wrapping_add(2) & 0xff_ffff, v as u16);
+            }
+        }
+    }
+
+    fn write_word(&mut self, addr: u32, v: u16) {
+        match self.mem.region(addr, true) {
+            Region::Chip => self.mem.chip.set_word(addr, v),
+            Region::Slow => self.mem.set_slow_word(addr, v),
+            Region::Custom => self.custom.write(addr as u16, v),
+            Region::Cia => {
+                self.write_cia(addr & !1, (v >> 8) as u8);
+                self.write_cia(addr | 1, v as u8);
+            }
+            Region::Rom | Region::Open => {}
+        }
+    }
+
+    /// The 68000 puts a byte on both halves of the data bus; the custom
+    /// chips ignore UDS/LDS and take the whole word.
+    fn write_byte(&mut self, addr: u32, v: u8) {
+        match self.mem.region(addr, true) {
+            Region::Chip => self.mem.chip.set_byte(addr, v),
+            Region::Slow => self.mem.set_slow_byte(addr, v),
+            Region::Custom => self
+                .custom
+                .write(addr as u16, u16::from(v) << 8 | u16::from(v)),
+            Region::Cia => self.write_cia(addr, v),
+            Region::Rom | Region::Open => {}
+        }
+    }
+}
+
+/// Clocks a VPA (E-clock synchronous) cycle starting at CPU clock `at`
+/// waits: it ends on an E-clock edge (every ten clocks) at least ten
+/// clocks after it began.
+fn e_clock_waits(at: u64) -> u32 {
+    let end = (at + 10).div_ceil(10) * 10;
+    (end - at - 4) as u32
+}
+
+/// The 68000's bus for one instruction.
+struct AmigaBus<'a> {
+    b: &'a mut Board,
+    /// CPU clock the instruction started on.
+    start: u64,
+    dbg: Option<&'a mut DebugHooks>,
+    beam: BeamPos,
+}
+
+impl Bus for AmigaBus<'_> {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        let v = self.b.read(addr, size, false);
+        match self.dbg.as_deref_mut() {
+            Some(dbg) if dbg.read_armed(CPU_SPACE) => {
+                let addr = addr & 0xff_ffff;
+                let seen = dbg.on_read(CPU_SPACE, addr, size, v);
+                dbg.trace_read(CPU_SPACE, addr, size, seen, self.beam);
+                seen
+            }
+            _ => v,
+        }
+    }
+
+    fn peek(&self, addr: u32, size: Size) -> u32 {
+        peek(self.b, addr, size)
+    }
+
+    fn write(&mut self, addr: u32, size: Size, v: u32) {
+        if let Some(dbg) = self.dbg.as_deref_mut() {
+            if dbg.write_armed(CPU_SPACE) {
+                let addr = addr & 0xff_ffff;
+                dbg.trace_write(CPU_SPACE, addr, size, v, self.beam);
+                if !dbg.on_write(CPU_SPACE, addr, size, v) {
+                    return;
+                }
+            }
+        }
+        self.b.write(addr, size, v);
+    }
+
+    fn addr_bits(&self) -> u8 {
+        24
+    }
+}
+
+impl TimedBus68 for AmigaBus<'_> {
+    fn bus_cycle(&mut self, access: Access, _fc: u8, addr: u32, _size: Size, t: u32) -> u32 {
+        let at = self.start + u64::from(t);
+        if access == Access::IntAck {
+            let w = e_clock_waits(at);
+            self.b.run_to((at + 4 + u64::from(w)) / 2);
+            return w;
+        }
+        let region = self.b.mem.region(addr, access == Access::Write);
+        if region.chip_bus() {
+            // The CPU's data slot is the second colour clock of its cycle.
+            let c0 = at / 2 + 1;
+            self.b.run_to(c0);
+            loop {
+                let c = self.b.cck;
+                if self.b.tick(true) {
+                    return (2 * (c - c0)) as u32;
+                }
+            }
+        }
+        if region == Region::Cia {
+            let w = e_clock_waits(at);
+            self.b.run_to((at + 4 + u64::from(w)) / 2 - 1);
+            return w;
+        }
+        0
+    }
+
+    fn reset_devices(&mut self) {
+        self.b.reset_devices();
+    }
+}
+
+fn peek(b: &Board, addr: u32, size: Size) -> u32 {
+    let addr = addr & 0xff_ffff;
+    match b.mem.region(addr, false) {
+        Region::Chip | Region::Slow | Region::Rom | Region::Open | Region::Custom => {
+            peek_plain(b, addr, size)
+        }
+        Region::Cia => {
+            let byte = |a: u32| -> u32 {
+                let reg = ((a >> 8) & 15) as u8;
+                if a & 1 == 1 {
+                    if a & 0x1000 != 0 {
+                        0xff
+                    } else {
+                        u32::from(b.cia_a.peek(reg, b.cia_a_ext(), 0xff))
+                    }
+                } else if a & 0x2000 != 0 {
+                    0xff
+                } else {
+                    u32::from(b.cia_b.peek(reg, 0xff, 0xff))
+                }
+            };
+            match size {
+                Size::Byte => byte(addr),
+                Size::Word => byte(addr & !1) << 8 | byte(addr | 1),
+                Size::Long => {
+                    (byte(addr) << 24)
+                        | (byte(addr + 1) << 16)
+                        | (byte(addr + 2) << 8)
+                        | byte(addr + 3)
+                }
+            }
+        }
+    }
+}
+
+/// Peek without CIAs.
+fn peek_plain(b: &Board, addr: u32, size: Size) -> u32 {
+    let word = |a: u32| -> u16 {
+        let a = a & 0xff_ffff;
+        match b.mem.region(a, false) {
+            Region::Chip => b.mem.chip.word(a),
+            Region::Slow => b.mem.slow_word(a),
+            Region::Rom => b.mem.rom_word(a),
+            Region::Custom => b.custom.peek(a as u16),
+            Region::Cia | Region::Open => 0,
+        }
+    };
+    match size {
+        Size::Byte => {
+            let w = word(addr & !1);
+            u32::from(if addr & 1 == 0 { w >> 8 } else { w & 0xff })
+        }
+        Size::Word => u32::from(word(addr)),
+        Size::Long => u32::from(word(addr)) << 16 | u32::from(word(addr.wrapping_add(2))),
+    }
+}
+
+/// Reads through the board without timing (reset vectors).
+struct PlainBus<'a>(&'a mut Board);
+
+impl Bus for PlainBus<'_> {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        self.0.read(addr, size, false)
+    }
+
+    fn peek(&self, addr: u32, size: Size) -> u32 {
+        peek(self.0, addr, size)
+    }
+
+    fn write(&mut self, addr: u32, size: Size, v: u32) {
+        self.0.write(addr, size, v);
+    }
+
+    fn addr_bits(&self) -> u8 {
+        24
+    }
+}
+
+impl TimedBus68 for PlainBus<'_> {
+    fn bus_cycle(&mut self, _: Access, _: u8, _: u32, _: Size, _: u32) -> u32 {
+        0
+    }
+
+    fn reset_devices(&mut self) {
+        self.0.reset_devices();
+    }
+}
+
+/// Peeks for the disassembler.
+struct PeekBus<'a>(&'a Board);
+
+impl Bus for PeekBus<'_> {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        peek(self.0, addr, size)
+    }
+
+    fn peek(&self, addr: u32, size: Size) -> u32 {
+        peek(self.0, addr, size)
+    }
+
+    fn write(&mut self, _: u32, _: Size, _: u32) {}
+
+    fn addr_bits(&self) -> u8 {
+        24
+    }
+}
+
+pub struct Amiga {
+    standard: Standard,
+    cpu: M68000,
+    board: Board,
+    /// CPU clocks since power-on.
+    sched: Scheduler,
+    input: InputQueue,
+    ports: [Option<Box<dyn PortDevice>>; 2],
+    jam_reported: bool,
+}
+
+impl Amiga {
+    pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
+        let standard = match config.model.as_deref() {
+            None | Some("pal") => Standard::Pal,
+            Some("ntsc") => Standard::Ntsc,
+            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        };
+        let slow = match option(config, "slow", "512k") {
+            "512k" => 0x8_0000,
+            "0" | "none" => 0,
+            other => {
+                return Err(ConfigError::Invalid(format!(
+                    "slow option '{other}' (512k or 0)"
+                )))
+            }
+        };
+        let drives = match option(config, "drives", "1") {
+            n @ ("1" | "2" | "3" | "4") => n.parse::<usize>().unwrap_or(1),
+            other => {
+                return Err(ConfigError::Invalid(format!(
+                    "drives option '{other}' (1–4)"
+                )))
+            }
+        };
+        let rom = load_rom(config)?;
+        let mut m = Self {
+            standard,
+            cpu: M68000::new(),
+            board: Board {
+                mem: Memory::new(CHIP_RAM, slow, &rom),
+                custom: Custom::new(standard, PTR_MASK),
+                cia_a: Cia::new(CiaModel::Mos8520),
+                cia_b: Cia::new(CiaModel::Mos8520),
+                drives: vec![AmigaDrive::new(); drives],
+                cck: 0,
+                field_done: false,
+                fire_low: 0,
+            },
+            sched: Scheduler::new(),
+            input: InputQueue::new(),
+            ports: [
+                port_option(config, "port0", "none")?,
+                port_option(config, "port1", "joystick")?,
+            ],
+            jam_reported: false,
+        };
+        m.power_on();
+        Ok(m)
+    }
+
+    fn power_on(&mut self) {
+        self.board.reset_devices();
+        self.cpu.reset_timed(&mut PlainBus(&mut self.board));
+    }
+
+    pub fn standard(&self) -> Standard {
+        self.standard
+    }
+
+    fn beam_pos(&self) -> BeamPos {
+        let c = &self.board.custom;
+        BeamPos {
+            frame: c.fields,
+            line: c.v,
+            cycle: c.h,
+            hpos: (4 * c.h).saturating_sub(4 * FIRST_CCK as u16),
+        }
+    }
+
+    /// Read the game ports' lines: JOY0DAT/JOY1DAT, the fire buttons and
+    /// the second buttons on the POT pins.
+    fn refresh_ports(&mut self) {
+        use devices_input::joystick::pin;
+        let now = self.sched.now();
+        let mut fire = 0;
+        let mut pot = 0;
+        for (i, dev) in self.ports.iter_mut().enumerate() {
+            let lines = match dev {
+                Some(d) => {
+                    d.write_lines(PortLines::default(), now);
+                    d.read_lines(now)
+                }
+                None => PortLines::default(),
+            };
+            self.board.custom.joydat[i] = joydat(lines);
+            if lines.pulled_low & pin::FIRE != 0 {
+                fire |= 0x40 << i;
+            }
+            if lines.pulled_low & pin::BUTTON2 != 0 {
+                pot |= 0x0400 << (4 * i);
+            }
+        }
+        self.board.fire_low = fire;
+        self.board.custom.pot_low = pot;
+    }
+
+    /// One instruction (or interrupt, or STOP wait). Returns `Some` if
+    /// emulation must stop.
+    fn instruction(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        while let Some(ev) = self.input.pop_due(self.sched.now()) {
+            self.apply_input(ev);
+        }
+        self.cpu.set_ipl(self.board.custom.ipl());
+        let start = self.sched.now().0;
+        let beam = self.beam_pos();
+        let step = {
+            let mut bus = AmigaBus {
+                b: &mut self.board,
+                start,
+                dbg: dbg.as_deref_mut(),
+                beam,
+            };
+            self.cpu.step_timed(&mut bus)
+        };
+        let clocks = match step {
+            Step::Done { clocks } | Step::Stopped { clocks } => clocks,
+            // A halted CPU (double bus fault): the chips keep running.
+            Step::Halted => 4,
+        };
+        let end = start + u64::from(clocks);
+        self.board.run_to(end / 2);
+        self.sched.advance(u64::from(clocks));
+        if step == Step::Halted {
+            if !self.jam_reported {
+                self.jam_reported = true;
+                return Some(StopReason::CpuJam {
+                    device: CPU,
+                    pc: self.cpu.pc(),
+                });
+            }
+        } else {
+            self.jam_reported = false;
+        }
+        let entered = self.cpu.take_interrupt();
+        let new_field = std::mem::take(&mut self.board.field_done);
+        if let Some(dbg) = dbg {
+            if let Some(kind) = entered {
+                if dbg.interrupt_armed(kind) {
+                    dbg.check_interrupt(kind);
+                }
+            }
+            let next_pc = self.cpu.pc();
+            if dbg.trace_instr_armed() {
+                dbg.trace_instr(CPU, next_pc, self.beam_pos());
+            }
+            if dbg.instr_step_armed() {
+                dbg.check_instr_step();
+            }
+            if dbg.exec_armed(CPU_SPACE) {
+                dbg.check_exec(CPU_SPACE, next_pc);
+            }
+            if dbg.raster_armed() {
+                let b = self.beam_pos();
+                dbg.check_raster(b.line, b.cycle);
+            }
+            if let Some(stop) = dbg.take_stop() {
+                self.board.field_done |= new_field;
+                return Some(stop);
+            }
+        }
+        new_field.then_some(StopReason::FrameDone)
+    }
+
+    fn apply_input(&mut self, ev: TimedInput) {
+        match (ev.target, ev.event) {
+            (InputTarget::Port(p), event) => {
+                if let Some(Some(dev)) = self.ports.get_mut(usize::from(p.0)) {
+                    dev.input(&event);
+                }
+                self.refresh_ports();
+            }
+            (InputTarget::Panel, InputEvent::Control { id, value: 1 }) => match id.0 {
+                0 => Machine::reset(self, ResetKind::Hard),
+                1 => Machine::reset(self, ResetKind::Soft),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn apply_frame_freezes(&mut self, dbg: &DebugHooks) {
+        for f in dbg.per_frame_freezes() {
+            match f.space {
+                CPU_SPACE => self.board.write(f.addr, f.size, f.value),
+                CHIP_SPACE => {
+                    for i in 0..f.size.bytes() {
+                        let shift = 8 * (f.size.bytes() - 1 - i);
+                        self.board
+                            .mem
+                            .chip
+                            .set_byte(f.addr.wrapping_add(i), (f.value >> shift) as u8);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn signal(&self) -> SignalInfo {
+        let c = &self.board.custom;
+        let (clock, standard) = match self.standard {
+            Standard::Pal => (4 * CPU_HZ_PAL / 2, VideoStandard::Pal),
+            Standard::Ntsc => (4 * CPU_HZ_NTSC / 2, VideoStandard::Ntsc),
+        };
+        SignalInfo {
+            pixel_clock_hz: clock,
+            active_pixels: WIDTH,
+            total_pixels: 4 * u32::from(custom::PAL_LINE),
+            lines_per_field: u32::from(c.field_lines()),
+            standard,
+            output: OutputType::Rgb,
+            field: if !c.interlaced() {
+                FieldParity::Progressive
+            } else if c.lof {
+                FieldParity::Even
+            } else {
+                FieldParity::Odd
+            },
+        }
+    }
+}
+
+/// Read memory as the CPU sees it now, without side effects (tests, tools).
+pub fn peek_cpu(m: &Amiga, addr: u32, size: Size) -> u32 {
+    peek(&m.board, addr, size)
+}
+
+fn chip_regs(name: &'static str, values: &[(&'static str, Option<u32>, u32, u8)]) -> ChipInfo {
+    ChipInfo {
+        name,
+        regs: values
+            .iter()
+            .map(|&(name, addr, value, bits)| ChipReg {
+                name,
+                addr,
+                value,
+                bits,
+            })
+            .collect(),
+    }
+}
+
+fn cia_info(name: &'static str, cia: &Cia, base: u32, step: u32) -> ChipInfo {
+    const NAMES: [&str; 16] = [
+        "PRA", "PRB", "DDRA", "DDRB", "TALO", "TAHI", "TBLO", "TBHI", "TODLO", "TODMID", "TODHI",
+        "-", "SDR", "ICR", "CRA", "CRB",
+    ];
+    let mut regs: Vec<(&'static str, Option<u32>, u32, u8)> = NAMES
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| {
+            (
+                n,
+                Some(base + step * i as u32),
+                u32::from(cia.peek(i as u8, 0xff, 0xff)),
+                8,
+            )
+        })
+        .collect();
+    regs.push(("IMR", None, u32::from(cia.mask()), 8));
+    regs.push(("TALATCH", None, u32::from(cia.ta.latch), 16));
+    regs.push(("TBLATCH", None, u32::from(cia.tb.latch), 16));
+    chip_regs(name, &regs)
+}
+
+impl Machine for Amiga {
+    fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
+        if std::mem::take(&mut self.board.field_done) {
+            return StopReason::FrameDone;
+        }
+        let c = &self.board.custom;
+        if c.v == 0 && c.h < 8 {
+            self.apply_frame_freezes(dbg);
+        }
+        loop {
+            if let Some(stop) = self.instruction(Some(dbg)) {
+                return stop;
+            }
+        }
+    }
+
+    fn step_cycle(&mut self) -> StopReason {
+        self.instruction(None);
+        StopReason::StepDone
+    }
+
+    /// Hard: power cycle (RAM cleared). Soft: the reset line (keyboard
+    /// reset): CPU, CIAs and custom chips restart, RAM keeps its contents.
+    fn reset(&mut self, kind: ResetKind) {
+        self.board.custom.reset();
+        if kind == ResetKind::Hard {
+            self.board.mem.clear();
+            for d in &mut self.board.drives {
+                *d = AmigaDrive::new();
+            }
+        }
+        self.input.clear();
+        self.board.field_done = false;
+        self.jam_reported = false;
+        self.power_on();
+    }
+
+    fn framebuffer(&self) -> FrameRef<'_> {
+        FrameRef {
+            width: WIDTH,
+            height: self.standard.height(),
+            pixels: PixelData::Rgb(self.board.custom.frame()),
+            luma_chroma: None,
+            signal: self.signal(),
+        }
+    }
+
+    fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {
+        emu_core::AudioFormat {
+            sample_rate: emu_core::SAMPLE_RATE,
+            channels: 1,
+        }
+    }
+
+    fn beam(&self) -> Option<BeamPos> {
+        Some(self.beam_pos())
+    }
+
+    fn memory_spaces(&self) -> Vec<MemSpace> {
+        vec![
+            MemSpace {
+                id: CPU_SPACE,
+                name: "cpu",
+                device: CPU,
+                addr_bits: 24,
+                big_endian: true,
+            },
+            MemSpace {
+                id: CHIP_SPACE,
+                name: "chip",
+                device: CPU,
+                addr_bits: 19,
+                big_endian: true,
+            },
+        ]
+    }
+
+    fn chips(&self) -> Vec<ChipInfo> {
+        let c = &self.board.custom;
+        let d = &c.denise;
+        let p = &c.paula;
+        let b = &c.blitter;
+        let r = |n, a: u16, v: u32, bits| (n, Some(0xdf_f000 + u32::from(a)), v, bits);
+        let mut agnus = vec![
+            r("DMACON", 0x096, u32::from(c.peek(0x002)), 16),
+            r("VPOSR", 0x004, u32::from(c.peek(0x004)), 16),
+            r("VHPOSR", 0x006, u32::from(c.peek(0x006)), 16),
+            r("DIWSTRT", 0x08e, u32::from(c.diwstrt), 16),
+            r("DIWSTOP", 0x090, u32::from(c.diwstop), 16),
+            r("DDFSTRT", 0x092, u32::from(c.ddfstrt), 16),
+            r("DDFSTOP", 0x094, u32::from(c.ddfstop), 16),
+            r("BPL1MOD", 0x108, u32::from(c.bpl1mod), 16),
+            r("BPL2MOD", 0x10a, u32::from(c.bpl2mod), 16),
+        ];
+        const BPL: [&str; 6] = ["BPL1PT", "BPL2PT", "BPL3PT", "BPL4PT", "BPL5PT", "BPL6PT"];
+        for (i, n) in BPL.iter().enumerate() {
+            agnus.push(r(n, 0x0e0 + 4 * i as u16, c.bplpt[i], 32));
+        }
+        let copper = [
+            r("COP1LC", 0x080, c.copper.cop1lc, 32),
+            r("COP2LC", 0x084, c.copper.cop2lc, 32),
+            ("COPPC", None, c.copper.pc, 32),
+            r("COPCON", 0x02e, u32::from(c.copper.danger) << 1, 16),
+        ];
+        let blitter = [
+            r("BLTCON0", 0x040, u32::from(b.con0), 16),
+            r("BLTCON1", 0x042, u32::from(b.con1), 16),
+            r("BLTAFWM", 0x044, u32::from(b.afwm), 16),
+            r("BLTALWM", 0x046, u32::from(b.alwm), 16),
+            r("BLTAPT", 0x050, b.pt[0], 32),
+            r("BLTBPT", 0x04c, b.pt[1], 32),
+            r("BLTCPT", 0x048, b.pt[2], 32),
+            r("BLTDPT", 0x054, b.pt[3], 32),
+            r("BLTAMOD", 0x064, u32::from(b.modulo[0]), 16),
+            r("BLTBMOD", 0x062, u32::from(b.modulo[1]), 16),
+            r("BLTCMOD", 0x060, u32::from(b.modulo[2]), 16),
+            r("BLTDMOD", 0x066, u32::from(b.modulo[3]), 16),
+            ("BUSY", None, u32::from(b.busy), 1),
+        ];
+        let mut denise = vec![
+            r("BPLCON0", 0x100, u32::from(d.bplcon0), 16),
+            r("BPLCON1", 0x102, u32::from(d.bplcon1), 16),
+            r("BPLCON2", 0x104, u32::from(d.bplcon2), 16),
+        ];
+        const COLORS: [&str; 32] = [
+            "COLOR00", "COLOR01", "COLOR02", "COLOR03", "COLOR04", "COLOR05", "COLOR06", "COLOR07",
+            "COLOR08", "COLOR09", "COLOR10", "COLOR11", "COLOR12", "COLOR13", "COLOR14", "COLOR15",
+            "COLOR16", "COLOR17", "COLOR18", "COLOR19", "COLOR20", "COLOR21", "COLOR22", "COLOR23",
+            "COLOR24", "COLOR25", "COLOR26", "COLOR27", "COLOR28", "COLOR29", "COLOR30", "COLOR31",
+        ];
+        for (i, n) in COLORS.iter().enumerate() {
+            denise.push(r(n, 0x180 + 2 * i as u16, u32::from(d.colors[i]), 12));
+        }
+        let paula = [
+            r("INTENA", 0x09a, u32::from(p.intena), 16),
+            r("INTREQ", 0x09c, u32::from(p.requests()), 16),
+            r("ADKCON", 0x09e, u32::from(p.adkcon), 16),
+            r("POTGO", 0x034, u32::from(p.potgo), 16),
+            ("IPL", None, u32::from(p.ipl()), 3),
+        ];
+        vec![
+            chip_regs("agnus", &agnus),
+            chip_regs("copper", &copper),
+            chip_regs("blitter", &blitter),
+            chip_regs("denise", &denise),
+            chip_regs("paula", &paula),
+            cia_info("cia_a", &self.board.cia_a, 0xbf_e001, 0x100),
+            cia_info("cia_b", &self.board.cia_b, 0xbf_d000, 0x100),
+        ]
+    }
+
+    fn devices(&self) -> Vec<DeviceId> {
+        vec![CPU]
+    }
+
+    fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget> {
+        (dev == CPU).then_some(self as &mut dyn DebugTarget)
+    }
+
+    fn input(&mut self, ev: TimedInput) {
+        self.input.push(ev);
+    }
+
+    fn now(&self) -> Cycle {
+        self.sched.now()
+    }
+
+    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+        use emu_core::ControlInfo;
+        vec![
+            ControlInfo::button(0, "POWER", false),
+            ControlInfo::button(1, "RESET", false),
+        ]
+    }
+
+    fn ports(&self) -> Vec<PortInfo> {
+        [
+            (PORT0, "game port 0 (mouse)"),
+            (PORT1, "game port 1 (joystick)"),
+        ]
+        .into_iter()
+        .map(|(id, name)| PortInfo {
+            id,
+            kind: PortKind::AmigaGameport,
+            name,
+            connected: self.ports[usize::from(id.0)].is_some(),
+        })
+        .collect()
+    }
+
+    fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError> {
+        let Some(slot) = self.ports.get_mut(usize::from(port.0)) else {
+            return Err(PortError::NoSuchPort(port));
+        };
+        if dev.kind() != PortKind::AmigaGameport {
+            return Err(PortError::Incompatible {
+                port: PortKind::AmigaGameport,
+                device: dev.kind(),
+            });
+        }
+        if slot.is_some() {
+            return Err(PortError::Occupied(port));
+        }
+        *slot = Some(dev);
+        self.refresh_ports();
+        Ok(())
+    }
+
+    fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>> {
+        let dev = self.ports.get_mut(usize::from(port.0))?.take();
+        self.refresh_ports();
+        dev
+    }
+
+    /// Disks come with milestone M3.
+    fn media_slots(&self) -> Vec<MediaSlotInfo> {
+        Vec::new()
+    }
+
+    fn media_slot(&mut self, _slot: SlotId) -> Option<&mut dyn MediaSlot> {
+        None
+    }
+
+    fn save_state(&self) -> Vec<u8> {
+        let mut w = StateWriter::new();
+        let b = &self.board;
+        w.chunk(*b"A500", 1, |w| {
+            w.u8(match self.standard {
+                Standard::Pal => 0,
+                Standard::Ntsc => 1,
+            });
+            w.u8(b.drives.len() as u8);
+            w.u64(b.cck);
+            w.bool(b.field_done);
+            w.u8(b.fire_low);
+            w.bool(self.jam_reported);
+        });
+        self.cpu.save(&mut w);
+        b.mem.save(&mut w);
+        b.custom.save(&mut w);
+        b.cia_a.save(&mut w);
+        b.cia_b.save(&mut w);
+        for d in &b.drives {
+            d.save(&mut w);
+        }
+        self.sched.save(&mut w);
+        self.input.save(&mut w);
+        for (i, tag) in [*b"GPT0", *b"GPT1"].into_iter().enumerate() {
+            w.chunk(tag, 1, |w| {
+                w.bytes(
+                    &self.ports[i]
+                        .as_ref()
+                        .map(|d| d.save_state())
+                        .unwrap_or_default(),
+                );
+            });
+        }
+        w.into_bytes()
+    }
+
+    /// Atomic: everything loads into copies first.
+    fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
+        let mut r = StateReader::new(s);
+        let (_, mut c) = r.chunk(*b"A500", 1)?;
+        let standard = match c.u8()? {
+            0 => Standard::Pal,
+            1 => Standard::Ntsc,
+            _ => return Err(StateError::Invalid("video standard")),
+        };
+        if standard != self.standard {
+            return Err(StateError::Invalid("video standard differs"));
+        }
+        if usize::from(c.u8()?) != self.board.drives.len() {
+            return Err(StateError::Invalid("drive count differs"));
+        }
+        let mut board = self.board.clone();
+        board.cck = c.u64()?;
+        board.field_done = c.bool()?;
+        board.fire_low = c.u8()? & 0xc0;
+        let jam_reported = c.bool()?;
+        let mut cpu = self.cpu.clone();
+        let mut sched = self.sched.clone();
+        let mut input = self.input.clone();
+        cpu.load(&mut r)?;
+        board.mem.load(&mut r)?;
+        board.custom.load(&mut r)?;
+        board.cia_a.load(&mut r)?;
+        board.cia_b.load(&mut r)?;
+        for d in &mut board.drives {
+            d.load(&mut r)?;
+        }
+        sched.load(&mut r)?;
+        input.load(&mut r)?;
+        let mut port_states = Vec::new();
+        for tag in [*b"GPT0", *b"GPT1"] {
+            let (_, mut c) = r.chunk(tag, 1)?;
+            port_states.push(c.bytes()?.to_vec());
+        }
+        let backups: Vec<Option<Vec<u8>>> = self
+            .ports
+            .iter()
+            .map(|d| d.as_ref().map(|d| d.save_state()))
+            .collect();
+        for (i, state) in port_states.iter().enumerate() {
+            if let (Some(dev), false) = (&mut self.ports[i], state.is_empty()) {
+                if let Err(e) = dev.load_state(state) {
+                    for (dev, b) in self.ports.iter_mut().zip(&backups) {
+                        if let (Some(d), Some(b)) = (dev, b) {
+                            let _ = d.load_state(b);
+                        }
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        self.cpu = cpu;
+        self.board = board;
+        self.sched = sched;
+        self.input = input;
+        self.jam_reported = jam_reported;
+        Ok(())
+    }
+}
+
+impl DebugTarget for Amiga {
+    fn regs(&self) -> RegisterSet {
+        self.cpu.regs()
+    }
+
+    fn set_reg(&mut self, name: &str, v: u32) {
+        self.cpu.set_reg(name, v);
+        if name.eq_ignore_ascii_case("pc") {
+            self.cpu.refill_queue(&PeekBus(&self.board));
+        }
+    }
+
+    fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
+        match space {
+            CPU_SPACE => Some(peek(&self.board, addr, size)),
+            CHIP_SPACE => {
+                let chip = &self.board.mem.chip;
+                Some((0..size.bytes()).fold(0, |v, i| {
+                    v << 8 | u32::from(chip.byte(addr.wrapping_add(i)))
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    fn poke(&mut self, space: MemSpaceId, addr: u32, size: Size, v: u32) -> bool {
+        match space {
+            CPU_SPACE => {
+                if self.board.mem.region(addr, true) == Region::Rom {
+                    return false;
+                }
+                self.board.write(addr, size, v);
+                true
+            }
+            CHIP_SPACE => {
+                let n = size.bytes();
+                for i in 0..n {
+                    self.board
+                        .mem
+                        .chip
+                        .set_byte(addr.wrapping_add(i), (v >> (8 * (n - 1 - i))) as u8);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn disassemble(&self, addr: u32) -> Instr {
+        self.cpu.disassemble(&PeekBus(&self.board), addr)
+    }
+}
+
+#[cfg(test)]
+mod tests;

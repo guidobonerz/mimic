@@ -95,6 +95,20 @@ own section.
 | AY-3-8912 registers, tone/noise/envelope generators, volume DAC | General Instrument AY-3-8910/8912 data sheet | `chips-amstrad/src/ay.rs` |
 | Z80 samples /WAIT on the falling edge of T2 (TW for I/O) | Zilog Z80 CPU User Manual (UM0080), timing diagrams; Thomas Harte, CLK wiki "Amstrad CPC Timing" (search summary, page not reachable) | `cpu-z80/src/lib.rs` (`step_timed`) |
 
+### Amiga
+
+| Topic | Document | Used in |
+| --- | --- | --- |
+| Custom chip registers, bit layouts | Commodore-Amiga, *Amiga Hardware Reference Manual*, 3rd edition, appendix A–C | `chips-amiga` |
+| Beam counters, DMA time-slot allocation, interrupt levels (INTENA/INTREQ), memory map | HRM chapter 7 "System control hardware", memory map appendix | `chips-amiga/src/custom.rs`, `paula.rs`, `machine-amiga/src/memory.rs` |
+| Copper MOVE/WAIT/SKIP, danger bit, restart at vertical blank | HRM chapter 2 "Coprocessor hardware" | `chips-amiga/src/copper.rs` |
+| Bitplane fetch window (DDFSTRT/DDFSTOP), display window, scrolling, HAM, EHB, dual playfield | HRM chapter 3 "Playfield hardware" | `chips-amiga/src/custom.rs`, `denise.rs` |
+| Sprite DMA and display, attached sprites, priorities | HRM chapter 4 "Sprite hardware" | `chips-amiga/src/custom.rs`, `denise.rs` |
+| Blitter area, fill and line modes, minterms | HRM chapter 6 "Blitter hardware" | `chips-amiga/src/blitter.rs` |
+| 8520 CIA (TOD event counter, one-shot start), CIA port assignments, floppy control and status lines, drive identification | HRM appendix F "8520 CIA"; HRM chapter 8 "Disk" | `chips-cbm/src/cia.rs`, `machine-amiga`, `drives-other/src/amiga_drive.rs` |
+| Joystick bits in JOYxDAT, POTGO/POTGOR | HRM chapter 8 "Interface hardware" | `machine-amiga`, `chips-amiga/src/paula.rs` |
+| VPA/E-clock bus cycles (CIA accesses, autovector acknowledge) | Motorola, *M68000 User's Manual*, "Synchronous operation" | `machine-amiga` (`e_clock_waits`) |
+
 ### Video, colour and host conventions
 
 | Topic | Document | Used in |
@@ -155,5 +169,6 @@ the Python standard library only.
 
 Not in the repository (golden rule 6): Commodore KERNAL/BASIC/character
 ROMs (C64, VIC-20, PET, C16/Plus/4, C128), drive DOS ROMs (1541, 1571,
-1581), Atari XL OS and BASIC, Amstrad CPC ROMs. Users put them into
+1581), Atari XL OS and BASIC, Amstrad CPC ROMs, Amiga Kickstart (1.2, 1.3,
+2.0, 3.1; 256 or 512 KB images). Users put them into
 `roms/<machine>/` and `roms/drives/`.

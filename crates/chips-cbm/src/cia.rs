@@ -19,7 +19,12 @@
 //! | E   | CRA    | 0 start, 1 PB6 on, 2 toggle, 3 one-shot, 4 force load (strobe), 5 CNT input, 6 SP output, 7 TOD 50 Hz |
 //! | F   | CRB    | 0 start, 1 PB7 on, 2 toggle, 3 one-shot, 4 force load, 5–6 input (φ2, CNT, TA, TA+CNT), 7 TOD alarm write |
 //!
-//! Sources: MOS 6526 data sheet; Wolfgang Lorenz, "A Software Model of the
+//! The 8520 ([`CiaModel::Mos8520`]) differs in the TOD (a 24-bit event
+//! counter: reading A latches until 8 is read, writing A stops counting
+//! until 8 is written) and in one-shot starts.
+//!
+//! Sources: MOS 6526 data sheet; Amiga Hardware Reference Manual,
+//! appendix F (8520); Wolfgang Lorenz, "A Software Model of the
 //! CIA6526" (timer pipeline, reload, one-shot and interrupt timing). The
 //! implementation is this project's own.
 //!
@@ -44,6 +49,11 @@ pub enum CiaModel {
     Mos6526,
     /// 6526A / 8521 (C64C, C128): IRQ output in the same cycle as the flag.
     Mos6526A,
+    /// MOS 8520 (Amiga): 6526A timing; the time-of-day clock is a 24-bit
+    /// binary event counter (registers 8–A, low byte first; B unused) and a
+    /// timer high-byte write in one-shot mode starts the timer
+    /// (Amiga Hardware Reference Manual, appendix F "8520 CIA").
+    Mos8520,
 }
 
 pub mod icr {
@@ -260,6 +270,61 @@ fn bcd_inc(v: u8) -> u8 {
 }
 
 impl Tod {
+    /// 8520: one count pulse of the 24-bit counter (`time[0..3]`, low byte
+    /// first). Returns true if the alarm matched.
+    fn count(&mut self) -> bool {
+        if self.stopped {
+            return false;
+        }
+        let v = (u32::from(self.time[2]) << 16
+            | u32::from(self.time[1]) << 8
+            | u32::from(self.time[0]))
+        .wrapping_add(1)
+            & 0xff_ffff;
+        self.time = [v as u8, (v >> 8) as u8, (v >> 16) as u8, 0];
+        self.time == self.alarm
+    }
+
+    /// 8520 register read: reading the high byte (A) latches the counter
+    /// until the low byte (8) is read.
+    fn read_counter(&mut self, reg: u8) -> u8 {
+        if reg == 0x0a {
+            self.latch = Some(self.time);
+        }
+        let v = self.peek_counter(reg);
+        if reg == 0x08 {
+            self.latch = None;
+        }
+        v
+    }
+
+    fn peek_counter(&self, reg: u8) -> u8 {
+        match reg {
+            0x08..=0x0a => self.latch.unwrap_or(self.time)[usize::from(reg - 8)],
+            _ => 0,
+        }
+    }
+
+    /// 8520 register write: the high byte stops the counter until the low
+    /// byte is written. Returns true if the write made time match alarm.
+    fn write_counter(&mut self, reg: u8, v: u8, alarm: bool) -> bool {
+        if reg == 0x0b {
+            return false;
+        }
+        let i = usize::from(reg - 8);
+        if alarm {
+            self.alarm[i] = v;
+        } else {
+            self.time[i] = v;
+            match reg {
+                0x0a => self.stopped = true,
+                0x08 => self.stopped = false,
+                _ => {}
+            }
+        }
+        self.time == self.alarm
+    }
+
     /// One power-line period. Returns true if the alarm matched.
     fn tick(&mut self, fifty_hz: bool) -> bool {
         if self.stopped {
@@ -375,6 +440,14 @@ pub struct Cia {
 
 impl Cia {
     pub fn new(model: CiaModel) -> Self {
+        let tod = if model == CiaModel::Mos8520 {
+            Tod {
+                time: [0; 4],
+                ..Tod::default()
+            }
+        } else {
+            Tod::default()
+        };
         Self {
             model,
             pra: 0,
@@ -383,7 +456,7 @@ impl Cia {
             ddrb: 0,
             ta: Timer::new(),
             tb: Timer::new(),
-            tod: Tod::default(),
+            tod,
             serial: Serial::default(),
             flags: 0,
             mask: 0,
@@ -448,9 +521,15 @@ impl Cia {
         (self.serial.cnt_out, self.serial.sp_out)
     }
 
-    /// One period of the TOD input (50 or 60 Hz power line).
+    /// One period of the TOD input (50 or 60 Hz power line; on the 8520 one
+    /// count pulse, e.g. VSYNC or HSYNC on the Amiga).
     pub fn tod_tick(&mut self) {
-        if self.tod.tick(self.ta.cr & 0x80 != 0) {
+        let matched = if self.model == CiaModel::Mos8520 {
+            self.tod.count()
+        } else {
+            self.tod.tick(self.ta.cr & 0x80 != 0)
+        };
+        if matched {
             self.raise(icr::ALARM);
         }
     }
@@ -460,7 +539,7 @@ impl Cia {
         if self.flags & self.mask != 0 && !self.irq {
             match self.model {
                 CiaModel::Mos6526 => self.irq_next = true,
-                CiaModel::Mos6526A => self.irq = true,
+                CiaModel::Mos6526A | CiaModel::Mos8520 => self.irq = true,
             }
         }
     }
@@ -558,6 +637,7 @@ impl Cia {
     /// allows on the pins (1 = not pulled low): pin = driven & external.
     pub fn read(&mut self, reg: u8, pa_ext: u8, pb_ext: u8) -> u8 {
         match reg & 0x0f {
+            0x08..=0x0b if self.model == CiaModel::Mos8520 => self.tod.read_counter(reg & 0x0f),
             0x08..=0x0b => self.tod.read(reg & 0x0f),
             0x0d => {
                 let v = self.flags | if self.irq { icr::IRQ } else { 0 };
@@ -581,6 +661,7 @@ impl Cia {
             0x5 => (self.ta.counter >> 8) as u8,
             0x6 => self.tb.counter as u8,
             0x7 => (self.tb.counter >> 8) as u8,
+            r @ 0x08..=0x0b if self.model == CiaModel::Mos8520 => self.tod.peek_counter(r),
             r @ 0x08..=0x0b => self.tod.peek(r),
             0x0c => self.serial.sdr,
             0x0d => self.flags | if self.irq { icr::IRQ } else { 0 },
@@ -596,12 +677,23 @@ impl Cia {
             0x2 => self.ddra = v,
             0x3 => self.ddrb = v,
             0x4 => self.ta.write_lo(v),
-            0x5 => self.ta.write_hi(v),
+            0x5 => {
+                self.ta.write_hi(v);
+                self.oneshot_start(0);
+            }
             0x6 => self.tb.write_lo(v),
-            0x7 => self.tb.write_hi(v),
+            0x7 => {
+                self.tb.write_hi(v);
+                self.oneshot_start(1);
+            }
             r @ 0x08..=0x0b => {
                 let alarm = self.tb.cr & 0x80 != 0;
-                if self.tod.write(r, v, alarm) {
+                let matched = if self.model == CiaModel::Mos8520 {
+                    self.tod.write_counter(r, v, alarm)
+                } else {
+                    self.tod.write(r, v, alarm)
+                };
+                if matched {
                     self.raise(icr::ALARM);
                 }
             }
@@ -627,6 +719,21 @@ impl Cia {
                 self.ta.write_cr(v);
             }
             _ => self.tb.write_cr(v),
+        }
+    }
+
+    /// 8520: a high-byte write in one-shot mode loads and starts the timer.
+    fn oneshot_start(&mut self, timer: usize) {
+        if self.model != CiaModel::Mos8520 {
+            return;
+        }
+        let t = if timer == 0 {
+            &mut self.ta
+        } else {
+            &mut self.tb
+        };
+        if t.cr & CR_ONESHOT != 0 {
+            t.write_cr(t.cr | CR_START | CR_LOAD);
         }
     }
 

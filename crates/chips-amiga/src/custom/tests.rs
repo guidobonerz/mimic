@@ -1,0 +1,201 @@
+use super::*;
+
+fn setup() -> (Custom, ChipRam) {
+    (Custom::new(Standard::Pal, 0x7fffe), ChipRam::new(0x8_0000))
+}
+
+/// Run until the start of the next field.
+fn field(c: &mut Custom, chip: &mut ChipRam) {
+    for _ in 0..200_000 {
+        if c.tick(chip, false).field_done {
+            return;
+        }
+    }
+    panic!("no field end");
+}
+
+fn pixel(c: &Custom, x: u32, y: u32) -> Rgb8 {
+    c.frame()[(y * WIDTH + x) as usize]
+}
+
+/// A 320×256 lowres screen with one plane at $10000: column 0 of every
+/// row set.
+fn screen(c: &mut Custom, chip: &mut ChipRam) {
+    for row in 0..256u32 {
+        chip.set_word(0x1_0000 + row * 40, 0x8000);
+    }
+    for (r, v) in [
+        (reg::BPLCON0, 0x1200),
+        (reg::DIWSTRT, 0x2c81),
+        (reg::DIWSTOP, 0x2cc1),
+        (reg::DDFSTRT, 0x38),
+        (reg::DDFSTOP, 0xd0),
+        (reg::BPL1PTH, 0x0001),
+        (reg::BPL1PTH + 2, 0x0000),
+        (reg::COLOR00, 0x00f),
+        (reg::COLOR00 + 2, 0xfff),
+        (reg::DMACON, 0x8000 | dma::DMAEN | dma::BPLEN),
+    ] {
+        c.write(r, v);
+    }
+}
+
+const BLUE: Rgb8 = Rgb8 { r: 0, g: 0, b: 255 };
+const WHITE: Rgb8 = Rgb8 {
+    r: 255,
+    g: 255,
+    b: 255,
+};
+
+#[test]
+fn beam_counts_pal_lines_and_fields() {
+    let (mut c, mut chip) = setup();
+    let mut n = 0u32;
+    let mut hsyncs = 0;
+    loop {
+        let out = c.tick(&mut chip, false);
+        n += 1;
+        hsyncs += u32::from(out.hsync);
+        if out.field_done {
+            break;
+        }
+    }
+    assert_eq!(n, 313 * 227, "long field");
+    assert_eq!(hsyncs, 313);
+    assert_eq!(c.peek(reg::VPOSR), 0x8000);
+    assert_ne!(c.paula.requests() & int::VERTB, 0);
+}
+
+#[test]
+fn lowres_plane_shows_inside_the_display_window() {
+    let (mut c, mut chip) = setup();
+    screen(&mut c, &mut chip);
+    field(&mut c, &mut chip);
+    // DIWSTRT $2C81: line 44 (row 18), pixel $81 (column 2·$81 − 4·$38).
+    let (x, y) = (2 * 0x81 - 4 * FIRST_CCK, 44 - 26);
+    assert_eq!(pixel(&c, x, y), WHITE);
+    assert_eq!(pixel(&c, x + 1, y), WHITE);
+    assert_eq!(pixel(&c, x + 2, y), BLUE);
+    assert_eq!(pixel(&c, x - 1, y), BLUE);
+    assert_eq!(pixel(&c, x, y - 1), BLUE, "above the window");
+    assert_eq!(pixel(&c, x, y + 255), WHITE, "last line");
+    assert_eq!(pixel(&c, x, y + 256), BLUE, "below the window");
+    // 256 rows of 40 bytes fetched; software reloads the pointer for the
+    // next field.
+    assert_eq!(c.bplpt[0], 0x1_0000 + 256 * 40);
+}
+
+#[test]
+fn copper_changes_colour_at_a_line() {
+    let (mut c, mut chip) = setup();
+    for (i, w) in [
+        0x0180u16, 0x0f00, 0x6001, 0xfffe, 0x0180, 0x00f0, 0xffff, 0xfffe,
+    ]
+    .iter()
+    .enumerate()
+    {
+        chip.set_word(0x2000 + 2 * i as u32, *w);
+    }
+    c.write(reg::COP1LCH, 0);
+    c.write(reg::COP1LCL, 0x2000);
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::COPEN);
+    field(&mut c, &mut chip);
+    field(&mut c, &mut chip);
+    let red = Rgb8 { r: 255, g: 0, b: 0 };
+    let green = Rgb8 { r: 0, g: 255, b: 0 };
+    assert_eq!(pixel(&c, 300, 0x5f - 26), red);
+    assert_eq!(pixel(&c, 300, 0x61 - 26), green);
+}
+
+#[test]
+fn copper_blitter_and_cpu_share_slots() {
+    let (mut c, mut chip) = setup();
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::BLTEN);
+    c.write(reg::BLTCON0, 0x01ff); // D only, all ones
+    c.write(reg::BLTDPTL, 0x4000);
+    c.write(reg::BLTSIZE, 8 << 6 | 8);
+    assert_ne!(c.peek(reg::DMACONR) & dma::BBUSY, 0);
+    let (mut cpu, mut total) = (0, 0);
+    while c.blitter.busy {
+        total += 1;
+        cpu += u32::from(c.tick(&mut chip, true).cpu_slot);
+    }
+    // Every fourth free slot goes to the waiting CPU.
+    assert!(cpu > 0 && cpu * 3 < total, "cpu {cpu} of {total}");
+    assert_eq!(chip.word(0x4000), 0xffff);
+    assert_eq!(chip.word(0x4000 + 63 * 2), 0xffff);
+    assert_ne!(c.paula.requests() & int::BLIT, 0);
+    // With BLTPRI the CPU waits for the whole blit.
+    c.write(reg::DMACON, 0x8000 | dma::BLTPRI);
+    c.write(reg::BLTSIZE, 8 << 6 | 8);
+    for _ in 0..4 {
+        c.tick(&mut chip, true); // start delay
+    }
+    while c.blitter.busy {
+        let out = c.tick(&mut chip, true);
+        if c.blitter.busy {
+            assert!(!out.cpu_slot, "CPU slot during a nasty blit");
+        }
+    }
+}
+
+#[test]
+fn savestate_round_trip() {
+    let (mut c, mut chip) = setup();
+    screen(&mut c, &mut chip);
+    for _ in 0..50_000 {
+        c.tick(&mut chip, false);
+    }
+    let mut w = StateWriter::new();
+    c.save(&mut w);
+    let data = w.into_bytes();
+    let mut d = Custom::new(Standard::Pal, 0x7fffe);
+    d.load(&mut StateReader::new(&data)).unwrap();
+    let mut chip2 = chip.clone();
+    for _ in 0..100_000 {
+        c.tick(&mut chip, false);
+        d.tick(&mut chip2, false);
+    }
+    assert_eq!((c.v, c.h, c.bplpt), (d.v, d.h, d.bplpt));
+    assert_eq!(c.frame(), d.frame());
+    assert!(d
+        .load(&mut StateReader::new(&data[..data.len() - 1]))
+        .is_err());
+}
+
+#[test]
+fn sprite_dma_fetches_control_and_data_words() {
+    let (mut c, mut chip) = setup();
+    // Sprite 0 at line $2C, low-resolution pixel $A0, two lines high.
+    for (i, w) in [0x2c50u16, 0x2e00, 0x8000, 0x0000, 0xc000, 0x8000, 0, 0]
+        .iter()
+        .enumerate()
+    {
+        chip.set_word(0x3000 + 2 * i as u32, *w);
+    }
+    for (r, v) in [
+        (reg::DIWSTRT, 0x2c81),
+        (reg::DIWSTOP, 0x2cc1),
+        (reg::SPR0PTH, 0),
+        (reg::SPR0PTH + 2, 0x3000),
+        (reg::COLOR00, 0x000),
+        (reg::COLOR00 + 34, 0xf00),
+        (reg::COLOR00 + 36, 0x0f0),
+        (reg::COLOR00 + 38, 0x00f),
+        (reg::DMACON, 0x8000 | dma::DMAEN | dma::SPREN),
+    ] {
+        c.write(r, v);
+    }
+    // One field: software (the Copper) reloads SPR0PT for the next.
+    field(&mut c, &mut chip);
+    let (x, y) = (2 * 0xa0 - 4 * FIRST_CCK, 0x2c - 26);
+    let red = Rgb8 { r: 255, g: 0, b: 0 };
+    let blue = Rgb8 { r: 0, g: 0, b: 255 };
+    let black = Rgb8::default();
+    assert_eq!(pixel(&c, x, y), red);
+    assert_eq!(pixel(&c, x + 2, y), black);
+    assert_eq!(pixel(&c, x, y + 1), blue, "colour 3 on the second line");
+    assert_eq!(pixel(&c, x + 2, y + 1), red);
+    assert_eq!(pixel(&c, x, y + 2), black, "VSTOP");
+    assert_eq!(pixel(&c, x, y - 1), black);
+}

@@ -18,6 +18,7 @@ machine-ted.workspace = true
 machine-c128.workspace = true
 machine-atari8.workspace = true
 machine-cpc.workspace = true
+machine-amiga.workspace = true
 
 [dev-dependencies]
 emu-debug.workspace = true

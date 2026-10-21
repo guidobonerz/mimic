@@ -378,6 +378,8 @@ cargo run -p emu-headless -- --machine c128 --option display=80 --rom-dir roms -
 cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --frames 350 --snapshot atari.png   # ROMs in roms/atari/; --model ntsc, --option basic=off (self-test)
 cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --disk game.atr --frames 600 --snapshot a.png   # also --prg game.xex, --tape game.cas, --cart game.car; --option drives=0..4, drive=810|1050|xf551
 cargo run -p emu-headless -- --machine atari2600 --cart game.a26 --frames 120 --snapshot vcs.png   # no system ROM; --model pal; --option roms=stub (built-in test cartridge)
+cargo run -p emu-headless -- --machine amiga --rom-dir roms --frames 400 --snapshot amiga.png   # ROMs in roms/amiga/ ("Kickstart 1.3.rom", kick13.rom …); --option kickstart=1.2|1.3|2.0|3.1, slow=512k|0, drives=1..4, roms=stub; --model ntsc
+EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test amiga_boot -- --ignored --nocapture   # Kickstarts reach "insert disk"; trace_kickstart with EMU_KICK=1.3, EMU_FRAMES=n
 cargo run -p emu-headless -- --machine cpc --rom-dir roms --frames 150 --snapshot cpc.png   # ROMs in roms/cpc/; --model 6128|664|464, --option crtc=0|1|2, dos=amsdos|parados|none
 cargo run --release -p emu-desktop -- --machine cpc --option joy1=amx   # AMX mouse (click to capture); joy2=joystick daisy-chains a second stick; --crt gt65 green monitor
 cargo run --release -p emu-desktop -- --machine cpc --disk game.dsk   # CPC 664/6128: DSK/EDSK in drive A (RUN"DISC or CAT)
