@@ -17,7 +17,10 @@
 //! | 6 | V | B | F | G | T | R | 5 | 6 |
 //! | 7 | X | C | D | S | W | E | 3 | 4 |
 //! | 8 | Z | CAPS LOCK | A | TAB | Q | ESC | 2 | 1 |
-//! | 9 | DEL | fire 3 | fire 2 | fire 1 | right | left | down | up |
+//! | 9 | DEL | fire 3 | fire 1 | fire 2 | right | left | down | up |
+//!
+//! Fire 2 is the joystick's main button (BASIC's JOY() bit 4), fire 1 the
+//! extra one (bit 5).
 
 use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
 use emu_core::Cycle;
@@ -35,7 +38,7 @@ pub mod keys {
     pub const SPACE: MachineKey = MachineKey(super::k(5, 7));
     pub const ESC: MachineKey = MachineKey(super::k(8, 2));
     pub const DEL: MachineKey = MachineKey(super::k(9, 7));
-    /// Joystick 0: up, down, left, right, fire 1, fire 2.
+    /// Joystick 0: up, down, left, right, fire 2 (main), fire 1.
     pub const JOY0: [MachineKey; 6] = [
         MachineKey(super::k(9, 0)),
         MachineKey(super::k(9, 1)),
@@ -129,6 +132,7 @@ pub fn key_for_char(c: char) -> Option<(MachineKey, bool)> {
         '`' => shifted(k(2, 6)),
         ' ' => plain(keys::SPACE.0),
         '\r' | '\n' => plain(keys::RETURN.0),
+        '\x1b' => plain(keys::ESC.0),
         _ => None,
     }
 }

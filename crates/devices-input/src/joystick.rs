@@ -4,7 +4,9 @@
 //! Pinout shared by the C64/VIC-20/C128 control ports, Atari 8-bit and
 //! Amiga ports (Commodore 64 Programmer's Reference Guide, appendix I):
 //! pin 1 up, 2 down, 3 left, 4 right, 6 fire. Amiga/Atari second buttons on
-//! pin 9 (and pin 5 for a third) are reported for those machines.
+//! pin 9 (and pin 5 for a third) are reported for those machines. On the
+//! CPC's port (Amstrad JY2) the main button, "fire 2", is pin 6 and the
+//! extra one, "fire 1", pin 7 (cpcwiki, "Connector:Digital joystick").
 
 use emu_core::input::{Dirs, InputEvent};
 use emu_core::port::{PortDevice, PortKind, PortLines};
@@ -19,6 +21,8 @@ pub mod pin {
     pub const RIGHT: u32 = 1 << 3;
     pub const BUTTON3: u32 = 1 << 4;
     pub const FIRE: u32 = 1 << 5;
+    /// CPC: fire 1, the extra button (the main one is [`FIRE`], pin 6).
+    pub const CPC_FIRE1: u32 = 1 << 6;
     pub const BUTTON2: u32 = 1 << 8;
 }
 
@@ -53,7 +57,12 @@ impl Joystick {
                 low |= bit;
             }
         }
-        for (mask, bit) in [(1, pin::FIRE), (2, pin::BUTTON2), (4, pin::BUTTON3)] {
+        let buttons = if self.kind == PortKind::CpcJoy {
+            [(1, pin::FIRE), (2, pin::CPC_FIRE1), (4, pin::BUTTON3)]
+        } else {
+            [(1, pin::FIRE), (2, pin::BUTTON2), (4, pin::BUTTON3)]
+        };
+        for (mask, bit) in buttons {
             if self.buttons & mask != 0 {
                 low |= bit;
             }

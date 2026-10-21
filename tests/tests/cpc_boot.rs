@@ -75,3 +75,44 @@ fn cpc_models_boot_to_basic_and_run_a_line() {
         }
     }
 }
+
+#[test]
+#[ignore = "needs CPC OS/BASIC ROMs in EMU_ROM_DIR"]
+fn cpc_joystick_and_sound_through_the_firmware() {
+    use emu_core::input::{Dirs, InputEvent, InputTarget, TimedInput};
+    let mut m = boot("6128");
+    // The firmware also turns a held joystick into keys, so it moves
+    // while a program polls it, not while typing.
+    type_text(m.as_mut(), "10 poke &4000,joy(0):goto 10\r");
+    type_text(m.as_mut(), "run\r");
+    let stick = |dirs, buttons| TimedInput {
+        at: emu_core::Cycle(0),
+        target: InputTarget::Port(machine_cpc::JOY0),
+        event: InputEvent::Digital { dirs, buttons },
+    };
+    // Up and the main button: JOY(0) bits 0 and 4.
+    m.input(TimedInput {
+        at: m.now(),
+        ..stick(Dirs::UP, 1)
+    });
+    run(m.as_mut(), 10);
+    let shot = snapshot(m.as_ref(), "cpc_joy.png");
+    assert_eq!(byte(m.as_mut(), 0x4000), 17, "snapshot at {shot}");
+    m.input(TimedInput {
+        at: m.now(),
+        ..stick(Dirs::NONE, 0)
+    });
+    run(m.as_mut(), 10);
+    assert_eq!(byte(m.as_mut(), 0x4000), 0);
+    // Stop the program (ESC twice).
+    type_text(m.as_mut(), "\x1b\x1b");
+
+    // SOUND channel A, period 239 (~261 Hz), 1 s at volume 15.
+    let mut out = Vec::new();
+    m.audio(&mut out);
+    type_text(m.as_mut(), "sound 1,239,100,15\r");
+    out.clear();
+    m.audio(&mut out);
+    let (lo, hi) = (*out.iter().min().unwrap(), *out.iter().max().unwrap());
+    assert!(i32::from(hi) - i32::from(lo) > 5000, "{lo}..{hi}");
+}

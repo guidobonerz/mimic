@@ -120,11 +120,27 @@ impl Profile {
                 tint: [0.26, 1.0, 0.0],
                 ..base
             },
+            // Amstrad CTM644 colour monitor (RGB, the CPC's default).
+            "ctm644" => Self {
+                aspect: true,
+                scanlines: 0.4,
+                gamma: 1.1,
+                ..base
+            },
+            // Amstrad GT64/GT65 green monitor: the luminance of the RGB
+            // picture on green phosphor.
+            "gt65" => Self {
+                signal: Signal::Monochrome,
+                aspect: true,
+                scanlines: 0.3,
+                tint: [0.2, 1.0, 0.25],
+                ..base
+            },
             _ => return None,
         })
     }
 
-    pub const PRESETS: [&'static str; 9] = [
+    pub const PRESETS: [&'static str; 11] = [
         "raw",
         "1702",
         "1084s",
@@ -134,6 +150,8 @@ impl Profile {
         "ntsc-tv",
         "pet-white",
         "pet-green",
+        "ctm644",
+        "gt65",
     ];
 
     /// Parse a TOML profile; `base = "<preset>"` starts from a preset.
@@ -170,6 +188,7 @@ impl Profile {
             "c64" | "c128" | "vic20" | "c16" | "plus4" => "1702",
             "pet" => "pet-green",
             "atari800xl" => "tv",
+            "cpc" => "ctm644",
             _ => "raw",
         };
         Self::preset(name).unwrap_or_default()

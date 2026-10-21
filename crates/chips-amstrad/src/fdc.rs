@@ -197,6 +197,11 @@ impl Fdc {
         *self = Self::new();
     }
 
+    /// The present cylinder number of drive `i` (debugger).
+    pub fn cylinder(&self, i: usize) -> u8 {
+        self.pcn[i & 1]
+    }
+
     /// Main status register (no side effects).
     pub fn status(&self) -> u8 {
         let seeking = u8::from(self.seek[0].is_some()) | u8::from(self.seek[1].is_some()) << 1;

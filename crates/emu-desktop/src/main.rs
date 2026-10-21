@@ -585,10 +585,10 @@ fn run() -> Result<(), String> {
     let mut input_profile = InputProfile::default_for(&args.machine);
     // A mouse or paddles in a control port: the captured host mouse drives
     // them (click the window to capture, middle button to release).
-    for (option, port) in [("port1", 0u8), ("port2", 1)] {
+    for (option, port) in [("port1", 0u8), ("port2", 1), ("joy1", 0)] {
         if matches!(
             args.config.options.get(option).map(String::as_str),
-            Some("mouse1351" | "paddles")
+            Some("mouse1351" | "paddles" | "amx")
         ) {
             input_profile
                 .mouse

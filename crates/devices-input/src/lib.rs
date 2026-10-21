@@ -2,10 +2,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod amx_mouse;
 pub mod joystick;
 pub mod mouse1351;
 pub mod paddles;
 
+pub use amx_mouse::AmxMouse;
 pub use joystick::Joystick;
 pub use mouse1351::Mouse1351;
 pub use paddles::Paddles;

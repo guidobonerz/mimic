@@ -1,7 +1,7 @@
 //! Amstrad CPC 464, 664 and 6128.
 //!
 //! Z80 at 4 MHz, Gate Array (video, palette, interrupts, wait states),
-//! CRTC 6845, 8255 PPI, AY-3-8912 (keyboard port; sound with Phase 6 M4),
+//! CRTC 6845, 8255 PPI, AY-3-8912 (sound at 1 MHz, keyboard port),
 //! 64 KB RAM (128 KB on the 6128) with the OS and BASIC ROMs and, on the
 //! 664/6128, the AMSDOS disc ROM as upper ROM 7 (see [`memory`]).
 //!
@@ -11,6 +11,10 @@
 //!   or "none".
 //! - `roms`: "stub" runs a tiny built-in program instead of the OS (tests
 //!   without ROMs).
+//! - `joy1`: the joystick port: "joystick" (default; Amstrad JY2, two
+//!   buttons), "amx" (AMX mouse) or "none"; `joy2`: a second joystick
+//!   daisy-chained through the first, "joystick" or "none" (default).
+//!   Joystick 0 reads as keyboard line 9, joystick 1 as line 6.
 //!
 //! Media slots: "drive A" and "drive B" (664/6128: DSK images on the
 //! µPD765A, ports &FA7E motor, &FB7E status, &FB7F data) and "tape"
@@ -48,7 +52,7 @@ use emu_core::frame::{
 use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
+use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, InterruptKind,
@@ -63,6 +67,13 @@ use memory::{Memory, Rom, Roms, ROM_SIZE};
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The Z80's view: memory at 0–&FFFF, I/O ports at `IO_BASE + port`.
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
+
+/// Joystick 0 (the port) and joystick 1 (daisy-chained through it).
+pub const JOY0: PortId = PortId(0);
+pub const JOY1: PortId = PortId(1);
+
+/// T-states one step of AMX mouse motion holds its direction line (1 ms).
+const AMX_STEP: u64 = 4000;
 
 /// Disc drives A and B (664/6128) and the cassette deck.
 pub const SLOT_A: SlotId = SlotId(0);
@@ -126,6 +137,54 @@ impl Model {
             Self::Cpc6128 => ("os6128", "basic6128", "rom6128"),
         }
     }
+}
+
+fn port_option(
+    config: &MachineConfig,
+    key: &str,
+    default: &str,
+    mouse: bool,
+) -> Result<Option<Box<dyn PortDevice>>, ConfigError> {
+    match config
+        .options
+        .get(key)
+        .map(String::as_str)
+        .unwrap_or(default)
+    {
+        "joystick" => Ok(Some(Box::new(devices_input::Joystick::new(
+            PortKind::CpcJoy,
+        )))),
+        "amx" if mouse => Ok(Some(Box::new(devices_input::AmxMouse::new(AMX_STEP)))),
+        "none" => Ok(None),
+        other => Err(ConfigError::Invalid(format!(
+            "{key} option '{other}' ({})",
+            if mouse {
+                "joystick, amx or none"
+            } else {
+                "joystick or none"
+            }
+        ))),
+    }
+}
+
+/// Port lines as keyboard matrix bits: up, down, left, right, fire 2 (pin
+/// 6, the main button), fire 1 (pin 7), fire 3 (pin 5) — BASIC's JOY()
+/// bits 0–5.
+fn joystick_bits(lines: PortLines) -> u8 {
+    use devices_input::joystick::pin;
+    [
+        pin::UP,
+        pin::DOWN,
+        pin::LEFT,
+        pin::RIGHT,
+        pin::FIRE,
+        pin::CPC_FIRE1,
+        pin::BUTTON3,
+    ]
+    .iter()
+    .enumerate()
+    .filter(|(_, &p)| lines.pulled_low & p != 0)
+    .fold(0, |v, (bit, _)| v | 1 << bit)
 }
 
 fn rom16(data: &[u8], role: &str) -> Result<Rom, ConfigError> {
@@ -202,6 +261,8 @@ struct Io {
     has_fdc: bool,
     /// Keyboard matrix lines, a 0 bit = key down.
     keys: [u8; 10],
+    /// Joystick 0 and 1 as matrix bits of lines 9 and 6 (1 = closed).
+    joy: [u8; 2],
     /// The CRTC's VSYNC (PPI port B bit 0) and the cassette's READ (bit 7).
     vsync: bool,
     cas_in: bool,
@@ -213,7 +274,12 @@ impl Io {
     /// The keyboard line selected by PPI port C.
     fn key_line(&self) -> u8 {
         let line = usize::from(self.ppi.c_pins() & 0x0f);
-        self.keys.get(line).copied().unwrap_or(0xff)
+        let joy = match line {
+            9 => self.joy[0],
+            6 => self.joy[1],
+            _ => 0,
+        };
+        self.keys.get(line).copied().unwrap_or(0xff) & !joy
     }
 
     /// What PPI port A reads: the AY's bus in a read cycle.
@@ -322,6 +388,7 @@ fn catch_up(mem: &Memory, io: &mut Io, now: &mut u64, to: u64, side: &mut Side<'
     while *now < to {
         if *now % T_PER_US == CHIP_PHASE {
             io.tick_us(mem);
+            io.ay.tick();
             if io.has_fdc {
                 for d in side.drives.iter_mut() {
                     d.set_motor(io.fdc.motor);
@@ -333,7 +400,10 @@ fn catch_up(mem: &Memory, io: &mut Io, now: &mut u64, to: u64, side: &mut Side<'
             side.tape.set_write(c & 0x20 != 0);
             side.tape.tick();
             io.cas_in = side.tape.read();
-            if let Some(s) = side.audio.push(0) {
+            // Channels A, B and C mixed into mono, as on the speaker.
+            let [a, b, c] = io.ay.output();
+            let level = (i32::from(a) + i32::from(b) + i32::from(c)) * 3 / 4;
+            if let Some(s) = side.audio.push(level) {
                 side.samples.push(s);
             }
         }
@@ -454,6 +524,9 @@ pub struct Cpc {
     audio: Decimator,
     samples: Vec<i16>,
     field_done_pending: bool,
+    ports: [Option<Box<dyn PortDevice>>; 2],
+    /// T-state of the next port refresh.
+    ports_due: u64,
     drives: [CpcDrive; 2],
     tape: CpcTape,
 }
@@ -503,6 +576,7 @@ impl Cpc {
                 fdc: Fdc::new(),
                 has_fdc: model != Model::Cpc464,
                 keys: [0xff; 10],
+                joy: [0; 2],
                 vsync: false,
                 cas_in: false,
                 has_pal: model == Model::Cpc6128,
@@ -514,6 +588,11 @@ impl Cpc {
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
             samples: Vec::new(),
             field_done_pending: false,
+            ports: [
+                port_option(config, "joy1", "joystick", true)?,
+                port_option(config, "joy2", "none", false)?,
+            ],
+            ports_due: 0,
             drives: [CpcDrive::new(), CpcDrive::new()],
             tape: CpcTape::new(),
         };
@@ -535,11 +614,31 @@ impl Cpc {
         }
     }
 
+    /// Read the joystick port's lines into the keyboard matrix.
+    fn refresh_ports(&mut self) {
+        let now = self.sched.now();
+        for (i, dev) in self.ports.iter_mut().enumerate() {
+            self.io.joy[i] = match dev {
+                Some(d) => {
+                    d.write_lines(PortLines::default(), now);
+                    joystick_bits(d.read_lines(now))
+                }
+                None => 0,
+            };
+        }
+    }
+
     /// One instruction (or interrupt response). Returns `Some` if
     /// emulation must stop.
     fn instruction(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
+        }
+        // Lines that change with time (AMX mouse): once a raster line.
+        let now = self.sched.now().0;
+        if now >= self.ports_due && self.ports.iter().any(Option::is_some) {
+            self.ports_due = now + 256;
+            self.refresh_ports();
         }
         self.cpu.set_int(self.io.ga.int_pending);
         let start = self.sched.now().0;
@@ -610,10 +709,17 @@ impl Cpc {
     }
 
     fn apply_input(&mut self, ev: TimedInput) {
-        if let (InputTarget::Keyboard, InputEvent::Key { machine_key, down }) =
-            (ev.target, ev.event)
-        {
-            self.key(machine_key.0, down);
+        match (ev.target, ev.event) {
+            (InputTarget::Keyboard, InputEvent::Key { machine_key, down }) => {
+                self.key(machine_key.0, down);
+            }
+            (InputTarget::Port(p), event) => {
+                if let Some(Some(dev)) = self.ports.get_mut(usize::from(p.0)) {
+                    dev.input(&event);
+                }
+                self.refresh_ports();
+            }
+            _ => {}
         }
     }
 
@@ -801,7 +907,22 @@ impl Machine for Cpc {
             .zip(self.io.ay.regs)
             .map(|(&n, v)| (n, v))
             .collect();
-        vec![
+        let (hcc, vlc, vcc) = c.counters();
+        let mut crtc = crtc;
+        crtc.extend([
+            ("HCC", hcc),
+            ("VLC", vlc),
+            ("VCC", vcc),
+            ("TYPE", c.kind.number()),
+        ]);
+        let f = &self.io.fdc;
+        let fdc = [
+            ("MSR", f.status()),
+            ("MOTOR", u8::from(f.motor)),
+            ("PCN_A", f.cylinder(0)),
+            ("PCN_B", f.cylinder(1)),
+        ];
+        let mut chips = vec![
             regs("crtc", None, &crtc),
             regs("gate_array", None, &gav),
             regs(
@@ -815,7 +936,11 @@ impl Machine for Cpc {
                 ],
             ),
             regs("ay", None, &ay),
-        ]
+        ];
+        if self.io.has_fdc {
+            chips.push(regs("fdc", None, &fdc));
+        }
+        chips
     }
 
     fn devices(&self) -> Vec<DeviceId> {
@@ -835,15 +960,39 @@ impl Machine for Cpc {
     }
 
     fn ports(&self) -> Vec<PortInfo> {
-        Vec::new()
+        [(JOY0, "joystick port"), (JOY1, "joystick 2 (daisy chain)")]
+            .into_iter()
+            .map(|(id, name)| PortInfo {
+                id,
+                kind: PortKind::CpcJoy,
+                name,
+                connected: self.ports[usize::from(id.0)].is_some(),
+            })
+            .collect()
     }
 
-    fn connect(&mut self, port: PortId, _dev: Box<dyn PortDevice>) -> Result<(), PortError> {
-        Err(PortError::NoSuchPort(port))
+    fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError> {
+        let Some(slot) = self.ports.get_mut(usize::from(port.0)) else {
+            return Err(PortError::NoSuchPort(port));
+        };
+        if dev.kind() != PortKind::CpcJoy {
+            return Err(PortError::Incompatible {
+                port: PortKind::CpcJoy,
+                device: dev.kind(),
+            });
+        }
+        if slot.is_some() {
+            return Err(PortError::Occupied(port));
+        }
+        *slot = Some(dev);
+        self.refresh_ports();
+        Ok(())
     }
 
-    fn disconnect(&mut self, _port: PortId) -> Option<Box<dyn PortDevice>> {
-        None
+    fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>> {
+        let dev = self.ports.get_mut(usize::from(port.0))?.take();
+        self.refresh_ports();
+        dev
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
@@ -886,6 +1035,8 @@ impl Machine for Cpc {
             w.u8(self.model.id());
             w.bool(self.field_done_pending);
             w.raw(&self.io.keys);
+            w.raw(&self.io.joy);
+            w.u64(self.ports_due);
             w.bool(self.io.vsync);
             w.bool(self.io.cas_in);
             self.audio.save(w);
@@ -902,6 +1053,16 @@ impl Machine for Cpc {
         self.tape.save(&mut w);
         for d in &self.drives {
             d.save(&mut w);
+        }
+        for (i, tag) in [*b"JOY0", *b"JOY1"].into_iter().enumerate() {
+            w.chunk(tag, 1, |w| {
+                w.bytes(
+                    &self.ports[i]
+                        .as_ref()
+                        .map(|d| d.save_state())
+                        .unwrap_or_default(),
+                );
+            });
         }
         w.into_bytes()
     }
@@ -923,6 +1084,8 @@ impl Machine for Cpc {
         }
         let field_done_pending = c.bool()?;
         c.raw_into(&mut next.io.keys)?;
+        c.raw_into(&mut next.io.joy)?;
+        let ports_due = c.u64()?;
         next.io.vsync = c.bool()?;
         next.io.cas_in = c.bool()?;
         next.audio.load(&mut c)?;
@@ -942,6 +1105,28 @@ impl Machine for Cpc {
         for _ in 0..2 {
             CpcDrive::new().load(&mut r)?;
         }
+        let mut port_states = Vec::new();
+        for tag in [*b"JOY0", *b"JOY1"] {
+            let (_, mut c) = r.chunk(tag, 1)?;
+            port_states.push(c.bytes()?.to_vec());
+        }
+        let backups: Vec<Option<Vec<u8>>> = self
+            .ports
+            .iter()
+            .map(|d| d.as_ref().map(|d| d.save_state()))
+            .collect();
+        for (i, state) in port_states.iter().enumerate() {
+            if let (Some(dev), false) = (&mut self.ports[i], state.is_empty()) {
+                if let Err(e) = dev.load_state(state) {
+                    for (dev, b) in self.ports.iter_mut().zip(&backups) {
+                        if let (Some(d), Some(b)) = (dev, b) {
+                            let _ = d.load_state(b);
+                        }
+                    }
+                    return Err(e);
+                }
+            }
+        }
         let mut rest = StateReader::new(&s[at..]);
         self.tape.load(&mut rest)?;
         for d in &mut self.drives {
@@ -955,6 +1140,7 @@ impl Machine for Cpc {
         self.audio = next.audio;
         self.samples.clear();
         self.field_done_pending = field_done_pending;
+        self.ports_due = ports_due;
         Ok(())
     }
 }

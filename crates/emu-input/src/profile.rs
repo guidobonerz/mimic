@@ -118,10 +118,12 @@ impl Profile {
         // games' joysticks.
         let port = match machine {
             "c64" | "c128" => Some(1),
-            "vic20" | "c16" | "plus4" | "atari800xl" => Some(0),
+            "vic20" | "c16" | "plus4" | "atari800xl" | "cpc" => Some(0),
             _ => None,
         };
-        let joystick = match port {
+        // The CPC's numeric keypad is its function keys: gamepad only.
+        let keys = machine != "cpc";
+        let mut joystick = match port {
             Some(port) => vec![
                 JoystickMap {
                     port,
@@ -144,6 +146,9 @@ impl Profile {
             ],
             None => Vec::new(),
         };
+        if !keys {
+            joystick.retain(|j| !matches!(j.source, JoystickSource::Keys { .. }));
+        }
         Self {
             machine: machine.into(),
             keyboard: KeyboardMode::Positional,

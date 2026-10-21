@@ -88,7 +88,8 @@ own section.
 | CDT tape images (TZX 1.20 block format, pulse and pause semantics) | "TZX format" specification, World of Spectrum (format revision 1.20) | `media/src/cdt.rs`, `drives-other/src/cpc_tape.rs` |
 | µPD765A floppy controller (commands, phases, MSR, ST0–ST3, end of cylinder without TC) | NEC µPD765 data sheet; cpcwiki, "765 FDC" | `chips-amstrad/src/fdc.rs` |
 | DSK / extended DSK disk images | cpcwiki, "Format:DSK disk image file format" (Marco Vieth, Ulrich Doewich, Kevin Thacker) | `media/src/dsk.rs`, `drives-other/src/cpc_drive.rs` |
-| AY-3-8912 registers | General Instrument AY-3-8910/8912 data sheet | `chips-amstrad/src/ay.rs` |
+| CPC joystick port pinout (fire 2 = main button, pin 6; fire 1 = pin 7), JOY() bits | cpcwiki, "Connector:Digital joystick"; magic-cookie.co.uk, "CPC JOY" (https://magic-cookie.co.uk/CPC/joy.html) | `devices-input/src/joystick.rs`, `amx_mouse.rs`, `machine-cpc` |
+| AY-3-8912 registers, tone/noise/envelope generators, volume DAC | General Instrument AY-3-8910/8912 data sheet | `chips-amstrad/src/ay.rs` |
 | Z80 samples /WAIT on the falling edge of T2 (TW for I/O) | Zilog Z80 CPU User Manual (UM0080), timing diagrams; Thomas Harte, CLK wiki "Amstrad CPC Timing" (search summary, page not reachable) | `cpu-z80/src/lib.rs` (`step_timed`) |
 
 ### Video, colour and host conventions
