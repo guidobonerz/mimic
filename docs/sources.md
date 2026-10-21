@@ -76,6 +76,13 @@ own section.
 | CAS | CAS format as documented with the A8CAS tools | `media/src/cas.rs` |
 | CAR | CAR format and type numbers from the Atari800 project's and Altirra's documentation | `media/src/car.rs` |
 
+### Amstrad CPC
+
+| Topic | Document | Used in |
+| --- | --- | --- |
+| Z80 instruction lengths on the CPC (µs/"NOPs"), wait-state rule (Gate Array holds /WAIT on 3 of 4 T-states; accesses stretched, internal cycles not; I/O sampled on TW) | cpcwiki, "Z80", CPC instruction timings (read via the mirror https://oldwiki.cpcwiki.eu/index.php/Z80) | `chips-amstrad/src/gate_array.rs`, `machine-cpc/tests/z80_timing.rs` |
+| Z80 samples /WAIT on the falling edge of T2 (TW for I/O) | Zilog Z80 CPU User Manual (UM0080), timing diagrams; Thomas Harte, CLK wiki "Amstrad CPC Timing" (search summary, page not reachable) | `cpu-z80/src/lib.rs` (`step_timed`) |
+
 ### Video, colour and host conventions
 
 | Topic | Document | Used in |
@@ -108,6 +115,8 @@ Pages fetched or searched while building (beyond the documents above):
 
 - https://virtualdub.org/altirra — Acid800 releases and archive names.
 - AtariAge forum, "Acid800 - an Atari test suite" (https://forums.atariage.com/topic/171296-acid800-an-atari-test-suite/) — how the suite is run (search result).
+- Searches for the CPC wait-state rule: cpcwiki forum threads (not readable, HTTP 403) and the CLK wiki page "Amstrad CPC Timing" (HTTP 502); only their search summaries were used.
+- Harte Z80 per-T-state bus traces (`cycles` in the test data) — the M-cycle placement of `Z80::step_timed` is checked against them.
 - The Acid800 1.2 archive's own `README.html` and test sources — how standalone tests report pass/fail (`_testPassed`, `_testFailed`, `_testSkipped` labels in the `.lab` files).
 - Acid800 test sources (MIT) as hardware measurements: the expected values and cycle comments of `antic_dmapattern` (playfield and refresh DMA slots), `antic_pfstarttiming`/`antic_pfstoptiming` (DMA window edges), `antic_vscroll`/`antic_vscroldli`, `antic_dlitiming`, `antic_blockednmi`, `antic_linebuffering`, `gtia_pmresize`/`gtia_pmoverlap`/`gtia_pmretrigger` (player width logic and retrigger) and `pokey_sertiming`. The models in `chips-atari` and `cpu-6502` were fitted to these results; no test code was copied.
 

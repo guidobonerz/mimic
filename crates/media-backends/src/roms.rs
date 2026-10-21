@@ -200,8 +200,50 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             0x2000,
         ),
     ];
+    // Amstrad CPC 464/664/6128 (one machine, the model picks the ROMs):
+    // 16 KB OS and BASIC per model (BASIC 1.0 on the 464, 1.1 on the
+    // 6128), or the common 32 KB files with both (OS first); AMSDOS for
+    // the disk models; ParaDOS as an optional AMSDOS replacement.
+    const CPC: &[RomSpec] = &[
+        optional("os464", &["os464", "os-464", "cpc464-os"], 0x4000),
+        optional(
+            "basic464",
+            &[
+                "basic1-0",
+                "basic10",
+                "basic-1-0",
+                "basic464",
+                "cpc464-basic",
+            ],
+            0x4000,
+        ),
+        optional("os664", &["os664", "os-664", "cpc664-os"], 0x4000),
+        optional(
+            "basic664",
+            &["basic664", "basic-664", "cpc664-basic"],
+            0x4000,
+        ),
+        optional("os6128", &["os6128", "os-6128", "cpc6128-os"], 0x4000),
+        optional(
+            "basic6128",
+            &[
+                "basic1-1",
+                "basic11",
+                "basic-1-1",
+                "basic6128",
+                "cpc6128-basic",
+            ],
+            0x4000,
+        ),
+        optional("rom464", &["cpc464"], 0x8000),
+        optional("rom664", &["cpc664"], 0x8000),
+        optional("rom6128", &["cpc6128"], 0x8000),
+        optional("amsdos", &["amsdos"], 0x4000),
+        optional("parados", &["parados"], 0x4000),
+    ];
     match machine {
         "atari800xl" => ATARI800XL,
+        "cpc" => CPC,
         "c64" => C64,
         "c128" => C128,
         "vic20" => VIC20,
@@ -222,6 +264,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "plus4" => &["plus4"],
         "c16" => &["c16", "plus4"],
         "atari800xl" => &["atari800xl", "atari8", "atari"],
+        "cpc" => &["cpc", "amstrad"],
         _ => &[],
     }
 }
@@ -332,6 +375,33 @@ mod tests {
         fs::remove_file(dir.join("basic.bin")).unwrap();
         let err = load(&dir, "c64").unwrap_err();
         assert!(err.to_string().contains("basic"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cpc_roms_per_model_and_combined() {
+        let dir = temp_dir("cpc");
+        fs::create_dir_all(dir.join("cpc")).unwrap();
+        for (name, v) in [
+            ("OS464.ROM", 1),
+            ("BASIC1-0.ROM", 2),
+            ("OS6128.ROM", 3),
+            ("BASIC1-1.ROM", 4),
+            ("AMSDOS.ROM", 5),
+            ("BASIC664.ROM", 6),
+        ] {
+            fs::write(dir.join("cpc").join(name), vec![v; 0x4000]).unwrap();
+        }
+        fs::write(dir.join("cpc/cpc664.rom"), vec![7; 0x8000]).unwrap();
+        let roms = load(&dir, "cpc").unwrap();
+        assert_eq!(roms["os464"][0], 1);
+        assert_eq!(roms["basic464"][0], 2);
+        assert_eq!(roms["os6128"][0], 3);
+        assert_eq!(roms["basic6128"][0], 4);
+        assert_eq!(roms["amsdos"][0], 5);
+        assert_eq!(roms["basic664"][0], 6);
+        assert_eq!(roms["rom664"][0], 7);
+        assert!(!roms.contains_key("os664"));
         fs::remove_dir_all(&dir).unwrap();
     }
 

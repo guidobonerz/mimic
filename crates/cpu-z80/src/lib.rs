@@ -18,9 +18,16 @@
 //!
 //! **Timing.** [`Cpu::tick`] is one T-state. An instruction executes in its
 //! first T-state and then spends its exact T-state count; the bus accesses
-//! happen in the right order but all in that first T-state. Machines whose
-//! hardware inserts wait states per access (CPC) need M-cycle placement of
-//! the accesses later.
+//! happen in the right order but all in that first T-state.
+//!
+//! Machines whose hardware stretches bus cycles (the CPC's Gate Array) use
+//! [`Z80::step_timed`] with a [`TimedBus`] instead: every access is an
+//! M-cycle placed on its T-state (opcode fetch 4 T-states, memory read and
+//! write 3, I/O 4, with the internal T-states between them as on the real
+//! chip), and before each access the bus is told on which T-state of the
+//! instruction it samples /WAIT, so it can insert wait states and bring the
+//! rest of the machine up to that moment first. The placement is checked
+//! against the per-T-state bus traces of the Harte tests.
 //!
 //! **Interrupts.** `set_int` is the level of /INT, `set_nmi` the level of
 //! /NMI (edge-triggered). In mode 2 the vector byte comes from
@@ -39,6 +46,57 @@ use emu_core::{
 
 /// I/O port `p` is at bus address `IO_BASE + p`.
 pub const IO_BASE: u32 = 0x1_0000;
+
+/// The kind of an M-cycle's bus access.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Access {
+    /// Opcode fetch (M1); /WAIT sampled on T2.
+    Fetch,
+    /// Memory read or write; /WAIT sampled on T2.
+    Read,
+    Write,
+    /// I/O read or write; /WAIT sampled on the automatic wait state TW.
+    IoRead,
+    IoWrite,
+    /// Interrupt acknowledge (M1 with /IORQ, two automatic wait states).
+    IntAck,
+}
+
+/// A bus that can stretch the Z80's M-cycles ([`Z80::step_timed`]).
+pub trait TimedBus: Bus {
+    /// The access of the coming M-cycle samples /WAIT on T-state `t` of the
+    /// instruction (counted from 0, including earlier wait states). Returns
+    /// the wait states to insert there; the access itself follows on
+    /// T-state `t + waits`.
+    fn wait_states(&mut self, access: Access, t: u32) -> u32;
+}
+
+/// A plain [`Bus`] that never waits.
+struct NoWait<'a>(&'a mut dyn Bus);
+
+impl Bus for NoWait<'_> {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        self.0.read(addr, size)
+    }
+
+    fn peek(&self, addr: u32, size: Size) -> u32 {
+        self.0.peek(addr, size)
+    }
+
+    fn write(&mut self, addr: u32, size: Size, v: u32) {
+        self.0.write(addr, size, v);
+    }
+
+    fn addr_bits(&self) -> u8 {
+        self.0.addr_bits()
+    }
+}
+
+impl TimedBus for NoWait<'_> {
+    fn wait_states(&mut self, _: Access, _: u32) -> u32 {
+        0
+    }
+}
 
 pub mod flag {
     pub const C: u8 = 0x01;
@@ -97,6 +155,10 @@ pub struct Z80 {
     entered: Option<InterruptKind>,
     /// Flags written during the current instruction.
     flags_written: bool,
+    /// T-states of the current instruction so far, and the wait states
+    /// among them (only meaningful inside a step).
+    t: u32,
+    waits: u32,
 }
 
 impl Z80 {
@@ -192,6 +254,24 @@ impl Z80 {
     /// T-state group) and return its T-states. [`Cpu::tick`] spreads this
     /// over T-states; tests and fast paths may call it directly.
     pub fn step(&mut self, bus: &mut dyn Bus) -> u32 {
+        self.step_timed(&mut NoWait(bus))
+    }
+
+    /// [`Z80::step`] on a bus that may insert wait states; the result
+    /// includes them.
+    pub fn step_timed(&mut self, bus: &mut dyn TimedBus) -> u32 {
+        self.t = 0;
+        self.waits = 0;
+        let t = self.step_inner(bus);
+        // Internal T-states after the last access.
+        debug_assert!(self.t - self.waits <= t, "accesses beyond the instruction");
+        let total = t + self.waits;
+        self.t = 0;
+        self.waits = 0;
+        total
+    }
+
+    fn step_inner(&mut self, bus: &mut dyn TimedBus) -> u32 {
         // No interrupt is taken right after EI, and none between a prefix
         // and its instruction.
         let after_prefix = self.prefix_only;
@@ -207,6 +287,7 @@ impl Z80 {
         }
         if self.halted {
             // HALT executes NOPs (refresh continues) until an interrupt.
+            self.m_cycle(bus, Access::Fetch, 4, 1);
             self.inc_r();
             self.q = 0;
             self.p = false;
@@ -220,9 +301,12 @@ impl Z80 {
         t
     }
 
-    fn nmi(&mut self, bus: &mut dyn Bus) -> u32 {
+    fn nmi(&mut self, bus: &mut dyn TimedBus) -> u32 {
         self.halted = false;
         self.iff1 = false;
+        // An opcode fetch whose byte is ignored, one T-state longer.
+        self.m_cycle(bus, Access::Fetch, 4, 1);
+        self.internal(1);
         self.inc_r();
         let pc = self.pc;
         self.push(bus, pc);
@@ -234,10 +318,13 @@ impl Z80 {
         11
     }
 
-    fn irq(&mut self, bus: &mut dyn Bus) -> u32 {
+    fn irq(&mut self, bus: &mut dyn TimedBus) -> u32 {
         self.halted = false;
         self.iff1 = false;
         self.iff2 = false;
+        // Acknowledge: M1 with two automatic wait states (7 T-states), the
+        // vector byte read after them.
+        self.m_cycle(bus, Access::IntAck, 7, 3);
         self.inc_r();
         self.q = 0;
         self.p = false;
@@ -275,15 +362,36 @@ impl Z80 {
         self.r = (self.r & 0x80) | (self.r.wrapping_add(1) & 0x7f);
     }
 
-    pub(crate) fn read(&mut self, bus: &mut dyn Bus, addr: u16) -> u8 {
+    /// An M-cycle of `len` T-states whose access samples /WAIT on its
+    /// T-state `strobe`; the bus may stretch it there.
+    pub(crate) fn m_cycle(
+        &mut self,
+        bus: &mut dyn TimedBus,
+        access: Access,
+        len: u32,
+        strobe: u32,
+    ) {
+        let w = bus.wait_states(access, self.t + strobe);
+        self.waits += w;
+        self.t += len + w;
+    }
+
+    /// T-states without a bus access between two M-cycles.
+    pub(crate) fn internal(&mut self, n: u32) {
+        self.t += n;
+    }
+
+    pub(crate) fn read(&mut self, bus: &mut dyn TimedBus, addr: u16) -> u8 {
+        self.m_cycle(bus, Access::Read, 3, 1);
         bus.read(u32::from(addr), Size::Byte) as u8
     }
 
-    pub(crate) fn write(&mut self, bus: &mut dyn Bus, addr: u16, v: u8) {
+    pub(crate) fn write(&mut self, bus: &mut dyn TimedBus, addr: u16, v: u8) {
+        self.m_cycle(bus, Access::Write, 3, 1);
         bus.write(u32::from(addr), Size::Byte, u32::from(v));
     }
 
-    pub(crate) fn push(&mut self, bus: &mut dyn Bus, v: u16) {
+    pub(crate) fn push(&mut self, bus: &mut dyn TimedBus, v: u16) {
         let [hi, lo] = v.to_be_bytes();
         self.sp = self.sp.wrapping_sub(1);
         self.write(bus, self.sp, hi);
@@ -291,7 +399,7 @@ impl Z80 {
         self.write(bus, self.sp, lo);
     }
 
-    pub(crate) fn pop(&mut self, bus: &mut dyn Bus) -> u16 {
+    pub(crate) fn pop(&mut self, bus: &mut dyn TimedBus) -> u16 {
         let lo = self.read(bus, self.sp);
         self.sp = self.sp.wrapping_add(1);
         let hi = self.read(bus, self.sp);

@@ -4,8 +4,8 @@
 //!
 //! Checked: every register including MEMPTR (`wz`), Q, P and the EI flag,
 //! RAM, the T-state count, the order and kind of the memory and I/O
-//! accesses and the bytes written to ports. Not checked: on which T-state
-//! each access happens (the core runs an instruction in its first T-state).
+//! accesses, the T-state each of them happens on (the M-cycle placement of
+//! [`Z80::step_timed`]) and the bytes written to ports.
 //!
 //! Data: `tools/fetch-testdata.sh`, then set `EMU_TESTDATA_DIR`.
 //! By default every 10th test per file runs; `EMU_HARTE_FULL=1` runs all;
@@ -15,8 +15,8 @@
 
 use std::path::PathBuf;
 
-use cpu_z80::{IO_BASE, Z80};
-use emu_core::{Bus, Cpu, CycleResult, Size};
+use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
+use emu_core::{Bus, Size};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -60,26 +60,35 @@ struct Test {
     ports: Vec<(u16, u8, String)>,
 }
 
-/// One bus access: address and kind ("mr", "mw", "ir", "iw").
-type Access = (u16, &'static str);
+/// One bus access: address, kind ("mr", "mw", "ir", "iw") and T-state.
+type Logged = (u16, &'static str, u32);
 
 /// Flat 64 KiB RAM plus scripted port reads; logs every access.
 struct RecordingBus {
     mem: Vec<u8>,
     port_reads: Vec<(u16, u8)>,
     port_writes: Vec<(u16, u8)>,
-    log: Vec<Access>,
+    log: Vec<Logged>,
+    /// T-state of the access announced by `wait_states`.
+    t: u32,
+}
+
+impl TimedBus for RecordingBus {
+    fn wait_states(&mut self, _: Access, t: u32) -> u32 {
+        self.t = t;
+        0
+    }
 }
 
 impl Bus for RecordingBus {
     fn read(&mut self, addr: u32, _: Size) -> u32 {
         if addr >= IO_BASE {
             let port = (addr - IO_BASE) as u16;
-            self.log.push((port, "ir"));
+            self.log.push((port, "ir", self.t));
             let i = self.port_reads.iter().position(|&(p, _)| p == port);
             return u32::from(i.map_or(0xff, |i| self.port_reads.remove(i).1));
         }
-        self.log.push((addr as u16, "mr"));
+        self.log.push((addr as u16, "mr", self.t));
         u32::from(self.mem[addr as usize & 0xffff])
     }
 
@@ -90,12 +99,12 @@ impl Bus for RecordingBus {
     fn write(&mut self, addr: u32, _: Size, v: u32) {
         if addr >= IO_BASE {
             let port = (addr - IO_BASE) as u16;
-            self.log.push((port, "iw"));
+            self.log.push((port, "iw", self.t));
             self.port_writes.push((port, v as u8));
             return;
         }
         self.mem[addr as usize & 0xffff] = v as u8;
-        self.log.push((addr as u16, "mw"));
+        self.log.push((addr as u16, "mw", self.t));
     }
 
     fn addr_bits(&self) -> u8 {
@@ -149,6 +158,7 @@ fn run(test: &Test) -> Result<(), String> {
             .collect(),
         port_writes: Vec::new(),
         log: Vec::new(),
+        t: 0,
     };
     for &(addr, v) in &test.initial.ram {
         bus.mem[usize::from(addr)] = v;
@@ -156,23 +166,19 @@ fn run(test: &Test) -> Result<(), String> {
     let mut cpu = Z80::new();
     set_state(&mut cpu, &test.initial);
 
-    for n in 0..test.cycles.len() {
-        let r = cpu.tick(&mut bus);
-        let last = n + 1 == test.cycles.len();
-        let done = matches!(r, CycleResult::InstrDone { .. });
-        if done != last {
-            return Err(format!(
-                "instruction ended after {} of {} T-states",
-                n + 1,
-                test.cycles.len()
-            ));
-        }
+    let t = cpu.step_timed(&mut bus);
+    if t as usize != test.cycles.len() {
+        return Err(format!(
+            "instruction took {t} of {} T-states",
+            test.cycles.len()
+        ));
     }
 
-    let expected_log: Vec<Access> = test
+    let expected_log: Vec<Logged> = test
         .cycles
         .iter()
-        .filter_map(|(addr, _, pins)| {
+        .enumerate()
+        .filter_map(|(i, (addr, _, pins))| {
             let p = pins.as_bytes();
             let kind = match (p[0], p[1], p[2], p[3]) {
                 (b'r', _, b'm', _) => "mr",
@@ -181,7 +187,7 @@ fn run(test: &Test) -> Result<(), String> {
                 (_, b'w', _, b'i') => "iw",
                 _ => return None,
             };
-            Some((addr.unwrap_or(0), kind))
+            Some((addr.unwrap_or(0), kind, i as u32))
         })
         .collect();
     if bus.log != expected_log {

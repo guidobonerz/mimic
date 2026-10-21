@@ -442,6 +442,7 @@ Added 2026-10-21; not part of a phase gate yet, scheduled when a phase has room:
 - **Atari 8-bit models** (configuration of `machine-atari8`, Phase 5 ships the 800XL only): **400** (and 800: OS-A/B, four joystick ports, no PORTB banking, RESET as NMI), **65XE** (800XL hardware in XE case), **130XE** (128 KB, PORTB banking with separate CPU/ANTIC access).
 - **Atari 2600 (VCS)**: own crate `machine-atari2600` with 6507 (cpu-6502 variant), TIA (beam-racing video, no frame buffer DMA) and RIOT 6532 in new `chips-*` code; cartridge bank-switching schemes. The debugger/preview contract applies unchanged.
 - **CPC 464 and 664** alongside the 6128 in Phase 6 (see the phase table).
+- **Amstrad CPC Plus** (464+/6128+/GX4000): ASIC (hardware sprites, DMA sound, split screen, 4096-colour palette, soft scroll), CRTC types 3/4, CPR cartridges; as models of `machine-cpc` after Phase 6.
 - **Mattel Intellivision**: new CPU core `cpu-cp1610` (GI CP1610, 16-bit), STIC video (MOBs, GRAM/GROM), PSG AY-3-8914; Executive ROM and GROM user-supplied.
 - **Sinclair ZX81**: reuses `cpu-z80`; the CPU itself generates the display (NMI/HALT-driven, ULA counts lines), 1 KB/16 KB RAM, tape via ear/mic; ROM user-supplied.
 - **Tandy TRS-80 Model I/III**: reuses `cpu-z80`; memory-mapped text screen with block graphics, keyboard matrix in the address space, cassette, Expansion Interface / FDC 1771/1793 floppies (DMK/JV1/JV3 images); ROMs user-supplied.

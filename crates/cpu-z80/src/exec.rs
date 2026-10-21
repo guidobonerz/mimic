@@ -3,10 +3,10 @@
 //! (C. Dinu, "Decoding Z80 Opcodes"); DD/FD substitute IX/IY for HL,
 //! IXH/IXL for H/L and `(IX+d)` for `(HL)`.
 
-use emu_core::{Bus, Size};
+use emu_core::Size;
 
 use crate::flag::{C, H, N, PV, S, X, Y, Z};
-use crate::{IO_BASE, Z80};
+use crate::{Access, TimedBus, IO_BASE, Z80};
 
 /// Which register stands in for HL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,42 +40,45 @@ impl Z80 {
     }
 
     /// M1: opcode fetch, refresh counter.
-    fn fetch_opcode(&mut self, bus: &mut dyn Bus) -> u8 {
-        let op = self.read(bus, self.pc);
+    fn fetch_opcode(&mut self, bus: &mut dyn TimedBus) -> u8 {
+        self.m_cycle(bus, Access::Fetch, 4, 1);
+        let op = bus.read(u32::from(self.pc), Size::Byte) as u8;
         self.pc = self.pc.wrapping_add(1);
         self.inc_r();
         op
     }
 
-    fn imm8(&mut self, bus: &mut dyn Bus) -> u8 {
+    fn imm8(&mut self, bus: &mut dyn TimedBus) -> u8 {
         let v = self.read(bus, self.pc);
         self.pc = self.pc.wrapping_add(1);
         v
     }
 
-    fn imm16(&mut self, bus: &mut dyn Bus) -> u16 {
+    fn imm16(&mut self, bus: &mut dyn TimedBus) -> u16 {
         let lo = self.imm8(bus);
         let hi = self.imm8(bus);
         u16::from_le_bytes([lo, hi])
     }
 
-    fn read16(&mut self, bus: &mut dyn Bus, a: u16) -> u16 {
+    fn read16(&mut self, bus: &mut dyn TimedBus, a: u16) -> u16 {
         let lo = self.read(bus, a);
         let hi = self.read(bus, a.wrapping_add(1));
         u16::from_le_bytes([lo, hi])
     }
 
-    fn write16(&mut self, bus: &mut dyn Bus, a: u16, v: u16) {
+    fn write16(&mut self, bus: &mut dyn TimedBus, a: u16, v: u16) {
         let [lo, hi] = v.to_le_bytes();
         self.write(bus, a, lo);
         self.write(bus, a.wrapping_add(1), hi);
     }
 
-    fn port_in(&mut self, bus: &mut dyn Bus, port: u16) -> u8 {
+    fn port_in(&mut self, bus: &mut dyn TimedBus, port: u16) -> u8 {
+        self.m_cycle(bus, Access::IoRead, 4, 2);
         bus.read(IO_BASE + u32::from(port), Size::Byte) as u8
     }
 
-    fn port_out(&mut self, bus: &mut dyn Bus, port: u16, v: u8) {
+    fn port_out(&mut self, bus: &mut dyn TimedBus, port: u16, v: u8) {
+        self.m_cycle(bus, Access::IoWrite, 4, 2);
         bus.write(IO_BASE + u32::from(port), Size::Byte, u32::from(v));
     }
 
@@ -178,12 +181,13 @@ impl Z80 {
     }
 
     /// The memory operand for `(HL)`: HL, or IX/IY plus a displacement
-    /// fetched now (which also sets MEMPTR).
-    fn mem_addr(&mut self, bus: &mut dyn Bus, idx: Idx) -> u16 {
+    /// fetched now (which also sets MEMPTR) and added in 5 T-states.
+    fn mem_addr(&mut self, bus: &mut dyn TimedBus, idx: Idx) -> u16 {
         if idx == Idx::Hl {
             return self.hl();
         }
         let d = self.imm8(bus) as i8;
+        self.internal(5);
         let a = self.idx_reg(idx).wrapping_add(d as u16);
         self.wz = a;
         a
@@ -195,14 +199,14 @@ impl Z80 {
     }
 
     /// One instruction with its prefixes; returns its T-states.
-    pub(crate) fn execute(&mut self, bus: &mut dyn Bus) -> u32 {
+    pub(crate) fn execute(&mut self, bus: &mut dyn TimedBus) -> u32 {
         let op = self.fetch_opcode(bus);
         self.exec_main(bus, op, Idx::Hl)
     }
 
     /// DD/FD: the next opcode runs with IX/IY. Before another prefix the
     /// DD/FD acts alone like a 4 T-state NOP.
-    fn index_prefix(&mut self, bus: &mut dyn Bus, idx: Idx) -> u32 {
+    fn index_prefix(&mut self, bus: &mut dyn TimedBus, idx: Idx) -> u32 {
         let next = bus.peek(u32::from(self.pc), Size::Byte) as u8;
         if matches!(next, 0xdd | 0xfd | 0xed) {
             self.prefix_only = true;
@@ -214,7 +218,7 @@ impl Z80 {
         self.exec_main(bus, op, idx)
     }
 
-    fn exec_main(&mut self, bus: &mut dyn Bus, op: u8, idx: Idx) -> u32 {
+    fn exec_main(&mut self, bus: &mut dyn TimedBus, op: u8, idx: Idx) -> u32 {
         let (x, y, z) = (op >> 6, (op >> 3) & 7, op & 7);
         let (p, q) = (y >> 1, y & 1);
         let indexed = idx != Idx::Hl;
@@ -231,6 +235,7 @@ impl Z80 {
                         4 + pre
                     }
                     2 => {
+                        self.internal(1);
                         let d = self.imm8(bus) as i8;
                         self.b = self.b.wrapping_sub(1);
                         if self.b != 0 {
@@ -324,6 +329,7 @@ impl Z80 {
                     if y == 6 {
                         let a = self.mem_addr(bus, idx);
                         let v = self.read(bus, a);
+                        self.internal(1);
                         let r = step(self, v);
                         self.write(bus, a, r);
                         if indexed {
@@ -340,8 +346,18 @@ impl Z80 {
                 }
                 6 => {
                     if y == 6 {
-                        let a = self.mem_addr(bus, idx);
+                        let a = if indexed {
+                            let d = self.imm8(bus) as i8;
+                            let a = self.idx_reg(idx).wrapping_add(d as u16);
+                            self.wz = a;
+                            a
+                        } else {
+                            self.hl()
+                        };
                         let n = self.imm8(bus);
+                        if indexed {
+                            self.internal(2);
+                        }
                         self.write(bus, a, n);
                         if indexed {
                             19
@@ -406,6 +422,7 @@ impl Z80 {
             }
             _ => match z {
                 0 => {
+                    self.internal(1);
                     if self.cond(y) {
                         self.pc = self.pop(bus);
                         self.wz = self.pc;
@@ -482,7 +499,10 @@ impl Z80 {
                         11 + pre
                     }
                     4 => {
-                        let v = self.read16(bus, self.sp);
+                        let lo = self.read(bus, self.sp);
+                        let hi = self.read(bus, self.sp.wrapping_add(1));
+                        self.internal(1);
+                        let v = u16::from_le_bytes([lo, hi]);
                         let r = self.idx_reg(idx);
                         // High byte first on the write-back.
                         let [lo, hi] = r.to_le_bytes();
@@ -514,6 +534,7 @@ impl Z80 {
                     let nn = self.imm16(bus);
                     self.wz = nn;
                     if self.cond(y) {
+                        self.internal(1);
                         let pc = self.pc;
                         self.push(bus, pc);
                         self.pc = nn;
@@ -524,6 +545,7 @@ impl Z80 {
                 }
                 5 => {
                     if q == 0 {
+                        self.internal(1);
                         let v = self.get_rp2(p, idx);
                         self.push(bus, v);
                         return 11 + pre;
@@ -531,6 +553,7 @@ impl Z80 {
                     match p {
                         0 => {
                             let nn = self.imm16(bus);
+                            self.internal(1);
                             self.wz = nn;
                             let pc = self.pc;
                             self.push(bus, pc);
@@ -551,6 +574,7 @@ impl Z80 {
                     7 + pre
                 }
                 _ => {
+                    self.internal(1);
                     let pc = self.pc;
                     self.push(bus, pc);
                     self.pc = u16::from(y) * 8;
@@ -770,7 +794,7 @@ impl Z80 {
         );
     }
 
-    fn exec_cb(&mut self, bus: &mut dyn Bus, op: u8) -> u32 {
+    fn exec_cb(&mut self, bus: &mut dyn TimedBus, op: u8) -> u32 {
         let (x, y, z) = (op >> 6, (op >> 3) & 7, op & 7);
         let mem = z == 6;
         let v = if mem {
@@ -790,6 +814,7 @@ impl Z80 {
             _ => v | (1 << y),
         };
         if mem {
+            self.internal(1);
             let hl = self.hl();
             self.write(bus, hl, r);
             15
@@ -801,9 +826,10 @@ impl Z80 {
 
     /// DD CB d op / FD CB d op: always on `(IX+d)`; except for BIT the
     /// result is also copied to register `z` (undocumented).
-    fn exec_index_cb(&mut self, bus: &mut dyn Bus, idx: Idx) -> u32 {
+    fn exec_index_cb(&mut self, bus: &mut dyn TimedBus, idx: Idx) -> u32 {
         let d = self.imm8(bus) as i8;
         let op = self.imm8(bus);
+        self.internal(2);
         let a = self.idx_reg(idx).wrapping_add(d as u16);
         self.wz = a;
         let (x, y, z) = (op >> 6, (op >> 3) & 7, op & 7);
@@ -817,6 +843,7 @@ impl Z80 {
             2 => v & !(1 << y),
             _ => v | (1 << y),
         };
+        self.internal(1);
         self.write(bus, a, r);
         if z != 6 {
             self.set_r(z, Idx::Hl, r);
@@ -824,7 +851,7 @@ impl Z80 {
         23
     }
 
-    fn exec_ed(&mut self, bus: &mut dyn Bus, op: u8) -> u32 {
+    fn exec_ed(&mut self, bus: &mut dyn TimedBus, op: u8) -> u32 {
         let (x, y, z) = (op >> 6, (op >> 3) & 7, op & 7);
         let (p, q) = (y >> 1, y & 1);
         if x == 2 && z <= 3 && y >= 4 {
@@ -913,6 +940,7 @@ impl Z80 {
                 4 | 5 => {
                     let hl = self.hl();
                     let v = self.read(bus, hl);
+                    self.internal(4);
                     let a = self.a;
                     let (new_v, new_a) = if y == 4 {
                         ((a << 4) | (v >> 4), (a & 0xf0) | (v & 0x0f))
@@ -932,7 +960,7 @@ impl Z80 {
 
     /// LDI/LDD/CPI/CPD/INI/IND/OUTI/OUTD (y = 4, 5) and their repeating
     /// forms (y = 6, 7).
-    fn block(&mut self, bus: &mut dyn Bus, y: u8, z: u8) -> u32 {
+    fn block(&mut self, bus: &mut dyn TimedBus, y: u8, z: u8) -> u32 {
         let up = y & 1 == 0;
         let repeat = y >= 6;
         let step = |v: u16| {
@@ -1002,6 +1030,7 @@ impl Z80 {
                 t
             }
             2 => {
+                self.internal(1);
                 let bc = self.bc();
                 let v = self.port_in(bus, bc);
                 let hl = self.hl();
@@ -1018,6 +1047,7 @@ impl Z80 {
                 self.block_io_end(v, k, repeat, rewind)
             }
             _ => {
+                self.internal(1);
                 let hl = self.hl();
                 let v = self.read(bus, hl);
                 self.b = self.b.wrapping_sub(1);
