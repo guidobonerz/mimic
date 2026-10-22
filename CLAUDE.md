@@ -387,6 +387,7 @@ cargo run --release -p emu-desktop -- --machine cpc --disk game.dsk   # CPC 664/
 cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape game.cdt   # CPC cassette (CDT/TZX); on the 664/6128 type |TAPE first
 cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines debug protocol on 127.0.0.1:6510
 cargo run -p emu-headless -- --machine c64 --vice --preview --run   # + VICE binary monitor (6502), live preview http://127.0.0.1:6580/
+cargo run --release -p emu-headless -- --machine amiga --rom-dir roms --gdb   # GDB remote stub on 127.0.0.1:2159: gdb-multiarch -ex "source tools/gdb/mimic.py" -ex "target remote 127.0.0.1:2159" (mimic live on, mimic preview, monitor help)
 python tools/polydbg.py regs                 # Python debug client (stdlib only): --help, or `shell` for a prompt; `chips`, Atari `dlist`
 python -m unittest discover -s tools         # its unit tests
 cargo run --release -p emu-desktop -- --machine c64 --disk game.d64 --autostart   # window, sound, keyboard, gamepad

@@ -211,6 +211,7 @@ fn server(machine: &str, config: MachineConfig) -> DebugServer {
         ServerConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             vice: Some("127.0.0.1:0".parse().unwrap()),
+            gdb: None,
             run: true,
             realtime: false,
         },

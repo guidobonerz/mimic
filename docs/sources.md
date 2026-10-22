@@ -127,7 +127,8 @@ own section.
 | VICE binary monitor protocol | VICE manual, chapter "Binary monitor" (API version 2) | `emu-debug/src/vice.rs` |
 | Symbol files | VICE monitor label files; KickAssembler `.sym` format | `emu-debug/src/symbols.rs` |
 | base64 | RFC 4648 | `emu-debug/src/protocol.rs` |
-| GDB stub (planned, Phase 8) | GDB manual, "Remote Serial Protocol" | — |
+| GDB remote stub | GDB manual, appendix "GDB Remote Serial Protocol" (packets, stop replies, `qXfer:features:read`, `vCont`, binary data escaping) and appendix "Target Descriptions" (target XML, standard feature `org.gnu.gdb.m68k.core`); GDB's z80 register order observed with `gdb-multiarch` 17.1 (`info registers`) | `emu-debug/src/gdb.rs`, `tools/gdb/mimic.py` |
+| GDB Python API | GDB manual, "Extending GDB" → "Python API" (`gdb.Command`, `gdb.events.stop`/`before_prompt`, `RemoteTargetConnection.send_packet`) | `tools/gdb/mimic.py` |
 
 ## Test suites and test data
 

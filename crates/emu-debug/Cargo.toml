@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 emu-core.workspace = true
+emu-preview.workspace = true
+video-crt.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

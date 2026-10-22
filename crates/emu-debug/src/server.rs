@@ -6,8 +6,9 @@
 //! single-threaded tokio runtime that accepts connections and moves lines
 //! between sockets and channels.
 //!
-//! An optional second listener speaks the VICE binary monitor protocol
-//! ([`crate::vice`]) for tools written for VICE.
+//! Optional further listeners speak the VICE binary monitor protocol
+//! ([`crate::vice`]) for tools written for VICE and the GDB remote protocol
+//! ([`crate::gdb`]).
 //!
 //! [`DebugServer::start`] runs its own emulation thread (headless).
 //! Frontends with their own emulation loop (desktop) use
@@ -24,6 +25,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, oneshot, watch};
 
+use crate::gdb::{self, GdbState};
 use crate::protocol::{self, Command};
 use crate::session::Session;
 use crate::vice::{self, ViceState};
@@ -33,6 +35,8 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
     /// VICE binary monitor listener (usually port 6502), if wanted.
     pub vice: Option<SocketAddr>,
+    /// GDB remote protocol listener (usually port 2159), if wanted.
+    pub gdb: Option<SocketAddr>,
     /// Start running instead of paused.
     pub run: bool,
     /// Pace emulation to the machine's real frame rate while running.
@@ -125,6 +129,7 @@ impl Endpoint {
 pub struct DebugServer {
     addr: SocketAddr,
     vice_addr: Option<SocketAddr>,
+    gdb_addr: Option<SocketAddr>,
     msg_tx: mpsc::Sender<Msg>,
     stop_net: watch::Sender<bool>,
     emu: Option<JoinHandle<()>>,
@@ -151,7 +156,10 @@ impl DebugServer {
     /// blocking with a timeout while paused).
     pub fn start_attached(config: ServerConfig, machine: &str) -> io::Result<(Self, Endpoint)> {
         let loopback = |a: &SocketAddr| a.ip().is_loopback();
-        if !loopback(&config.bind) || config.vice.is_some_and(|a| !loopback(&a)) {
+        if !loopback(&config.bind)
+            || config.vice.is_some_and(|a| !loopback(&a))
+            || config.gdb.is_some_and(|a| !loopback(&a))
+        {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "debug server binds to loopback only (remote access needs a token, not yet supported)",
@@ -169,6 +177,15 @@ impl DebugServer {
             None => None,
         };
         let vice_addr = vice_listener.as_ref().map(|l| l.local_addr()).transpose()?;
+        let gdb_listener = match config.gdb {
+            Some(a) => {
+                let l = std::net::TcpListener::bind(a)?;
+                l.set_nonblocking(true)?;
+                Some(l)
+            }
+            None => None,
+        };
+        let gdb_addr = gdb_listener.as_ref().map(|l| l.local_addr()).transpose()?;
 
         let machine = machine.to_string();
         let (msg_tx, msg_rx) = mpsc::channel::<Msg>();
@@ -199,6 +216,14 @@ impl DebugServer {
                             stop_rx.clone(),
                         ));
                     }
+                    if let Some(l) = gdb_listener.and_then(|l| TcpListener::from_std(l).ok()) {
+                        tokio::spawn(gdb_accept_loop(
+                            l,
+                            net_msg_tx.clone(),
+                            event_tx.clone(),
+                            stop_rx.clone(),
+                        ));
+                    }
                     accept_loop(listener, net_msg_tx, event_tx, machine, stop_rx).await;
                 });
             })?;
@@ -207,6 +232,7 @@ impl DebugServer {
             Self {
                 addr,
                 vice_addr,
+                gdb_addr,
                 msg_tx,
                 stop_net,
                 emu: None,
@@ -231,6 +257,11 @@ impl DebugServer {
     /// The bound VICE binary monitor address, if enabled.
     pub fn vice_addr(&self) -> Option<SocketAddr> {
         self.vice_addr
+    }
+
+    /// The bound GDB remote protocol address, if enabled.
+    pub fn gdb_addr(&self) -> Option<SocketAddr> {
+        self.gdb_addr
     }
 
     /// Stop both threads and wait for them.
@@ -504,6 +535,102 @@ async fn vice_client(
     // remove them so they do not stop a machine nobody watches.
     let _ = vice_exec(&msg_tx, &mut state, |st, s| {
         vice::disconnect(st, s);
+        Vec::new()
+    })
+    .await;
+}
+
+async fn gdb_accept_loop(
+    listener: TcpListener,
+    msg_tx: mpsc::Sender<Msg>,
+    events: broadcast::Sender<Value>,
+    mut stop: watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let Ok((stream, _)) = accepted else { continue };
+                tokio::spawn(gdb_client(stream, msg_tx.clone(), events.subscribe()));
+            }
+            _ = stop.changed() => return,
+        }
+    }
+}
+
+/// Run adapter code with this GDB connection's state on the emulation
+/// thread. `None` if the emulation thread is gone.
+async fn gdb_exec(
+    msg_tx: &mpsc::Sender<Msg>,
+    state: &mut Option<GdbState>,
+    f: impl FnOnce(&mut GdbState, &mut Session) -> Vec<u8> + Send + 'static,
+) -> Option<Vec<u8>> {
+    let mut st = state.take()?;
+    let (tx, rx) = oneshot::channel();
+    let job = Msg::Exec(Box::new(move |s| {
+        let out = f(&mut st, s);
+        let _ = tx.send((st, out));
+    }));
+    msg_tx.send(job).ok()?;
+    let (st, out) = rx.await.ok()?;
+    *state = Some(st);
+    Some(out)
+}
+
+async fn gdb_client(
+    stream: TcpStream,
+    msg_tx: mpsc::Sender<Msg>,
+    mut events: broadcast::Receiver<Value>,
+) {
+    let _ = stream.set_nodelay(true);
+    let (mut r, mut w) = stream.into_split();
+    let mut buf = Vec::new();
+    let mut state = Some(GdbState::default());
+    'conn: loop {
+        tokio::select! {
+            n = r.read_buf(&mut buf) => {
+                if !matches!(n, Ok(n) if n > 0) {
+                    break;
+                }
+                loop {
+                    let (packet, used) = match gdb::parse(&buf) {
+                        Ok(Some(p)) => p,
+                        Ok(None) => break,
+                        Err(_) => break 'conn,
+                    };
+                    buf.drain(..used);
+                    let Some(out) =
+                        gdb_exec(&msg_tx, &mut state, move |st, s| gdb::handle(st, s, &packet)).await
+                    else {
+                        return;
+                    };
+                    if w.write_all(&out).await.is_err() {
+                        break 'conn;
+                    }
+                }
+            }
+            ev = events.recv() => match ev {
+                Ok(ev) => {
+                    if ev["event"] != "stopped" {
+                        continue;
+                    }
+                    let Some(out) =
+                        gdb_exec(&msg_tx, &mut state, move |st, s| gdb::on_event(st, s, &ev)).await
+                    else {
+                        return;
+                    };
+                    if w.write_all(&out).await.is_err() {
+                        break 'conn;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+        }
+    }
+    // Breakpoints belong to the connection; remove them so they do not
+    // stop a machine nobody watches.
+    let _ = gdb_exec(&msg_tx, &mut state, |st, s| {
+        gdb::disconnect(st, s);
         Vec::new()
     })
     .await;

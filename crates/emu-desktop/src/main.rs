@@ -93,6 +93,8 @@ usage: mimic-desktop [options]
                         (default 127.0.0.1:6580)
   --vice [ADDR]         serve the VICE binary monitor protocol for VS64 & co.
                         (default 127.0.0.1:6502); implies --debug
+  --gdb [ADDR]          serve the GDB remote protocol (target remote;
+                        default 127.0.0.1:2159); implies --debug
   --footer              start with the status footer shown (Ctrl+Space)
   --no-panel            start with the console panel hidden (Ctrl+P)
   --joykeys KEYS        keys that play the joystick: cursor (cursor keys,
@@ -146,6 +148,7 @@ struct Args {
     scale: u32,
     debug: Option<SocketAddr>,
     vice: Option<SocketAddr>,
+    gdb: Option<SocketAddr>,
     preview: Option<SocketAddr>,
     footer: bool,
     panel: bool,
@@ -155,6 +158,7 @@ struct Args {
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
 const DEFAULT_VICE_ADDR: &str = "127.0.0.1:6502";
+const DEFAULT_GDB_ADDR: &str = "127.0.0.1:2159";
 const DEFAULT_PREVIEW_ADDR: &str = "127.0.0.1:6580";
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -170,6 +174,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         scale: 2,
         debug: None,
         vice: None,
+        gdb: None,
         preview: None,
         footer: false,
         panel: true,
@@ -220,10 +225,11 @@ fn parse_args() -> Result<Option<Args>, String> {
                 let v = value("--scale")?;
                 a.scale = v.parse().map_err(|_| format!("bad scale '{v}'"))?;
             }
-            flag @ ("--debug" | "--vice" | "--preview") => {
+            flag @ ("--debug" | "--vice" | "--gdb" | "--preview") => {
                 let default = match flag {
                     "--debug" => DEFAULT_DEBUG_ADDR,
                     "--vice" => DEFAULT_VICE_ADDR,
+                    "--gdb" => DEFAULT_GDB_ADDR,
                     _ => DEFAULT_PREVIEW_ADDR,
                 };
                 let addr = match it.peek() {
@@ -236,6 +242,7 @@ fn parse_args() -> Result<Option<Args>, String> {
                 match flag {
                     "--debug" => a.debug = Some(addr),
                     "--vice" => a.vice = Some(addr),
+                    "--gdb" => a.gdb = Some(addr),
                     _ => a.preview = Some(addr),
                 }
             }
@@ -243,7 +250,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             other => return Err(format!("unknown option '{other}'")),
         }
     }
-    if a.vice.is_some() && a.debug.is_none() {
+    if (a.vice.is_some() || a.gdb.is_some()) && a.debug.is_none() {
         a.debug = DEFAULT_DEBUG_ADDR.parse().ok();
     }
     Ok(Some(a))
@@ -898,6 +905,7 @@ fn run() -> Result<(), String> {
             let config = ServerConfig {
                 bind,
                 vice: args.vice,
+                gdb: args.gdb,
                 run: true,
                 realtime: true,
             };
@@ -906,6 +914,9 @@ fn run() -> Result<(), String> {
             eprintln!("debug server listening on {}", s.addr());
             if let Some(vice) = s.vice_addr() {
                 eprintln!("VICE binary monitor listening on {vice}");
+            }
+            if let Some(gdb) = s.gdb_addr() {
+                eprintln!("GDB remote protocol listening on {gdb} (target remote {gdb})");
             }
             server = Some(s);
             Some((endpoint, args.machine.clone()))

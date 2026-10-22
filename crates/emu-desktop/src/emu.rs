@@ -533,6 +533,7 @@ mod tests {
             emu_debug::ServerConfig {
                 bind: "127.0.0.1:0".parse().unwrap(),
                 vice: None,
+                gdb: None,
                 run: true,
                 realtime: true,
             },

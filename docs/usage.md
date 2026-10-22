@@ -18,7 +18,8 @@ Inhalt:
 10. [Debug-Schnittstelle](#10-debug-schnittstelle)
 11. [Python-Client `polydbg`](#11-python-client-polydbg)
 12. [VICE-Binary-Monitor (VS64 & Co.)](#12-vice-binary-monitor-vs64--co)
-13. [Tests und Testdaten](#13-tests-und-testdaten)
+13. [GDB mit Live-Bild](#13-gdb-mit-live-bild)
+14. [Tests und Testdaten](#14-tests-und-testdaten)
 
 ---
 
@@ -92,6 +93,7 @@ Größe** erkannt.
 | `c128/` | C128 | KERNAL, BASIC, Zeichensatz, optional Funktions-ROM |
 | `atari/` (`atari8/`, `atari800xl/`) | Atari 800XL | XL-OS (`atarixl.rom`, 16 KB), BASIC (`ataribas.rom`, 8 KB) |
 | `cpc/` (`amstrad/`) | Amstrad CPC | `os464`/`basic1-0`, `os664`/`basic664`, `os6128`/`basic1-1` (je 16 KB) oder 32-KB-Kombidateien `cpc464`/`cpc664`/`cpc6128`; `amsdos`, optional `parados` |
+| `amiga/` | Amiga 500 | Kickstart als 256 KB oder 512 KB, Name z. B. `Kickstart 1.3.rom`, `kick13.rom`, `kick34005.rom`; je Version eine Datei (1.2, 1.3, 2.0, 3.1), Auswahl mit `--option kickstart=` |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
 Der Atari 2600 hat kein System-ROM: das Programm kommt vom Modul (`--cart`).
@@ -117,6 +119,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `atari800xl` | Atari 800XL | `pal`, `ntsc` |
 | `atari2600` | Atari 2600 (VCS) | `ntsc` (Standard), `pal` |
 | `cpc` | Amstrad CPC | `6128` (Standard), `664`, `464` |
+| `amiga` | Commodore Amiga 500 (OCS) | `pal` (Standard), `ntsc` |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
 
 Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
@@ -131,6 +134,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | Atari 800XL | `port1`/`port2=joystick\|paddles\|none`, `basic=on\|off`, `drives=0..4`, `drive=1050\|810\|xf551` |
 | Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`) |
 | CPC | `crtc=0\|1\|2` (Standard 464: 0, sonst 1), `dos=amsdos\|parados\|none`, `joy1=joystick\|amx\|none`, `joy2=joystick\|none` |
+| Amiga 500 | `kickstart=1.3\|1.2\|2.0\|3.1` (Standard 1.3), `slow=512k\|0` (Trapdoor-Erweiterung, Standard 512 KB), `drives=1..4` (DF0:–DF3:, Standard 1), `port0=mouse\|joystick\|none` (Standard Maus), `port1=joystick\|mouse\|none` (Standard Joystick) |
 
 `drive8=virtual` bedient Laufwerk 8 auf Protokollebene (schnell, nur
 KERNAL-LOAD/SAVE), die anderen Werte emulieren das echte Laufwerk mit eigener
@@ -148,12 +152,14 @@ cargo run --release -p emu-desktop -- --machine atari2600 --cart spiel.a26
 cargo run --release -p emu-desktop -- --machine atari2600 --model pal --cart spiel.bin --option port1=paddles
 cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
 cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
+cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk workbench13.adf
+cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --option drives=2 --disk demo.adf
 ```
 
 Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
 `--cart`, `--autostart`, `--rom-dir`, `--option KEY=WERT`,
 `--crt PROFIL` (Monitor, Standard: der der Maschine), `--scale N`,
-`--debug [ADR]`, `--preview [ADR]`, `--vice [ADR]` (siehe unten).
+`--debug [ADR]`, `--preview [ADR]`, `--vice [ADR]`, `--gdb [ADR]` (siehe unten).
 `--help` zeigt alles.
 
 **Tastatur.** Die Tasten liegen nach **Position** auf einer PC-Tastatur
@@ -171,6 +177,10 @@ Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
 - CPC: `- ^` auf `- =`, `@ [` auf `[ ]`, `: ;` auf `; '`, `]` auf `\`,
   Rücktaste = DEL, Entf = CLR, linke Alt = COPY, Ziffernblock und F1–F10 =
   Funktionstasten f0–f9 und f., Ziffernblock-Enter = ENTER.
+- Amiga: linke/rechte Windows-Taste = linke/rechte Amiga-Taste, Alt = Alt,
+  beide Strg = CTRL, Einfg = HELP, Entf = DEL, Num-Taste und Rollen = `(`
+  und `)` des Ziffernblocks, F1–F10 = F1–F10. **Strg + Win + Win** (beide
+  Amiga-Tasten) ist der Reset der echten Tastatur.
 
 **Konsolen-Panel:** Unter dem Bild zeigt eine Leiste die Tasten und Schalter
 des Gehäuses (POWER, RESET, beim Atari 2600 die Konsolenschalter, beim 800XL
@@ -198,6 +208,18 @@ spielen die Cursortasten und die Leertaste den Joystick statt zu tippen.
 Atari 2600 auch `driving`, jeweils auch `port2`) bzw. beim CPC
 `--option joy1=amx` fängt ein Klick ins Fenster die Maus ein; die mittlere
 Maustaste gibt sie frei. Beim 2600 dreht die Maus Paddle 0 bzw. das Lenkrad.
+Beim Amiga steckt die Maus von Haus aus in Port 0 (Klick ins Fenster fängt
+sie ein, mittlere Taste gibt sie frei), der Joystick in Port 1.
+
+**Amiga.** Ohne Diskette zeigt die Kickstart den „Insert disk“-Bildschirm;
+eine ADF in DF0: (`--disk`) bootet. Workbench 1.3 braucht von Diskette
+etwa drei Minuten emulierte Zeit bis zum Workbench-Bildschirm. Mit
+`--option drives=2` gibt es DF1:, das Demos mit mehreren Disketten nutzen
+(eine weitere Diskette legt der Debugger mit `insert_media` ein, z. B.
+`python tools/polydbg.py raw list_media_slots`, dann
+`python tools/polydbg.py raw insert_media '{"slot": 1, "path": "b.adf"}'`). Der Ton ist Stereo (Paula, Kanäle 0/3 links,
+1/2 rechts) mit dem Tiefpass des A500. Interlace-Bilder (Workbench mit LACE)
+werden aus beiden Halbbildern zusammengesetzt.
 
 `EMU_DESKTOP_DEBUG=1` gibt alle 5 Sekunden Bild- und Audio-Statistik aus.
 
@@ -213,6 +235,10 @@ cargo run --release -p emu-headless -- --machine c64 --rom-dir roms \
 # C128 im 80-Zeichen-Modus, Bild des VDC
 cargo run --release -p emu-headless -- --machine c128 --option display=80 \
     --rom-dir roms --frames 600 --screen vdc --snapshot c128.png
+
+# Amiga 500: Kickstart 1.3 bis zum Insert-Disk-Bildschirm
+cargo run --release -p emu-headless -- --machine amiga --rom-dir roms \
+    --frames 400 --snapshot amiga.png
 
 # Bild durch ein Monitorprofil, Ton als WAV, Savestate schreiben
 cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
@@ -230,6 +256,7 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 | `--debug [ADR]` | Debug-Server statt Bilder laufen lassen (Standard `127.0.0.1:6510`) |
 | `--preview [ADR]` | Live-Preview (Standard `127.0.0.1:6580`), schließt `--debug` ein |
 | `--vice [ADR]` | VICE-Binary-Monitor (Standard `127.0.0.1:6502`), schließt `--debug` ein |
+| `--gdb [ADR]` | GDB-Remote-Protokoll (Standard `127.0.0.1:2159`), schließt `--debug` ein |
 | `--run` | mit `--debug`: gleich laufen statt angehalten starten |
 | `--no-realtime` | mit `--debug`: so schnell wie möglich |
 
@@ -237,7 +264,7 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 
 | Art | Formate | Frontend-Option |
 | --- | --- | --- |
-| Diskette | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC); ein **Ordner** als virtuelle Diskette | `--disk` |
+| Diskette | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga, DD 880 KB; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF); ein **Ordner** als virtuelle Diskette | `--disk` |
 | Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
 | Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt) | `--cart` |
 | Programm | PRG, T64, XEX | `--prg` |
@@ -486,10 +513,61 @@ Wichtig: `127.0.0.1`, nicht `localhost` – der Server lauscht nur auf IPv4.
 Speicherraum 0 ist die Haupt-CPU, 1–4 sind die Laufwerke 8–11; Speicherlesen
 ist immer seiteneffektfrei; `LIN`/`CYC` liefern die Strahlposition.
 
-Geplant (Phase 8): GDB-Remote-Protokoll mit Live-Bild-Erweiterung und
-Debug-Adapter-Protokoll (DAP).
+## 13. GDB mit Live-Bild
 
-## 13. Tests und Testdaten
+Mit `--gdb [ADR]` (Standard `127.0.0.1:2159`, schließt `--debug` ein) spricht
+mimic das GDB-Remote-Protokoll. Jede Maschine lässt sich so mit GDB
+debuggen; zusätzlich liefert der Stub das Bild der Maschine.
+
+```bash
+cargo run --release -p emu-headless -- --machine amiga --rom-dir roms --disk spiel.adf --gdb
+```
+
+```text
+gdb-multiarch
+(gdb) source tools/gdb/mimic.py
+(gdb) target remote 127.0.0.1:2159
+(gdb) break *0xfc00d2          # Einsprung von Kickstart 1.x nach dem Reset
+(gdb) continue
+(gdb) mimic live on          # Bild bei jedem Halt neu (Browserseite lädt es nach)
+(gdb) mimic preview          # Live-Stream im Browser
+(gdb) monitor help
+```
+
+Ein GDB mit der passenden Architektur ist nötig: `gdb-multiarch` (Windows:
+MSYS2-Paket `mingw-w64-x86_64-gdb-multiarch`; Linux: Paket `gdb-multiarch`)
+oder `m68k-elf-gdb`.
+
+- **Architektur:** wird an den Registern der Haupt-CPU erkannt. 68000
+  (Amiga): Register `d0`–`d7`, `a0`–`a5`, `fp`, `sp`, `ps`, `pc`, dazu `usp`
+  und `ssp`. Ohne ELF-Datei nimmt GDB die Byte-Reihenfolge des Hosts an;
+  `mimic.py` stellt deshalb auf Big-Endian um (ohne das Skript:
+  `set endian big`). Z80 (CPC, C128-Z80 nur als Haupt-CPU): GDBs
+  `z80`-Registersatz. Hinweis: GDB 17.1 stürzt bei `stepi` auf dem Z80 in
+  seiner eigenen Frame-Analyse ab (interner Fehler in `trad-frame.h`);
+  Register, Speicher, Disassembly, Breakpoints und `continue` gehen. Für die
+  6502-Maschinen kennt Standard-GDB keine Architektur; die
+  Target-Beschreibung (`a x y s p pc`) dient anderen RSP-Clients.
+- **Threads:** ein Thread pro Prozessor derselben Architektur, Haupt-CPU
+  zuerst (C64: `cpu` und `drive8`). Register und Speicher folgen dem
+  gewählten Thread (`thread 2`); Schritte führt immer die Haupt-CPU aus.
+- **Breakpoints:** `break *ADR` und `hbreak` sind Ausführungs-Breakpoints
+  des Debuggers (kein Patchen des Speichers), `watch`/`rwatch`/`awatch`
+  Watchpoints. Sie gehören zur GDB-Verbindung und verschwinden mit ihr.
+- **Halt-Meldungen** tragen `beam:<bild>,<zeile>,<zyklus>;` (hex), das GDB
+  übergeht.
+- **Bild:** das Paket `qMimic.frame[:screen=NAME;format=png|qoi;scale=N;filter=raw|crt;profile=P]`
+  liefert das aktuelle (auch halbfertige) Bild, `qMimic.beam` die
+  Strahlposition. `mimic.py` nutzt es (GDB ab 14; ältere GDBs bekommen das
+  Bild über `monitor snapshot`).
+- **Monitor-Befehle:** `monitor beam`, `devices`, `screen [NAME]`,
+  `snapshot DATEI [crt]`, `preview` (startet im Headless-Frontend den
+  Live-Preview-Server, falls er noch nicht läuft, und nennt die URL; im
+  Desktop-Frontend `--preview` beim Start angeben), `reset [hard]`.
+
+Geplant (Phase 8): Debug-Adapter-Protokoll (DAP) für VS Code.
+
+## 14. Tests und Testdaten
 
 ```bash
 cargo test --workspace                                   # ohne ROMs/Testdaten
