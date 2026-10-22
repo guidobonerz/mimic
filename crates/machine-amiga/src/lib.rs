@@ -82,6 +82,14 @@ pub const CPU: DeviceId = DeviceId("cpu");
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 /// Chip RAM as the DMA channels see it.
 pub const CHIP_SPACE: MemSpaceId = MemSpaceId(1);
+/// Chip RAM as the Copper runs it: exec breakpoints here stop when the
+/// Copper fetches an instruction at that address.
+pub const COPPER_SPACE: MemSpaceId = MemSpaceId(2);
+
+/// The Copper and the Blitter as debug targets (registers, chip RAM,
+/// Copper disassembly).
+pub const COPPER: DeviceId = DeviceId("copper");
+pub const BLITTER: DeviceId = DeviceId("blitter");
 
 /// Game port 0 (mouse) and 1 (joystick).
 pub const PORT0: PortId = PortId(0);
@@ -100,6 +108,8 @@ fn cpu_hz(standard: Standard) -> u32 {
 const CHIP_RAM: usize = 0x8_0000;
 /// The OCS Agnus (8367/8361) addresses 512 KB.
 const PTR_MASK: u32 = 0x7_fffe;
+/// Byte addresses in chip RAM (the 512 KB repeat up to $1FFFFF).
+const PTR_MASK_BYTE: u32 = 0x7_ffff;
 
 pub fn entry() -> MachineEntry {
     MachineEntry {
@@ -458,16 +468,20 @@ struct AmigaBus<'a> {
 
 impl Bus for AmigaBus<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
-        let v = self.b.read(addr, size, false);
-        match self.dbg.as_deref_mut() {
-            Some(dbg) if dbg.read_armed(CPU_SPACE) => {
-                let addr = addr & 0xff_ffff;
-                let seen = dbg.on_read(CPU_SPACE, addr, size, v);
-                dbg.trace_read(CPU_SPACE, addr, size, seen, self.beam);
-                seen
+        let mut v = self.b.read(addr, size, false);
+        let addr = addr & 0xff_ffff;
+        if let Some(dbg) = self.dbg.as_deref_mut() {
+            if dbg.read_armed(CPU_SPACE) {
+                v = dbg.on_read(CPU_SPACE, addr, size, v);
+                dbg.trace_read(CPU_SPACE, addr, size, v, self.beam);
             }
-            _ => v,
+            // Chip RAM by its physical address (freezes and watchpoints
+            // set on the "chip" space).
+            if dbg.read_armed(CHIP_SPACE) && self.b.mem.region(addr, false) == Region::Chip {
+                v = dbg.on_read(CHIP_SPACE, addr & PTR_MASK_BYTE, size, v);
+            }
         }
+        v
     }
 
     fn peek(&self, addr: u32, size: Size) -> u32 {
@@ -476,12 +490,18 @@ impl Bus for AmigaBus<'_> {
 
     fn write(&mut self, addr: u32, size: Size, v: u32) {
         if let Some(dbg) = self.dbg.as_deref_mut() {
+            let addr = addr & 0xff_ffff;
             if dbg.write_armed(CPU_SPACE) {
-                let addr = addr & 0xff_ffff;
                 dbg.trace_write(CPU_SPACE, addr, size, v, self.beam);
                 if !dbg.on_write(CPU_SPACE, addr, size, v) {
                     return;
                 }
+            }
+            if dbg.write_armed(CHIP_SPACE)
+                && self.b.mem.region(addr, true) == Region::Chip
+                && !dbg.on_write(CHIP_SPACE, addr & PTR_MASK_BYTE, size, v)
+            {
+                return;
             }
         }
         self.b.write(addr, size, v);
@@ -643,6 +663,8 @@ pub struct Amiga {
     jam_reported: bool,
     /// CPU clock of the next game port sample.
     ports_due: u64,
+    /// The device [`DebugTarget`] calls go to.
+    debug_dev: DeviceId,
 }
 
 impl Amiga {
@@ -699,6 +721,7 @@ impl Amiga {
             ],
             jam_reported: false,
             ports_due: 0,
+            debug_dev: CPU,
         };
         m.power_on();
         Ok(m)
@@ -799,7 +822,12 @@ impl Amiga {
         }
         let entered = self.cpu.take_interrupt();
         let new_field = std::mem::take(&mut self.board.field_done);
+        let copper_pcs = self.board.custom.copper.take_fetched();
         if let Some(dbg) = dbg {
+            for pc in copper_pcs {
+                dbg.check_exec(COPPER_SPACE, pc);
+            }
+            self.board.custom.copper.watch = dbg.exec_armed(COPPER_SPACE);
             if let Some(kind) = entered {
                 if dbg.interrupt_armed(kind) {
                     dbg.check_interrupt(kind);
@@ -1013,6 +1041,13 @@ impl Machine for Amiga {
                 addr_bits: 19,
                 big_endian: true,
             },
+            MemSpace {
+                id: COPPER_SPACE,
+                name: "copper",
+                device: COPPER,
+                addr_bits: 19,
+                big_endian: true,
+            },
         ]
     }
 
@@ -1116,11 +1151,16 @@ impl Machine for Amiga {
     }
 
     fn devices(&self) -> Vec<DeviceId> {
-        vec![CPU]
+        vec![CPU, COPPER, BLITTER]
     }
 
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget> {
-        (dev == CPU).then_some(self as &mut dyn DebugTarget)
+        if [CPU, COPPER, BLITTER].contains(&dev) {
+            self.debug_dev = dev;
+            Some(self as &mut dyn DebugTarget)
+        } else {
+            None
+        }
     }
 
     fn input(&mut self, ev: TimedInput) {
@@ -1328,27 +1368,122 @@ impl Machine for Amiga {
     }
 }
 
-impl DebugTarget for Amiga {
-    fn regs(&self) -> RegisterSet {
-        self.cpu.regs()
+/// Register list from (name, value, bits).
+fn register_set(values: &[(&'static str, u32, u8)]) -> RegisterSet {
+    let mut set = RegisterSet::default();
+    for &(name, value, bits) in values {
+        set.0.push(emu_core::Register { name, value, bits });
+    }
+    set
+}
+
+impl Amiga {
+    fn copper_regs(&self) -> RegisterSet {
+        use chips_amiga::copper::State;
+        let c = &self.board.custom.copper;
+        let (state, ir1, ir2) = match c.state {
+            State::Fetch1 => (0, 0, 0),
+            State::Fetch2(a) => (1, a, 0),
+            State::Wait(a, b) => (2, a, b),
+            State::Stopped => (3, 0, 0),
+        };
+        register_set(&[
+            ("PC", c.pc, 32),
+            ("COP1LC", c.cop1lc, 32),
+            ("COP2LC", c.cop2lc, 32),
+            // 0 fetch, 1 second word, 2 waiting, 3 stopped (illegal MOVE)
+            ("STATE", state, 8),
+            ("IR1", u32::from(ir1), 16),
+            ("IR2", u32::from(ir2), 16),
+            ("DANGER", u32::from(c.danger), 1),
+        ])
     }
 
+    fn blitter_regs(&self) -> RegisterSet {
+        let b = &self.board.custom.blitter;
+        register_set(&[
+            ("BLTCON0", u32::from(b.con0), 16),
+            ("BLTCON1", u32::from(b.con1), 16),
+            ("BLTAFWM", u32::from(b.afwm), 16),
+            ("BLTALWM", u32::from(b.alwm), 16),
+            ("BLTAPT", b.pt[0], 32),
+            ("BLTBPT", b.pt[1], 32),
+            ("BLTCPT", b.pt[2], 32),
+            ("BLTDPT", b.pt[3], 32),
+            ("BLTAMOD", u32::from(b.modulo[0]), 16),
+            ("BLTBMOD", u32::from(b.modulo[1]), 16),
+            ("BLTCMOD", u32::from(b.modulo[2]), 16),
+            ("BLTDMOD", u32::from(b.modulo[3]), 16),
+            ("BLTADAT", u32::from(b.adat), 16),
+            ("BLTBDAT", u32::from(b.bdat), 16),
+            ("BLTCDAT", u32::from(b.cdat), 16),
+            ("BUSY", u32::from(b.busy), 1),
+            ("ZERO", u32::from(b.zero), 1),
+        ])
+    }
+
+    fn chip_peek(&self, addr: u32, size: Size) -> u32 {
+        let chip = &self.board.mem.chip;
+        (0..size.bytes()).fold(0, |v, i| {
+            v << 8 | u32::from(chip.byte(addr.wrapping_add(i)))
+        })
+    }
+}
+
+impl DebugTarget for Amiga {
+    fn regs(&self) -> RegisterSet {
+        match self.debug_dev {
+            COPPER => self.copper_regs(),
+            BLITTER => self.blitter_regs(),
+            _ => self.cpu.regs(),
+        }
+    }
+
+    /// Copper: PC (restarts fetching there), COP1LC, COP2LC, DANGER.
+    /// Blitter: its registers by name (written like the CPU would).
     fn set_reg(&mut self, name: &str, v: u32) {
-        self.cpu.set_reg(name, v);
-        if name.eq_ignore_ascii_case("pc") {
-            self.cpu.refill_queue(&PeekBus(&self.board));
+        let upper = name.to_ascii_uppercase();
+        match self.debug_dev {
+            COPPER => {
+                let c = &mut self.board.custom.copper;
+                match upper.as_str() {
+                    "PC" => {
+                        c.pc = v & PTR_MASK;
+                        c.state = chips_amiga::copper::State::Fetch1;
+                    }
+                    "COP1LC" => c.cop1lc = v & PTR_MASK,
+                    "COP2LC" => c.cop2lc = v & PTR_MASK,
+                    "DANGER" => c.danger = v != 0,
+                    _ => {}
+                }
+            }
+            BLITTER => {
+                let custom = &mut self.board.custom;
+                if let Some(ptr) = upper.strip_suffix("PT") {
+                    // BLTxPT: high and low word.
+                    if let Some(off) = chips_amiga::regnames::offset(&format!("{ptr}PTH")) {
+                        custom.write(off, (v >> 16) as u16);
+                        custom.write(off + 2, v as u16);
+                    }
+                } else if let Some(off) = chips_amiga::regnames::offset(&upper) {
+                    if (0x040..0x080).contains(&off) && off != 0x058 {
+                        custom.write(off, v as u16);
+                    }
+                }
+            }
+            _ => {
+                self.cpu.set_reg(name, v);
+                if name.eq_ignore_ascii_case("pc") {
+                    self.cpu.refill_queue(&PeekBus(&self.board));
+                }
+            }
         }
     }
 
     fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
         match space {
             CPU_SPACE => Some(peek(&self.board, addr, size)),
-            CHIP_SPACE => {
-                let chip = &self.board.mem.chip;
-                Some((0..size.bytes()).fold(0, |v, i| {
-                    v << 8 | u32::from(chip.byte(addr.wrapping_add(i)))
-                }))
-            }
+            CHIP_SPACE | COPPER_SPACE => Some(self.chip_peek(addr, size)),
             _ => None,
         }
     }
@@ -1362,7 +1497,7 @@ impl DebugTarget for Amiga {
                 self.board.write(addr, size, v);
                 true
             }
-            CHIP_SPACE => {
+            CHIP_SPACE | COPPER_SPACE => {
                 let n = size.bytes();
                 for i in 0..n {
                     self.board
@@ -1376,8 +1511,39 @@ impl DebugTarget for Amiga {
         }
     }
 
+    /// CPU: 68000 code in its address space; Copper: a Copper instruction
+    /// in chip RAM; Blitter: the chip RAM word (the Blitter has no code).
     fn disassemble(&self, addr: u32) -> Instr {
-        self.cpu.disassemble(&PeekBus(&self.board), addr)
+        match self.debug_dev {
+            COPPER => {
+                let addr = addr & PTR_MASK;
+                let (ir1, ir2) = (
+                    self.chip_peek(addr, Size::Word) as u16,
+                    self.chip_peek(addr + 2, Size::Word) as u16,
+                );
+                let (mnemonic, operand) = chips_amiga::copper::disassemble(ir1, ir2);
+                Instr {
+                    addr,
+                    bytes: [ir1.to_be_bytes(), ir2.to_be_bytes()].concat(),
+                    mnemonic,
+                    operand,
+                    target: None,
+                    flow: emu_core::Flow::Normal,
+                }
+            }
+            BLITTER => {
+                let w = self.chip_peek(addr, Size::Word) as u16;
+                Instr {
+                    addr,
+                    bytes: w.to_be_bytes().to_vec(),
+                    mnemonic: "DC.W".into(),
+                    operand: format!("${w:04X}"),
+                    target: None,
+                    flow: emu_core::Flow::Normal,
+                }
+            }
+            _ => self.cpu.disassemble(&PeekBus(&self.board), addr),
+        }
     }
 }
 

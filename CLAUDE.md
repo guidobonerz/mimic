@@ -410,7 +410,7 @@ cargo run --release -p emu-desktop -- --machine c64 --cart game.crt   # cartridg
 
 ## Roadmap and current phase
 
-Work in phase order; each phase ends at a verifiable gate. **Current phase: 7.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64. Phase 3 done 2026-10-20: VS64 debugs the C64 through the VICE binary monitor adapter. Phase 4 done 2026-10-21: VIC-20, PET, C16/Plus/4 and C128 boot to BASIC with real ROMs; the items under "Deferred from Phase 4" are held back. Phase 5 done 2026-10-21: Acid800 52/57 on PAL and NTSC; still failing `antic_virtdma`, `gtia_phantomdma` (need the CPU's bus value in ANTIC/GTIA), `antic_hscrolbug`, `antic_hiresbug`, `gtia_psuedomodee`. Phase 6 done 2026-10-21: CPC 464/664/6128 boot, tape and disc work with real ROMs; Arnold acid tests 66/70 (94.3 %, CRTC type 1) in the 8 programs that report results; still failing PPI mode 1 port C output latching (two tests the author's type 0/1 CPCs fail too), "port b read (vsync on)" (depends on where in the frame it starts) and "ppi i/o decode (f5xx)" (port B /EXP level unverified); `crtctest` and `disc/fdc` (needs its own test disc) do not finish. Phase 6b done 2026-10-21: Atari 2600 NTSC/PAL with TIA, RIOT, all planned bank-switching schemes and controllers; 24 games of a ROM collection run with correct scheme detection; DPC (Pitfall II), Supercharger and SECAM later.)
+Work in phase order; each phase ends at a verifiable gate. **Current phase: 8.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64. Phase 3 done 2026-10-20: VS64 debugs the C64 through the VICE binary monitor adapter. Phase 4 done 2026-10-21: VIC-20, PET, C16/Plus/4 and C128 boot to BASIC with real ROMs; the items under "Deferred from Phase 4" are held back. Phase 5 done 2026-10-21: Acid800 52/57 on PAL and NTSC; still failing `antic_virtdma`, `gtia_phantomdma` (need the CPU's bus value in ANTIC/GTIA), `antic_hscrolbug`, `antic_hiresbug`, `gtia_psuedomodee`. Phase 6 done 2026-10-21: CPC 464/664/6128 boot, tape and disc work with real ROMs; Arnold acid tests 66/70 (94.3 %, CRTC type 1) in the 8 programs that report results; still failing PPI mode 1 port C output latching (two tests the author's type 0/1 CPCs fail too), "port b read (vsync on)" (depends on where in the frame it starts) and "ppi i/o decode (f5xx)" (port B /EXP level unverified); `crtctest` and `disc/fdc` (needs its own test disc) do not finish. Phase 6b done 2026-10-21: Atari 2600 NTSC/PAL with TIA, RIOT, all planned bank-switching schemes and controllers; 24 games of a ROM collection run with correct scheme detection; DPC (Pitfall II), Supercharger and SECAM later. Phase 7 done 2026-10-22: Amiga 500 OCS — 68000 passes all Tom Harte 68000 tests (three contradictory cases skipped); Kickstart 1.2, 1.3, 2.0 and 3.1 reach their insert-disk screens; Workbench 1.3 boots from ADF and works with mouse and keyboard; demos with their own trackloaders run (Desert Dream); Copper and Blitter are debug targets; the items under "Deferred from Phase 7" are held back.)
 
 | # | Phase | Est. | Gate |
 | --- | --- | --- | --- |
@@ -466,6 +466,17 @@ Added 2026-10-21; not part of a phase gate yet, scheduled when a phase has room:
 - **ColecoVision**: reuses `cpu-z80`; TMS9918A video (16 KB VRAM, sprites), SN76489 sound, keypad controllers with joystick; BIOS user-supplied; console panel: POWER, RESET.
 - **Vectrex**: 6809 CPU (new `cpu-6809`), VIA 6522 (reuse from `chips-cbm`), AY-3-8912 (reuse from `chips-amstrad`), and a vector display: needs a vector frame type next to `FrameRef` (beam lines with intensity, phosphor decay in `video-crt`) — the debugger/preview contract then carries vectors or a rasterized picture; overlays; console panel: POWER, RESET.
 - **Tandy TRS-80 Model I/III**: reuses `cpu-z80`; memory-mapped text screen with block graphics, keyboard matrix in the address space, cassette, Expansion Interface / FDC 1771/1793 floppies (DMK/JV1/JV3 images); ROMs user-supplied.
+
+### Deferred from Phase 7
+
+Held back on 2026-10-22; not part of the Phase 7 gate.
+
+- **Action Replay (A500 side-port freezer):** needs its ROM (user-supplied) and the side-port hardware (freeze NMI, ROM/RAM overlay).
+- **Paula:** audio attach modes (ADKCON USEx), the serial port (UART: SERDAT/SERDATR transfers, RBF/TBE timing), disk precompensation; the A500 output filters are first-order approximations.
+- **Timing details:** Blitter idle cycles given to the CPU, the D channel's one-word pipeline, the Copper's wake-up cycle after WAIT; CPU accesses to the CIAs and the autovector use a simplified E-clock rule.
+- **Collisions with sprites outside the display window**, sprite/playfield priority in single-playfield mode (PF2P assumed), the exact sprite start pixel (no offset to DIWSTRT assumed) — to verify with test programs (vAmigaTS once ADF runs are automated).
+- **ECS/AGA, fast RAM, 1 MB chip RAM (Agnus 8372), A1000 / A2000 models; HD disks; extended ADF / DMS images.**
+- **Frontends:** choosing bob deinterlacing in the desktop; the preview stream shows interlaced fields unwoven.
 
 ### Deferred from Phase 4
 

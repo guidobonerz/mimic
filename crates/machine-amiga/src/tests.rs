@@ -384,3 +384,107 @@ fn interlace_alternates_long_and_short_fields() {
     );
     assert!(seen.iter().any(|&(l, _)| l == 312) && seen.iter().any(|&(l, _)| l == 313));
 }
+
+mod debugger {
+    use super::*;
+    use emu_core::debug::BreakpointKind;
+    use emu_core::freeze::{Freeze, FreezeMode};
+
+    /// Hooks configured the way the debug session does it.
+    fn hooks(m: &Amiga) -> DebugHooks {
+        let mut dbg = DebugHooks::new();
+        for s in m.memory_spaces() {
+            dbg.set_big_endian(s.id, s.big_endian);
+        }
+        dbg
+    }
+
+    #[test]
+    fn copper_and_blitter_are_debug_targets() {
+        let mut m = stub();
+        frames(&mut m, 2);
+        assert_eq!(m.devices(), [CPU, COPPER, BLITTER]);
+        let t = m.debug_target(COPPER).unwrap();
+        assert_eq!(t.regs().get("COP1LC"), Some(0x1000));
+        assert_eq!(t.disassemble(0x1000).to_string(), "MOVE #$0F00,COLOR00");
+        assert_eq!(t.disassemble(0x1004).to_string(), "WAIT $80,$00");
+        assert_eq!(t.peek(COPPER_SPACE, 0x1002, Size::Word), Some(0x0f00));
+        t.set_reg("COP2LC", 0x2000);
+        assert_eq!(m.board.custom.copper.cop2lc, 0x2000);
+        let t = m.debug_target(BLITTER).unwrap();
+        t.set_reg("BLTDPT", 0x1_2346);
+        t.set_reg("BLTCON0", 0x01f0);
+        assert_eq!(m.board.custom.blitter.pt[3], 0x1_2346);
+        assert_eq!(m.board.custom.blitter.con0, 0x01f0);
+        let t = m.debug_target(BLITTER).unwrap();
+        assert_eq!(t.regs().get("BLTDPT"), Some(0x1_2346));
+        assert_eq!(
+            m.debug_target(CPU)
+                .unwrap()
+                .regs()
+                .get("PC")
+                .map(|pc| pc >> 16),
+            Some(0xf8)
+        );
+    }
+
+    #[test]
+    fn copper_exec_breakpoint_stops_at_the_instruction() {
+        let mut m = stub();
+        frames(&mut m, 2);
+        let mut dbg = hooks(&m);
+        let id = dbg.add_breakpoint(BreakpointKind::Exec {
+            space: COPPER_SPACE,
+            addr: 0x1008,
+        });
+        let mut stop = StopReason::FrameDone;
+        for _ in 0..3 {
+            stop = m.run_frame(&mut dbg);
+            if stop != StopReason::FrameDone {
+                break;
+            }
+        }
+        assert_eq!(stop, StopReason::Breakpoint(id));
+        // The Copper is past the WAIT at line $80, at the second MOVE.
+        assert!(
+            m.board.custom.v >= 0x80 && m.board.custom.v < 0x82,
+            "line {}",
+            m.board.custom.v
+        );
+    }
+
+    #[test]
+    fn long_freezes_in_chip_ram_are_big_endian() {
+        let mut m = stub();
+        frames(&mut m, 2);
+        // The stub's interrupt handler counts fields with ADDQ.L #1,$100.
+        let mut dbg = hooks(&m);
+        let mut f = Freeze::new(CHIP_SPACE, 0x100, Size::Long, 0x0001_0002);
+        f.mode = FreezeMode::ReapplyPerFrame;
+        let id = dbg.add_freeze(f);
+        for _ in 0..3 {
+            m.run_frame(&mut dbg);
+        }
+        let v = peek_cpu(&m, 0x100, Size::Long);
+        assert!((0x0001_0002..=0x0001_0003).contains(&v), "{v:08x}");
+        dbg.remove_freeze(id);
+        // Blocked writes: the counter stops; CPU reads see the frozen value.
+        let before = peek_cpu(&m, 0x100, Size::Long);
+        let mut f = Freeze::new(CHIP_SPACE, 0x100, Size::Long, 0x0000_0042);
+        f.mode = FreezeMode::BlockWrites;
+        dbg.add_freeze(f);
+        for _ in 0..3 {
+            m.run_frame(&mut dbg);
+        }
+        assert_eq!(peek_cpu(&m, 0x100, Size::Long), before, "writes blocked");
+        let mut bus = AmigaBus {
+            b: &mut m.board,
+            start: 0,
+            dbg: Some(&mut dbg),
+            beam: BeamPos::default(),
+        };
+        assert_eq!(bus.read(0x100, Size::Word), 0x0000, "high word");
+        assert_eq!(bus.read(0x102, Size::Word), 0x0042, "low word");
+        assert_eq!(bus.read(0x8_0102, Size::Word), 0x0042, "through the mirror");
+    }
+}

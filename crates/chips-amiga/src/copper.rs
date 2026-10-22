@@ -32,6 +32,30 @@ pub enum State {
     Stopped,
 }
 
+/// Disassemble a Copper instruction: mnemonic and operand.
+///
+/// `MOVE #$0F00,COLOR00`; `WAIT $2C,$40` (vertical, horizontal; masks
+/// that are not all ones follow as `mask $vv,$hh`; `,blitter` when BFD is
+/// clear, i.e. the WAIT also waits for the Blitter); `SKIP` likewise.
+pub fn disassemble(ir1: u16, ir2: u16) -> (String, String) {
+    if ir1 & 1 == 0 {
+        return (
+            "MOVE".into(),
+            format!("#${ir2:04X},{}", crate::regnames::name(ir1)),
+        );
+    }
+    let mnemonic = if ir2 & 1 == 0 { "WAIT" } else { "SKIP" };
+    let mut operand = format!("${:02X},${:02X}", ir1 >> 8, ir1 & 0xfe);
+    let (ve, he) = ((ir2 >> 8) & 0x7f, ir2 & 0xfe);
+    if ve != 0x7f || he != 0xfe {
+        operand += &format!(" mask ${:02X},${:02X}", ve | 0x80, he);
+    }
+    if ir2 & 0x8000 == 0 {
+        operand += ",blitter";
+    }
+    (mnemonic.into(), operand)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Copper {
     pub cop1lc: u32,
@@ -41,6 +65,10 @@ pub struct Copper {
     pub state: State,
     /// COPCON CDANG: MOVEs to $40–$7F allowed.
     pub danger: bool,
+    /// Instruction addresses fetched since [`Copper::take_fetched`] while
+    /// `watch` is set (debugger exec breakpoints); not state.
+    pub watch: bool,
+    fetched: Vec<u32>,
 }
 
 impl Default for Copper {
@@ -69,7 +97,14 @@ impl Copper {
             pc: 0,
             state: State::Fetch1,
             danger: false,
+            watch: false,
+            fetched: Vec::new(),
         }
+    }
+
+    /// Addresses of the instructions started since the last call.
+    pub fn take_fetched(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.fetched)
     }
 
     pub fn jump(&mut self, second: bool) {
@@ -103,6 +138,9 @@ impl Copper {
         let word = chip.word(self.pc);
         match self.state {
             State::Fetch1 => {
+                if self.watch {
+                    self.fetched.push(self.pc);
+                }
                 self.pc = self.pc.wrapping_add(2);
                 self.state = State::Fetch2(word);
                 None
@@ -167,6 +205,8 @@ impl Copper {
             pc,
             state,
             danger: r.bool()?,
+            watch: false,
+            fetched: Vec::new(),
         })
     }
 }
@@ -188,6 +228,22 @@ mod tests {
         assert!(beam_reached(0x2c01, 0xff00, 0x2c, 0x00, false));
         // BFD clear waits for the Blitter.
         assert!(!beam_reached(0x2c01, 0x7f00, 0x2c, 0x00, true));
+    }
+
+    #[test]
+    fn disassembles_moves_waits_and_skips() {
+        assert_eq!(
+            disassemble(0x0180, 0x0f00),
+            ("MOVE".into(), "#$0F00,COLOR00".into())
+        );
+        assert_eq!(
+            disassemble(0x2c41, 0xfffe),
+            ("WAIT".into(), "$2C,$40".into())
+        );
+        assert_eq!(
+            disassemble(0x0001, 0x7f01),
+            ("SKIP".into(), "$00,$00 mask $FF,$00,blitter".into())
+        );
     }
 
     #[test]

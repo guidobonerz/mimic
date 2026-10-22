@@ -128,10 +128,16 @@ pub type FrameHook = Box<dyn FnMut(&mut dyn Machine, bool) + Send>;
 
 impl Session {
     pub fn new(machine: Box<dyn Machine>, machine_id: impl Into<String>) -> Self {
+        // Multi-byte freezes and watch values follow each space's byte
+        // order (the Amiga's spaces are big-endian).
+        let mut hooks = DebugHooks::new();
+        for s in machine.memory_spaces() {
+            hooks.set_big_endian(s.id, s.big_endian);
+        }
         Self {
             machine,
             machine_id: machine_id.into(),
-            hooks: DebugHooks::new(),
+            hooks,
             running: false,
             mode: RunMode::Free,
             bp_meta: BTreeMap::new(),

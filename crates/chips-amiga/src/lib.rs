@@ -22,6 +22,7 @@ pub mod custom;
 pub mod denise;
 pub mod disk;
 pub mod paula;
+pub mod regnames;
 
 pub use chipram::ChipRam;
 pub use custom::{Custom, Standard, TickOut};
