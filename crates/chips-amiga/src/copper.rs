@@ -14,7 +14,19 @@
 //!   bits. SKIP jumps over the next instruction if the condition holds.
 //!
 //! COPJMP1/COPJMP2 (strobes) restart at COP1LC/COP2LC; at the start of
-//! every field the Copper restarts at COP1LC.
+//! every field the Copper restarts at COP1LC. After a restart the Copper
+//! lets one of its cycles (an even slot) pass before it fetches the first
+//! instruction word (observed on hardware: a Copper list starting with a
+//! no-op MOVE at the line start needs it; see `docs/sources.md`). The
+//! 68000 gets that slot, which code polling VHPOSR for line 0 relies on.
+//!
+//! After a satisfied WAIT the Copper wakes up in one even slot of its own
+//! (it holds the bus; the CPU does not get it) before it fetches again.
+//! The common way past line 255, `WAIT $FF,$DE` followed by a WAIT for a
+//! line below $2C, depends on it: the second WAIT is fetched in line 256,
+//! where the beam's low eight bits start over (Rule 30's kaleidoscope).
+//! Measured against a cycle-exact A500 configuration with the bus test of
+//! `tools/amiga_bustest.py` (`docs/sources.md`).
 
 use emu_core::{StateError, StateReader, StateWriter};
 
@@ -69,6 +81,11 @@ pub struct Copper {
     /// `watch` is set (debugger exec breakpoints); not state.
     pub watch: bool,
     fetched: Vec<u32>,
+    /// Even slots to let pass before the next fetch (restart wake-up).
+    wake: u8,
+    /// Even slots the Copper takes without fetching after a satisfied
+    /// WAIT (its wake-up cycle; it holds the bus, the CPU waits).
+    pub busy_wake: u8,
 }
 
 impl Default for Copper {
@@ -99,6 +116,8 @@ impl Copper {
             danger: false,
             watch: false,
             fetched: Vec::new(),
+            wake: 0,
+            busy_wake: 0,
         }
     }
 
@@ -110,21 +129,31 @@ impl Copper {
     pub fn jump(&mut self, second: bool) {
         self.pc = if second { self.cop2lc } else { self.cop1lc };
         self.state = State::Fetch1;
+        // Counted down on the even slot of the restart (if any) and the
+        // next one: the first fetch comes one Copper cycle later.
+        self.wake = 2;
     }
 
     /// Every colour clock: a WAIT that is satisfied releases the Copper
-    /// for its next fetch.
+    /// for its next fetch; the wake-up after a restart runs down.
     pub fn check_wait(&mut self, v: u16, h: u16, blitter_busy: bool) {
+        if h & 1 == 0 && self.wake > 0 {
+            self.wake -= 1;
+        }
         if let State::Wait(ir1, ir2) = self.state {
             if beam_reached(ir1, ir2, v, h, blitter_busy) {
                 self.state = State::Fetch1;
+                // Waking up takes the Copper one even slot of its own.
+                self.busy_wake = 1;
             }
         }
     }
 
     /// Does the Copper want this (even, otherwise free) slot?
     pub fn wants_slot(&self) -> bool {
-        matches!(self.state, State::Fetch1 | State::Fetch2(_))
+        self.wake == 0
+            && self.busy_wake == 0
+            && matches!(self.state, State::Fetch1 | State::Fetch2(_))
     }
 
     /// Use one DMA slot. Returns a register MOVE (offset, value) to perform.
@@ -183,9 +212,13 @@ impl Copper {
         w.u16(a);
         w.u16(b);
         w.bool(self.danger);
+        w.u8(self.wake);
+        w.u8(self.busy_wake);
     }
 
-    pub(crate) fn load(r: &mut StateReader<'_>) -> Result<Self, StateError> {
+    /// `version`: the enclosing chunk's; 1 had no wake-up count, before 5
+    /// no wake-up after WAIT.
+    pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let cop1lc = r.u32()?;
         let cop2lc = r.u32()?;
         let pc = r.u32()?;
@@ -207,6 +240,8 @@ impl Copper {
             danger: r.bool()?,
             watch: false,
             fetched: Vec::new(),
+            wake: if version >= 2 { r.u8()?.min(2) } else { 0 },
+            busy_wake: if version >= 5 { r.u8()?.min(1) } else { 0 },
         })
     }
 }
@@ -244,6 +279,31 @@ mod tests {
             disassemble(0x0001, 0x7f01),
             ("SKIP".into(), "$00,$00 mask $FF,$00,blitter".into())
         );
+    }
+
+    #[test]
+    fn a_restart_lets_one_copper_cycle_pass() {
+        let mut c = Copper::new();
+        c.jump(false);
+        assert!(!c.wants_slot());
+        c.check_wait(0, 0, false);
+        assert!(!c.wants_slot(), "the restart's own slot passes");
+        c.check_wait(0, 1, false);
+        assert!(!c.wants_slot());
+        c.check_wait(0, 2, false);
+        assert!(c.wants_slot(), "fetching from the second even slot on");
+    }
+
+    #[test]
+    fn a_satisfied_wait_takes_one_copper_cycle() {
+        let mut c = Copper::new();
+        c.state = State::Wait(0x2c41, 0xfffe);
+        c.check_wait(0x2c, 0x40, false);
+        assert_eq!(c.state, State::Fetch1);
+        assert!(!c.wants_slot(), "the wake-up slot comes first");
+        assert_eq!(c.busy_wake, 1);
+        c.busy_wake = 0; // the custom chips take it on the next even slot
+        assert!(c.wants_slot());
     }
 
     #[test]

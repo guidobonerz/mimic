@@ -12,8 +12,14 @@
 //! **DMA slots** (HRM chapter 7, "DMA time slot allocation"): odd slots
 //! $01–$07 refresh, $09–$0D disk, $0F–$15 audio, $17–$35 sprites; bitplanes
 //! in their fetch window; the Copper takes even free slots, the Blitter any
-//! free slot, the CPU what is left — and only even-numbered slots (HRM
-//! chapter 6, "Blitter DMA"). Without BLTPRI (BLITHOG) the Blitter leaves
+//! free slot, the CPU what is left — odd slots included. The HRM (chapter
+//! 6, "Blitter DMA") says the 68000 uses only the even-numbered cycles; a
+//! measurement on a cycle-exact A500 configuration (WinUAE, 2026-10-22,
+//! `docs/sources.md`: bus-test boot block) shows a chip-RAM-bound loop
+//! running at its full instruction time with bitplane DMA off, so a CPU
+//! cycle whose second colour clock is odd is not delayed when that clock is
+//! free. With even slots only it would lose a clock per 4n+2-cycle
+//! instruction (10 % there). Without BLTPRI (BLITHOG) the Blitter leaves
 //! a slot to the CPU once the CPU has been "unsatisfied for three
 //! consecutive memory cycles" (HRM): every colour clock counts from the
 //! one the CPU asserts its bus request in ([`Custom::cpu_request`], the
@@ -25,8 +31,13 @@
 //! **Bitplane fetch.** Inside the vertical display window and between
 //! DDFSTRT and DDFSTOP, eight-slot groups fetch the planes in the order
 //! (lowres) `- 4 6 2 - 3 5 1` and (hires) `4 2 3 1 4 2 3 1`; groups start
-//! at DDFSTRT + 8n while ≤ DDFSTOP (hires: DDFSTOP + 4). After the line's last group the
-//! modulos are added (BPL1MOD odd planes, BPL2MOD even planes).
+//! at DDFSTRT + 8n while ≤ DDFSTOP (hires: DDFSTOP + 4). Each plane's
+//! modulo (BPL1MOD odd planes, BPL2MOD even planes) is added with its last
+//! fetch of the line, in the last group (HRM chapter 3: the modulo is added
+//! "at the end of the data fetch for each horizontal line"); a pointer
+//! written after that (Desert Dream's cube: a Copper MOVE to BPL1PTL at
+//! $E0, right after a window ending at $DF) is used unchanged on the next
+//! line.
 //!
 //! **Picture.** [`Custom::frame`] is the field in 12-bit colours as RGB, 720
 //! high-resolution pixels wide from colour clock $38 (low-resolution pixel
@@ -79,6 +90,8 @@ pub const WIDTH: u32 = 720;
 pub const FIRST_CCK: u32 = 0x38;
 /// Colour clocks per PAL line.
 pub const PAL_LINE: u16 = 227;
+/// Colour clocks from the vertical strobe to the VERTB request.
+const VERTB_DELAY: u16 = 2;
 
 /// What happened in one colour clock.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -324,7 +337,6 @@ impl Custom {
             out.hsync = true;
             if v == 0 {
                 out.vsync = true;
-                self.paula.request(int::VERTB);
                 self.copper.jump(false);
                 self.bpl_vertical = false;
             }
@@ -342,11 +354,18 @@ impl Custom {
         if h == denise::LINE_START {
             self.denise.start_line();
         }
+        if v == 0 && h == VERTB_DELAY {
+            // VERTB appears in INTREQ two colour clocks after the vertical
+            // strobe at 0/0 (logic-analyzer observation on an A500, see
+            // `docs/sources.md`); code polling VHPOSR for line 0 sees it
+            // before the interrupt is taken.
+            self.paula.request(int::VERTB);
+        }
         self.blitter.tick();
         self.copper.check_wait(v, h, self.blitter.busy);
 
-        // The CPU uses even slots only.
-        let cpu_turn = cpu_wants && h & 1 == 0;
+        // The CPU takes any free slot (measured, see the module doc).
+        let cpu_turn = cpu_wants;
         let cpu_unsatisfied = cpu_wants || std::mem::take(&mut self.cpu_pending);
         match self.slot(h) {
             Slot::Fixed => {}
@@ -372,12 +391,22 @@ impl Custom {
             Slot::Plane(p) => {
                 let w = chip.word(self.bplpt[p]);
                 self.bplpt[p] = self.bplpt[p].wrapping_add(2) & self.ptr_mask;
+                if self.last_fetch_group(h) {
+                    // The plane's last word of the line: its modulo is added
+                    // with this fetch, so a Copper MOVE right after the fetch
+                    // window (Desert Dream's cube writes BPL1PTL at $E0) is
+                    // not shifted by it.
+                    self.add_modulo(p);
+                }
                 let dh = self.denise_h(h);
                 self.denise.write_bpldat(p, w, dh);
                 self.fetched = true;
             }
             Slot::Free => {
-                if h & 1 == 0 && self.copper.wants_slot() && self.dma_on(dma::COPEN) {
+                if h & 1 == 0 && self.copper.busy_wake > 0 && self.dma_on(dma::COPEN) {
+                    // The Copper's wake-up after a WAIT holds the bus.
+                    self.copper.busy_wake -= 1;
+                } else if h & 1 == 0 && self.copper.wants_slot() && self.dma_on(dma::COPEN) {
                     if let Some((r, val)) = self.copper.cycle(chip, v, h, self.blitter.busy) {
                         self.write(r, val);
                     }
@@ -404,7 +433,6 @@ impl Custom {
             0
         };
         if self.fetched && h == self.fetch_window().1 {
-            self.add_modulos();
             self.fetched = false;
         }
         self.render(v, h);
@@ -456,15 +484,25 @@ impl Custom {
         }
     }
 
-    fn add_modulos(&mut self) {
-        for p in 0..self.denise.planes() {
-            let m = if p & 1 == 0 {
-                self.bpl1mod
-            } else {
-                self.bpl2mod
-            };
-            self.bplpt[p] = self.bplpt[p].wrapping_add(m as i16 as i32 as u32) & self.ptr_mask;
-        }
+    /// Is slot `h` in the last fetch group of the line, where each plane
+    /// fetches its last word (low resolution: the last 8 colour clocks of
+    /// the window; high resolution fetches every plane twice per group, so
+    /// the last 4)?
+    fn last_fetch_group(&self, h: u16) -> bool {
+        let end = self.fetch_window().1;
+        let group = if self.denise.hires() { 4 } else { 8 };
+        h + group >= end
+    }
+
+    /// Add the plane's modulo (BPL1MOD odd planes 1/3/5, BPL2MOD even
+    /// planes 2/4/6) to its pointer, after its last fetch of the line.
+    fn add_modulo(&mut self, p: usize) {
+        let m = if p & 1 == 0 {
+            self.bpl1mod
+        } else {
+            self.bpl2mod
+        };
+        self.bplpt[p] = self.bplpt[p].wrapping_add(m as i16 as i32 as u32) & self.ptr_mask;
     }
 
     fn render(&mut self, v: u16, h: u16) {
@@ -706,7 +744,9 @@ const TAG: [u8; 4] = *b"OCS ";
 
 impl Savestate for Custom {
     fn save(&self, w: &mut StateWriter) {
-        w.chunk(TAG, 1, |w| {
+        // Version 3: two pending shifter loads per plane group in Denise;
+        // version 4: four; version 5: the Copper's wake-up after WAIT.
+        w.chunk(TAG, 5, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -748,7 +788,7 @@ impl Savestate for Custom {
 
     /// Atomic; the standard and pointer width are configuration.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, 1)?;
+        let (version, mut c) = r.chunk(TAG, 5)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -791,9 +831,9 @@ impl Savestate for Custom {
                 _ => return Err(StateError::Invalid("sprite DMA state")),
             };
         }
-        n.copper = Copper::load(&mut c)?;
+        n.copper = Copper::load(&mut c, version)?;
         n.blitter = crate::blitter::Blitter::load(&mut c)?;
-        n.denise = Denise::load(&mut c)?;
+        n.denise = Denise::load(&mut c, version)?;
         n.paula = Paula::load(&mut c)?;
         if n.h >= 228 || n.v >= n.field_lines() {
             return Err(StateError::Invalid("beam position"));

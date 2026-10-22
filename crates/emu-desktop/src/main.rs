@@ -127,12 +127,17 @@ Disks: Ctrl+D puts the next disk of the --disk list into the first drive;
 dropping an image file onto the window inserts it there.
 Ctrl+P shows or hides the console panel: the machine's buttons and
 switches (power, reset, Atari console switches, RESTORE …); click a button
-(held while the mouse button is down) or a switch position. Its JOY KEYS
+(held while the mouse button is down) or a switch position. Its PAUSE
+button stops the whole machine and lets it run again (lit while stopped,
+also by a debugger; the title bar shows where). Its JOY KEYS
 switch picks the keys that play the joystick: CURSOR (cursor keys, Space
 fires), NUMPAD or OFF; JOY PORT (machines with several joystick ports)
 moves the joysticks to another port.
-Ctrl+Space shows or hides the status footer: mouse pointer position in
-frame pixels, joystick directions and drive activity/errors.
+Ctrl+Space shows or hides the status footer: a speed slider (click a step
+or drag the knob: 10 % to 800 % of real time; sound is muted off
+100 %), emulated time since power-on (m:ss.t) and frame count, mouse
+pointer position in frame pixels, joystick directions and drive
+activity/errors.
 With --option port1=mouse1351 (or paddles, driving, also port2) a click into the
 window captures the mouse for the machine; the middle button releases it.
 
@@ -419,6 +424,12 @@ struct App {
     cursor: Option<(f64, f64)>,
     /// Captured mouse movement summed since the capture (footer).
     mouse_sum: (i32, i32),
+    /// The footer's speed slider and the footer's top (window pixels),
+    /// while the footer is shown.
+    speed_slider: Option<footer::Slider>,
+    footer_top: f64,
+    /// The slider's knob is being dragged.
+    speed_drag: bool,
 }
 
 impl App {
@@ -434,7 +445,31 @@ impl App {
             .flatten()
     }
 
+    /// Is the pointer over the footer's speed slider?
+    fn over_speed(&self) -> bool {
+        match (self.cursor, self.speed_slider) {
+            (Some((x, y)), Some(s)) => self.footer_on && y >= self.footer_top && s.contains(x),
+            _ => false,
+        }
+    }
+
+    /// Set the speed from the pointer's column on the slider.
+    fn speed_from_pointer(&self) {
+        if let (Some((x, _)), Some(s)) = (self.cursor, self.speed_slider) {
+            self.shared
+                .speed
+                .store(s.step_at(x) as u8, Ordering::Relaxed);
+        }
+    }
+
     fn panel_send(&self, id: u16, value: u8) {
+        if id == panel::PAUSE {
+            // A press toggles; the release is nothing.
+            if value != 0 {
+                self.shared.pause_toggle.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
         if id == panel::JOY_KEYS {
             self.shared.joy_keys.store(value, Ordering::Relaxed);
             return;
@@ -631,6 +666,17 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // The footer's speed slider: click a step or drag the knob.
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } if !self.mouse_captured && (self.speed_drag || self.over_speed()) => {
+                self.speed_drag = state == ElementState::Pressed;
+                if self.speed_drag {
+                    self.speed_from_pointer();
+                }
+            }
             // The console panel: a button is held while the mouse button
             // is down, a switch position is set by a click.
             WindowEvent::MouseInput {
@@ -671,6 +717,9 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) if self.mouse_captured => self.capture_mouse(false),
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = Some((position.x, position.y));
+                if self.speed_drag {
+                    self.speed_from_pointer();
+                }
             }
             WindowEvent::CursorLeft { .. } => self.cursor = None,
             WindowEvent::DroppedFile(path) => {
@@ -799,12 +848,12 @@ impl ApplicationHandler for App {
                     let mut strip = Vec::new();
                     let mut rows = 0;
                     if self.panel_on {
-                        let mut controls = self
-                            .shared
-                            .controls
-                            .lock()
-                            .map(|c| c.clone())
-                            .unwrap_or_default();
+                        let mut controls = vec![panel::pause_control(
+                            self.shared.paused.load(Ordering::Relaxed),
+                        )];
+                        if let Ok(c) = self.shared.controls.lock() {
+                            controls.extend(c.iter().cloned());
+                        }
                         controls.push(panel::joy_keys_control(
                             self.shared.joy_keys.load(Ordering::Relaxed),
                         ));
@@ -835,9 +884,15 @@ impl ApplicationHandler for App {
                             .lock()
                             .map(|f| f.clone())
                             .unwrap_or_default();
-                        let rgba = footer::render(&footer::segments(&info, mouse), width, size);
+                        let speed = usize::from(self.shared.speed.load(Ordering::Relaxed));
+                        let (rgba, slider) =
+                            footer::render(&footer::segments(&info, mouse), speed, width, size);
                         strip.extend_from_slice(&rgba);
                         rows += row;
+                        self.speed_slider = Some(slider);
+                    } else {
+                        self.speed_slider = None;
+                        self.speed_drag = false;
                     }
                     if rows == 0 {
                         g.set_footer(None);
@@ -847,6 +902,7 @@ impl ApplicationHandler for App {
                     let window_height = self.window.as_ref().map_or(0, |w| w.inner_size().height);
                     self.panel_top = f64::from(window_height.saturating_sub(rows));
                     self.panel_row = f64::from(row);
+                    self.footer_top = f64::from(window_height.saturating_sub(row));
                     if !self.panel_on {
                         self.panel_rows = 0;
                     }
@@ -1037,6 +1093,9 @@ fn run() -> Result<(), String> {
         panel_held: None,
         cursor: None,
         mouse_sum: (0, 0),
+        speed_slider: None,
+        footer_top: 0.0,
+        speed_drag: false,
     };
     let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
     shared.quit.store(true, Ordering::Relaxed);

@@ -186,20 +186,38 @@ Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
 des Gehäuses (POWER, RESET, beim Atari 2600 die Konsolenschalter, beim 800XL
 START/SELECT/OPTION, beim C64/VIC-20 RESTORE, beim C128 auch 40/80 und CAPS
 LOCK). Eine Taste ist gedrückt, solange die Maustaste gehalten wird; ein Klick
-auf eine Schalterstellung stellt den Schalter um. Strg+P blendet die Leiste
-ein/aus, `--no-panel` startet ohne sie. Dieselbe Leiste hat der
-Browser-Viewer; der Debugger bedient sie mit `controls`/`set_control`
-(`polydbg panel`).
+auf eine Schalterstellung stellt den Schalter um. Ganz links steht
+**PAUSE**: ein Klick hält die ganze Maschine an, der nächste lässt sie
+weiterlaufen; der Knopf leuchtet, solange die Maschine steht (auch wenn ein
+Debugger sie hält), die Titelleiste zeigt die Stelle. Für einen
+angeschlossenen Debugger ist das dasselbe wie `pause`/`resume`. Strg+P
+blendet die Leiste ein/aus, `--no-panel` startet ohne sie. Dieselbe Leiste
+hat der Browser-Viewer (ohne PAUSE); der Debugger bedient sie mit
+`controls`/`set_control` (`polydbg panel`).
 
 **Disketten wechseln:** `--disk` lässt sich mehrfach angeben. Die
 Disketten kommen der Reihe nach in die Laufwerke (Amiga: DF0:, DF1: … mit
 `--option drives=N`); die übrigen bilden eine Wechselliste für das erste
 Laufwerk. **Strg+D** legt die nächste Diskette dieser Liste ein, und eine
 Image-Datei, die man auf das Fenster zieht, landet ebenfalls im ersten
-Laufwerk. Die Titelleiste zeigt, welche Diskette gerade drin ist. Beispiel
+Laufwerk. Wie von Hand bleibt das Laufwerk dabei etwa zwei Sekunden leer,
+bevor die neue Diskette hineinkommt: Programme, die das Laufwerk nur ab und
+zu abfragen (Desert Dream etwa einmal pro Sekunde), bemerken den Wechsel
+nur, wenn sie es einmal leer vorfinden. Die Titelleiste zeigt, welche
+Diskette gerade drin ist; gibt es keine weitere Diskette in der Liste, sagt
+sie das. Beispiel
 für eine Demo mit zwei Disketten und einem Laufwerk:
 `--disk demo-a.adf --disk demo-b.adf`, dann Strg+D, wenn die Demo nach
 Disk B fragt. Im Debugger geht dasselbe mit `insert_media`.
+
+**Statuszeile:** Strg+Leertaste blendet unter dem Bild eine Statuszeile
+ein (`--footer` startet mit ihr). Links sitzt ein **Geschwindigkeitsregler**:
+ein Klick auf eine Stufe oder Ziehen des Knopfs stellt 10 %, 25 %, 50 %,
+100 %, 150 %, 200 %, 400 % oder 800 % der Echtzeit ein (ist der Rechner zu
+langsam für eine Stufe, läuft die Emulation so schnell sie kann); außerhalb von 100 %
+ist der Ton stumm. Dahinter folgen die emulierte Zeit seit dem Einschalten
+(`m:ss.t`) mit der Bildnummer (dieselbe, die der Debugger in `beam` meldet),
+die Mausposition, die Joystick-Richtungen und der Zustand der Laufwerke.
 
 **Weitere Tasten:** F12 wechselt zwischen den Bildschirmen einer Maschine
 (C128: VIC und VDC). Datasette/Kassette: F9 PLAY, Shift+F9 RECORD, F10 STOP,

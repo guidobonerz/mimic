@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use emu_core::frame::SignalInfo;
 use emu_core::input::{InputEvent, InputTarget, TimedInput};
 use emu_core::{ControlId, ControlInfo, Machine, ScreenId, StopReason};
+use emu_debug::protocol::Command;
 use emu_debug::{Endpoint, Service, Session};
 use emu_input::{HostEvent, JoyKeys, Mapper};
 use emu_preview::server::FrameTap;
@@ -97,6 +98,16 @@ pub struct Shared {
     /// the machine has (the panel offers the switch from two on).
     pub joy_port: AtomicU8,
     pub joy_ports: AtomicU8,
+    /// Set by the window's PAUSE button: stop the machine, or let it run
+    /// again. Goes through the debug session like the debugger's `pause`
+    /// and `resume`, so attached debuggers see the stop.
+    pub pause_toggle: AtomicBool,
+    /// The machine is stopped (by the button or a debugger); published by
+    /// the emulation thread for the button's face.
+    pub paused: AtomicBool,
+    /// Emulation speed set with the footer's slider: an index into
+    /// [`crate::footer::SPEEDS`]. Off 100 % the sound is muted.
+    pub speed: AtomicU8,
 }
 
 /// Datasette keys from the window.
@@ -160,6 +171,9 @@ impl Shared {
             joy_keys: AtomicU8::new(0),
             joy_port: AtomicU8::new(0),
             joy_ports: AtomicU8::new(0),
+            pause_toggle: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+            speed: AtomicU8::new(crate::footer::NORMAL_SPEED as u8),
         }
     }
 }
@@ -231,9 +245,7 @@ fn swap_disk(m: &mut dyn Machine, path: &str) -> String {
     else {
         return "no disk drive".into();
     };
-    let name = std::path::Path::new(path)
-        .file_name()
-        .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned());
+    let name = file_name(path);
     let media = match media_backends::image::open(std::path::Path::new(path)) {
         Ok(m) if m.kind == emu_core::media::MediaKind::Disk => m,
         Ok(_) => return format!("{name}: not a disk image"),
@@ -247,6 +259,30 @@ fn swap_disk(m: &mut dyn Machine, path: &str) -> String {
         Ok(()) => format!("{} {name}", info.name),
         Err(e) => format!("{name}: {e}"),
     }
+}
+
+/// Frames the first drive stays empty between taking a disk out and putting
+/// the next one in (about 2 s, as by hand). Software that polls the drive
+/// now and then (Desert Dream checks DF0: about once a second) only sees a
+/// change when its poll finds the drive empty: with a disk inside, the head
+/// step of the poll resets the drive's change signal right away.
+const SWAP_FRAMES: u64 = 100;
+
+/// Take the disk out of the machine's first disk drive; returns the
+/// drive's name.
+fn eject_first(m: &mut dyn Machine) -> Option<&'static str> {
+    let info = m
+        .media_slots()
+        .into_iter()
+        .find(|s| s.kind == emu_core::media::MediaKind::Disk)?;
+    let _ = m.media_slot(info.id)?.eject();
+    Some(info.name)
+}
+
+fn file_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 fn next_screen(m: &dyn Machine, current: ScreenId) -> ScreenId {
@@ -340,6 +376,10 @@ pub fn spawn(
         let mut chosen: Option<ScreenId> = None;
         // Index of the disk in the first drive within `Shared::disk_swap`.
         let mut disk_at = 0usize;
+        // A disk on its way into the first drive and the frame it goes in;
+        // frames run so far (the swap pause counts emulated frames).
+        let mut pending_disk: Option<(String, u64)> = None;
+        let mut frames_run = 0u64;
         let mut tracker = Tracker::default();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
@@ -376,6 +416,12 @@ pub fn spawn(
                     if list.len() > 1 {
                         disk_at = (disk_at + 1) % list.len();
                         disk = Some(list[disk_at].clone());
+                    } else {
+                        // Say why nothing happens instead of ignoring the key.
+                        *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(
+                            "Ctrl+D: no other disk (give --disk more than once or drop an image on the window)"
+                                .into(),
+                        );
                     }
                 }
             }
@@ -397,8 +443,20 @@ pub fn spawn(
                 disk = Some(path);
             }
             if let Some(path) = disk {
-                let msg = swap_disk(session.machine_mut(), &path);
+                // Out now, in after SWAP_FRAMES emulated frames.
+                let msg = match eject_first(session.machine_mut()) {
+                    Some(drive) => format!("{drive} empty, inserting {} …", file_name(&path)),
+                    None => "no disk drive".into(),
+                };
                 *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                pending_disk = Some((path, frames_run + SWAP_FRAMES));
+            }
+            if let Some((path, due)) = &pending_disk {
+                if frames_run >= *due {
+                    let msg = swap_disk(session.machine_mut(), path);
+                    *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                    pending_disk = None;
+                }
             }
             if shared.next_screen.swap(false, Ordering::Relaxed) {
                 let current = shown_screen(session.machine(), chosen);
@@ -448,19 +506,34 @@ pub fn spawn(
             }
             let screen = shown_screen(session.machine(), chosen);
             if shared.footer_on.load(Ordering::Relaxed) {
-                let f = tracker.snapshot(session.machine_mut());
+                let f = tracker.snapshot(session.machine_mut(), frame_time.as_secs_f64() * 1e3);
                 if let Ok(mut s) = shared.footer.lock() {
                     *s = f;
                 }
             }
 
             let was_running = session.is_running();
+            if shared.pause_toggle.swap(false, Ordering::Relaxed) {
+                let cmd = if was_running {
+                    Command::Pause
+                } else {
+                    Command::Resume
+                };
+                let _ = session.command(cmd);
+                match &endpoint {
+                    Some(ep) => ep.publish(&mut session),
+                    None => drop(session.take_events()),
+                }
+            }
             if let Some(ep) = &endpoint {
                 let wait = (!was_running).then_some(Duration::from_millis(10));
                 if ep.service(&mut session, wait) == Service::Shutdown {
                     endpoint = None;
                 }
             }
+            shared
+                .paused
+                .store(!session.is_running(), Ordering::Relaxed);
             if !session.is_running() {
                 // Held by the debugger or stopped by a jam: show what the
                 // machine looks like now, once per change.
@@ -488,9 +561,12 @@ pub fn spawn(
                 }
             }
 
+            let percent = crate::footer::speed_percent(shared.speed.load(Ordering::Relaxed));
             wait_until(deadline);
             let period = shared.display_period_ns.load(Ordering::Relaxed);
-            if period == 0 {
+            if percent != 100 {
+                deadline += frame_time.mul_f64(100.0 / f64::from(percent));
+            } else if period == 0 {
                 deadline += frame_time;
             } else {
                 deadline += Duration::from_nanos(period);
@@ -502,6 +578,7 @@ pub fn spawn(
             }
 
             session.run_slice();
+            frames_run += 1;
             match &endpoint {
                 Some(ep) => ep.publish(&mut session),
                 None => drop(session.take_events()),
@@ -511,7 +588,12 @@ pub fn spawn(
             if let Some(tap) = &preview {
                 tap.publish_audio(&samples, format);
             }
-            if let Ok(mut a) = shared.audio.lock() {
+            if percent != 100 {
+                // Sound at another speed would only crackle: muted.
+                if let Ok(mut a) = shared.audio.lock() {
+                    a.clear();
+                }
+            } else if let Ok(mut a) = shared.audio.lock() {
                 min_fill = min_fill.min(a.len());
                 if format.channels == 2 {
                     a.extend(samples.as_chunks::<2>().0.iter().copied());
@@ -586,6 +668,131 @@ mod tests {
         assert!(!shared.audio.lock().unwrap().is_empty(), "audio produced");
         shared.quit.store(true, Ordering::Relaxed);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn the_pause_button_stops_and_resumes_the_machine() {
+        let mut config = MachineConfig::default();
+        config.options.insert("roms".into(), "stub".into());
+        let machine = emu_machines::registry().create("c64", &config).unwrap();
+        let mapper = Mapper::new(emu_input::Profile::default_for("c64"));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let shared = Arc::new(Shared::new());
+        let handle = spawn(machine, mapper, rx, shared.clone(), None, None);
+        let status = || shared.status.lock().unwrap().clone();
+        assert!(eventually(|| !shared.frames.lock().unwrap().is_empty()));
+        assert!(!shared.paused.load(Ordering::Relaxed));
+
+        shared.pause_toggle.store(true, Ordering::Relaxed);
+        assert!(
+            eventually(|| status().is_some_and(|s| s.starts_with("paused at $"))),
+            "{:?}",
+            status()
+        );
+        assert!(eventually(|| shared.paused.load(Ordering::Relaxed)));
+        // Stopped: no new frames after the one showing the stop.
+        thread::sleep(Duration::from_millis(100));
+        shared.frames.lock().unwrap().clear();
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            shared.frames.lock().unwrap().is_empty(),
+            "frames while paused"
+        );
+
+        shared.pause_toggle.store(true, Ordering::Relaxed);
+        assert!(eventually(|| status().is_none()), "{:?}", status());
+        assert!(eventually(|| !shared.paused.load(Ordering::Relaxed)));
+        assert!(eventually(|| !shared.frames.lock().unwrap().is_empty()));
+
+        shared.quit.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn another_speed_mutes_the_sound_and_still_runs() {
+        let mut config = MachineConfig::default();
+        config.options.insert("roms".into(), "stub".into());
+        let machine = emu_machines::registry().create("c64", &config).unwrap();
+        let mapper = Mapper::new(emu_input::Profile::default_for("c64"));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let shared = Arc::new(Shared::new());
+        // Top speed (800 %).
+        shared.speed.store(7, Ordering::Relaxed);
+        let handle = spawn(machine, mapper, rx, shared.clone(), None, None);
+        assert!(eventually(|| shared.frames.lock().unwrap().len() >= 2));
+        assert!(shared.audio.lock().unwrap().is_empty(), "muted");
+        shared
+            .speed
+            .store(crate::footer::NORMAL_SPEED as u8, Ordering::Relaxed);
+        assert!(eventually(|| !shared.audio.lock().unwrap().is_empty()));
+        shared.quit.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn ctrl_d_swaps_the_next_disk_into_the_first_drive() {
+        let dir = std::env::temp_dir().join(format!("mimic-swap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.adf"), dir.join("b.adf"));
+        for p in [&a, &b] {
+            std::fs::write(p, vec![0u8; 901_120]).unwrap();
+        }
+        let mut config = MachineConfig::default();
+        config.options.insert("roms".into(), "stub".into());
+        let machine = emu_machines::registry().create("amiga", &config).unwrap();
+        let mapper = Mapper::new(emu_input::Profile::default_for("amiga"));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let shared = Arc::new(Shared::new());
+        // Top speed (800 %): the swap waits 100 emulated frames.
+        shared.speed.store(7, Ordering::Relaxed);
+        let status = || shared.status.lock().unwrap().clone();
+        // One disk only: the key says why nothing happens.
+        *shared.disk_swap.lock().unwrap() = vec![a.to_string_lossy().into_owned()];
+        let handle = spawn(machine, mapper, rx, shared.clone(), None, None);
+        shared.next_disk.store(true, Ordering::Relaxed);
+        assert!(
+            eventually(|| status().is_some_and(|s| s.contains("no other disk"))),
+            "{:?}",
+            status()
+        );
+        // Two disks: the drive is empty for a while, then the second goes
+        // in, then the first again.
+        shared
+            .disk_swap
+            .lock()
+            .unwrap()
+            .push(b.to_string_lossy().into_owned());
+        shared.next_disk.store(true, Ordering::Relaxed);
+        assert!(
+            eventually(|| status().is_some_and(|s| s.contains("empty, inserting b.adf"))),
+            "{:?}",
+            status()
+        );
+        assert!(
+            eventually_for(60, || status().is_some_and(|s| s.ends_with("b.adf"))),
+            "{:?}",
+            status()
+        );
+        shared.next_disk.store(true, Ordering::Relaxed);
+        assert!(
+            eventually_for(60, || status().is_some_and(|s| s.ends_with("a.adf"))),
+            "{:?}",
+            status()
+        );
+        shared.quit.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Poll `f` for up to `secs` seconds.
+    fn eventually_for(secs: u64, mut f: impl FnMut() -> bool) -> bool {
+        for _ in 0..secs * 100 {
+            if f() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
     }
 
     /// Poll `f` for up to 5 s.

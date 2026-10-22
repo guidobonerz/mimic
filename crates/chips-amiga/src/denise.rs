@@ -53,6 +53,11 @@ pub const LINE_START: u16 = 9;
 /// Pixels from the bitplane fetch slot to the load (low resolution).
 const LOAD_DELAY: u32 = 3;
 
+/// Loads that can wait per plane group: a word arrives every 16
+/// high-resolution pixels in high resolution (32 in low resolution) and a
+/// scroll of 15 delays its load by 36 pixels, so up to three wait at once.
+const QUEUE: usize = 4;
+
 /// A pending parallel load into the odd or even plane shifters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Load {
@@ -72,8 +77,12 @@ pub struct Denise {
     pub bpldat: [u16; 6],
     /// Shift registers, planes 1–6.
     shift: [u16; 6],
-    /// Pending loads for odd (1, 3, 5) and even (2, 4, 6) planes.
-    pending: [Option<Load>; 2],
+    /// Pending loads for odd (1, 3, 5) and even (2, 4, 6) planes, the
+    /// earliest first. Several can wait: with a large scroll value the next
+    /// words are fetched before the previous load is due (low resolution:
+    /// scroll 13–15, Desert Dream's moon; high resolution: from scroll 5,
+    /// its end scroller uses 15). See [`QUEUE`].
+    pending: [[Option<Load>; QUEUE]; 2],
     /// High-resolution pixels since each group's load (low-resolution
     /// shifting moves on every second one).
     phase: [u8; 2],
@@ -143,7 +152,7 @@ impl Denise {
             diwstop: 0,
             bpldat: [0; 6],
             shift: [0; 6],
-            pending: [None; 2],
+            pending: [[None; QUEUE]; 2],
             phase: [0; 2],
             armed: false,
             ham: 0,
@@ -262,15 +271,40 @@ impl Denise {
             let odd = u32::from(self.bplcon1 & 15);
             let even = u32::from((self.bplcon1 >> 4) & 15);
             let d = self.bpldat;
-            self.pending[0] = Some(Load {
-                at: base + 2 * odd,
-                data: [d[0], d[2], d[4]],
-            });
-            self.pending[1] = Some(Load {
-                at: base + 2 * even,
-                data: [d[1], d[3], d[5]],
-            });
+            self.queue(
+                0,
+                Load {
+                    at: base + 2 * odd,
+                    data: [d[0], d[2], d[4]],
+                },
+            );
+            self.queue(
+                1,
+                Load {
+                    at: base + 2 * even,
+                    data: [d[1], d[3], d[5]],
+                },
+            );
             self.armed = true;
+        }
+    }
+
+    /// Queue a load for plane group `g` behind those still waiting; loads
+    /// at or after the new one's time are dropped (a new line or a smaller
+    /// scroll value). A full queue drops its oldest load.
+    fn queue(&mut self, g: usize, load: Load) {
+        let q = &mut self.pending[g];
+        let mut n = q
+            .iter()
+            .take_while(|l| l.is_some_and(|l| l.at < load.at))
+            .count();
+        if n == QUEUE {
+            q.rotate_left(1);
+            n -= 1;
+        }
+        q[n] = Some(load);
+        for l in &mut q[n + 1..] {
+            *l = None;
         }
     }
 
@@ -290,13 +324,14 @@ impl Denise {
         for (i, px) in out.iter_mut().enumerate() {
             let x = 4 * h + i as u32;
             for g in 0..2 {
-                if let Some(l) = self.pending[g] {
+                if let Some(l) = self.pending[g][0] {
                     if x >= l.at {
                         for (k, &w) in l.data.iter().enumerate() {
                             self.shift[g + 2 * k] = w;
                         }
                         self.phase[g] = 0;
-                        self.pending[g] = None;
+                        self.pending[g].rotate_left(1);
+                        self.pending[g][QUEUE - 1] = None;
                     }
                 }
             }
@@ -414,7 +449,7 @@ impl Denise {
         for v in self.bpldat.iter().chain(&self.shift) {
             w.u16(*v);
         }
-        for p in &self.pending {
+        for p in self.pending.iter().flatten() {
             w.bool(p.is_some());
             let l = p.unwrap_or_default();
             w.u32(l.at);
@@ -435,7 +470,9 @@ impl Denise {
         }
     }
 
-    pub(crate) fn load(r: &mut StateReader<'_>) -> Result<Self, StateError> {
+    /// `version` is the OCS chunk's: version 2 saved one pending load per
+    /// group, version 3 two, from 4 on [`QUEUE`].
+    pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let mut d = Self::new();
         for c in &mut d.colors {
             *c = r.u16()? & 0x0fff;
@@ -453,16 +490,29 @@ impl Denise {
         for v in d.bpldat.iter_mut().chain(d.shift.iter_mut()) {
             *v = r.u16()?;
         }
-        for p in &mut d.pending {
-            let some = r.bool()?;
-            let mut l = Load {
-                at: r.u32()?,
-                data: [0; 3],
-            };
-            for v in &mut l.data {
-                *v = r.u16()?;
+        let depth = match version {
+            0..=2 => 1,
+            3 => 2,
+            _ => QUEUE,
+        };
+        for q in &mut d.pending {
+            for p in q.iter_mut().take(depth) {
+                let some = r.bool()?;
+                let mut l = Load {
+                    at: r.u32()?,
+                    data: [0; 3],
+                };
+                for v in &mut l.data {
+                    *v = r.u16()?;
+                }
+                *p = some.then_some(l);
             }
-            *p = some.then_some(l);
+            // Keep the queue packed: nothing after the first gap.
+            if let Some(gap) = q.iter().position(Option::is_none) {
+                for l in &mut q[gap..] {
+                    *l = None;
+                }
+            }
         }
         r.raw_into(&mut d.phase)?;
         d.armed = r.bool()?;
@@ -529,6 +579,60 @@ mod tests {
         d.write_bpldat(0, 0x8000, 0x3f);
         let px = line(&mut d, 0x3f, 0x44);
         assert_eq!(&px[6..10], &[0, 0, 0xf00, 0xf00]);
+    }
+
+    #[test]
+    fn a_large_scroll_keeps_every_word() {
+        // BPL1DAT every 8 colour clocks; with PF1H = 15 each load waits 36
+        // high-resolution pixels, past the next fetch (Desert Dream's moon
+        // sliding in from the right).
+        let mut d = Denise::new();
+        d.colors[1] = 0xf00;
+        d.bplcon0 = 0x1200;
+        d.bplcon1 = 0x000f;
+        d.diwstrt = 0x2c81;
+        d.diwstop = 0x2cc1;
+        d.start_line();
+        let mut px = Vec::new();
+        for n in 0..3u32 {
+            d.write_bpldat(0, 0x8000 >> n, 0x3f + 8 * n);
+            px.extend(line(&mut d, 0x3f + 8 * n, 0x47 + 8 * n));
+        }
+        px.extend(line(&mut d, 0x57, 0x5f));
+        // Word n shows at hires pixel 4·$3F + 6 + 30 + 32n (+ 2n for its bit).
+        for n in 0..3usize {
+            let at = 36 + 34 * n;
+            assert_eq!(&px[at..at + 2], &[0xf00; 2], "word {n}");
+            assert_eq!(px[at - 1], 0, "word {n} start");
+        }
+    }
+
+    #[test]
+    fn a_large_hires_scroll_keeps_every_word() {
+        // High resolution: BPL1DAT every 4 colour clocks (16 pixels); with
+        // PF1H = 15 each load waits 36 pixels, so three are pending at once
+        // (Desert Dream's end scroller).
+        let mut d = Denise::new();
+        d.colors[1] = 0xf00;
+        d.bplcon0 = 0x9200;
+        d.bplcon1 = 0x000f;
+        d.diwstrt = 0x2c81;
+        d.diwstop = 0x2cc1;
+        d.start_line();
+        let mut px = Vec::new();
+        for n in 0..4u32 {
+            d.write_bpldat(0, 0x8000 >> n, 0x3f + 4 * n);
+            px.extend(line(&mut d, 0x3f + 4 * n, 0x43 + 4 * n));
+        }
+        px.extend(line(&mut d, 0x4f, 0x5f));
+        // Word n shows from pixel 4·$3F + 6 + 30 + 16n; its bit n one pixel
+        // per bit later.
+        for n in 0..4usize {
+            let at = 36 + 17 * n;
+            assert_eq!(px[at], 0xf00, "word {n}");
+            assert_eq!(px[at - 1], 0, "word {n} start");
+            assert_eq!(px[at + 1], 0, "word {n} is one hires pixel");
+        }
     }
 
     #[test]

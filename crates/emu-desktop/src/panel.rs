@@ -4,6 +4,8 @@
 //! click on a switch position sets the switch. The window sends the clicks
 //! to the emulation thread, which queues them as
 //! [`InputEvent::Control`](emu_core::input::InputEvent::Control) events.
+//! The frontend adds its own controls (PAUSE, JOY KEYS, JOY PORT) whose
+//! clicks stay in the window.
 
 use emu_core::{ControlInfo, ControlKind};
 use noto_sans_mono_bitmap::RasterHeight;
@@ -18,6 +20,15 @@ pub const JOY_KEYS: u16 = 0xffff;
 /// The panel entry for the keyboard joystick setting `value`.
 pub fn joy_keys_control(value: u8) -> ControlInfo {
     ControlInfo::switch(JOY_KEYS, "JOY KEYS", &["OFF", "NUMPAD", "CURSOR"], value)
+}
+
+/// The frontend's PAUSE button: stops the whole machine and lets it run
+/// again; lit while the machine is stopped (also by a debugger).
+pub const PAUSE: u16 = 0xfffd;
+
+/// The panel entry for the PAUSE button.
+pub fn pause_control(paused: bool) -> ControlInfo {
+    ControlInfo::button(PAUSE, "PAUSE", paused)
 }
 
 /// The frontend's switch for the port the joysticks play (shown when the

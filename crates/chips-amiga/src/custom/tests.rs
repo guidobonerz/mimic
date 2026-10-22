@@ -86,6 +86,52 @@ fn lowres_plane_shows_inside_the_display_window() {
 }
 
 #[test]
+fn modulo_comes_with_the_last_fetch_not_after_a_later_pointer_write() {
+    let (mut c, mut chip) = setup();
+    screen(&mut c, &mut chip);
+    c.write(reg::BPL1MOD, 40);
+    // Run into line $40, to the first slot after the fetch window
+    // ($38 + 19·8 + 8 = $D8).
+    while !(c.v == 0x40 && c.h == 0xd8) {
+        c.tick(&mut chip, false);
+    }
+    let fetched = 0x1_0000 + (0x40 - 0x2c) * 80 + 40;
+    assert_eq!(c.bplpt[0], fetched + 40, "40 bytes and the modulo");
+    // A pointer write after the window (a Copper MOVE at the line end)
+    // is what the next line fetches from.
+    c.write(reg::BPL1PTH + 2, 0x2000);
+    while c.h != 0x38 {
+        c.tick(&mut chip, false);
+    }
+    assert_eq!(c.bplpt[0], 0x1_2000);
+}
+
+#[test]
+fn copper_waits_past_line_255_after_wait_ff_de() {
+    // WAIT $FF,$DE; WAIT $20,$DE; MOVE COLOR00: the second WAIT must be
+    // fetched in line 256, so the colour changes at line $120 (288), not
+    // right after line 255 (Rule 30's kaleidoscope uses this).
+    let (mut c, mut chip) = setup();
+    for (i, w) in [
+        0x0180u16, 0x0f00, 0xffdf, 0xfffe, 0x20df, 0xfffe, 0x0180, 0x00f0, 0xffff, 0xfffe,
+    ]
+    .iter()
+    .enumerate()
+    {
+        chip.set_word(0x2000 + 2 * i as u32, *w);
+    }
+    c.write(reg::COP1LCH, 0);
+    c.write(reg::COP1LCL, 0x2000);
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::COPEN);
+    field(&mut c, &mut chip);
+    field(&mut c, &mut chip);
+    let red = Rgb8 { r: 255, g: 0, b: 0 };
+    let green = Rgb8 { r: 0, g: 255, b: 0 };
+    assert_eq!(pixel(&c, 300, 270 - 26), red, "line 270: still red");
+    assert_eq!(pixel(&c, 300, 290 - 26), green, "line 290: green");
+}
+
+#[test]
 fn copper_changes_colour_at_a_line() {
     let (mut c, mut chip) = setup();
     for (i, w) in [

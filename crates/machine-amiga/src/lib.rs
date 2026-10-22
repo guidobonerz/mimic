@@ -224,15 +224,22 @@ struct Board {
     keyboard: Keyboard,
 }
 
-/// Colour clocks before the CPU acts on a new IPL level. The 68000 decides
-/// whether to take an interrupt at the end of an instruction from IPL0–2
-/// as sampled before its last bus cycle (4 clocks), through a synchroniser
-/// that wants the level on two sampling edges (MC68000 User's Manual,
-/// interrupt exception processing); together about 6 clocks. A request
-/// that arrives later is taken after the next instruction. Measurements on
-/// an A500 (vAmiga issue #274, discussion only) show IPL changing a few
-/// cycles after a request as well; that part is not modelled.
-const IPL_DELAY: u64 = 3;
+/// Colour clocks from a change of Paula's interrupt request to the CPU
+/// acting on it: Paula's IPL0–2 outputs follow INTREQ/INTENA about four
+/// colour clocks later (logic-analyzer observation on an A500, vAmiga
+/// issue #274, see `docs/sources.md`), and the 68000 decides whether to
+/// take an interrupt at the end of an instruction from IPL0–2 as sampled
+/// before its last bus cycle, through a synchroniser that wants the level
+/// on two sampling edges (MC68000 User's Manual, interrupt exception
+/// processing): about six clocks, three colour clocks. The sampling
+/// point is taken as the start of the instruction's last bus cycle (a
+/// rule of thumb from the same discussion); a bus cycle that then waits
+/// for the chip bus does not move it. A request that arrives later is
+/// taken after the next instruction. Desert Dream's main loop depends on
+/// this: it polls VHPOSR for line 0 in a loop whose branch waits for the
+/// Copper's burst at the line start, and reads the 0 only because the
+/// vertical blank interrupt is taken one instruction later.
+const IPL_DELAY: u64 = 7;
 
 /// One-pole low-pass coefficients at 48 kHz (16-bit fraction):
 /// 1 − e^(−2π·fc/48000) for 4.9 kHz and 3.3 kHz.
@@ -278,9 +285,10 @@ impl Board {
         out.cpu_slot
     }
 
-    /// The interrupt level the CPU acts on now (see [`IPL_DELAY`]).
-    fn ipl_seen(&self) -> u8 {
-        if self.cck < self.ipl_changed + IPL_DELAY {
+    /// The interrupt level the CPU saw at colour clock `cck` (see
+    /// [`IPL_DELAY`]; at most one change since then is told apart).
+    fn ipl_seen_at(&self, cck: u64) -> u8 {
+        if cck < self.ipl_changed + IPL_DELAY {
             self.ipl_before
         } else {
             self.ipl
@@ -493,6 +501,10 @@ struct AmigaBus<'a> {
     b: &'a mut Board,
     /// CPU clock the instruction started on.
     start: u64,
+    /// CPU clock the instruction's latest bus cycle started on: where
+    /// the 68000 samples IPL0–2 for the interrupt decision at the end of
+    /// the instruction (see [`IPL_DELAY`]).
+    bus_start: u64,
     dbg: Option<&'a mut DebugHooks>,
     beam: BeamPos,
 }
@@ -546,6 +558,7 @@ impl Bus for AmigaBus<'_> {
 impl TimedBus68 for AmigaBus<'_> {
     fn bus_cycle(&mut self, access: Access, _fc: u8, addr: u32, _size: Size, t: u32) -> u32 {
         let at = self.start + u64::from(t);
+        self.bus_start = at;
         if access == Access::IntAck {
             let w = e_clock_waits(at);
             self.b.run_to((at + 4 + u64::from(w)) / 2);
@@ -829,17 +842,18 @@ impl Amiga {
             self.ports_due = now + PORT_SAMPLE;
             self.refresh_ports();
         }
-        self.cpu.set_ipl(self.board.ipl_seen());
         let start = self.sched.now().0;
         let beam = self.beam_pos();
-        let step = {
+        let (step, sampled) = {
             let mut bus = AmigaBus {
                 b: &mut self.board,
                 start,
+                bus_start: start,
                 dbg: dbg.as_deref_mut(),
                 beam,
             };
-            self.cpu.step_timed(&mut bus)
+            let step = self.cpu.step_timed(&mut bus);
+            (step, bus.bus_start)
         };
         let clocks = match step {
             Step::Done { clocks } | Step::Stopped { clocks } => clocks,
@@ -849,6 +863,10 @@ impl Amiga {
         let end = start + u64::from(clocks);
         self.board.run_to(end / 2);
         self.sched.advance(u64::from(clocks));
+        // The interrupt decision at the end of this instruction uses the
+        // level as it stood when its last bus cycle began (the next step
+        // acts on it).
+        self.cpu.set_ipl(self.board.ipl_seen_at(sampled / 2));
         if step == Step::Halted {
             if !self.jam_reported {
                 self.jam_reported = true;

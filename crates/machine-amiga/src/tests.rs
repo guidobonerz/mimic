@@ -87,6 +87,7 @@ fn chip_bus_accesses_wait_for_dma() {
     let mut bus = AmigaBus {
         b,
         start,
+        bus_start: start,
         dbg: None,
         beam: BeamPos::default(),
     };
@@ -373,7 +374,9 @@ fn interlace_alternates_long_and_short_fields() {
     for _ in 0..4 {
         let t0 = m.now().0;
         frames(&mut m, 1);
-        let lines = (m.now().0 - t0) / (2 * 227);
+        // A frame ends at an instruction boundary, within half a line of
+        // the field end: round to whole lines.
+        let lines = (m.now().0 - t0 + 227) / (2 * 227);
         seen.push((lines, m.framebuffer().signal.field));
     }
     use emu_core::frame::FieldParity::{Even, Odd};
@@ -382,7 +385,10 @@ fn interlace_alternates_long_and_short_fields() {
         pattern == [Odd, Even, Odd, Even] || pattern == [Even, Odd, Even, Odd],
         "{seen:?}"
     );
-    assert!(seen.iter().any(|&(l, _)| l == 312) && seen.iter().any(|&(l, _)| l == 313));
+    assert!(
+        seen.iter().any(|&(l, _)| l == 312) && seen.iter().any(|&(l, _)| l == 313),
+        "{seen:?}"
+    );
 }
 
 mod debugger {
@@ -480,6 +486,7 @@ mod debugger {
         let mut bus = AmigaBus {
             b: &mut m.board,
             start: 0,
+            bus_start: 0,
             dbg: Some(&mut dbg),
             beam: BeamPos::default(),
         };
