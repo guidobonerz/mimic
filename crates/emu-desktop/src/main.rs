@@ -75,7 +75,9 @@ usage: mimic-desktop [options]
   --machine ID          machine id (default: c64)
   --model NAME          model variant (C64: pal, ntsc)
   --prg FILE            program (PRG/T64, Atari XEX) to load and run
-  --disk FILE           disk image for drive 8 (Atari: ATR for D1:)
+  --disk FILE           disk image for drive 8 (Atari: ATR for D1:, Amiga: DF0:);
+                        repeat for the next drives, extra disks are swapped
+                        into the first drive with Ctrl+D
   --tape FILE           TAP image for the datasette, CAS for the Atari program
                         recorder (a PRG is recorded in the machine's tape format)
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
@@ -93,8 +95,6 @@ usage: mimic-desktop [options]
                         (default 127.0.0.1:6580)
   --vice [ADDR]         serve the VICE binary monitor protocol for VS64 & co.
                         (default 127.0.0.1:6502); implies --debug
-  --gdb [ADDR]          serve the GDB remote protocol (target remote;
-                        default 127.0.0.1:2159); implies --debug
   --footer              start with the status footer shown (Ctrl+Space)
   --no-panel            start with the console panel hidden (Ctrl+P)
   --joykeys KEYS        keys that play the joystick: cursor (cursor keys,
@@ -123,6 +123,8 @@ left 1 2 3 / Q W E / A S D / Z X C, right 8 9 0 / I O P / K L ; / , . /.
 F12 switches between a machine's screens (C128: 40-column VIC and
 80-column VDC; the window starts on the one the 40/80 key selects).
 Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
+Disks: Ctrl+D puts the next disk of the --disk list into the first drive;
+dropping an image file onto the window inserts it there.
 Ctrl+P shows or hides the console panel: the machine's buttons and
 switches (power, reset, Atari console switches, RESTORE …); click a button
 (held while the mouse button is down) or a switch position. Its JOY KEYS
@@ -141,14 +143,16 @@ struct Args {
     config: MachineConfig,
     rom_dir: Option<PathBuf>,
     prg: Option<String>,
-    disk: Option<String>,
+    disk: Vec<String>,
+    /// Disks the first drive swaps through (Ctrl+D), filled by
+    /// `build_machine`.
+    disk_swap: Vec<String>,
     tape: Option<String>,
     cart: Option<String>,
     crt: Option<String>,
     scale: u32,
     debug: Option<SocketAddr>,
     vice: Option<SocketAddr>,
-    gdb: Option<SocketAddr>,
     preview: Option<SocketAddr>,
     footer: bool,
     panel: bool,
@@ -158,7 +162,6 @@ struct Args {
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
 const DEFAULT_VICE_ADDR: &str = "127.0.0.1:6502";
-const DEFAULT_GDB_ADDR: &str = "127.0.0.1:2159";
 const DEFAULT_PREVIEW_ADDR: &str = "127.0.0.1:6580";
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -167,14 +170,14 @@ fn parse_args() -> Result<Option<Args>, String> {
         config: MachineConfig::default(),
         rom_dir: None,
         prg: None,
-        disk: None,
+        disk: Vec::new(),
+        disk_swap: Vec::new(),
         tape: None,
         cart: None,
         crt: None,
         scale: 2,
         debug: None,
         vice: None,
-        gdb: None,
         preview: None,
         footer: false,
         panel: true,
@@ -188,7 +191,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--machine" => a.machine = value("--machine")?,
             "--model" => a.config.model = Some(value("--model")?),
             "--prg" => a.prg = Some(value("--prg")?),
-            "--disk" => a.disk = Some(value("--disk")?),
+            "--disk" => a.disk.push(value("--disk")?),
             "--tape" => a.tape = Some(value("--tape")?),
             "--cart" => a.cart = Some(value("--cart")?),
             "--footer" => a.footer = true,
@@ -225,11 +228,10 @@ fn parse_args() -> Result<Option<Args>, String> {
                 let v = value("--scale")?;
                 a.scale = v.parse().map_err(|_| format!("bad scale '{v}'"))?;
             }
-            flag @ ("--debug" | "--vice" | "--gdb" | "--preview") => {
+            flag @ ("--debug" | "--vice" | "--preview") => {
                 let default = match flag {
                     "--debug" => DEFAULT_DEBUG_ADDR,
                     "--vice" => DEFAULT_VICE_ADDR,
-                    "--gdb" => DEFAULT_GDB_ADDR,
                     _ => DEFAULT_PREVIEW_ADDR,
                 };
                 let addr = match it.peek() {
@@ -242,7 +244,6 @@ fn parse_args() -> Result<Option<Args>, String> {
                 match flag {
                     "--debug" => a.debug = Some(addr),
                     "--vice" => a.vice = Some(addr),
-                    "--gdb" => a.gdb = Some(addr),
                     _ => a.preview = Some(addr),
                 }
             }
@@ -250,7 +251,7 @@ fn parse_args() -> Result<Option<Args>, String> {
             other => return Err(format!("unknown option '{other}'")),
         }
     }
-    if (a.vice.is_some() || a.gdb.is_some()) && a.debug.is_none() {
+    if a.vice.is_some() && a.debug.is_none() {
         a.debug = DEFAULT_DEBUG_ADDR.parse().ok();
     }
     Ok(Some(a))
@@ -272,6 +273,10 @@ fn insert(m: &mut dyn Machine, kind: MediaKind, path: &str) -> Result<(), String
         .find(|s| s.kind == kind)
         .map(|s| s.id)
         .ok_or_else(|| format!("no slot for {kind:?} media (DOS ROM missing?)"))?;
+    insert_into(m, slot, path)
+}
+
+fn insert_into(m: &mut dyn Machine, slot: SlotId, path: &str) -> Result<(), String> {
     let media = media_backends::image::open(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
     m.media_slot(slot)
         .ok_or("no such slot")?
@@ -296,8 +301,27 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
     if let Some(p) = &args.prg {
         insert(m.as_mut(), MediaKind::Program, p)?;
     }
-    if let Some(d) = &args.disk {
-        insert(m.as_mut(), MediaKind::Disk, d)?;
+    // Each --disk goes into the next drive; the rest wait for Ctrl+D in
+    // the first drive's swap list.
+    if !args.disk.is_empty() {
+        let drives: Vec<SlotId> = m
+            .media_slots()
+            .into_iter()
+            .filter(|s| s.kind == MediaKind::Disk)
+            .map(|s| s.id)
+            .collect();
+        if drives.is_empty() {
+            return Err(format!(
+                "{} has no disk drive (DOS ROM missing?)",
+                args.machine
+            ));
+        }
+        for (path, &slot) in args.disk.iter().zip(&drives) {
+            insert_into(m.as_mut(), slot, path)?;
+        }
+        args.disk_swap = std::iter::once(args.disk[0].clone())
+            .chain(args.disk.iter().skip(drives.len()).cloned())
+            .collect();
     }
     if let Some(t) = &args.tape {
         let slot = m
@@ -380,6 +404,8 @@ struct App {
     footer_on: bool,
     /// The P of a Ctrl+P is down; its release is not sent either.
     swallow_p: bool,
+    /// The D of a Ctrl+D is down; its release is not sent either.
+    swallow_d: bool,
     panel_on: bool,
     /// The panel's clickable areas, its top and row height (window
     /// pixels) and number of rows.
@@ -647,6 +673,11 @@ impl ApplicationHandler for App {
                 self.cursor = Some((position.x, position.y));
             }
             WindowEvent::CursorLeft { .. } => self.cursor = None,
+            WindowEvent::DroppedFile(path) => {
+                if let Ok(mut d) = self.shared.dropped_disks.lock() {
+                    d.push(path.to_string_lossy().into_owned());
+                }
+            }
             WindowEvent::Resized(s) => {
                 if let Some(g) = &mut self.gfx {
                     g.resize(s.width, s.height);
@@ -690,6 +721,20 @@ impl ApplicationHandler for App {
                         self.swallow_p = true;
                     } else {
                         self.swallow_p = false;
+                    }
+                    return;
+                }
+                // Ctrl+D swaps the next disk into the first drive.
+                if event.physical_key == PhysicalKey::Code(KeyCode::KeyD)
+                    && (self.ctrl || self.swallow_d)
+                {
+                    if event.state == ElementState::Pressed {
+                        if !event.repeat {
+                            self.shared.next_disk.store(true, Ordering::Relaxed);
+                        }
+                        self.swallow_d = true;
+                    } else {
+                        self.swallow_d = false;
                     }
                     return;
                 }
@@ -905,7 +950,6 @@ fn run() -> Result<(), String> {
             let config = ServerConfig {
                 bind,
                 vice: args.vice,
-                gdb: args.gdb,
                 run: true,
                 realtime: true,
             };
@@ -914,9 +958,6 @@ fn run() -> Result<(), String> {
             eprintln!("debug server listening on {}", s.addr());
             if let Some(vice) = s.vice_addr() {
                 eprintln!("VICE binary monitor listening on {vice}");
-            }
-            if let Some(gdb) = s.gdb_addr() {
-                eprintln!("GDB remote protocol listening on {gdb} (target remote {gdb})");
             }
             server = Some(s);
             Some((endpoint, args.machine.clone()))
@@ -952,6 +993,9 @@ fn run() -> Result<(), String> {
         }
         None => None,
     };
+    if let Ok(mut l) = shared.disk_swap.lock() {
+        l.clone_from(&args.disk_swap);
+    }
     let emu = emu::spawn(machine, mapper, rx, shared.clone(), debug, tap);
 
     // Wait briefly for the first frame so the window opens at the right size.
@@ -984,6 +1028,7 @@ fn run() -> Result<(), String> {
         swallow_space: false,
         footer_on: args.footer,
         swallow_p: false,
+        swallow_d: false,
         panel_on: args.panel,
         panel_hits: Vec::new(),
         panel_top: 0.0,

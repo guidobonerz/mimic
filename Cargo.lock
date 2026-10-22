@@ -748,12 +748,10 @@ name = "emu-debug"
 version = "0.1.0"
 dependencies = [
  "emu-core",
- "emu-preview",
  "serde",
  "serde_json",
  "tokio",
  "toml",
- "video-crt",
 ]
 
 [[package]]

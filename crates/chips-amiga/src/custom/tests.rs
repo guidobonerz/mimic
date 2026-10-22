@@ -110,8 +110,15 @@ fn copper_changes_colour_at_a_line() {
 #[test]
 fn copper_blitter_and_cpu_share_slots() {
     let (mut c, mut chip) = setup();
+    for i in 0..64 {
+        chip.set_word(0x3000 + 2 * i, 0xffff);
+    }
     c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::BLTEN);
-    c.write(reg::BLTCON0, 0x01ff); // D only, all ones
+    // A to D: both slots of every blitter cycle access chip RAM.
+    c.write(reg::BLTCON0, 0x09f0);
+    c.write(reg::BLTAFWM, 0xffff);
+    c.write(reg::BLTALWM, 0xffff);
+    c.write(reg::BLTAPTL, 0x3000);
     c.write(reg::BLTDPTL, 0x4000);
     c.write(reg::BLTSIZE, 8 << 6 | 8);
     assert_ne!(c.peek(reg::DMACONR) & dma::BBUSY, 0);
@@ -120,11 +127,13 @@ fn copper_blitter_and_cpu_share_slots() {
         total += 1;
         cpu += u32::from(c.tick(&mut chip, true).cpu_slot);
     }
-    // Every fourth free slot goes to the waiting CPU.
-    assert!(cpu > 0 && cpu * 3 < total, "cpu {cpu} of {total}");
+    // About every fourth slot goes to the waiting CPU.
+    assert!(cpu * 5 > total && cpu * 3 < total, "cpu {cpu} of {total}");
     assert_eq!(chip.word(0x4000), 0xffff);
     assert_eq!(chip.word(0x4000 + 63 * 2), 0xffff);
     assert_ne!(c.paula.requests() & int::BLIT, 0);
+    c.write(reg::BLTAPTL, 0x3000);
+    c.write(reg::BLTDPTL, 0x4000);
     // With BLTPRI the CPU waits for the whole blit.
     c.write(reg::DMACON, 0x8000 | dma::BLTPRI);
     c.write(reg::BLTSIZE, 8 << 6 | 8);
@@ -137,6 +146,73 @@ fn copper_blitter_and_cpu_share_slots() {
             assert!(!out.cpu_slot, "CPU slot during a nasty blit");
         }
     }
+}
+
+/// A CPU bus cycle against a busy blitter: the request clock, then the
+/// waiting clocks until the data slot. Returns the colour clocks the cycle
+/// took from the request on.
+fn cpu_bus_cycle(c: &mut Custom, chip: &mut ChipRam) -> u32 {
+    c.cpu_request();
+    c.tick(chip, false);
+    let mut n = 1;
+    loop {
+        n += 1;
+        if c.tick(chip, true).cpu_slot {
+            return n;
+        }
+        assert!(n < 20, "CPU never got the bus");
+    }
+}
+
+#[test]
+fn a_waiting_cpu_gets_every_fourth_cycle_of_a_nasty_blit() {
+    let (mut c, mut chip) = setup();
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::BLTEN);
+    // A, B, C and D: no idle cycles, the blit lasts a whole field.
+    c.write(reg::BLTCON0, 0x0fca);
+    c.write(reg::BLTAFWM, 0xffff);
+    c.write(reg::BLTALWM, 0xffff);
+    c.write(reg::BLTSIZE, 0);
+    for _ in 0..8 {
+        c.tick(&mut chip, false);
+    }
+    // Request in an odd slot: unsatisfied there and in the next two, the
+    // fourth (even) is released to the CPU.
+    while c.h & 1 == 0 {
+        c.tick(&mut chip, false);
+    }
+    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 4);
+    // Back-to-back bus cycles keep that rhythm.
+    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 4);
+    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 4);
+    // An internal CPU cycle in between: the count starts over.
+    c.tick(&mut chip, false);
+    c.tick(&mut chip, false);
+    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 4);
+    assert!(c.blitter.busy);
+}
+
+#[test]
+fn idle_blitter_cycles_leave_the_bus_to_the_cpu() {
+    let (mut c, mut chip) = setup();
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::BLTEN | dma::BLTPRI);
+    // A line: per pixel a C read, two idle cycles and the D write.
+    c.write(reg::BLTCON0, 0x0bca);
+    c.write(reg::BLTCON1, 0x0001);
+    c.write(reg::BLTADAT, 0x8000);
+    c.write(reg::BLTBDAT, 0xffff);
+    c.write(reg::BLTCMOD, 40);
+    c.write(reg::BLTCPTH, 0);
+    c.write(reg::BLTCPTL, 0x4000);
+    c.write(reg::BLTDPTL, 0x4000);
+    c.write(reg::BLTSIZE, 64 << 6 | 2);
+    let (mut cpu, mut total) = (0, 0);
+    while c.blitter.busy {
+        total += 1;
+        cpu += u32::from(c.tick(&mut chip, true).cpu_slot);
+    }
+    // Even with BLTPRI, the CPU gets the idle cycles on its slots.
+    assert!(cpu * 5 > total, "cpu {cpu} of {total}");
 }
 
 #[test]

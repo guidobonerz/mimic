@@ -14,7 +14,8 @@ use emu_core::media::{MediaKind, SlotId};
 use emu_core::registry::MachineConfig;
 use emu_core::{DebugHooks, Machine, StopReason};
 use emu_debug::{DebugServer, ServerConfig, Session};
-use emu_preview::server::FrameTap;
+use emu_input::{Mapper, Profile as InputProfile};
+use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer, RemoteInput};
 
 const USAGE: &str = "\
 usage: mimic-headless [options]
@@ -23,7 +24,8 @@ usage: mimic-headless [options]
   --model NAME          model variant
   --prg FILE            program (PRG/T64, Atari XEX) into the machine's program slot,
                         or as its \"program\" ROM role (sim6502)
-  --disk FILE           disk image into the first disk drive (drive 8, Atari D1: ATR)
+  --disk FILE           disk image into the first disk drive (drive 8, Atari D1: ATR);
+                        repeat for the next drives (Amiga DF1: with --option drives=2)
   --tape FILE           TAP image into the datasette, CAS into the Atari
                         program recorder (PLAY pressed); a PRG is recorded
                         in the machine's tape format first
@@ -53,9 +55,6 @@ usage: mimic-headless [options]
                         implies --debug, and --run unless --debug is given
   --vice [ADDR]         also serve the VICE binary monitor protocol (VS64,
                         C64 Studio …; default 127.0.0.1:6502); implies --debug
-  --gdb [ADDR]          also serve the GDB remote protocol (target remote;
-                        default 127.0.0.1:2159); implies --debug. In GDB,
-                        `monitor preview` starts the live preview
   --run                 with --debug: start running instead of paused
   --no-realtime         with --debug: run as fast as possible
   --list                list machines and exit
@@ -67,7 +66,7 @@ struct Args {
     config: MachineConfig,
     rom_dir: Option<String>,
     prg: Option<String>,
-    disk: Option<String>,
+    disk: Vec<String>,
     tape: Option<String>,
     cart: Option<String>,
     frames: u64,
@@ -80,7 +79,6 @@ struct Args {
     save_state: Option<String>,
     debug: Option<SocketAddr>,
     vice: Option<SocketAddr>,
-    gdb: Option<SocketAddr>,
     preview: Option<SocketAddr>,
     run: bool,
     realtime: bool,
@@ -90,7 +88,6 @@ struct Args {
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
 const DEFAULT_VICE_ADDR: &str = "127.0.0.1:6502";
-const DEFAULT_GDB_ADDR: &str = "127.0.0.1:2159";
 const DEFAULT_PREVIEW_ADDR: &str = "127.0.0.1:6580";
 
 fn key_value(s: &str, flag: &str) -> Result<(String, String), String> {
@@ -117,7 +114,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--machine" => args.machine = value("--machine")?,
             "--model" => args.config.model = Some(value("--model")?),
             "--prg" => args.prg = Some(value("--prg")?),
-            "--disk" => args.disk = Some(value("--disk")?),
+            "--disk" => args.disk.push(value("--disk")?),
             "--tape" => args.tape = Some(value("--tape")?),
             "--cart" => args.cart = Some(value("--cart")?),
             "--autostart" => {
@@ -156,11 +153,10 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             }
             "--load-state" => args.load_state = Some(value("--load-state")?),
             "--save-state" => args.save_state = Some(value("--save-state")?),
-            flag @ ("--debug" | "--vice" | "--gdb" | "--preview") => {
+            flag @ ("--debug" | "--vice" | "--preview") => {
                 let default = match flag {
                     "--debug" => DEFAULT_DEBUG_ADDR,
                     "--vice" => DEFAULT_VICE_ADDR,
-                    "--gdb" => DEFAULT_GDB_ADDR,
                     _ => DEFAULT_PREVIEW_ADDR,
                 };
                 let addr = match it.peek() {
@@ -173,7 +169,6 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 match flag {
                     "--debug" => args.debug = Some(addr),
                     "--vice" => args.vice = Some(addr),
-                    "--gdb" => args.gdb = Some(addr),
                     _ => args.preview = Some(addr),
                 }
             }
@@ -184,12 +179,11 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             other => return Err(format!("unknown option '{other}'")),
         }
     }
-    if args.preview.is_some() && args.debug.is_none() && args.vice.is_none() && args.gdb.is_none() {
+    if args.preview.is_some() && args.debug.is_none() && args.vice.is_none() {
         // Just watching: run instead of showing a paused machine.
         args.run = true;
     }
-    if (args.vice.is_some() || args.gdb.is_some() || args.preview.is_some()) && args.debug.is_none()
-    {
+    if (args.vice.is_some() || args.preview.is_some()) && args.debug.is_none() {
         args.debug = DEFAULT_DEBUG_ADDR.parse().ok();
     }
     Ok(args)
@@ -292,9 +286,26 @@ fn run(args: Args) -> Result<ExitCode, String> {
             }
         }
     }
-    if let Some(path) = &args.disk {
-        let slot = slot_of(machine.as_ref(), MediaKind::Disk)
-            .ok_or_else(|| format!("{} has no disk drive (DOS ROM missing?)", args.machine))?;
+    // Each --disk goes into the next disk drive.
+    let drives: Vec<SlotId> = machine
+        .media_slots()
+        .into_iter()
+        .filter(|s| s.kind == MediaKind::Disk)
+        .map(|s| s.id)
+        .collect();
+    if args.disk.len() > drives.len() {
+        return Err(if drives.is_empty() {
+            format!("{} has no disk drive (DOS ROM missing?)", args.machine)
+        } else {
+            format!(
+                "{} disks for {} drive(s) of {} (more drives: e.g. --option drives=N)",
+                args.disk.len(),
+                drives.len(),
+                args.machine
+            )
+        });
+    }
+    for (path, slot) in args.disk.iter().zip(drives) {
         insert(machine.as_mut(), slot, path)?;
     }
     if let Some(path) = &args.tape {
@@ -327,14 +338,19 @@ fn run(args: Args) -> Result<ExitCode, String> {
 
     if let Some(bind) = args.debug {
         let mut session = Session::new(machine, args.machine.clone());
-        let preview = Arc::new(Mutex::new(host::Preview::new(&args.machine)));
-        session.set_host(Box::new(host::FrontendHost {
-            preview: preview.clone(),
-        }));
+        session.set_host(Box::new(host::FrontendHost));
         let tap = args.preview.map(|_| {
             let tap = FrameTap::new();
             tap.publish(session.machine(), args.run);
-            session.set_frame_hook(host::frame_hook(tap.clone()));
+            let hook_tap = tap.clone();
+            // No audio device here: the samples go to raw streams only.
+            let mut samples = Vec::new();
+            session.set_frame_hook(Box::new(move |m, running| {
+                hook_tap.publish(m, running);
+                samples.clear();
+                let format = m.audio(&mut samples);
+                hook_tap.publish_audio(&samples, format);
+            }));
             tap
         });
         let server = DebugServer::start(
@@ -342,18 +358,53 @@ fn run(args: Args) -> Result<ExitCode, String> {
             ServerConfig {
                 bind,
                 vice: args.vice,
-                gdb: args.gdb,
                 run: args.run,
                 realtime: args.realtime,
             },
         )
         .map_err(|e| format!("debug server: {e}"))?;
-        if let Ok(mut p) = preview.lock() {
-            p.control = Some(server.control());
-            if let (Some(bind), Some(tap)) = (args.preview, tap) {
-                p.start(bind, tap)?;
+        let preview = match (args.preview, tap) {
+            (Some(bind), Some(tap)) => {
+                // Viewer input is mapped like local keys and gamepads, on the
+                // emulation thread.
+                let mapper = Arc::new(Mutex::new(Mapper::new(InputProfile::default_for(
+                    &args.machine,
+                ))));
+                let control = server.control();
+                let sink: InputSink = Arc::new(move |input| {
+                    if let RemoteInput::Control { id, value } = input {
+                        control.exec(move |s| {
+                            let at = s.machine().now();
+                            s.input(emu_core::input::TimedInput {
+                                at,
+                                target: emu_core::input::InputTarget::Panel,
+                                event: emu_core::input::InputEvent::Control {
+                                    id: emu_core::ControlId(id),
+                                    value,
+                                },
+                            });
+                        });
+                        return;
+                    }
+                    let Some(ev) = host::host_event(input) else {
+                        return;
+                    };
+                    let mapper = mapper.clone();
+                    control.exec(move |s| {
+                        let now = s.machine().now();
+                        let events = mapper.lock().map(|mut m| m.handle(&ev, now));
+                        for e in events.unwrap_or_default() {
+                            s.input(e);
+                        }
+                    });
+                });
+                let p =
+                    PreviewServer::start(PreviewConfig { bind }, &args.machine, tap, Some(sink))
+                        .map_err(|e| format!("preview server: {e}"))?;
+                Some(p)
             }
-        }
+            _ => None,
+        };
         eprintln!(
             "debug server for '{}' listening on {} ({})",
             args.machine,
@@ -363,14 +414,11 @@ fn run(args: Args) -> Result<ExitCode, String> {
         if let Some(vice) = server.vice_addr() {
             eprintln!("VICE binary monitor listening on {vice}");
         }
-        if let Some(gdb) = server.gdb_addr() {
-            eprintln!("GDB remote protocol listening on {gdb} (target remote {gdb})");
-        }
-        if let Some(url) = preview.lock().ok().and_then(|p| p.url.clone()) {
-            eprintln!("live preview on {url}");
+        if let Some(p) = &preview {
+            eprintln!("live preview on http://{}/", p.addr());
         }
         server.wait();
-        if let Some(p) = preview.lock().ok().and_then(|mut p| p.server.take()) {
+        if let Some(p) = preview {
             p.shutdown();
         }
         return Ok(ExitCode::SUCCESS);
@@ -540,7 +588,9 @@ mod tests {
         );
         assert!(parse("--crt 1702:x").is_err());
         let a = parse("--disk x.d64 --autostart").unwrap();
-        assert_eq!(a.disk.as_deref(), Some("x.d64"));
+        assert_eq!(a.disk, ["x.d64"]);
         assert_eq!(a.config.options["autostart"], "on");
+        let a = parse("--disk a.adf --disk b.adf").unwrap();
+        assert_eq!(a.disk, ["a.adf", "b.adf"]);
     }
 }

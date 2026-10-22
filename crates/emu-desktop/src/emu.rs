@@ -44,7 +44,8 @@ pub struct Shared {
     pub frames: Mutex<VecDeque<Frame>>,
     /// Interlace weaving for [`Shared::frames`].
     pub fields: Mutex<FieldStage>,
-    pub audio: Mutex<VecDeque<i16>>,
+    /// Stereo frames (left, right) at 48 kHz; mono machines fill both.
+    pub audio: Mutex<VecDeque<[i16; 2]>>,
     /// Set by the audio thread when a device is running.
     pub audio_live: AtomicBool,
     pub quit: AtomicBool,
@@ -71,6 +72,14 @@ pub struct Shared {
     pub next_screen: AtomicBool,
     /// Set by the window (F9–F11): a datasette key ([`TapeKey`]), 0 = none.
     pub tape_key: AtomicU8,
+    /// The disks the first drive swaps through (from `--disk`), the first
+    /// one inserted at start.
+    pub disk_swap: Mutex<Vec<String>>,
+    /// Set by the window (Ctrl+D): put the next disk of
+    /// [`Shared::disk_swap`] into the first drive.
+    pub next_disk: AtomicBool,
+    /// Image files dropped onto the window, for the first drive.
+    pub dropped_disks: Mutex<Vec<String>>,
     /// Set by the window (Ctrl+Space): the status footer is shown, so the
     /// emulation publishes [`Shared::footer`] after every frame.
     pub footer_on: AtomicBool,
@@ -140,6 +149,9 @@ impl Shared {
             status: Mutex::default(),
             next_screen: AtomicBool::new(false),
             tape_key: AtomicU8::new(0),
+            disk_swap: Mutex::default(),
+            next_disk: AtomicBool::new(false),
+            dropped_disks: Mutex::default(),
             footer_on: AtomicBool::new(false),
             footer: Mutex::default(),
             panel_on: AtomicBool::new(false),
@@ -152,7 +164,7 @@ impl Shared {
     }
 }
 
-/// Audio kept buffered ahead of the device (48 kHz samples, 100 ms).
+/// Audio kept buffered ahead of the device (48 kHz frames, 100 ms).
 pub const AUDIO_TARGET: usize = 4_800;
 /// Frames waiting for the window before old ones are dropped.
 const MAX_QUEUED_FRAMES: usize = 4;
@@ -208,6 +220,35 @@ fn shown_screen(m: &dyn Machine, chosen: Option<ScreenId>) -> ScreenId {
 }
 
 /// The screen after `current` in the machine's list (wrapping).
+/// Put the image at `path` into the machine's first disk drive (the old
+/// disk is ejected, which writes it back through its backend); returns
+/// the message for the title bar.
+fn swap_disk(m: &mut dyn Machine, path: &str) -> String {
+    let Some(info) = m
+        .media_slots()
+        .into_iter()
+        .find(|s| s.kind == emu_core::media::MediaKind::Disk)
+    else {
+        return "no disk drive".into();
+    };
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned());
+    let media = match media_backends::image::open(std::path::Path::new(path)) {
+        Ok(m) if m.kind == emu_core::media::MediaKind::Disk => m,
+        Ok(_) => return format!("{name}: not a disk image"),
+        Err(e) => return format!("{name}: {e}"),
+    };
+    let Some(slot) = m.media_slot(info.id) else {
+        return "no disk drive".into();
+    };
+    let _ = slot.eject();
+    match slot.insert(media) {
+        Ok(()) => format!("{} {name}", info.name),
+        Err(e) => format!("{name}: {e}"),
+    }
+}
+
 fn next_screen(m: &dyn Machine, current: ScreenId) -> ScreenId {
     let screens = m.screens();
     let i = screens.iter().position(|s| s.id == current).unwrap_or(0);
@@ -297,6 +338,8 @@ pub fn spawn(
         let debug_stats = std::env::var_os("EMU_DESKTOP_DEBUG").is_some();
         let mut report = Instant::now();
         let mut chosen: Option<ScreenId> = None;
+        // Index of the disk in the first drive within `Shared::disk_swap`.
+        let mut disk_at = 0usize;
         let mut tracker = Tracker::default();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
@@ -326,6 +369,36 @@ pub fn spawn(
                             Some(format!("tape: {e}"));
                     }
                 }
+            }
+            let mut disk = None;
+            if shared.next_disk.swap(false, Ordering::Relaxed) {
+                if let Ok(list) = shared.disk_swap.lock() {
+                    if list.len() > 1 {
+                        disk_at = (disk_at + 1) % list.len();
+                        disk = Some(list[disk_at].clone());
+                    }
+                }
+            }
+            let dropped = shared
+                .dropped_disks
+                .lock()
+                .map(|mut d| std::mem::take(&mut *d))
+                .unwrap_or_default();
+            if let Some(path) = dropped.into_iter().last() {
+                if let Ok(mut list) = shared.disk_swap.lock() {
+                    disk_at = match list.iter().position(|p| *p == path) {
+                        Some(i) => i,
+                        None => {
+                            list.push(path.clone());
+                            list.len() - 1
+                        }
+                    };
+                }
+                disk = Some(path);
+            }
+            if let Some(path) = disk {
+                let msg = swap_disk(session.machine_mut(), &path);
+                *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
             }
             if shared.next_screen.swap(false, Ordering::Relaxed) {
                 let current = shown_screen(session.machine(), chosen);
@@ -440,7 +513,11 @@ pub fn spawn(
             }
             if let Ok(mut a) = shared.audio.lock() {
                 min_fill = min_fill.min(a.len());
-                a.extend(samples.iter().copied());
+                if format.channels == 2 {
+                    a.extend(samples.as_chunks::<2>().0.iter().copied());
+                } else {
+                    a.extend(samples.iter().map(|&s| [s, s]));
+                }
                 let excess = a.len().saturating_sub(AUDIO_MAX);
                 a.drain(..excess);
                 max_fill = max_fill.max(a.len());
@@ -448,7 +525,7 @@ pub fn spawn(
             frames += 1;
             if debug_stats && report.elapsed() >= Duration::from_secs(5) {
                 eprintln!(
-                    "5 s: emulated {frames}, window refreshes {}, presented {}, dropped {}, audio buffer {min_fill}..{max_fill} samples, underruns {}, rate {:+} ppm",
+                    "5 s: emulated {frames}, window refreshes {}, presented {}, dropped {}, audio buffer {min_fill}..{max_fill} frames, underruns {}, rate {:+} ppm",
                     shared.redraws.swap(0, Ordering::Relaxed),
                     shared.presented.swap(0, Ordering::Relaxed),
                     shared.dropped.swap(0, Ordering::Relaxed),
@@ -533,7 +610,6 @@ mod tests {
             emu_debug::ServerConfig {
                 bind: "127.0.0.1:0".parse().unwrap(),
                 vice: None,
-                gdb: None,
                 run: true,
                 realtime: true,
             },

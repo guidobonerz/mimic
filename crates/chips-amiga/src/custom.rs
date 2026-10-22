@@ -14,9 +14,13 @@
 //! in their fetch window; the Copper takes even free slots, the Blitter any
 //! free slot, the CPU what is left — and only even-numbered slots (HRM
 //! chapter 6, "Blitter DMA"). Without BLTPRI (BLITHOG) the Blitter leaves
-//! the next slot to the CPU after the CPU went without one for three of its
-//! cycles. Disk and audio DMA follow in later milestones; their slots stay
-//! free until then.
+//! a slot to the CPU once the CPU has been "unsatisfied for three
+//! consecutive memory cycles" (HRM): every colour clock counts from the
+//! one the CPU asserts its bus request in ([`Custom::cpu_request`], the
+//! first half of its bus cycle; it can take data only from the next one
+//! on), odd ones included; a colour clock without a request starts over.
+//! A busy Blitter thus leaves the CPU every fourth slot, halving its
+//! speed on a bus-bound stretch of code.
 //!
 //! **Bitplane fetch.** Inside the vertical display window and between
 //! DDFSTRT and DDFSTOP, eight-slot groups fetch the planes in the order
@@ -149,8 +153,11 @@ pub struct Custom {
     bpl_vertical: bool,
     /// Planes were fetched on this line (modulos are due).
     fetched: bool,
-    /// Even slots in a row the waiting CPU did not get.
+    /// Colour clocks in a row the waiting CPU did not get the bus.
     cpu_starved: u8,
+    /// The CPU asserted its bus request in the coming colour clock (it
+    /// cannot take data yet; see [`Custom::cpu_request`]).
+    cpu_pending: bool,
     spr_dma: [SprDma; 8],
     frame: Vec<Rgb8>,
     lut: Vec<Rgb8>,
@@ -184,6 +191,7 @@ impl Custom {
             bpl_vertical: false,
             fetched: false,
             cpu_starved: 0,
+            cpu_pending: false,
             spr_dma: [SprDma::Off; 8],
             frame: vec![Rgb8::default(); (WIDTH * standard.height()) as usize],
             lut: (0..4096u16).map(denise::rgb12).collect(),
@@ -220,6 +228,13 @@ impl Custom {
 
     pub fn interlaced(&self) -> bool {
         self.denise.bplcon0 & 0x0004 != 0
+    }
+
+    /// The CPU starts a chip bus cycle: the next colour clock is the first
+    /// half of it, in which the CPU already waits for the bus but cannot
+    /// use it yet (its data comes in the second half at the earliest).
+    pub fn cpu_request(&mut self) {
+        self.cpu_pending = true;
     }
 
     fn dma_on(&self, bit: u16) -> bool {
@@ -332,6 +347,7 @@ impl Custom {
 
         // The CPU uses even slots only.
         let cpu_turn = cpu_wants && h & 1 == 0;
+        let cpu_unsatisfied = cpu_wants || std::mem::take(&mut self.cpu_pending);
         match self.slot(h) {
             Slot::Fixed => {}
             Slot::Disk => {
@@ -366,7 +382,13 @@ impl Custom {
                         self.write(r, val);
                     }
                 } else if self.blitter.wants_slot() && self.dma_on(dma::BLTEN) {
-                    if cpu_turn && self.dmacon & dma::BLTPRI == 0 && self.cpu_starved >= 3 {
+                    if self.blitter.idle_now() {
+                        // An idle blitter cycle passes; the bus stays free.
+                        if self.blitter.cycle(chip) {
+                            self.paula.request(int::BLIT);
+                        }
+                        out.cpu_slot = cpu_turn;
+                    } else if cpu_turn && self.dmacon & dma::BLTPRI == 0 && self.cpu_starved >= 3 {
                         out.cpu_slot = true;
                     } else if self.blitter.cycle(chip) {
                         self.paula.request(int::BLIT);
@@ -376,13 +398,11 @@ impl Custom {
                 }
             }
         }
-        if cpu_turn {
-            self.cpu_starved = if out.cpu_slot {
-                0
-            } else {
-                self.cpu_starved.saturating_add(1)
-            };
-        }
+        self.cpu_starved = if cpu_unsatisfied && !out.cpu_slot {
+            self.cpu_starved.saturating_add(1)
+        } else {
+            0
+        };
         if self.fetched && h == self.fetch_window().1 {
             self.add_modulos();
             self.fetched = false;

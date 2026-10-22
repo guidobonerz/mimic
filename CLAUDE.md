@@ -52,7 +52,7 @@ crates/
   machine-amiga/  machine-atari8/  machine-cpc/
   machine-sim6502/ Reference/test machine: 6502 + 64 KB RAM + minimal raster chip (not real hardware)
   emu-machines/    Fills the machine registry; the only crate that links every machine-*
-  emu-debug/       Debug server: native protocol + adapters (VICE binary monitor, GDB RSP, DAP)
+  emu-debug/       Debug server: native protocol + adapter (VICE binary monitor)
   emu-preview/     Frame encoders, snapshot endpoint, WebSocket stream, overlays
   emu-desktop/  emu-web/  emu-headless/   Frontends
 tests/             Integration tests, reference frames, test-suite runners
@@ -324,18 +324,12 @@ The web frontend uses these over WebSocket to forward browser keyboard/gamepad/m
   - Symbols: VICE labels, cc65 `.dbg`, KickAss `.sym`, sjasmplus `.sld`, m68k ELF/hunk symbols
   - Push events: `stopped`, `breakpoint_hit`, `frame_ready`, trace stream, `media_changed`, `device_connected`
   - Devices: see "Remote control of devices"
-- **Adapters** translate to: VICE binary monitor (port 6502, all Commodore 8-bit machines), GDB Remote Serial Protocol (esp. m68k), Debug Adapter Protocol (VS Code).
-- **GDB stub with live picture** (Phase 8): besides registers, memory, breakpoints and stepping for every CPU device (one GDB "thread"/inferior per `devices()` entry, target XML per CPU: 6502, Z80, 68000), the stub carries the machine's picture as a protocol extension that plain GDB clients ignore:
-  - `qSupported` advertises `mimic-frame+`; `qMimic.frame[:screen=<name>;format=png|qoi;scale=<n>;filter=raw|crt]` returns the current (partial) frame, binary-escaped as in `vFile`/`qXfer` replies; `qMimic.beam` returns frame/line/cycle.
-  - Stop replies (`T` packets) carry `beam:<frame>,<line>,<cycle>;` — GDB ignores unknown keys.
-  - `monitor preview` starts (or names) the live preview server for this session and prints its URL (`/preview` WebSocket stream, `/snapshot.png`); `monitor snapshot <file> [crt]` writes a PNG; `monitor screen vic|vdc` picks the screen.
-  - `tools/gdb/mimic.py` (GDB Python extension, stdlib only) shows the live picture: opens the preview URL in a browser, or refreshes a PNG on every stop (`mimic frame`, `mimic live on|off`); the same packets let other GDB front ends (VS Code via native-debug / cortex-debug style adapters) embed it.
-  - Contract test like the native protocol's; the picture path uses `emu-preview` encoders only (golden rule 1: still no machine crate in `emu-debug`).
+- **Adapters** translate to: VICE binary monitor (port 6502, all Commodore 8-bit machines). A GDB remote stub was built and dropped on 2026-10-22 (user decision): stock GDB has no 6502 and crashes stepping a Z80, so it would not work for every machine. DAP is deferred too (user decision 2026-10-22: the team has its own IDE on the native protocol).
 - **Graphics data views** (Phase 8; needs a core trait extension, ask before changing the trait): where a machine has them, the debugger also delivers the graphics the video chip works from, decoded and raw, without the debugger knowing the chip:
   - `Machine::gfx_views() -> Vec<GfxViewInfo>` (default: none) and `Machine::gfx_view(id, opts) -> Option<GfxView>`; a view is a kind (`sprites`, `charset`, `bitmap`, `screen`, `tiles`), a name ("VIC-II sprites", "ANTIC charset $E000", "GTIA players", "Amiga bitplanes"), the source memory space and address range, its parameters (size, colours, multicolour/hires, current bank/pointer) and a picture as indexed pixels + palette (same type as `FrameRef`), plus the raw bytes.
   - Examples: C64 VIC-II — 8 sprites (pointers, positions, colours, multicolour, expansion) and the current charset/bitmap/screen RAM by bank; C128 VDC charset; TED/VIC charsets; Atari — players/missiles, the character set at CHBASE, the display list's playfield memory; Amiga — sprites, bitplanes, Copper-set palettes; CPC — screen memory in the current mode.
   - Options select what a view shows (e.g. a different charset address, colours, sprite number), so a debugger can browse memory as graphics.
-  - Native protocol: `gfx_list`, `gfx_get {view, format=png|qoi|indexed, scale, options}`; the preview server serves the same as `/gfx/<view>.png`; the GDB stub as `qMimic.gfx…` and `monitor gfx <view>`; `polydbg gfx`. Contract tests for each.
+  - Native protocol: `gfx_list`, `gfx_get {view, format=png|qoi|indexed, scale, options}`; the preview server serves the same as `/gfx/<view>.png`; `polydbg gfx`. Contract tests for each.
 - Machine-specific extensions are negotiated via `capabilities`; generic clients must work without them.
 - Every protocol change needs a contract test and a version bump in the handshake.
 
@@ -380,14 +374,13 @@ cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --disk game.atr
 cargo run -p emu-headless -- --machine atari2600 --cart game.a26 --frames 120 --snapshot vcs.png   # no system ROM; --model pal; --option roms=stub (built-in test cartridge)
 cargo run -p emu-headless -- --machine amiga --rom-dir roms --frames 400 --snapshot amiga.png   # ROMs in roms/amiga/ ("Kickstart 1.3.rom", kick13.rom …); --option kickstart=1.2|1.3|2.0|3.1, slow=512k|0, drives=1..4, roms=stub; --model ntsc
 EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test amiga_boot -- --ignored --nocapture   # Kickstarts reach "insert disk" and boot a generated boot block; trace_kickstart: EMU_KICK=1.3, EMU_FRAMES=n, EMU_DISK=a.adf, EMU_DISK1=b.adf, EMU_OPTION=drives=2; workbench_13_boots (Phase 7 gate) with EMU_WB_ADF=workbench1.3.adf
-cargo run --release -p emu-desktop -- --machine amiga --disk demo.adf   # ADF in DF0: (--option drives=2 for DF1:); stereo Paula audio; mouse in port 0 (click to capture), joystick port 1, Amiga keys on the Windows keys, HELP on Insert, Ctrl+Win+Win resets
+cargo run --release -p emu-desktop -- --machine amiga --disk demo-a.adf --disk demo-b.adf   # disks fill DF0:, DF1: … (--option drives=N), extra ones swap into DF0: with Ctrl+D (or drop an image on the window); stereo Paula audio; mouse in port 0 (click to capture), joystick port 1, Amiga keys on the Windows keys, HELP on Insert, Ctrl+Win+Win resets
 cargo run -p emu-headless -- --machine cpc --rom-dir roms --frames 150 --snapshot cpc.png   # ROMs in roms/cpc/; --model 6128|664|464, --option crtc=0|1|2, dos=amsdos|parados|none
 cargo run --release -p emu-desktop -- --machine cpc --option joy1=amx   # AMX mouse (click to capture); joy2=joystick daisy-chains a second stick; --crt gt65 green monitor
 cargo run --release -p emu-desktop -- --machine cpc --disk game.dsk   # CPC 664/6128: DSK/EDSK in drive A (RUN"DISC or CAT)
 cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape game.cdt   # CPC cassette (CDT/TZX); on the 664/6128 type |TAPE first
 cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines debug protocol on 127.0.0.1:6510
 cargo run -p emu-headless -- --machine c64 --vice --preview --run   # + VICE binary monitor (6502), live preview http://127.0.0.1:6580/
-cargo run --release -p emu-headless -- --machine amiga --rom-dir roms --gdb   # GDB remote stub on 127.0.0.1:2159: gdb-multiarch -ex "source tools/gdb/mimic.py" -ex "target remote 127.0.0.1:2159" (mimic live on, mimic preview, monitor help)
 python tools/polydbg.py regs                 # Python debug client (stdlib only): --help, or `shell` for a prompt; `chips`, Atari `dlist`
 python -m unittest discover -s tools         # its unit tests
 cargo run --release -p emu-desktop -- --machine c64 --disk game.d64 --autostart   # window, sound, keyboard, gamepad
@@ -423,7 +416,7 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 8.**
 | 6 | CPC 464, 664, 6128 (models of one machine): reuse Z80, CRTC, Gate Array, AY, FDC, DSK/CDT | 6 wk | BASIC + disk work |
 | 6b | Atari 2600 (NTSC, PAL): 6507, TIA (video, sound, inputs), RIOT 6532, cartridge bank switching (2K/4K, F8/F6/F4 + Superchip, FE, E0, E7, 3F, FA), joystick, paddles, keypad, driving controller, console switches | 6 wk | own TIA/RIOT test programs green; user-supplied games run correctly |
 | 7 | Amiga 500 (OCS): 68000, Agnus DMA slots, Copper, Blitter, Denise, Paula, ADF via MFM, Copper debugger | 20 wk | Workbench 1.3 boots |
-| 8 | Expansion: GDB stub with live-picture extension, graphics data views (sprites/chars/bitmaps), DAP, overlays, rewind, partial frames, A1200 (AGA), web frontend | 10 wk | Release 1.0 |
+| 8 | Expansion: graphics data views (sprites/chars/bitmaps), overlays, rewind, partial frames, A1200 (AGA), web frontend | 10 wk | Release 1.0 |
 
 Device work by phase (part of each gate):
 
@@ -474,7 +467,7 @@ Held back on 2026-10-22; not part of the Phase 7 gate.
 
 - **Action Replay (A500 side-port freezer):** needs its ROM (user-supplied) and the side-port hardware (freeze NMI, ROM/RAM overlay).
 - **Paula:** audio attach modes (ADKCON USEx), the serial port (UART: SERDAT/SERDATR transfers, RBF/TBE timing), disk precompensation; the A500 output filters are first-order approximations.
-- **Timing details:** Blitter idle cycles given to the CPU, the D channel's one-word pipeline, the Copper's wake-up cycle after WAIT; CPU accesses to the CIAs and the autovector use a simplified E-clock rule.
+- **Timing details:** Blitter idle cycles reach the CPU only on its even slots (a D-only clear gains nothing; unverified against hardware), the D channel's one-word pipeline, the Copper's wake-up cycle after WAIT; CPU accesses to the CIAs and the autovector use a simplified E-clock rule.
 - **Collisions with sprites outside the display window**, sprite/playfield priority in single-playfield mode (PF2P assumed), the exact sprite start pixel (no offset to DIWSTRT assumed) — to verify with test programs (vAmigaTS once ADF runs are automated).
 - **ECS/AGA, fast RAM, 1 MB chip RAM (Agnus 8372), A1000 / A2000 models; HD disks; extended ADF / DMS images.**
 - **Frontends:** choosing bob deinterlacing in the desktop; the preview stream shows interlaced fields unwoven.

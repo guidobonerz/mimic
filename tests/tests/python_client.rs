@@ -75,7 +75,6 @@ fn command_line_client_drives_the_debugger() {
         ServerConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             vice: None,
-            gdb: None,
             run: false,
             realtime: false,
         },

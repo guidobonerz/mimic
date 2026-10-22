@@ -185,29 +185,6 @@ impl Session {
         self.frame_hook = Some(hook);
     }
 
-    /// The live preview's URL, starting the server through the frontend
-    /// if it is not running yet (GDB's `monitor preview`).
-    pub fn preview_url(&mut self) -> Result<String, String> {
-        let host = self
-            .host
-            .as_mut()
-            .ok_or("this frontend has no live preview server")?;
-        let (url, hook) = host.preview()?;
-        if let Some(mut new) = hook {
-            // Keep a hook the frontend already has.
-            let hook: FrameHook = match self.frame_hook.take() {
-                Some(mut old) => Box::new(move |m: &mut dyn Machine, running| {
-                    old(m, running);
-                    new(m, running);
-                }),
-                None => Box::new(move |m: &mut dyn Machine, running| new(m, running)),
-            };
-            self.frame_hook = Some(hook);
-            self.notify_frame();
-        }
-        Ok(url)
-    }
-
     /// Run the frame hook now (adapters call this after commands that
     /// bypass [`Session::handle`]).
     pub fn notify_frame(&mut self) {

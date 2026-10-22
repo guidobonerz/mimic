@@ -106,7 +106,6 @@ fn server_with(config: MachineConfig) -> DebugServer {
         Session::new(machine, "sim6502"),
         ServerConfig {
             vice: None,
-            gdb: None,
             bind: "127.0.0.1:0".parse().unwrap(),
             run: false,
             realtime: false,
@@ -236,7 +235,6 @@ fn refuses_non_loopback_bind() {
         Session::new(machine, "sim6502"),
         ServerConfig {
             vice: None,
-            gdb: None,
             bind: "0.0.0.0:0".parse().unwrap(),
             run: false,
             realtime: false,
@@ -454,7 +452,6 @@ fn c64_server() -> DebugServer {
         ServerConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             vice: None,
-            gdb: None,
             run: false,
             realtime: false,
         },
@@ -693,7 +690,6 @@ fn console_panel_controls() {
         ServerConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             vice: None,
-            gdb: None,
             run: false,
             realtime: false,
         },

@@ -59,6 +59,8 @@ pub mod reg {
     pub const BLTAFWM: u16 = 0x044;
     pub const BLTALWM: u16 = 0x046;
     pub const BLTCPTH: u16 = 0x048;
+    pub const BLTCPTL: u16 = 0x04a;
+    pub const BLTAPTL: u16 = 0x052;
     pub const BLTDPTL: u16 = 0x056;
     pub const BLTSIZE: u16 = 0x058;
     pub const BLTCMOD: u16 = 0x060;

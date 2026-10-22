@@ -30,7 +30,7 @@ RULES = [
     ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media"]),
     # Also the catalogue of pluggable port devices for the frontends.
     ("emu-machines", ["emu-core", "machine-*", "devices-input"]),
-    ("emu-debug", ["emu-core", "emu-preview", "video-crt"]),  # golden rule 1
+    ("emu-debug", ["emu-core"]),                   # golden rule 1
     ("emu-preview", ["emu-core", "video-crt"]),    # golden rule 1
     ("emu-desktop", FRONTEND_DEPS),
     ("emu-web", FRONTEND_DEPS),

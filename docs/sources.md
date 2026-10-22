@@ -107,8 +107,9 @@ own section.
 | Blitter area, fill and line modes, minterms | HRM chapter 6 "Blitter hardware" | `chips-amiga/src/blitter.rs` |
 | 8520 CIA (TOD event counter, one-shot start), CIA port assignments, floppy control and status lines, drive identification | HRM appendix F "8520 CIA"; HRM chapter 8 "Disk" | `chips-cbm/src/cia.rs`, `machine-amiga`, `drives-other/src/amiga_drive.rs` |
 | Collision detection (CLXCON, CLXDAT) | HRM chapter 7 "Collision detection" | `chips-amiga/src/denise.rs` |
-| Blitter cycle lengths by channel, line-mode pixel time; CPU on even slots, BLITHOG and the three-cycle rule | HRM chapter 6 "Blitter speed" and "Blitter DMA" (read via the Amiga Developer CD 2.1 HTML copy, see below) | `chips-amiga/src/blitter.rs`, `custom.rs` |
+| Blitter cycle lengths by channel, idle ("-") cycles in the blitter cycle sequences, line-mode pixel time; CPU on even slots, BLITHOG and the three-cycle rule | HRM chapter 6 "Blitter speed" and "Blitter DMA" (read via the Amiga Developer CD 2.1 HTML copy, see below) | `chips-amiga/src/blitter.rs`, `custom.rs` |
 | Joystick bits in JOYxDAT, POTGO/POTGOR | HRM chapter 8 "Interface hardware" | `machine-amiga`, `chips-amiga/src/paula.rs` |
+| Interrupt latency: VERTB set about two colour clocks after the vertical strobe, IPL lines changing a few DMA cycles after a request, the CPU acting on IPL some clocks later (logic-analyzer and test-ROM observations on A500/A1000) | vAmiga issue #274 "Test Interrupts/int/int1" (github.com/dirkwhoffmann/vAmiga/issues/274), discussion only, no code; MC68000 User's Manual, interrupt exception processing | `machine-amiga/src/lib.rs` (`IPL_DELAY`) |
 | Audio channels: registers, DMA, block-start interrupts, left/right assignment, output filters | HRM chapter 5 "Audio hardware" | `chips-amiga/src/audio.rs`, `machine-amiga` |
 | Disk controller: DSKLEN double write, WORDSYNC, DSKSYNC, DSKBYTR, FIFO, ADKCON FAST; drive lines, index | HRM chapter 8 "Disk", appendix A | `chips-amiga/src/disk.rs`, `drives-other/src/amiga_drive.rs` |
 | ADF images, AmigaDOS track and sector format (odd/even MFM longs, header and data checksums), boot block checksum | Laurent Clévy, "The .ADF (Amiga Disk File) format FAQ" | `media/src/adf.rs`, `tests/tests/amiga_boot.rs` |
@@ -127,8 +128,6 @@ own section.
 | VICE binary monitor protocol | VICE manual, chapter "Binary monitor" (API version 2) | `emu-debug/src/vice.rs` |
 | Symbol files | VICE monitor label files; KickAssembler `.sym` format | `emu-debug/src/symbols.rs` |
 | base64 | RFC 4648 | `emu-debug/src/protocol.rs` |
-| GDB remote stub | GDB manual, appendix "GDB Remote Serial Protocol" (packets, stop replies, `qXfer:features:read`, `vCont`, binary data escaping) and appendix "Target Descriptions" (target XML, standard feature `org.gnu.gdb.m68k.core`); GDB's z80 register order observed with `gdb-multiarch` 17.1 (`info registers`) | `emu-debug/src/gdb.rs`, `tools/gdb/mimic.py` |
-| GDB Python API | GDB manual, "Extending GDB" → "Python API" (`gdb.Command`, `gdb.events.stop`/`before_prompt`, `RemoteTargetConnection.send_packet`) | `tools/gdb/mimic.py` |
 
 ## Test suites and test data
 

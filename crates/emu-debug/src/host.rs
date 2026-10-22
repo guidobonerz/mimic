@@ -16,8 +16,6 @@ use emu_core::media::Media;
 use emu_core::port::{PortDevice, PortId, PortKind};
 use emu_core::{ControlId, Cycle};
 
-use crate::session::FrameHook;
-
 /// Frontend services for device and media commands.
 pub trait HostServices: Send {
     /// Names of the devices [`HostServices::create_device`] can make for a
@@ -30,13 +28,6 @@ pub trait HostServices: Send {
     /// Open an image file on this host (copy-on-write: the file stays
     /// untouched until the slot is flushed).
     fn open_media(&self, path: &str) -> Result<Media, String>;
-
-    /// Start the live preview server for this session, or name the one
-    /// already running: its URL, and the frame hook that feeds a server
-    /// started just now (the session adds it to its own).
-    fn preview(&mut self) -> Result<(String, Option<FrameHook>), String> {
-        Err("this frontend has no live preview server".into())
-    }
 }
 
 /// Version of the recording format.

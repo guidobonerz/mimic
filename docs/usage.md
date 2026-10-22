@@ -18,8 +18,7 @@ Inhalt:
 10. [Debug-Schnittstelle](#10-debug-schnittstelle)
 11. [Python-Client `polydbg`](#11-python-client-polydbg)
 12. [VICE-Binary-Monitor (VS64 & Co.)](#12-vice-binary-monitor-vs64--co)
-13. [GDB mit Live-Bild](#13-gdb-mit-live-bild)
-14. [Tests und Testdaten](#14-tests-und-testdaten)
+13. [Tests und Testdaten](#13-tests-und-testdaten)
 
 ---
 
@@ -153,13 +152,14 @@ cargo run --release -p emu-desktop -- --machine atari2600 --model pal --cart spi
 cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
 cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk workbench13.adf
-cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --option drives=2 --disk demo.adf
+cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk demo-a.adf --disk demo-b.adf
+cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --option drives=2 --disk demo-a.adf --disk demo-b.adf
 ```
 
 Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
 `--cart`, `--autostart`, `--rom-dir`, `--option KEY=WERT`,
 `--crt PROFIL` (Monitor, Standard: der der Maschine), `--scale N`,
-`--debug [ADR]`, `--preview [ADR]`, `--vice [ADR]`, `--gdb [ADR]` (siehe unten).
+`--debug [ADR]`, `--preview [ADR]`, `--vice [ADR]` (siehe unten).
 `--help` zeigt alles.
 
 **Tastatur.** Die Tasten liegen nach **Position** auf einer PC-Tastatur
@@ -191,6 +191,16 @@ ein/aus, `--no-panel` startet ohne sie. Dieselbe Leiste hat der
 Browser-Viewer; der Debugger bedient sie mit `controls`/`set_control`
 (`polydbg panel`).
 
+**Disketten wechseln:** `--disk` lässt sich mehrfach angeben. Die
+Disketten kommen der Reihe nach in die Laufwerke (Amiga: DF0:, DF1: … mit
+`--option drives=N`); die übrigen bilden eine Wechselliste für das erste
+Laufwerk. **Strg+D** legt die nächste Diskette dieser Liste ein, und eine
+Image-Datei, die man auf das Fenster zieht, landet ebenfalls im ersten
+Laufwerk. Die Titelleiste zeigt, welche Diskette gerade drin ist. Beispiel
+für eine Demo mit zwei Disketten und einem Laufwerk:
+`--disk demo-a.adf --disk demo-b.adf`, dann Strg+D, wenn die Demo nach
+Disk B fragt. Im Debugger geht dasselbe mit `insert_media`.
+
 **Weitere Tasten:** F12 wechselt zwischen den Bildschirmen einer Maschine
 (C128: VIC und VDC). Datasette/Kassette: F9 PLAY, Shift+F9 RECORD, F10 STOP,
 F11 REWIND.
@@ -213,11 +223,7 @@ sie ein, mittlere Taste gibt sie frei), der Joystick in Port 1.
 
 **Amiga.** Ohne Diskette zeigt die Kickstart den „Insert disk“-Bildschirm;
 eine ADF in DF0: (`--disk`) bootet. Workbench 1.3 braucht von Diskette
-etwa drei Minuten emulierte Zeit bis zum Workbench-Bildschirm. Mit
-`--option drives=2` gibt es DF1:, das Demos mit mehreren Disketten nutzen
-(eine weitere Diskette legt der Debugger mit `insert_media` ein, z. B.
-`python tools/polydbg.py raw list_media_slots`, dann
-`python tools/polydbg.py raw insert_media '{"slot": 1, "path": "b.adf"}'`). Der Ton ist Stereo (Paula, Kanäle 0/3 links,
+etwa drei Minuten emulierte Zeit bis zum Workbench-Bildschirm. Der Ton ist Stereo (Paula, Kanäle 0/3 links,
 1/2 rechts) mit dem Tiefpass des A500. Interlace-Bilder (Workbench mit LACE)
 werden aus beiden Halbbildern zusammengesetzt.
 
@@ -256,7 +262,6 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 | `--debug [ADR]` | Debug-Server statt Bilder laufen lassen (Standard `127.0.0.1:6510`) |
 | `--preview [ADR]` | Live-Preview (Standard `127.0.0.1:6580`), schließt `--debug` ein |
 | `--vice [ADR]` | VICE-Binary-Monitor (Standard `127.0.0.1:6502`), schließt `--debug` ein |
-| `--gdb [ADR]` | GDB-Remote-Protokoll (Standard `127.0.0.1:2159`), schließt `--debug` ein |
 | `--run` | mit `--debug`: gleich laufen statt angehalten starten |
 | `--no-realtime` | mit `--debug`: so schnell wie möglich |
 
@@ -264,7 +269,7 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 
 | Art | Formate | Frontend-Option |
 | --- | --- | --- |
-| Diskette | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga, DD 880 KB; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF); ein **Ordner** als virtuelle Diskette | `--disk` |
+| Diskette (mehrfach: weitere Laufwerke, Rest per Strg+D) | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga, DD 880 KB; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF); ein **Ordner** als virtuelle Diskette | `--disk` |
 | Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
 | Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt) | `--cart` |
 | Programm | PRG, T64, XEX | `--prg` |
@@ -513,61 +518,7 @@ Wichtig: `127.0.0.1`, nicht `localhost` – der Server lauscht nur auf IPv4.
 Speicherraum 0 ist die Haupt-CPU, 1–4 sind die Laufwerke 8–11; Speicherlesen
 ist immer seiteneffektfrei; `LIN`/`CYC` liefern die Strahlposition.
 
-## 13. GDB mit Live-Bild
-
-Mit `--gdb [ADR]` (Standard `127.0.0.1:2159`, schließt `--debug` ein) spricht
-mimic das GDB-Remote-Protokoll. Jede Maschine lässt sich so mit GDB
-debuggen; zusätzlich liefert der Stub das Bild der Maschine.
-
-```bash
-cargo run --release -p emu-headless -- --machine amiga --rom-dir roms --disk spiel.adf --gdb
-```
-
-```text
-gdb-multiarch
-(gdb) source tools/gdb/mimic.py
-(gdb) target remote 127.0.0.1:2159
-(gdb) break *0xfc00d2          # Einsprung von Kickstart 1.x nach dem Reset
-(gdb) continue
-(gdb) mimic live on          # Bild bei jedem Halt neu (Browserseite lädt es nach)
-(gdb) mimic preview          # Live-Stream im Browser
-(gdb) monitor help
-```
-
-Ein GDB mit der passenden Architektur ist nötig: `gdb-multiarch` (Windows:
-MSYS2-Paket `mingw-w64-x86_64-gdb-multiarch`; Linux: Paket `gdb-multiarch`)
-oder `m68k-elf-gdb`.
-
-- **Architektur:** wird an den Registern der Haupt-CPU erkannt. 68000
-  (Amiga): Register `d0`–`d7`, `a0`–`a5`, `fp`, `sp`, `ps`, `pc`, dazu `usp`
-  und `ssp`. Ohne ELF-Datei nimmt GDB die Byte-Reihenfolge des Hosts an;
-  `mimic.py` stellt deshalb auf Big-Endian um (ohne das Skript:
-  `set endian big`). Z80 (CPC, C128-Z80 nur als Haupt-CPU): GDBs
-  `z80`-Registersatz. Hinweis: GDB 17.1 stürzt bei `stepi` auf dem Z80 in
-  seiner eigenen Frame-Analyse ab (interner Fehler in `trad-frame.h`);
-  Register, Speicher, Disassembly, Breakpoints und `continue` gehen. Für die
-  6502-Maschinen kennt Standard-GDB keine Architektur; die
-  Target-Beschreibung (`a x y s p pc`) dient anderen RSP-Clients.
-- **Threads:** ein Thread pro Prozessor derselben Architektur, Haupt-CPU
-  zuerst (C64: `cpu` und `drive8`). Register und Speicher folgen dem
-  gewählten Thread (`thread 2`); Schritte führt immer die Haupt-CPU aus.
-- **Breakpoints:** `break *ADR` und `hbreak` sind Ausführungs-Breakpoints
-  des Debuggers (kein Patchen des Speichers), `watch`/`rwatch`/`awatch`
-  Watchpoints. Sie gehören zur GDB-Verbindung und verschwinden mit ihr.
-- **Halt-Meldungen** tragen `beam:<bild>,<zeile>,<zyklus>;` (hex), das GDB
-  übergeht.
-- **Bild:** das Paket `qMimic.frame[:screen=NAME;format=png|qoi;scale=N;filter=raw|crt;profile=P]`
-  liefert das aktuelle (auch halbfertige) Bild, `qMimic.beam` die
-  Strahlposition. `mimic.py` nutzt es (GDB ab 14; ältere GDBs bekommen das
-  Bild über `monitor snapshot`).
-- **Monitor-Befehle:** `monitor beam`, `devices`, `screen [NAME]`,
-  `snapshot DATEI [crt]`, `preview` (startet im Headless-Frontend den
-  Live-Preview-Server, falls er noch nicht läuft, und nennt die URL; im
-  Desktop-Frontend `--preview` beim Start angeben), `reset [hard]`.
-
-Geplant (Phase 8): Debug-Adapter-Protokoll (DAP) für VS Code.
-
-## 14. Tests und Testdaten
+## 13. Tests und Testdaten
 
 ```bash
 cargo test --workspace                                   # ohne ROMs/Testdaten

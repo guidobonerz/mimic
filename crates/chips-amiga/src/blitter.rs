@@ -25,10 +25,14 @@
 //!
 //! **Timing** (HRM chapter 6, "Blitter speed"): a blitter cycle takes four
 //! clocks (two colour clocks) plus two when B is used and two more when
-//! both C and D are; a line pixel takes eight. Here every colour clock of a
-//! blitter cycle occupies a DMA slot (on the chip some of them are idle
-//! bus cycles). Words are computed when their last slot is granted, so CPU
-//! reads during a blit see the progress word by word.
+//! both C and D are; a line pixel takes eight. Only the slots of channels
+//! in use access chip RAM: the source reads (A, B, C) come first, the D
+//! write last, and the rest are idle cycles (the "-" entries of the HRM's
+//! blitter cycle sequences), which pass in free slots while the CPU may
+//! use the bus. A clear with D alone or a line (C read, D write in four
+//! slots) leaves the CPU half its slots. Words are computed when their
+//! last slot has passed, so CPU reads during a blit see the progress word
+//! by word.
 
 use emu_core::{StateError, StateReader, StateWriter};
 
@@ -175,6 +179,22 @@ impl Blitter {
             return 4;
         }
         2 + u8::from(self.uses(B)) + u8::from(self.uses(C) && self.uses(D))
+    }
+
+    /// Is the next slot of the current blitter cycle an idle one (no chip
+    /// RAM access; the bus is free for the CPU)?
+    pub fn idle_now(&self) -> bool {
+        let Some(job) = self.job else {
+            return false;
+        };
+        let reads = if self.line_mode() {
+            // Line mode reads only C; A and B come from their data registers.
+            u8::from(self.uses(C))
+        } else {
+            u8::from(self.uses(A)) + u8::from(self.uses(B)) + u8::from(self.uses(C))
+        };
+        let last = self.slots_per_unit() - 1;
+        job.slots >= reads && !(self.uses(D) && job.slots == last)
     }
 
     /// One granted DMA slot. Returns true when the blit finished in it.

@@ -203,6 +203,12 @@ struct Board {
     drives: Vec<AmigaDrive>,
     /// Colour clocks the chips have run.
     cck: u64,
+    /// The interrupt level Paula drives on IPL0–2, the level before its
+    /// last change and the colour clock of that change: the CPU sees a
+    /// change only [`IPL_DELAY`] later.
+    ipl: u8,
+    ipl_before: u8,
+    ipl_changed: u64,
     /// A field ended since the last check.
     field_done: bool,
     /// /FIR0, /FIR1 pressed (CIA-A port A bits 6, 7).
@@ -217,6 +223,16 @@ struct Board {
     samples: Vec<i16>,
     keyboard: Keyboard,
 }
+
+/// Colour clocks before the CPU acts on a new IPL level. The 68000 decides
+/// whether to take an interrupt at the end of an instruction from IPL0–2
+/// as sampled before its last bus cycle (4 clocks), through a synchroniser
+/// that wants the level on two sampling edges (MC68000 User's Manual,
+/// interrupt exception processing); together about 6 clocks. A request
+/// that arrives later is taken after the next instruction. Measurements on
+/// an A500 (vAmiga issue #274, discussion only) show IPL changing a few
+/// cycles after a request as well; that part is not modelled.
+const IPL_DELAY: u64 = 3;
 
 /// One-pole low-pass coefficients at 48 kHz (16-bit fraction):
 /// 1 − e^(−2π·fc/48000) for 4.9 kHz and 3.3 kHz.
@@ -240,6 +256,12 @@ impl Board {
         }
         self.custom.paula.ports_line = self.cia_a.irq();
         self.custom.paula.exter_line = self.cia_b.irq();
+        let ipl = self.custom.ipl();
+        if ipl != self.ipl {
+            self.ipl_before = self.ipl;
+            self.ipl = ipl;
+            self.ipl_changed = self.cck;
+        }
         self.field_done |= out.field_done;
         self.audio(out.audio);
         let rate = if self.custom.paula.adkcon & chips_amiga::disk::FAST != 0 {
@@ -254,6 +276,15 @@ impl Board {
         }
         self.cck += 1;
         out.cpu_slot
+    }
+
+    /// The interrupt level the CPU acts on now (see [`IPL_DELAY`]).
+    fn ipl_seen(&self) -> u8 {
+        if self.cck < self.ipl_changed + IPL_DELAY {
+            self.ipl_before
+        } else {
+            self.ipl
+        }
     }
 
     /// One disk bit cell: Paula writes to or reads from the selected
@@ -522,9 +553,15 @@ impl TimedBus68 for AmigaBus<'_> {
         }
         let region = self.b.mem.region(addr, access == Access::Write);
         if region.chip_bus() {
-            // The CPU's data slot is the second colour clock of its cycle.
+            // The CPU's data slot is the second colour clock of its cycle;
+            // in the first it already asks for the bus (the Blitter's
+            // starvation count sees it).
             let c0 = at / 2 + 1;
-            self.b.run_to(c0);
+            self.b.run_to(c0 - 1);
+            if self.b.cck == c0 - 1 {
+                self.b.custom.cpu_request();
+                self.b.tick(false);
+            }
             loop {
                 let c = self.b.cck;
                 if self.b.tick(true) {
@@ -702,6 +739,9 @@ impl Amiga {
                 cia_b: Cia::new(CiaModel::Mos8520),
                 drives: vec![AmigaDrive::new(); drives],
                 cck: 0,
+                ipl: 0,
+                ipl_before: 0,
+                ipl_changed: 0,
                 field_done: false,
                 fire_low: 0,
                 cck_hz: cpu_hz(standard) / 2,
@@ -789,7 +829,7 @@ impl Amiga {
             self.ports_due = now + PORT_SAMPLE;
             self.refresh_ports();
         }
-        self.cpu.set_ipl(self.board.custom.ipl());
+        self.cpu.set_ipl(self.board.ipl_seen());
         let start = self.sched.now().0;
         let beam = self.beam_pos();
         let step = {
@@ -1107,7 +1147,7 @@ impl Machine for Amiga {
         for (i, n) in COLORS.iter().enumerate() {
             denise.push(r(n, 0x180 + 2 * i as u16, u32::from(d.colors[i]), 12));
         }
-        let paula = [
+        let mut paula = vec![
             r("INTENA", 0x09a, u32::from(p.intena), 16),
             r("INTREQ", 0x09c, u32::from(p.requests()), 16),
             r("ADKCON", 0x09e, u32::from(p.adkcon), 16),
@@ -1119,6 +1159,19 @@ impl Machine for Amiga {
             r("DSKBYTR", 0x01a, u32::from(p.disk.dskbytr()), 16),
             ("DSKLEFT", None, u32::from(p.disk.remaining), 16),
         ];
+        const AUD: [[&str; 4]; 4] = [
+            ["AUD0LC", "AUD0LEN", "AUD0PER", "AUD0VOL"],
+            ["AUD1LC", "AUD1LEN", "AUD1PER", "AUD1VOL"],
+            ["AUD2LC", "AUD2LEN", "AUD2PER", "AUD2VOL"],
+            ["AUD3LC", "AUD3LEN", "AUD3PER", "AUD3VOL"],
+        ];
+        for (i, (n, a)) in AUD.iter().zip(&p.audio).enumerate() {
+            let base = 0x0a0 + 0x10 * i as u16;
+            paula.push(r(n[0], base, a.lc, 32));
+            paula.push(r(n[1], base + 4, u32::from(a.len), 16));
+            paula.push(r(n[2], base + 6, u32::from(a.per), 16));
+            paula.push(r(n[3], base + 8, u32::from(a.vol), 7));
+        }
         vec![
             chip_regs("agnus", &agnus),
             chip_regs("copper", &copper),
@@ -1243,7 +1296,7 @@ impl Machine for Amiga {
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         let b = &self.board;
-        w.chunk(*b"A500", 3, |w| {
+        w.chunk(*b"A500", 4, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1261,6 +1314,9 @@ impl Machine for Amiga {
             for v in b.filter.iter().flatten() {
                 w.u32(*v as u32);
             }
+            w.u8(b.ipl);
+            w.u8(b.ipl_before);
+            w.u64(b.ipl_changed);
         });
         self.cpu.save(&mut w);
         b.mem.save(&mut w);
@@ -1289,7 +1345,7 @@ impl Machine for Amiga {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"A500", 3)?;
+        let (version, mut c) = r.chunk(*b"A500", 4)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -1317,6 +1373,11 @@ impl Machine for Amiga {
         for v in board.filter.iter_mut().flatten() {
             *v = c.u32()? as i32;
         }
+        if version >= 4 {
+            board.ipl = c.u8()? & 7;
+            board.ipl_before = c.u8()? & 7;
+            board.ipl_changed = c.u64()?;
+        }
         board.samples.clear();
         let mut cpu = self.cpu.clone();
         let mut sched = self.sched.clone();
@@ -1324,6 +1385,12 @@ impl Machine for Amiga {
         cpu.load(&mut r)?;
         board.mem.load(&mut r)?;
         board.custom.load(&mut r)?;
+        if version < 4 {
+            // Older states: the CPU sees Paula's level at once.
+            board.ipl = board.custom.ipl();
+            board.ipl_before = board.ipl;
+            board.ipl_changed = 0;
+        }
         board.cia_a.load(&mut r)?;
         board.cia_b.load(&mut r)?;
         for d in &mut board.drives {
