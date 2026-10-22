@@ -30,6 +30,7 @@ use emu_core::Machine;
 use emu_debug::{DebugServer, ServerConfig};
 use emu_input::{Axis, Button, HostEvent, JoyKeys, Mapper, Profile as InputProfile};
 use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer};
+use video_crt::field::Deinterlace;
 use video_crt::Profile;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
@@ -90,6 +91,9 @@ usage: mimic-desktop [options]
                         pet-white, pet-green, ctm644, gt65 or a .toml file
                         (default: the machine's own monitor)
   --scale N             initial window size in rows per line (default 2)
+  --deinterlace MODE    interlaced pictures (Amiga LACE): weave (default, both
+                        fields interleaved) or bob (the current field's lines
+                        doubled, no combing); Ctrl+I switches at run time
   --debug [ADDR]        serve the debug protocol (default 127.0.0.1:6510)
   --preview [ADDR]      serve the live preview in the browser
                         (default 127.0.0.1:6580)
@@ -155,6 +159,7 @@ struct Args {
     tape: Option<String>,
     cart: Option<String>,
     crt: Option<String>,
+    deinterlace: Deinterlace,
     scale: u32,
     debug: Option<SocketAddr>,
     vice: Option<SocketAddr>,
@@ -180,6 +185,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         tape: None,
         cart: None,
         crt: None,
+        deinterlace: Deinterlace::Weave,
         scale: 2,
         debug: None,
         vice: None,
@@ -229,6 +235,14 @@ fn parse_args() -> Result<Option<Args>, String> {
                 a.config.options.insert(k.into(), v.into());
             }
             "--crt" => a.crt = Some(value("--crt")?),
+            "--deinterlace" => {
+                let v = value("--deinterlace")?;
+                a.deinterlace = match v.as_str() {
+                    "weave" => Deinterlace::Weave,
+                    "bob" => Deinterlace::Bob,
+                    _ => return Err(format!("--deinterlace {v}: weave or bob")),
+                };
+            }
             "--scale" => {
                 let v = value("--scale")?;
                 a.scale = v.parse().map_err(|_| format!("bad scale '{v}'"))?;
@@ -409,6 +423,7 @@ struct App {
     footer_on: bool,
     /// The P of a Ctrl+P is down; its release is not sent either.
     swallow_p: bool,
+    swallow_i: bool,
     /// The D of a Ctrl+D is down; its release is not sent either.
     swallow_d: bool,
     panel_on: bool,
@@ -773,6 +788,25 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // Ctrl+I switches between weave and bob deinterlacing.
+                if event.physical_key == PhysicalKey::Code(KeyCode::KeyI)
+                    && (self.ctrl || self.swallow_i)
+                {
+                    if event.state == ElementState::Pressed {
+                        if !event.repeat {
+                            if let Ok(mut fields) = self.shared.fields.lock() {
+                                fields.mode = match fields.mode {
+                                    Deinterlace::Weave => Deinterlace::Bob,
+                                    Deinterlace::Bob => Deinterlace::Weave,
+                                };
+                            }
+                        }
+                        self.swallow_i = true;
+                    } else {
+                        self.swallow_i = false;
+                    }
+                    return;
+                }
                 // Ctrl+D swaps the next disk into the first drive.
                 if event.physical_key == PhysicalKey::Code(KeyCode::KeyD)
                     && (self.ctrl || self.swallow_d)
@@ -990,6 +1024,9 @@ fn run() -> Result<(), String> {
         .unwrap_or(0) as u8;
 
     let shared = Arc::new(Shared::new());
+    if let Ok(mut fields) = shared.fields.lock() {
+        fields.mode = args.deinterlace;
+    }
     shared.footer_on.store(args.footer, Ordering::Relaxed);
     shared.panel_on.store(args.panel, Ordering::Relaxed);
     shared.joy_keys.store(joy_keys, Ordering::Relaxed);
@@ -1084,6 +1121,7 @@ fn run() -> Result<(), String> {
         swallow_space: false,
         footer_on: args.footer,
         swallow_p: false,
+        swallow_i: false,
         swallow_d: false,
         panel_on: args.panel,
         panel_hits: Vec::new(),

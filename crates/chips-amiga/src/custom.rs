@@ -46,6 +46,7 @@
 use emu_core::frame::Rgb8;
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
+use crate::audio;
 use crate::blitter::Blitter;
 use crate::chipram::ChipRam;
 use crate::copper::Copper;
@@ -215,6 +216,7 @@ impl Custom {
     /// running.
     pub fn reset(&mut self) {
         let mut n = Self::new(self.standard, self.ptr_mask);
+        n.paula.uart.loopback = self.paula.uart.loopback;
         n.v = self.v;
         n.h = self.h;
         n.lof = self.lof;
@@ -436,13 +438,11 @@ impl Custom {
             self.fetched = false;
         }
         self.render(v, h);
-        for n in 0..4 {
-            if self.paula.audio[n].tick() {
-                self.paula.request(int::AUD0 << n);
-            }
-        }
+        self.audio_tick();
         let a = &self.paula.audio;
         out.audio = [a[0].level() + a[3].level(), a[1].level() + a[2].level()];
+        let ints = self.paula.uart.tick();
+        self.paula.request(ints);
 
         self.h += 1;
         if self.h >= self.line_len() {
@@ -461,6 +461,26 @@ impl Custom {
             }
         }
         out
+    }
+
+    /// The audio channels' colour clock: samples, block interrupts and the
+    /// ADKCON attach modes (a channel's words set the next channel's
+    /// volume or period; see `audio`).
+    fn audio_tick(&mut self) {
+        let adk = self.paula.adkcon;
+        for n in 0..4 {
+            let attach = u8::from(adk & 1 << n != 0) | u8::from(adk & 0x10 << n != 0) << 1;
+            let t = self.paula.audio[n].tick(attach);
+            if t.irq {
+                self.paula.request(int::AUD0 << n);
+            }
+            if let (Some(m), Some(next)) = (t.modulate, (n < 3).then_some(n + 1)) {
+                match m {
+                    audio::Modulation::Volume(v) => self.paula.audio[next].vol = v,
+                    audio::Modulation::Period(p) => self.paula.audio[next].per = p,
+                }
+            }
+        }
     }
 
     /// Sprite DMA at the start of line `v`: control words on the first
@@ -560,8 +580,11 @@ impl Custom {
                 self.h = (v & 0xff).min(self.line_len() - 1);
             }
             reg::COPCON => self.copper.danger = v & 2 != 0,
-            reg::SERDAT => self.paula.request(int::TBE),
-            reg::SERPER => self.paula.serper = v,
+            reg::SERDAT => {
+                let ints = self.paula.uart.write_serdat(v);
+                self.paula.request(ints);
+            }
+            reg::SERPER => self.paula.uart.serper = v,
             reg::POTGO => self.paula.potgo = v,
             // The counters' upper six bits of both ports.
             reg::JOYTEST => {
@@ -704,8 +727,7 @@ impl Custom {
             reg::ADKCONR => self.paula.adkcon,
             reg::POT0DAT | reg::POT1DAT => 0,
             reg::POTGOR => self.paula.potgor(self.pot_low),
-            // TBE and TSRE: the transmitter is idle.
-            reg::SERDATR => 0x3000,
+            reg::SERDATR => self.paula.uart.serdatr(),
             reg::DSKBYTR => self.paula.disk.dskbytr(),
             reg::INTENAR => self.paula.intena,
             reg::INTREQR => self.paula.requests(),
@@ -745,8 +767,9 @@ const TAG: [u8; 4] = *b"OCS ";
 impl Savestate for Custom {
     fn save(&self, w: &mut StateWriter) {
         // Version 3: two pending shifter loads per plane group in Denise;
-        // version 4: four; version 5: the Copper's wake-up after WAIT.
-        w.chunk(TAG, 5, |w| {
+        // version 4: four; version 5: the Copper's wake-up after WAIT;
+        // version 6: the serial port and the audio attach alternation.
+        w.chunk(TAG, 6, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -788,7 +811,7 @@ impl Savestate for Custom {
 
     /// Atomic; the standard and pointer width are configuration.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (version, mut c) = r.chunk(TAG, 5)?;
+        let (version, mut c) = r.chunk(TAG, 6)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -798,6 +821,7 @@ impl Savestate for Custom {
             return Err(StateError::Invalid("video standard differs"));
         }
         let mut n = Custom::new(self.standard, self.ptr_mask);
+        let loopback = self.paula.uart.loopback;
         for v in [
             &mut n.dmacon,
             &mut n.v,
@@ -834,7 +858,8 @@ impl Savestate for Custom {
         n.copper = Copper::load(&mut c, version)?;
         n.blitter = crate::blitter::Blitter::load(&mut c)?;
         n.denise = Denise::load(&mut c, version)?;
-        n.paula = Paula::load(&mut c)?;
+        n.paula = Paula::load(&mut c, version)?;
+        n.paula.uart.loopback = loopback;
         if n.h >= 228 || n.v >= n.field_lines() {
             return Err(StateError::Invalid("beam position"));
         }

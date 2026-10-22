@@ -1,6 +1,14 @@
 //! Paula (8364): interrupt control (INTENA, INTREQ → IPL0–2), ADKCON,
-//! POTGO, the serial port's status, the disk controller ([`DiskCtl`]) and
-//! the four audio channels ([`Channel`]).
+//! POTGO, the serial port ([`Uart`]), the disk controller ([`DiskCtl`])
+//! and the four audio channels ([`Channel`]).
+//!
+//! ADKCON (appendix A): bits 0–7 the audio attach modes (`audio`), 8 FAST
+//! and 9 MSBSYNC and 10 WORDSYNC for the disk (`disk`; MSBSYNC is for GCR
+//! and ignored), 11 UARTBRK (`uart`), 12 MFMPREC and 13–14 PRECOMP: write
+//! precompensation (0, 140, 280, 560 ns). Precompensation shifts the
+//! analogue flux transitions a drive writes; the drives here keep whole
+//! bit cells, so the bits are stored as written and the setting only
+//! reads back.
 //!
 //! Interrupt levels (HRM chapter 7, "Interrupts", table 7-1):
 //!
@@ -22,6 +30,7 @@ use emu_core::{StateError, StateReader, StateWriter};
 use crate::audio::Channel;
 use crate::disk::DiskCtl;
 use crate::int;
+use crate::uart::Uart;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Paula {
@@ -34,9 +43,9 @@ pub struct Paula {
     pub exter_line: bool,
     pub dsklen: u16,
     pub dsksync: u16,
-    pub serper: u16,
     pub disk: DiskCtl,
     pub audio: [Channel; 4],
+    pub uart: Uart,
 }
 
 pub(crate) fn set_clr(reg: &mut u16, v: u16) {
@@ -82,6 +91,9 @@ impl Paula {
 
     pub fn write_intreq(&mut self, v: u16) {
         set_clr(&mut self.intreq, v);
+        if v & 0x8000 == 0 && v & int::RBF != 0 {
+            self.uart.clear_rbf();
+        }
     }
 
     pub fn write_adkcon(&mut self, v: u16) {
@@ -115,7 +127,7 @@ impl Paula {
             self.potgo,
             self.dsklen,
             self.dsksync,
-            self.serper,
+            self.uart.serper,
         ] {
             w.u16(v);
         }
@@ -125,21 +137,30 @@ impl Paula {
         for c in &self.audio {
             c.save(w);
         }
+        self.uart.save(w);
     }
 
-    pub(crate) fn load(r: &mut StateReader<'_>) -> Result<Self, StateError> {
+    /// `version`: the enclosing chunk's; before 6 the serial port had
+    /// only SERPER.
+    pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let mut p = Self::new();
         for v in [&mut p.intena, &mut p.intreq, &mut p.adkcon] {
             *v = r.u16()? & 0x7fff;
         }
-        for v in [&mut p.potgo, &mut p.dsklen, &mut p.dsksync, &mut p.serper] {
+        for v in [&mut p.potgo, &mut p.dsklen, &mut p.dsksync] {
             *v = r.u16()?;
         }
+        let serper = r.u16()?;
         p.ports_line = r.bool()?;
         p.exter_line = r.bool()?;
         p.disk = DiskCtl::load(r)?;
         for c in &mut p.audio {
-            *c = Channel::load(r)?;
+            *c = Channel::load(r, version)?;
+        }
+        if version >= 6 {
+            p.uart = Uart::load(r)?;
+        } else {
+            p.uart.serper = serper;
         }
         Ok(p)
     }

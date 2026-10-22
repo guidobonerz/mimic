@@ -13,8 +13,15 @@
 //! words the CPU writes to AUDxDAT play once each and raise the
 //! interrupt when taken. Every period one byte is output.
 //!
-//! Channels 0 and 3 are the left output, 1 and 2 the right. ADKCON
-//! attach modes (volume/period modulation) are not modelled yet.
+//! Channels 0 and 3 are the left output, 1 and 2 the right.
+//!
+//! **Attach modes** (ADKCON bits 0–7, HRM chapter 5 "Producing complex
+//! sounds / Modulating sound"): with USExV (bit x) the channel's data words
+//! set the *volume* of channel x + 1, with USExP (bit 4 + x) its *period*,
+//! with both they alternate (volume first). An attached channel consumes
+//! one word per period instead of two bytes and its own output is silent;
+//! USE3VN/USE3PN only silence channel 3. The modulated channel plays as
+//! usual with the values written into it.
 
 use emu_core::{StateError, StateReader, StateWriter};
 
@@ -43,7 +50,26 @@ pub struct Channel {
     word: u16,
     /// Bytes of `word` left to play (2, 1, 0).
     bytes: u8,
+    /// Attached with both USExV and USExP: the next word sets the period
+    /// (else the volume).
+    alt_period: bool,
     pub output: i8,
+}
+
+/// What a channel delivered in a colour clock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Tick {
+    /// The channel's interrupt is due (a block started, or without DMA a
+    /// CPU word was taken).
+    pub irq: bool,
+    /// Attached: a word for the next channel's volume or period.
+    pub modulate: Option<Modulation>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Modulation {
+    Volume(u8),
+    Period(u16),
 }
 
 impl Channel {
@@ -99,42 +125,61 @@ impl Channel {
         irq
     }
 
-    /// One colour clock. Returns true if the channel's interrupt is due
-    /// (without DMA: a CPU word was taken).
-    pub fn tick(&mut self) -> bool {
+    /// One colour clock. `attach`: the channel's USExV and USExP bits
+    /// (bit 0 volume, bit 1 period) — attached, it hands each word on as a
+    /// [`Modulation`] instead of playing it.
+    pub fn tick(&mut self, attach: u8) -> Tick {
+        let mut out = Tick::default();
         if self.counter > 1 {
             self.counter -= 1;
-            return false;
+            return out;
         }
         let period = if self.dma {
             self.per.max(MIN_PERIOD)
         } else {
             self.per.max(1)
         };
-        let mut irq = false;
         if self.bytes == 0 {
             if !self.dat_full {
                 // Nothing to play: the output holds, the period waits.
                 self.counter = 0;
-                return false;
+                return out;
             }
             self.word = self.dat;
             self.dat_full = false;
-            self.bytes = 2;
+            self.bytes = if attach != 0 { 1 } else { 2 };
             if self.dma {
                 self.want = true;
             } else {
-                irq = true;
+                out.irq = true;
             }
         }
-        self.output = if self.bytes == 2 {
-            (self.word >> 8) as i8
+        if attach != 0 {
+            let period_now = match attach {
+                1 => false,
+                2 => true,
+                _ => {
+                    let now = self.alt_period;
+                    self.alt_period = !now;
+                    now
+                }
+            };
+            out.modulate = Some(if period_now {
+                Modulation::Period(self.word)
+            } else {
+                Modulation::Volume((self.word & 0x7f).min(64) as u8)
+            });
+            self.output = 0;
         } else {
-            self.word as i8
-        };
+            self.output = if self.bytes == 2 {
+                (self.word >> 8) as i8
+            } else {
+                self.word as i8
+            };
+        }
         self.bytes -= 1;
         self.counter = period;
-        irq
+        out
     }
 
     /// The channel's level: sample × volume (−8192 … 8128).
@@ -152,12 +197,20 @@ impl Channel {
         w.u8(self.vol);
         w.u8(self.bytes);
         w.u8(self.output as u8);
-        for b in [self.dma, self.want, self.block_start, self.dat_full] {
+        for b in [
+            self.dma,
+            self.want,
+            self.block_start,
+            self.dat_full,
+            self.alt_period,
+        ] {
             w.bool(b);
         }
     }
 
-    pub(crate) fn load(r: &mut StateReader<'_>) -> Result<Self, StateError> {
+    /// `version`: the enclosing chunk's; before 6 there was no attach
+    /// alternation flag.
+    pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let mut c = Self {
             lc: r.u32()?,
             pt: r.u32()?,
@@ -178,6 +231,9 @@ impl Channel {
         c.output = r.u8()? as i8;
         for b in [&mut c.dma, &mut c.want, &mut c.block_start, &mut c.dat_full] {
             *b = r.bool()?;
+        }
+        if version >= 6 {
+            c.alt_period = r.bool()?;
         }
         if c.bytes > 2 || c.remaining > 0x1_0000 {
             return Err(StateError::Invalid("audio channel"));
@@ -209,7 +265,7 @@ mod tests {
             if c.wants_slot() && c.fetch(&chip, 0xfffe) {
                 irqs += 1;
             }
-            if c.tick() {
+            if c.tick(0).irq {
                 irqs += 1;
             }
             if out.last() != Some(&c.output) {
@@ -229,11 +285,46 @@ mod tests {
             ..Channel::default()
         };
         c.write_dat(0x4020);
-        assert!(c.tick(), "word taken");
+        assert!(c.tick(0).irq, "word taken");
         assert_eq!(c.output, 0x40);
         for _ in 0..10 {
-            assert!(!c.tick());
+            assert!(!c.tick(0).irq);
         }
         assert_eq!(c.output, 0x20);
+    }
+
+    #[test]
+    fn an_attached_channel_hands_words_on_and_stays_silent() {
+        let mut c = Channel {
+            per: 4,
+            vol: 64,
+            ..Channel::default()
+        };
+        c.write_dat(0x0030);
+        let t = c.tick(1);
+        assert_eq!(t.modulate, Some(Modulation::Volume(0x30)));
+        assert_eq!(c.output, 0, "silent");
+        c.write_dat(0x7fff);
+        for _ in 0..4 {
+            c.tick(1);
+        }
+        assert_eq!(c.tick(1).modulate, None, "a word takes a whole period");
+        // Volume and period alternate, volume first.
+        let mut c = Channel {
+            per: 2,
+            ..Channel::default()
+        };
+        c.write_dat(0x0010);
+        assert_eq!(c.tick(3).modulate, Some(Modulation::Volume(0x10)));
+        c.tick(3);
+        c.write_dat(0x0123);
+        assert_eq!(c.tick(3).modulate, Some(Modulation::Period(0x0123)));
+        c.tick(3);
+        c.write_dat(0x0080);
+        assert_eq!(
+            c.tick(3).modulate,
+            Some(Modulation::Volume(0)),
+            "bits above 6 are ignored"
+        );
     }
 }

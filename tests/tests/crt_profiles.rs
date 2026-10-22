@@ -166,9 +166,7 @@ fn atari_card(model: &str) -> Pattern {
         ..Default::default()
     };
     config.options.insert("roms".into(), "stub".into());
-    let mut m = emu_machines::registry()
-        .create("atari800xl", &config)
-        .unwrap();
+    let mut m = emu_machines::registry().create("atari8", &config).unwrap();
     let mut dbg = DebugHooks::new();
     for _ in 0..2 {
         m.run_frame(&mut dbg);
@@ -238,7 +236,7 @@ fn uv((r, g, b): (f64, f64, f64)) -> (f64, f64) {
 
 #[test]
 fn atari_ntsc_hires_stripes_show_artifact_colours() {
-    let card = atari_card("ntsc");
+    let card = atari_card("800xl-ntsc");
     // Mode F starts at scan line 32 = frame row 24.
     let (aa, x55) = (24 + 25, 24 + 75);
     // The raw frame is white on black only.
@@ -273,8 +271,8 @@ fn atari_ntsc_hires_stripes_show_artifact_colours() {
 fn atari_pal_has_no_stable_artifact_colours() {
     // PAL machines' hires pixels are not locked to the colour carrier and
     // the delay line averages what cross-colour remains.
-    let ntsc = atari_card("ntsc");
-    let pal = atari_card("pal");
+    let ntsc = atari_card("800xl-ntsc");
+    let pal = atari_card("800xl");
     let tv = Profile::preset("tv").unwrap();
     let n = signal::process(&ntsc.frame(), &tv).unwrap();
     let p = signal::process(&pal.frame(), &tv).unwrap();
@@ -410,8 +408,8 @@ fn profiles_match_reference_images() {
     let c64_ntsc = c64_card(VideoStandard::Ntsc);
     let vdc = vdc_card();
     let pet = pet_card();
-    let atari_ntsc = atari_card("ntsc");
-    let atari_pal = atari_card("pal");
+    let atari_ntsc = atari_card("800xl-ntsc");
+    let atari_pal = atari_card("800xl");
     let cases: [(&str, &Pattern, &str); 12] = [
         ("raw", &c64_pal, "c64-pal-raw"),
         ("1702", &c64_pal, "c64-pal-1702"),

@@ -1,6 +1,6 @@
 //! Amiga OCS custom chips: Agnus (beam counters, DMA slot allocation,
 //! bitplane fetch, [`copper`], [`blitter`]), [`denise`] (bitplane display,
-//! colours) and [`paula`] (interrupts; audio and disk later), joined in
+//! colours) and [`paula`] (interrupts, audio, disk, serial port), joined in
 //! [`custom::Custom`], which runs them one colour clock (CCK, one DMA slot)
 //! at a time against [`chipram::ChipRam`].
 //!
@@ -23,6 +23,7 @@ pub mod denise;
 pub mod disk;
 pub mod paula;
 pub mod regnames;
+pub mod uart;
 
 pub use chipram::ChipRam;
 pub use custom::{Custom, Standard, TickOut};

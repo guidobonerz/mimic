@@ -562,7 +562,7 @@ const ATARI_POSITIONAL: &[(&str, &[u16])] = &[
 ];
 
 pub static ATARI: Keymap = Keymap {
-    machine: "atari800xl",
+    machine: "atari8",
     entries: ATARI_POSITIONAL,
 };
 
@@ -829,7 +829,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "vic20" => Some(&VIC20),
         "pet" => Some(&PET),
         "plus4" | "c16" => Some(&TED),
-        "atari800xl" => Some(&ATARI),
+        "atari8" => Some(&ATARI),
         "atari2600" => Some(&ATARI2600),
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
@@ -856,7 +856,7 @@ mod tests {
         for k in (0..64).filter(|k| !unused.contains(k)) {
             assert!(seen.contains_key(&k), "key code {k:#04x} unreachable");
         }
-        assert_eq!(positional("atari800xl").unwrap().machine, "atari800xl");
+        assert_eq!(positional("atari8").unwrap().machine, "atari8");
         let vcs = positional("atari2600").unwrap();
         let codes: Vec<u16> = ATARI2600_POSITIONAL.iter().map(|(_, k)| k[0]).collect();
         assert_eq!(codes.len(), 5 + 24);

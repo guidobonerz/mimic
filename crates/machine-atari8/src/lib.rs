@@ -1,19 +1,25 @@
-//! Atari 800XL.
+//! Atari 8-bit computers: 400, 800, 800XL, 65XE and 130XE.
 //!
 //! 6502C "SALLY", ANTIC (display lists, DMA), GTIA (colours, players and
 //! missiles), POKEY (sound, timers, keyboard, serial I/O), a 6520 PIA
-//! (joysticks, memory banking) and 64 KB RAM with the OS, self-test and
-//! BASIC ROMs banked in by PIA port B (see [`memory`]).
+//! (joysticks; memory banking on the XL/XE) and RAM with the OS,
+//! self-test and BASIC ROMs banked in by PIA port B (see [`memory`]).
 //!
-//! Models: "pal" (default; 1 773 447 Hz, 312 lines) and "ntsc"
-//! (1 789 773 Hz, 262 lines); 114 cycles per line on both.
+//! Models (`--model`): "800xl" (default), "65xe" (the same hardware),
+//! "130xe" (128 KB, PORTB bank switching for CPU and ANTIC separately),
+//! "800" and "400" (OS-A/OS-B ROM, 8–48 KB RAM, four joystick ports, no
+//! built-in BASIC, RESET key as an NMI). Each as PAL (1 773 447 Hz, 312
+//! lines) or with "-ntsc" (1 789 773 Hz, 262 lines); 114 cycles per line.
 //!
 //! Options:
-//! - `port1`, `port2`: "joystick" (default port 1), "paddles" or "none"
-//!   (default port 2). Paddles turn POKEY's POT0/1 (port 1) or POT2/3
-//!   (port 2); their buttons are the stick's left/right lines.
-//! - `basic`: "on" (default) or "off" — holds OPTION while the OS boots,
-//!   like the real machine.
+//! - `port1`–`port4`: "joystick" (default port 1), "paddles" or "none"
+//!   (default elsewhere). Ports 3 and 4 exist on the 400/800 only (PIA port
+//!   B, TRIG2/3, POT4–7). Paddles turn POKEY's POT0/1 (port 1) … POT6/7
+//!   (port 4); their buttons are the stick's left/right lines.
+//! - `basic`: "on" (default) or "off" — XL/XE: holds OPTION while the OS
+//!   boots, like the real machine; 400/800: puts the BASIC ROM (role
+//!   "basic") into the left cartridge slot, or leaves the slot empty.
+//! - `ram` (400/800): "8k", "16k" (400 default), "32k", "48k" (800 default).
 //! - `drives`: SIO disk drives D1:… connected, "0"–"4" (default "1");
 //!   `drive`: their model, "1050" (default), "810" or "xf551".
 //! - `roms`: "stub" uses a tiny built-in OS, for tests without ROMs.
@@ -23,8 +29,9 @@
 //! recorder, motor on PIA CA2) and "cartridge" (CAR or raw 8/16 KB ROM;
 //! inserting or removing one powers the machine up again).
 //!
-//! ROMs come from `MachineConfig::roms`: "os" (16 KB XL/XE OS), "basic"
-//! (8 KB, optional). User-supplied, never in the repository.
+//! ROMs come from `MachineConfig::roms`: "os" (16 KB XL/XE OS), "osb"
+//! (10 KB OS-A/OS-B for the 400/800), "basic" (8 KB, optional).
+//! User-supplied, never in the repository.
 //!
 //! Per cycle: ANTIC runs its DMA first (and halts the CPU for it), the CPU
 //! runs unless halted, GTIA draws the cycle's two colour clocks, POKEY
@@ -66,15 +73,17 @@ use drives_other::sio::{DriveModel, SerialIn, Sio, SioDrive};
 use keyboard::keys;
 use loader::{Loader, Phase, ProgramSlot, INIT_TRAP};
 use media::xex::{INITAD, RUNAD};
-use memory::{Area, Memory, Roms, BASIC_SIZE, OS_SIZE};
+use memory::{Area, Kind, Memory, Roms, BASIC_SIZE, OS_AB_SIZE, OS_SIZE};
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The CPU's view of memory (banked by PORTB).
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 
-/// Joystick ports 1 and 2.
+/// Joystick ports 1–4 (3 and 4 on the 400/800 only).
 pub const PORT1: PortId = PortId(0);
 pub const PORT2: PortId = PortId(1);
+pub const PORT3: PortId = PortId(2);
+pub const PORT4: PortId = PortId(3);
 
 /// Disk drives D1:–D4: (`SlotId` 0–3) and the program slot.
 pub const SLOT_D1: SlotId = SlotId(0);
@@ -88,10 +97,64 @@ const OPTION_HOLD_FIELDS: u64 = 100;
 
 pub fn entry() -> MachineEntry {
     MachineEntry {
-        id: "atari800xl",
-        name: "Atari 800XL",
-        models: &["pal", "ntsc"],
-        create: |config| Ok(Box::new(Atari800Xl::new(config)?)),
+        id: "atari8",
+        name: "Atari 400/800/800XL/65XE/130XE",
+        models: &[
+            "800xl",
+            "800xl-ntsc",
+            "65xe",
+            "65xe-ntsc",
+            "130xe",
+            "130xe-ntsc",
+            "800",
+            "800-ntsc",
+            "400",
+            "400-ntsc",
+        ],
+        create: |config| Ok(Box::new(Atari8::new(config)?)),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Model {
+    A400,
+    A800,
+    A800Xl,
+    A65Xe,
+    A130Xe,
+}
+
+impl Model {
+    fn parse(model: Option<&str>) -> Result<(Model, VideoStandard), ConfigError> {
+        let Some(model) = model else {
+            return Ok((Model::A800Xl, VideoStandard::Pal));
+        };
+        let (name, standard) = match model.strip_suffix("-ntsc") {
+            Some(n) => (n, VideoStandard::Ntsc),
+            None => (model, VideoStandard::Pal),
+        };
+        let m = match name {
+            "400" => Model::A400,
+            "800" => Model::A800,
+            "800xl" => Model::A800Xl,
+            "65xe" => Model::A65Xe,
+            "130xe" => Model::A130Xe,
+            _ => return Err(ConfigError::UnknownModel(model.into())),
+        };
+        Ok((m, standard))
+    }
+
+    /// 400/800: the old board without PORTB banking.
+    pub fn is_old(self) -> bool {
+        matches!(self, Model::A400 | Model::A800)
+    }
+
+    fn ports(self) -> usize {
+        if self.is_old() {
+            4
+        } else {
+            2
+        }
     }
 }
 
@@ -102,12 +165,12 @@ fn cpu_hz(standard: VideoStandard) -> u32 {
     }
 }
 
-/// ANTIC's view of memory.
+/// ANTIC's view of memory (the 130XE banks it separately).
 struct DmaView<'a>(&'a Memory);
 
 impl AnticMemory for DmaView<'_> {
     fn dma_read(&self, addr: u16) -> u8 {
-        self.0.read_plain(addr)
+        self.0.read_dma(addr)
     }
 }
 
@@ -120,6 +183,9 @@ struct Io {
     pia: Pia,
     /// PIA port A pins: joystick directions (0 = pressed).
     porta: u8,
+    /// PIA port B input pins: joystick ports 3 and 4 on the 400/800
+    /// (pulled up elsewhere).
+    portb_in: u8,
 }
 
 /// PIA register for an address: A0 selects port A/B, A1 data/control
@@ -133,7 +199,9 @@ impl Io {
         match addr >> 8 {
             0xd0 => self.gtia.peek(addr as u8),
             0xd2 => self.pokey.peek(addr as u8),
-            0xd3 => self.pia.peek(pia_reg(addr), self.porta_pins(), 0xff),
+            0xd3 => self
+                .pia
+                .peek(pia_reg(addr), self.porta_pins(), self.portb()),
             0xd4 => self.antic.peek(addr as u8),
             _ => 0xff,
         }
@@ -141,7 +209,9 @@ impl Io {
 
     fn read(&mut self, addr: u16) -> u8 {
         match addr >> 8 {
-            0xd3 => self.pia.read(pia_reg(addr), self.porta_pins(), 0xff),
+            0xd3 => self
+                .pia
+                .read(pia_reg(addr), self.porta_pins(), self.portb()),
             _ => self.peek(addr),
         }
     }
@@ -167,10 +237,11 @@ impl Io {
         self.pia.port_a_out() & self.porta
     }
 
-    /// Port B pins: outputs as driven, inputs pulled up.
+    /// Port B pins: outputs as driven, inputs pulled up (and pulled low
+    /// by the 400/800's joysticks 3 and 4).
     fn portb(&self) -> u8 {
         let b = &self.pia.b;
-        (b.or & b.ddr) | !b.ddr
+        (b.or & b.ddr) | (!b.ddr & self.portb_in)
     }
 }
 
@@ -258,15 +329,23 @@ fn rom<const N: usize>(config: &MachineConfig, role: &str) -> Result<Box<[u8; N]
     })
 }
 
-fn load_roms(config: &MachineConfig) -> Result<Roms, ConfigError> {
+fn load_roms(config: &MachineConfig, model: Model) -> Result<Roms, ConfigError> {
     match config.options.get("roms").map(String::as_str) {
         Some("stub") => Ok(Roms {
-            os: stub::os(),
+            os: if model.is_old() {
+                stub::os()[OS_SIZE - OS_AB_SIZE..].to_vec()
+            } else {
+                stub::os().to_vec()
+            },
             basic: None,
         }),
         Some(other) => Err(ConfigError::Invalid(format!("roms option '{other}'"))),
         None => Ok(Roms {
-            os: rom::<OS_SIZE>(config, "os")?,
+            os: if model.is_old() {
+                rom::<OS_AB_SIZE>(config, "osb")?.to_vec()
+            } else {
+                rom::<OS_SIZE>(config, "os")?.to_vec()
+            },
             basic: match config.roms.get("basic") {
                 Some(_) => Some(rom::<BASIC_SIZE>(config, "basic")?),
                 None => None,
@@ -305,14 +384,16 @@ fn pot_count(analog: u16) -> u8 {
     (1 + u32::from(analog) * 227 / 0xffff) as u8
 }
 
-pub struct Atari800Xl {
+pub struct Atari8 {
+    model: Model,
     standard: VideoStandard,
     cpu: Cpu6502,
     mem: Memory,
     io: Io,
     sched: Scheduler,
     input: InputQueue,
-    ports: [Option<Box<dyn PortDevice>>; 2],
+    /// Joystick ports: two, or four on the 400/800.
+    ports: Vec<Option<Box<dyn PortDevice>>>,
     palette: [Rgb8; 256],
     audio: Decimator,
     samples: Vec<i16>,
@@ -340,24 +421,49 @@ struct Snapshot {
     audio: Decimator,
 }
 
-impl Atari800Xl {
+impl Atari8 {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let standard = match config.model.as_deref() {
-            None | Some("pal") => VideoStandard::Pal,
-            Some("ntsc") => VideoStandard::Ntsc,
-            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
-        };
+        let (model, standard) = Model::parse(config.model.as_deref())?;
         let basic_off = match config.options.get("basic").map(String::as_str) {
             None | Some("on") => false,
             Some("off") => true,
             Some(other) => return Err(ConfigError::Invalid(format!("basic option '{other}'"))),
         };
-        let mut ports: [Option<Box<dyn PortDevice>>; 2] = [None, None];
-        for (i, (key, default)) in [("port1", "joystick"), ("port2", "none")]
+        let kind = match model {
+            Model::A400 | Model::A800 => {
+                let default = if model == Model::A400 { "16k" } else { "48k" };
+                let ram = match config
+                    .options
+                    .get("ram")
+                    .map(String::as_str)
+                    .unwrap_or(default)
+                {
+                    "8k" => 0x2000,
+                    "16k" => 0x4000,
+                    "32k" => 0x8000,
+                    "48k" => 0xc000,
+                    other => {
+                        return Err(ConfigError::Invalid(format!(
+                            "ram option '{other}' (8k, 16k, 32k or 48k)"
+                        )))
+                    }
+                };
+                Kind::Old { ram }
+            }
+            Model::A800Xl | Model::A65Xe => Kind::Xl,
+            Model::A130Xe => Kind::Xe130,
+        };
+        let mut ports: Vec<Option<Box<dyn PortDevice>>> = Vec::new();
+        for (i, key) in ["port1", "port2", "port3", "port4"]
             .into_iter()
+            .take(model.ports())
             .enumerate()
         {
-            ports[i] = port_option(config, key, default)?;
+            ports.push(port_option(
+                config,
+                key,
+                if i == 0 { "joystick" } else { "none" },
+            )?);
         }
         let drives = match config.options.get("drives").map(String::as_str) {
             None => 1,
@@ -367,7 +473,7 @@ impl Atari800Xl {
                 .filter(|&n| n <= 4)
                 .ok_or_else(|| ConfigError::Invalid(format!("drives option '{n}' (0-4)")))?,
         };
-        let model = match config.options.get("drive").map(String::as_str) {
+        let drive_model = match config.options.get("drive").map(String::as_str) {
             None => DriveModel::A1050,
             Some(m) => DriveModel::from_option(m).ok_or_else(|| {
                 ConfigError::Invalid(format!("drive option '{m}' (810, 1050 or xf551)"))
@@ -375,7 +481,7 @@ impl Atari800Xl {
         };
         let mut sio = Sio::new(cpu_hz(standard));
         for d in sio.drives.iter_mut().take(drives) {
-            *d = Some(SioDrive::new(model));
+            *d = Some(SioDrive::new(drive_model));
         }
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Sally,
@@ -383,16 +489,33 @@ impl Atari800Xl {
         });
         cpu.reset();
         let hz = cpu_hz(standard);
+        let mut roms = load_roms(config, model)?;
+        // 400/800: BASIC is a cartridge in the left slot.
+        let cart_slot = devices_cartridge::atari::slot();
+        let mut cart = None;
+        if model.is_old() {
+            if let (false, Some(basic)) = (basic_off, roms.basic.take()) {
+                let c = AtariCart::parse(&basic[..])
+                    .map_err(|e| ConfigError::Invalid(format!("BASIC cartridge: {e:?}")))?;
+                cart = Some(c);
+            }
+        }
+        let mut gtia = Gtia::new(standard);
+        gtia.set_trig3_is_cartridge(!model.is_old());
+        let mut mem = Memory::new(kind, roms);
+        mem.cart = cart;
         let mut m = Self {
+            model,
             standard,
             cpu,
-            mem: Memory::new(load_roms(config)?),
+            mem,
             io: Io {
                 antic: Antic::new(standard),
-                gtia: Gtia::new(standard),
+                gtia,
                 pokey: Pokey::new(),
                 pia: Pia::new(),
                 porta: 0xff,
+                portb_in: 0xff,
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -402,18 +525,26 @@ impl Atari800Xl {
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
             samples: Vec::new(),
             field_done_pending: false,
-            option_until: if basic_off { OPTION_HOLD_FIELDS } else { 0 },
-            basic_off,
+            option_until: if basic_off && !model.is_old() {
+                OPTION_HOLD_FIELDS
+            } else {
+                0
+            },
+            basic_off: basic_off && !model.is_old(),
             option_key: false,
             sio,
             program: ProgramSlot::default(),
             loader: None,
             recorder: Recorder::new(hz),
-            cart: devices_cartridge::atari::slot(),
+            cart: cart_slot,
         };
         m.refresh_ports();
         m.refresh_console();
         Ok(m)
+    }
+
+    pub fn model(&self) -> Model {
+        self.model
     }
 
     fn beam_pos(&self) -> BeamPos {
@@ -504,9 +635,11 @@ impl Atari800Xl {
         if let Some(b) = serial.byte {
             self.io.pokey.receive(b);
         }
-        self.io
-            .gtia
-            .set_cartridge(self.mem.cart.as_ref().is_some_and(AtariCart::rd5));
+        if !self.model.is_old() {
+            self.io
+                .gtia
+                .set_cartridge(self.mem.cart.as_ref().is_some_and(AtariCart::rd5));
+        }
         let level =
             i32::from(self.io.pokey.output()) * 400 + if self.io.gtia.speaker() { 3000 } else { 0 };
         if let Some(s) = self.audio.push(level) {
@@ -580,7 +713,7 @@ impl Atari800Xl {
     fn control(&mut self, id: u16, value: u8) {
         match id {
             0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
-            1 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Soft),
+            1 if value == 1 => self.reset_key(),
             2..=4 => self.key(keys::START.0 + id - 2, value == 1),
             _ => {}
         }
@@ -606,8 +739,18 @@ impl Atari800Xl {
                 }
                 self.refresh_console();
             }
-            c if c == keys::RESET.0 && down => self.reset(ResetKind::Soft),
+            c if c == keys::RESET.0 && down => self.reset_key(),
             _ => {}
+        }
+    }
+
+    /// The RESET key: the system reset line on the XL/XE, an NMI through
+    /// ANTIC on the 400/800 (the OS warm-starts in its handler).
+    fn reset_key(&mut self) {
+        if self.model.is_old() {
+            self.io.antic.reset_key();
+        } else {
+            self.reset(ResetKind::Soft);
         }
     }
 
@@ -622,23 +765,28 @@ impl Atari800Xl {
         }
     }
 
-    /// Joystick lines into PIA port A (directions) and GTIA (triggers).
+    /// Joystick lines into PIA port A (directions of ports 1 and 2), port
+    /// B (ports 3 and 4 on the 400/800), GTIA (triggers) and POKEY (pots).
     fn refresh_ports(&mut self) {
         let now = self.sched.now();
-        let mut porta = 0xffu8;
+        let mut pins = [0xffu8; 2];
         for (i, dev) in self.ports.iter().enumerate() {
             let lines = dev.as_ref().map(|d| d.read_lines(now));
             let low = lines.map_or(0, |l| l.pulled_low);
-            // Up, down, left, right on bits 0–3 (port 1) / 4–7 (port 2).
-            porta &= !(((low & 0x0f) as u8) << (4 * i));
+            // Up, down, left, right on bits 0–3 (ports 1, 3) / 4–7 (2, 4).
+            pins[i / 2] &= !(((low & 0x0f) as u8) << (4 * (i % 2)));
             self.io.gtia.set_trigger(i, low & 0x20 != 0);
-            // Pins 9 and 5: POT0/1 (port 1), POT2/3 (port 2).
+            // Pins 9 and 5: POT0/1 (port 1) … POT6/7 (port 4).
             let analog = lines.map_or([u16::MAX; 2], |l| l.analog);
             for (k, a) in analog.into_iter().enumerate() {
                 self.io.pokey.set_pot(2 * i + k, pot_count(a));
             }
         }
-        self.io.porta = porta;
+        self.io.porta = pins[0];
+        self.io.portb_in = pins[1];
+        if !self.mem.banks_with_portb() {
+            self.mem.portb = self.io.portb();
+        }
     }
 
     /// The CPU reached the loader's trap: load segments until one asks
@@ -745,7 +893,7 @@ impl Atari800Xl {
 }
 
 /// Typing for tests and tools: queue key presses for `text`.
-pub fn type_text(m: &mut Atari800Xl, text: &str) {
+pub fn type_text(m: &mut Atari8, text: &str) {
     m.type_text(text);
 }
 
@@ -771,7 +919,7 @@ fn regs(
     }
 }
 
-impl Machine for Atari800Xl {
+impl Machine for Atari8 {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
         if std::mem::take(&mut self.field_done_pending) {
             return StopReason::FrameDone;
@@ -1024,13 +1172,20 @@ impl Machine for Atari800Xl {
     }
 
     fn ports(&self) -> Vec<PortInfo> {
-        [(PORT1, "joystick port 1"), (PORT2, "joystick port 2")]
-            .into_iter()
-            .map(|(id, name)| PortInfo {
-                id,
+        const NAMES: [&str; 4] = [
+            "joystick port 1",
+            "joystick port 2",
+            "joystick port 3",
+            "joystick port 4",
+        ];
+        self.ports
+            .iter()
+            .enumerate()
+            .map(|(i, dev)| PortInfo {
+                id: PortId(i as u8),
                 kind: PortKind::AtariJoy,
-                name,
-                connected: self.ports[usize::from(id.0)].is_some(),
+                name: NAMES[i],
+                connected: dev.is_some(),
             })
             .collect()
     }
@@ -1109,12 +1264,16 @@ impl Machine for Atari800Xl {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"A8XL", 3, |w| {
+        // Version 4: the model and PIA port B inputs; one port chunk per
+        // joystick port (four on the 400/800).
+        w.chunk(*b"A8XL", 4, |w| {
             w.bool(self.field_done_pending);
             w.u64(self.option_until);
             w.bool(self.option_key);
             w.u8(self.io.porta);
             self.audio.save(w);
+            w.u8(self.model as u8);
+            w.u8(self.io.portb_in);
         });
         self.cpu.save(&mut w);
         self.mem.save(&mut w);
@@ -1124,7 +1283,11 @@ impl Machine for Atari800Xl {
         self.io.pia.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
-        for (i, tag) in [*b"POR1", *b"POR2"].into_iter().enumerate() {
+        for (i, tag) in [*b"POR1", *b"POR2", *b"POR3", *b"POR4"]
+            .into_iter()
+            .take(self.ports.len())
+            .enumerate()
+        {
             w.chunk(tag, 1, |w| {
                 w.bytes(
                     &self.ports[i]
@@ -1156,12 +1319,20 @@ impl Machine for Atari800Xl {
             audio: self.audio,
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"A8XL", 3)?;
+        let (version, mut c) = r.chunk(*b"A8XL", 4)?;
         let field_done_pending = c.bool()?;
         let option_until = c.u64()?;
         let option_key = c.bool()?;
         next.io.porta = c.u8()?;
         next.audio.load(&mut c)?;
+        if version >= 4 {
+            if c.u8()? != self.model as u8 {
+                return Err(StateError::Invalid("model differs"));
+            }
+            next.io.portb_in = c.u8()?;
+        } else if self.model != Model::A800Xl {
+            return Err(StateError::Invalid("model differs"));
+        }
         next.cpu.load(&mut r)?;
         next.mem.load(&mut r)?;
         next.io.antic.load(&mut r)?;
@@ -1171,7 +1342,10 @@ impl Machine for Atari800Xl {
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
         let mut port_states = Vec::new();
-        for tag in [*b"POR1", *b"POR2"] {
+        for tag in [*b"POR1", *b"POR2", *b"POR3", *b"POR4"]
+            .into_iter()
+            .take(self.ports.len())
+        {
             let (_, mut c) = r.chunk(tag, 1)?;
             port_states.push(c.bytes()?.to_vec());
         }
@@ -1249,7 +1423,7 @@ impl Machine for Atari800Xl {
     }
 }
 
-impl DebugTarget for Atari800Xl {
+impl DebugTarget for Atari8 {
     fn regs(&self) -> RegisterSet {
         self.cpu.regs()
     }
@@ -1277,7 +1451,7 @@ impl DebugTarget for Atari800Xl {
         for i in 0..size.bytes() {
             let a = (addr.wrapping_add(i) & 0xffff) as u16;
             match self.mem.area(a) {
-                Area::Ram | Area::Io => AtariBus {
+                Area::Ram | Area::Extended(..) | Area::Io => AtariBus {
                     mem: &mut self.mem,
                     io: &mut self.io,
                 }

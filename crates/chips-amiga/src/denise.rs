@@ -34,8 +34,16 @@
 //! planes compared with the match values MVBP6–1 (5–0); a disabled plane
 //! always matches. CLXDAT (cleared by reading; bit 15 reads 1): 14–9
 //! sprite pairs 4–6, 2–6, 2–4, 0–6, 0–4, 0–2; 8–5 even planes with pairs
-//! 6, 4, 2, 0; 4–1 odd planes with pairs 6, 4, 2, 0; 0 even with odd
-//! planes. Collisions count inside the horizontal display window.
+//! 6, 4, 2, 0; 4–1 odd planes with pairs 6, 4, 2, 0; 0 "even with odd
+//! planes". Collisions count inside the horizontal display window on
+//! lines with bitplane data (a BPL1DAT write).
+//!
+//! Photographs of A500s running the vAmiga test suite's `sprcoll` programs
+//! (see `docs/sources.md`) show the playfield bits differently from the
+//! HRM: bit 0 is set wherever the *odd* planes match (whether or not the
+//! even ones do), and in single-playfield mode the odd-plane sprite bits
+//! 4–1 need the even planes to match as well (in dual-playfield mode they
+//! follow the odd planes alone, as documented).
 //!
 //! **Coordinates.** Positions are low-resolution pixels as DIWSTRT counts
 //! them: colour clock `h` covers pixels `2h` and `2h + 1`; data fetched in
@@ -162,22 +170,25 @@ impl Denise {
         }
     }
 
-    /// Collision bits for one pixel: playfield `index`, sprite values.
+    /// Collision bits for one pixel: playfield `index`, sprite values (see
+    /// the module doc for how the playfield bits follow the hardware).
     fn collisions(&self, index: u8, vals: &[u8; 8]) -> u16 {
         let enable = (self.clxcon >> 6) as u8 & 0x3f;
         let matchv = self.clxcon as u8 & 0x3f;
         let matches = |planes: u8| (index ^ matchv) & enable & planes == 0;
         let odd = matches(0b01_0101);
         let even = matches(0b10_1010);
+        let dual = self.bplcon0 & 0x0400 != 0;
+        let sprite_odd = odd && (dual || even);
         let mut group = [false; 4];
         for (g, on) in group.iter_mut().enumerate() {
             let odd_on = self.clxcon & (0x1000 << g) != 0;
             *on = vals[2 * g] != 0 || (odd_on && vals[2 * g + 1] != 0);
         }
-        let mut v = u16::from(odd && even);
+        let mut v = u16::from(odd);
         for (g, &on) in group.iter().enumerate() {
             if on {
-                v |= u16::from(odd) << (1 + g) | u16::from(even) << (5 + g);
+                v |= u16::from(sprite_odd) << (1 + g) | u16::from(even) << (5 + g);
             }
         }
         const PAIRS: [(usize, usize); 6] = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
@@ -364,14 +375,16 @@ impl Denise {
             } else {
                 (None, [0; 8])
             };
-            let sprite = sprite.filter(|_| inside);
-            if inside {
-                let pf_index = if self.armed { index } else { 0 };
+            // Sprites show inside the window once the line's bitplane data
+            // has started (BPL1DAT); a line without planes shows them from
+            // the window start (vAmigaTS diwclip/clip1h and sprbpu photos).
+            let sprite = sprite.filter(|_| inside && (self.armed || planes == 0));
+            if inside && self.armed {
                 if vals != [0; 8] {
-                    self.clxdat |= self.collisions(pf_index, &vals);
+                    self.clxdat |= self.collisions(index, &vals);
                 } else if self.clxdat & 1 == 0 {
-                    // Without sprites only even-to-odd planes can collide.
-                    self.clxdat |= self.collisions(pf_index, &vals) & 1;
+                    // Without sprites only the playfield bit can come.
+                    self.clxdat |= self.collisions(index, &vals) & 1;
                 }
             }
             *px = match (sprite, front) {
@@ -668,7 +681,7 @@ mod tests {
         vals[0] = 1;
         vals[3] = 2;
         // Nothing enabled: every plane matches, so sprite 0 collides with
-        // both playfields, and odd with even planes.
+        // both playfields, and the playfield bit is set.
         assert_eq!(d.collisions(0, &vals), 0b10_0011);
         // ENSP3 puts sprite 3 into pair 1: pair 0 with pair 1.
         d.clxcon = 0x2000;
@@ -677,6 +690,33 @@ mod tests {
         d.clxcon = 0x0041;
         assert_eq!(d.collisions(0, &vals) & 0x1f, 0b0_0000, "even ok, odd not");
         assert_eq!(d.collisions(1, &vals) & 0x1f, 0b0_0011);
+        // sprcoll8: planes 1 and 2 enabled with match 0, index 2: the odd
+        // planes match, the even ones not. Single playfield: no sprite
+        // bits, but bit 0; dual playfield: the odd sprite bit too.
+        d.clxcon = 0x00c0;
+        assert_eq!(d.collisions(2, &vals) & 0x1ff, 0b0_0000_0001);
+        d.bplcon0 = 0x0400;
+        assert_eq!(d.collisions(2, &vals) & 0x1ff, 0b0_0000_0011);
+        // sprcollbrd1: all planes enabled with match 0, index 1: only the
+        // even planes match, so just the even sprite bit.
+        d.bplcon0 = 0;
+        d.clxcon = 0x0fc0;
+        assert_eq!(d.collisions(1, &vals) & 0x1ff, 0b0_0010_0000);
+    }
+
+    #[test]
+    fn playfield_collision_with_every_plane_enabled() {
+        let mut d = Denise::new();
+        d.clxcon = 0xffff;
+        assert_eq!(
+            d.collisions(1, &[0; 8]) & 1,
+            0,
+            "planes 2-6 read 0, match wants 1"
+        );
+        assert_eq!(d.collisions(0x3f, &[0; 8]) & 1, 1);
+        d.clxcon = 0x0fc0;
+        assert_eq!(d.collisions(1, &[0; 8]) & 1, 0);
+        assert_eq!(d.collisions(0, &[0; 8]) & 1, 1);
     }
 
     #[test]
@@ -688,7 +728,8 @@ mod tests {
         d.colors[21] = 0x0f0;
         d.diwstrt = 0x2c81;
         d.diwstop = 0x2cc1;
-        d.bplcon0 = 0x1200;
+        // No planes on this line: sprites show from the window start.
+        d.bplcon0 = 0x0200;
         // Sprite 0 at low-resolution pixel $A0, sprite 2 one pixel later.
         d.write_sprite(0, 0, 0x2c50);
         d.write_sprite(0, 1, 0x2d00);
@@ -706,6 +747,7 @@ mod tests {
             &[0, 0xf00, 0xf00, 0x0f0, 0x0f0, 0x0f0, 0x0f0, 0]
         );
         // A playfield in front of pair 1 (PF2P = 1) hides sprite 2 only.
+        d.bplcon0 = 0x1200;
         d.bplcon2 = 1 << 3;
         d.start_line();
         d.write_bpldat(0, 0xffff, 0x4c);

@@ -4,7 +4,7 @@ This file guides Claude Code when working in this repository. Read it fully befo
 
 ## Project in one paragraph
 
-A cycle-accurate, multi-machine emulator for classic home computers — the whole Commodore family (PET, VIC-20, C16/Plus/4, C64, C128, Amiga), Atari 800XL and Amstrad CPC 6128 — built on one shared core. Its distinguishing feature: **every machine automatically gets the same remote debugger and a live preview stream** (frames of the running machine, also headless and while halted at a breakpoint). Debugger and preview depend only on core traits, never on a concrete machine.
+A cycle-accurate, multi-machine emulator for classic home computers — the whole Commodore family (PET, VIC-20, C16/Plus/4, C64, C128, Amiga), Atari 400/800/XL/XE and Amstrad CPC 6128 — built on one shared core. Its distinguishing feature: **every machine automatically gets the same remote debugger and a live preview stream** (frames of the running machine, also headless and while halted at a breakpoint). Debugger and preview depend only on core traits, never on a concrete machine.
 
 ## Golden rules
 
@@ -114,9 +114,9 @@ Multi-CPU machines (C64 + 1541, C128 8502 + Z80, Amiga Copper/Blitter) expose ea
 | C16/Plus/4 | TED-driven, single/double clock | TED is video+sound+timers; CPU speed changes per line |
 | PET | 1 MHz | Models with/without CRTC (2001 vs 4032/8032) |
 | C128 | 8502 1/2 MHz, Z80 | MMU switches CPUs; VDC with its own RAM and 2nd screen |
-| Amiga 500 | 7.09379 MHz | Agnus DMA slot arbitration per line; Copper/Blitter; CPU only gets free chip-RAM slots; ADF converted to MFM tracks |
+| Amiga 500/1000/2000 | 7.09379 MHz | Agnus DMA slot arbitration per line; Copper/Blitter; CPU only gets free chip-RAM slots; ADF (DD/HD, extended, DMS) converted to MFM tracks; A1000 WCS, Zorro II autoconfig fast RAM |
 | Atari 2600 | colour clock 3.546894 MHz, CPU ÷3 (NTSC 3.579545) | No frame buffer: the CPU races the beam; WSYNC halts it via RDY; fields follow VSYNC; bank switching by cartridge hotspots |
-| Atari 800XL | CPU 1.773447 MHz | ANTIC DMA steals cycles; display lists; DLIs |
+| Atari 400/800/800XL/65XE/130XE | CPU 1.773447 MHz | ANTIC DMA steals cycles; display lists; DLIs; XL/XE bank ROMs by PORTB, the 130XE banks 64 KB extended RAM for CPU and ANTIC separately; 400/800: OS-B, four joystick ports, RESET key is an NMI |
 | CPC 464/664/6128 | Z80 4 MHz | Wait states align memory access to 1 µs; CRTC register tricks; 464 tape only, 664/6128 FDC, 6128 128 KB banking |
 
 Model variants (PAL/NTSC, Kernal revisions, RAM sizes) are **configuration**, not separate machine crates.
@@ -359,7 +359,7 @@ EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-m68k --release --test harte -- 
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-z80 --release --test zex -- --ignored --nocapture   # ZEXDOC + ZEXALL, minutes
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz lorenz_suite_stub -- --ignored   # Lorenz, no ROMs (CI gate)
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz lorenz_suite -- --ignored --exact
-EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test acid800 -- --ignored --nocapture   # Acid800 on the 800XL (EMU_ACID_MODEL=ntsc, EMU_ACID_FILTER=antic)
+EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test acid800 -- --ignored --nocapture   # Acid800 on the 800XL (EMU_ACID_MODEL=800xl-ntsc|130xe, EMU_ACID_FILTER=antic)
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test cpc_acid -- --ignored --nocapture   # Arnold Acid tests on the CPC 6128 (~10 min; EMU_CPC_FILTER=ppi, EMU_CPC_CRTC=0, EMU_CPC_FRAMES=n, EMU_CPC_TAIL=n, EMU_CPC_BREAK=hex)
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 cargo bench -p cpu-6502                      # before/after when touching hot paths
@@ -369,13 +369,17 @@ cargo run -p emu-headless -- --machine vic20 --model ntsc --option ram=8k --rom-
 cargo run -p emu-headless -- --machine pet --model 8032 --option hz=50 --rom-dir roms --frames 200 --snapshot pet.png   # 2001, 3032, 4032, 8032
 cargo run -p emu-headless -- --machine plus4 --rom-dir roms --frames 200 --snapshot plus4.png   # also --machine c16, --model ntsc
 cargo run -p emu-headless -- --machine c128 --option display=80 --rom-dir roms --frames 600 --screen vdc --snapshot c128.png   # --screen vic|vdc
-cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --frames 350 --snapshot atari.png   # ROMs in roms/atari/; --model ntsc, --option basic=off (self-test)
-cargo run -p emu-headless -- --machine atari800xl --rom-dir roms --disk game.atr --frames 600 --snapshot a.png   # also --prg game.xex, --tape game.cas, --cart game.car; --option drives=0..4, drive=810|1050|xf551
+cargo run -p emu-headless -- --machine atari8 --rom-dir roms --frames 350 --snapshot atari.png   # ROMs in roms/atari/; --model 800xl|65xe|130xe|800|400 (+ -ntsc); --option basic=off (XL/XE: self-test; 400/800: no BASIC cartridge), ram=8k|16k|32k|48k (400/800), port3/port4 (400/800)
+EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test atari_boot other_models_boot -- --ignored --nocapture   # 130XE, 800 (OS-B + BASIC cartridge / memo pad) and 400 boot
+cargo run -p emu-headless -- --machine atari8 --rom-dir roms --disk game.atr --frames 600 --snapshot a.png   # also --prg game.xex, --tape game.cas, --cart game.car; --option drives=0..4, drive=810|1050|xf551
 cargo run -p emu-headless -- --machine atari2600 --cart game.a26 --frames 120 --snapshot vcs.png   # no system ROM; --model pal; --option roms=stub (built-in test cartridge)
-cargo run -p emu-headless -- --machine amiga --rom-dir roms --frames 400 --snapshot amiga.png   # ROMs in roms/amiga/ ("Kickstart 1.3.rom", kick13.rom …); --option kickstart=1.2|1.3|2.0|3.1, slow=512k|0, drives=1..4, roms=stub; --model ntsc
+cargo run -p emu-headless -- --machine amiga --rom-dir roms --frames 400 --snapshot amiga.png   # ROMs in roms/amiga/ ("Kickstart 1.3.rom", kick13.rom …); --model 500|1000|2000 (+ -ntsc); --option kickstart=1.2|1.3|2.0|3.1, chip=256k|512k|1m, slow=512k|0, fast=0|512k|…|8m, drives=1..4, drivetype=dd|hd, serial=none|loopback, wcs=rom|disk (A1000), roms=stub
+EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test amiga_boot expansions_and_models_boot -- --ignored --nocapture   # 1 MB chip + fast RAM via autoconfig, A2000, A1000 (WCS) reach insert-disk
+EMU_DMS_DIR=/path/with/dms cargo test -p media --release --test dms_files -- --ignored --nocapture   # real DMS archives unpack with good checksums (freely distributed ones from Aminet)
+EMU_ROM_DIR=$PWD/roms EMU_VAMIGATS_DIR=/path/to/vAmigaTS/Denise/Sprites EMU_CLXDAT=1 cargo test -p emu-tests --release --test vamigats -- --ignored --nocapture   # vAmigaTS programs (GPL test data, not in the repo): snapshots in target/tmp/vamigats/ to compare with the suite's A500 photographs; EMU_FILTER=name, EMU_FRAMES=n
 EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test amiga_boot -- --ignored --nocapture   # Kickstarts reach "insert disk" and boot a generated boot block; trace_kickstart: EMU_KICK=1.3, EMU_FRAMES=n, EMU_DISK=a.adf, EMU_DISK1=b.adf, EMU_OPTION=drives=2; workbench_13_boots (Phase 7 gate) with EMU_WB_ADF=workbench1.3.adf
 python tools/amiga_bustest.py bustest.adf [tests/data/amiga_bustest.bootblock]   # chip-bus timing test disk (boot it in WinUAE/on hardware; the test chip_bus_arbitration_matches_the_bus_test compares us with WinUAE's numbers)
-cargo run --release -p emu-desktop -- --machine amiga --disk demo-a.adf --disk demo-b.adf   # disks fill DF0:, DF1: … (--option drives=N), extra ones swap into DF0: with Ctrl+D (or drop an image on the window); stereo Paula audio; mouse in port 0 (click to capture), joystick port 1, Amiga keys on the Windows keys, HELP on Insert, Ctrl+Win+Win resets
+cargo run --release -p emu-desktop -- --machine amiga --disk demo-a.adf --disk demo-b.adf   # disks fill DF0:, DF1: … (--option drives=N), extra ones swap into DF0: with Ctrl+D (or drop an image on the window); ADF/HD ADF/extended ADF/DMS; stereo Paula audio; mouse in port 0 (click to capture), joystick port 1, Amiga keys on the Windows keys, HELP on Insert, Ctrl+Win+Win resets; --deinterlace weave|bob (Ctrl+I)
 cargo run -p emu-headless -- --machine cpc --rom-dir roms --frames 150 --snapshot cpc.png   # ROMs in roms/cpc/; --model 6128|664|464, --option crtc=0|1|2, dos=amsdos|parados|none
 cargo run --release -p emu-desktop -- --machine cpc --option joy1=amx   # AMX mouse (click to capture); joy2=joystick daisy-chains a second stick; --crt gt65 green monitor
 cargo run --release -p emu-desktop -- --machine cpc --disk game.dsk   # CPC 664/6128: DSK/EDSK in drive A (RUN"DISC or CAT)
@@ -405,7 +409,7 @@ cargo run --release -p emu-desktop -- --machine c64 --cart game.crt   # cartridg
 
 ## Roadmap and current phase
 
-Work in phase order; each phase ends at a verifiable gate. **Current phase: 8.** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64. Phase 3 done 2026-10-20: VS64 debugs the C64 through the VICE binary monitor adapter. Phase 4 done 2026-10-21: VIC-20, PET, C16/Plus/4 and C128 boot to BASIC with real ROMs; the items under "Deferred from Phase 4" are held back. Phase 5 done 2026-10-21: Acid800 52/57 on PAL and NTSC; still failing `antic_virtdma`, `gtia_phantomdma` (need the CPU's bus value in ANTIC/GTIA), `antic_hscrolbug`, `antic_hiresbug`, `gtia_psuedomodee`. Phase 6 done 2026-10-21: CPC 464/664/6128 boot, tape and disc work with real ROMs; Arnold acid tests 66/70 (94.3 %, CRTC type 1) in the 8 programs that report results; still failing PPI mode 1 port C output latching (two tests the author's type 0/1 CPCs fail too), "port b read (vsync on)" (depends on where in the frame it starts) and "ppi i/o decode (f5xx)" (port B /EXP level unverified); `crtctest` and `disc/fdc` (needs its own test disc) do not finish. Phase 6b done 2026-10-21: Atari 2600 NTSC/PAL with TIA, RIOT, all planned bank-switching schemes and controllers; 24 games of a ROM collection run with correct scheme detection; DPC (Pitfall II), Supercharger and SECAM later. Phase 7 done 2026-10-22: Amiga 500 OCS — 68000 passes all Tom Harte 68000 tests (three contradictory cases skipped); Kickstart 1.2, 1.3, 2.0 and 3.1 reach their insert-disk screens; Workbench 1.3 boots from ADF and works with mouse and keyboard; demos with their own trackloaders run (Desert Dream); Copper and Blitter are debug targets; the items under "Deferred from Phase 7" are held back.)
+Work in phase order; each phase ends at a verifiable gate. **Current phase: 8 (open; Phase 9 done 2026-10-22 on the user's request before Phase 8's blocks: 400/800 with OS-B boot to BASIC (cartridge) or the memo pad, 65XE and 130XE boot to BASIC, Acid800 on the 130XE 52/57 like the 800XL, the 130XE's CPU/ANTIC bank switching covered by machine tests).** (Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green. Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64. Phase 3 done 2026-10-20: VS64 debugs the C64 through the VICE binary monitor adapter. Phase 4 done 2026-10-21: VIC-20, PET, C16/Plus/4 and C128 boot to BASIC with real ROMs; the items under "Deferred from Phase 4" are held back. Phase 5 done 2026-10-21: Acid800 52/57 on PAL and NTSC; still failing `antic_virtdma`, `gtia_phantomdma` (need the CPU's bus value in ANTIC/GTIA), `antic_hscrolbug`, `antic_hiresbug`, `gtia_psuedomodee`. Phase 6 done 2026-10-21: CPC 464/664/6128 boot, tape and disc work with real ROMs; Arnold acid tests 66/70 (94.3 %, CRTC type 1) in the 8 programs that report results; still failing PPI mode 1 port C output latching (two tests the author's type 0/1 CPCs fail too), "port b read (vsync on)" (depends on where in the frame it starts) and "ppi i/o decode (f5xx)" (port B /EXP level unverified); `crtctest` and `disc/fdc` (needs its own test disc) do not finish. Phase 6b done 2026-10-21: Atari 2600 NTSC/PAL with TIA, RIOT, all planned bank-switching schemes and controllers; 24 games of a ROM collection run with correct scheme detection; DPC (Pitfall II), Supercharger and SECAM later. Phase 7 done 2026-10-22: Amiga 500 OCS — 68000 passes all Tom Harte 68000 tests (three contradictory cases skipped); Kickstart 1.2, 1.3, 2.0 and 3.1 reach their insert-disk screens; Workbench 1.3 boots from ADF and works with mouse and keyboard; demos with their own trackloaders run (Desert Dream); Copper and Blitter are debug targets; the items under "Deferred from Phase 7" are held back.)
 
 | # | Phase | Est. | Gate |
 | --- | --- | --- | --- |
@@ -418,6 +422,12 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 8.**
 | 6b | Atari 2600 (NTSC, PAL): 6507, TIA (video, sound, inputs), RIOT 6532, cartridge bank switching (2K/4K, F8/F6/F4 + Superchip, FE, E0, E7, 3F, FA), joystick, paddles, keypad, driving controller, console switches | 6 wk | own TIA/RIOT test programs green; user-supplied games run correctly |
 | 7 | Amiga 500 (OCS): 68000, Agnus DMA slots, Copper, Blitter, Denise, Paula, ADF via MFM, Copper debugger | 20 wk | Workbench 1.3 boots |
 | 8 | Expansion: graphics data views (sprites/chars/bitmaps), overlays, rewind, partial frames, A1200 (AGA), web frontend | 10 wk | Release 1.0 |
+| 9 | Atari 8-bit models as configuration of `machine-atari8`: 400/800 (OS-A/B, four joystick ports, no PORTB banking, RESET as NMI), 65XE, 130XE (128 KB, PORTB banking with separate CPU/ANTIC access) | 2 wk | all boot their OS; Acid800 on the 130XE as on the 800XL; a 130XE bank-switching test program |
+| 10 | Z80 home computers: Sinclair ZX81 (`machine-zx81`: CPU-generated display, ULA line counting, 1/16 KB RAM, tape via ear/mic, .P files) and Tandy TRS-80 Model I/III (`machine-trs80`: text screen with block graphics, keyboard matrix, cassette, Expansion Interface with FDC 1771/1793 and DMK/JV1/JV3 images) | 4 wk | both boot to BASIC with real ROMs; a ZX81 .P program and a TRS-80 disk load |
+| 11 | ColecoVision (`machine-coleco`): Z80, TMS9918A (`chips-ti`, 16 KB VRAM, sprites, all modes), SN76489, keypad controllers with joystick, cartridge ROMs; console panel POWER/RESET | 4 wk | BIOS boots; user-supplied cartridges run; TMS9918A mode and sprite tests against reference pictures |
+| 12 | Nintendo NES/Famicom (`machine-nes`): 2A03 as a cpu-6502 variant (no decimal mode, APU on chip), PPU 2C02/2C07 with VRAM/OAM (`chips-nintendo`), mappers NROM, MMC1, UxROM, CNROM, MMC3 (`devices-cartridge::nes`, iNES/NES 2.0), controllers; console panel POWER/RESET | 8 wk | nestest and blargg's CPU/PPU/APU test ROMs green; user-supplied games run |
+| 13 | Mattel Intellivision (`machine-intv`): new `cpu-cp1610` (16-bit), STIC (MOBs, GRAM/GROM), AY-3-8914 PSG, hand controllers; Executive ROM and GROM user-supplied | 6 wk | Executive ROM title screen; user-supplied cartridges run; CP1610 instruction tests |
+| 14 | Vectrex (`machine-vectrex`): new `cpu-6809`, VIA 6522 (reuse `chips-cbm`), AY-3-8912 (reuse `chips-amstrad`), vector display with a vector frame type next to `FrameRef` (beam segments with intensity; phosphor decay in `video-crt`; debugger/preview carry the segments and a rasterised picture — core trait extension, ask first), cartridges, controllers | 6 wk | built-in Mine Storm plays; 6809 instruction tests green |
 
 Device work by phase (part of each gate):
 
@@ -449,30 +459,31 @@ CRT work by phase:
 
 ### Machine backlog
 
-Added 2026-10-21; not part of a phase gate yet, scheduled when a phase has room:
+Added 2026-10-21. On 2026-10-22 the user scheduled the remaining machines as Phases 9–14 (see the phase table; order by effort, the Vectrex vector frame type is decided in its own phase, not prepared in Phase 8). What stays here is detail for those phases and the items without a phase:
 
-- **Atari 8-bit models** (configuration of `machine-atari8`, Phase 5 ships the 800XL only): **400** (and 800: OS-A/B, four joystick ports, no PORTB banking, RESET as NMI), **65XE** (800XL hardware in XE case), **130XE** (128 KB, PORTB banking with separate CPU/ANTIC access).
+- **Atari 8-bit models** (Phase 9; configuration of `machine-atari8`, Phase 5 ships the 800XL only): **400** (and 800: OS-A/B, four joystick ports, no PORTB banking, RESET as NMI), **65XE** (800XL hardware in XE case), **130XE** (128 KB, PORTB banking with separate CPU/ANTIC access).
 - **Atari 2600 (VCS)**: now Phase 6b (see the phase table): `machine-atari2600` with the 6507 (cpu-6502 variant), TIA and RIOT 6532 in `chips-atari`, bank-switching schemes in `devices-cartridge::atari2600`. Later: DPC (Pitfall II), Starpath Supercharger, SECAM.
 - **CPC 464 and 664** alongside the 6128 in Phase 6 (see the phase table).
 - **Amstrad CPC Plus** (464+/6128+/GX4000): ASIC (hardware sprites, DMA sound, split screen, 4096-colour palette, soft scroll), CRTC types 3/4, CPR cartridges; as models of `machine-cpc` after Phase 6.
-- **Mattel Intellivision**: new CPU core `cpu-cp1610` (GI CP1610, 16-bit), STIC video (MOBs, GRAM/GROM), PSG AY-3-8914; Executive ROM and GROM user-supplied.
-- **Sinclair ZX81**: reuses `cpu-z80`; the CPU itself generates the display (NMI/HALT-driven, ULA counts lines), 1 KB/16 KB RAM, tape via ear/mic; ROM user-supplied.
-- **Nintendo NES (Famicom)**: new CPU variant 2A03 (6502 without decimal mode, APU on chip), PPU 2C02/2C07 with its own VRAM and OAM, cartridge mappers (NROM, MMC1, UxROM, CNROM, MMC3 …), controllers; console panel: POWER, RESET.
-- **ColecoVision**: reuses `cpu-z80`; TMS9918A video (16 KB VRAM, sprites), SN76489 sound, keypad controllers with joystick; BIOS user-supplied; console panel: POWER, RESET.
-- **Vectrex**: 6809 CPU (new `cpu-6809`), VIA 6522 (reuse from `chips-cbm`), AY-3-8912 (reuse from `chips-amstrad`), and a vector display: needs a vector frame type next to `FrameRef` (beam lines with intensity, phosphor decay in `video-crt`) — the debugger/preview contract then carries vectors or a rasterized picture; overlays; console panel: POWER, RESET.
-- **Tandy TRS-80 Model I/III**: reuses `cpu-z80`; memory-mapped text screen with block graphics, keyboard matrix in the address space, cassette, Expansion Interface / FDC 1771/1793 floppies (DMK/JV1/JV3 images); ROMs user-supplied.
+- **Mattel Intellivision** (Phase 13): new CPU core `cpu-cp1610` (GI CP1610, 16-bit), STIC video (MOBs, GRAM/GROM), PSG AY-3-8914; Executive ROM and GROM user-supplied.
+- **Sinclair ZX81** (Phase 10): reuses `cpu-z80`; the CPU itself generates the display (NMI/HALT-driven, ULA counts lines), 1 KB/16 KB RAM, tape via ear/mic; ROM user-supplied.
+- **Nintendo NES (Famicom)** (Phase 12): new CPU variant 2A03 (6502 without decimal mode, APU on chip), PPU 2C02/2C07 with its own VRAM and OAM, cartridge mappers (NROM, MMC1, UxROM, CNROM, MMC3 …), controllers; console panel: POWER, RESET.
+- **ColecoVision** (Phase 11): reuses `cpu-z80`; TMS9918A video (16 KB VRAM, sprites), SN76489 sound, keypad controllers with joystick; BIOS user-supplied; console panel: POWER, RESET.
+- **Vectrex** (Phase 14): 6809 CPU (new `cpu-6809`), VIA 6522 (reuse from `chips-cbm`), AY-3-8912 (reuse from `chips-amstrad`), and a vector display: needs a vector frame type next to `FrameRef` (beam lines with intensity, phosphor decay in `video-crt`) — the debugger/preview contract then carries vectors or a rasterized picture; overlays; console panel: POWER, RESET.
+- **Tandy TRS-80 Model I/III** (Phase 10): reuses `cpu-z80`; memory-mapped text screen with block graphics, keyboard matrix in the address space, cassette, Expansion Interface / FDC 1771/1793 floppies (DMK/JV1/JV3 images); ROMs user-supplied.
 
 ### Deferred from Phase 7
 
-Held back on 2026-10-22; not part of the Phase 7 gate.
+Held back on 2026-10-22; not part of the Phase 7 gate. Done on 2026-10-22 (user request "implement the rest of Phase 7"): Paula attach modes and UART (loopback option), 1 MB chip RAM, Zorro II fast RAM via autoconfig, A1000 (WCS, bootstrap ROM) and A2000 models, HD drives/disks, extended ADF, DMS, bob deinterlacing in the desktop (`--deinterlace`, Ctrl+I), woven fields in the preview, LED filter as a second-order Butterworth. Still open:
 
-- **Action Replay (A500 side-port freezer):** needs its ROM (user-supplied) and the side-port hardware (freeze NMI, ROM/RAM overlay).
-- **Paula:** audio attach modes (ADKCON USEx), the serial port (UART: SERDAT/SERDATR transfers, RBF/TBE timing), disk precompensation; the A500 output filters are first-order approximations.
+- **Action Replay (A500 side-port freezer):** needs its ROM (user-supplied) and the side-port hardware (freeze NMI, ROM/RAM overlay). User decision 2026-10-22: left out (no ROM).
+- **Paula:** disk write precompensation has no effect in the bit-cell drive model (documented); the fixed output filter stays first-order. The serial port has no host device yet (only `serial=loopback`).
+- **A1000 bootstrap path** (`wcs=disk`) is tested with the stub only — no bootstrap ROM or Kickstart disk at hand.
+- **ECS** (Agnus 8372A/8375 registers, Denise 8373, 2 MB chip RAM): with the A1200/AGA block in Phase 8 (user decision 2026-10-22). The Agnus id in VPOSR stays 0 (OCS) with 1 MB chip RAM.
 - **Chip-bus residual:** the bus test (`tools/amiga_bustest.py`, reference from a cycle-exact WinUAE A500 in `tests/tests/amiga_boot.rs`) matches within 0.2 % except the 4-plane + per-line-Copper row, where we are 0.7 % fast after modelling the Copper's bus-holding wake-up after WAIT (a second wake-up slot changes nothing). The measurement itself moves up to 1 % with the loop's start phase.
 - **Timing details:** Blitter idle cycles reach the CPU (unverified against hardware), the D channel's one-word pipeline; the interrupt latencies (VERTB two colour clocks after the strobe, IPL four after a request, the 68000 sampling at the start of its last bus cycle) follow community measurements, not a datasheet; CPU accesses to the CIAs and the autovector use a simplified E-clock rule.
-- **Collisions with sprites outside the display window**, sprite/playfield priority in single-playfield mode (PF2P assumed), the exact sprite start pixel (no offset to DIWSTRT assumed) — to verify with test programs (vAmigaTS once ADF runs are automated).
-- **ECS/AGA, fast RAM, 1 MB chip RAM (Agnus 8372), A1000 / A2000 models; HD disks; extended ADF / DMS images.**
-- **Frontends:** choosing bob deinterlacing in the desktop; the preview stream shows interlaced fields unwoven.
+- **Sprites, checked against vAmigaTS photographs on 2026-10-22** (`tests/tests/vamigats.rs`): all 18 `sprcoll` collision tests, the `clip`/`diwclip` window clipping (sprites appear only after the line's first BPL1DAT, or on lines without planes) and `sprbpu` match. `sprites1` looks right at a glance (priorities not checked pixel by pixel). Open: the `timing` family — in `sprtimpos1` the second sprite column (SPRxPOS rewritten by the Copper near the sprite start) comes out white instead of in the sprites' colours; `sprtimctl1`, `sprtimdat*`, `sprdmadat*`, `sprxpos` not compared.
+- **AGA** (A1200) in Phase 8.
 
 ### Deferred from Phase 4
 

@@ -1,10 +1,20 @@
-//! Commodore Amiga 500 (OCS).
+//! Commodore Amiga 500, 1000 and 2000 (OCS).
 //!
 //! 68000 at 7.09379 MHz (PAL; NTSC 7.15909 MHz), the OCS custom chips
 //! (`chips-amiga`: Agnus with Copper and Blitter, Denise, Paula), two 8520
-//! CIAs (`chips-cbm`, [`CiaModel::Mos8520`]), 512 KB chip RAM, 512 KB slow
-//! RAM, the Kickstart ROM (see [`memory`] for the map) and up to four
+//! CIAs (`chips-cbm`, [`CiaModel::Mos8520`]), chip RAM, slow RAM, Zorro II
+//! fast RAM, the Kickstart ROM (see [`memory`] for the map) and up to four
 //! floppy drives ("DF0:"–"DF3:", ADF images; `drives_other::amiga_drive`).
+//!
+//! **Models** (`--model`, the board; "-ntsc" for the NTSC version of each):
+//! - `500` (default): 512 KB chip RAM
+//!   (option `chip=1m` for the 8372 "Fat Agnus" revision), 512 KB slow RAM
+//!   in the trapdoor, Kickstart in ROM.
+//! - `1000`: 256 KB chip RAM (`chip=512k` with the front expansion), no
+//!   slow RAM, the Kickstart in the writable control store: preloaded by
+//!   default, or loaded from a Kickstart disk by the bootstrap ROM (ROM
+//!   role `a1000boot`, option `wcs=disk`).
+//! - `2000`: 1 MB chip RAM, no slow RAM, Kickstart in ROM.
 //!
 //! **Disks.** Paula reads and writes the selected drive one bit cell at a
 //! time: every 2 µs with ADKCON FAST, else every 4 µs. The index hole
@@ -16,16 +26,23 @@
 //!
 //! **Audio.** Paula's channels 0+3 (left) and 1+2 (right) at the colour
 //! clock, averaged down to 48 kHz stereo, then the A500's output filters:
-//! a fixed low-pass (about 4.9 kHz) and the "LED" filter (about 3.3 kHz),
-//! on while CIA-A PA1 (/LED) is low. Both are approximated by first-order
-//! stages here (HRM chapter 5, "Audio filter"; the A500's actual filters
-//! are higher-order).
+//! a fixed first-order low-pass (about 4.9 kHz) and the "LED" filter, a
+//! second-order Butterworth (Sallen-Key) low-pass at about 3.3 kHz, on
+//! while CIA-A PA1 (/LED) is low (HRM chapter 5, "Audio filter"; the
+//! corner frequencies as derived from the A500 schematics).
 //!
-//! Models: "pal" (default), "ntsc". Options:
+//! Options:
 //! - `kickstart`: "1.3" (default), "1.2", "2.0", "3.1" — which ROM role to
 //!   use (`kick13` …, 256 or 512 KB images).
-//! - `slow`: slow RAM, "512k" (default) or "0".
+//! - `chip`: chip RAM, "256k", "512k" or "1m" (default per model).
+//! - `slow`: slow RAM, "512k" (A500 default) or "0".
+//! - `fast`: Zorro II fast RAM on an autoconfig board, "0" (default),
+//!   "512k", "1m", "2m", "4m" or "8m".
 //! - `drives`: floppy drives fitted, "1" (default) to "4".
+//! - `drivetype`: "dd" (default) or "hd" (1.76 MB drives; they spin at
+//!   half speed for HD disks and report DD disks as a DD drive).
+//! - `serial`: "none" (default) or "loopback" (TXD wired to RXD).
+//! - `wcs` (A1000): "rom" (default, Kickstart preloaded) or "disk".
 //! - `port0` / `port1`: game port devices, "mouse", "joystick" or "none"
 //!   (defaults: the mouse in port 0, a joystick in port 1). The ports are
 //!   sampled once a raster line; Denise counts mouse steps into JOYxDAT.
@@ -105,19 +122,65 @@ fn cpu_hz(standard: Standard) -> u32 {
     }
 }
 
-const CHIP_RAM: usize = 0x8_0000;
-/// The OCS Agnus (8367/8361) addresses 512 KB.
-const PTR_MASK: u32 = 0x7_fffe;
-/// Byte addresses in chip RAM (the 512 KB repeat up to $1FFFFF).
-const PTR_MASK_BYTE: u32 = 0x7_ffff;
-
 pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "amiga",
-        name: "Commodore Amiga 500",
-        models: &["pal", "ntsc"],
+        name: "Commodore Amiga 500/1000/2000",
+        models: &["500", "500-ntsc", "1000", "1000-ntsc", "2000", "2000-ntsc"],
         create: |config| Ok(Box::new(Amiga::new(config)?)),
     }
+}
+
+/// The board a model names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Model {
+    A500,
+    A1000,
+    A2000,
+}
+
+/// `--machine amiga --model 500|1000|2000`, "-ntsc" for the NTSC version.
+fn parse_model(model: Option<&str>) -> Result<(Model, Standard), ConfigError> {
+    let Some(model) = model else {
+        return Ok((Model::A500, Standard::Pal));
+    };
+    let (board, standard) = match model.strip_suffix("-ntsc") {
+        Some(b) => (b, Standard::Ntsc),
+        None => (model, Standard::Pal),
+    };
+    let board = match board {
+        "500" => Model::A500,
+        "1000" => Model::A1000,
+        "2000" => Model::A2000,
+        _ => return Err(ConfigError::UnknownModel(model.into())),
+    };
+    Ok((board, standard))
+}
+
+/// A size option: "0", "256k", "512k", "1m" … from `allowed`.
+fn size_option(
+    config: &MachineConfig,
+    key: &str,
+    default: &str,
+    allowed: &[&str],
+) -> Result<usize, ConfigError> {
+    let v = option(config, key, default);
+    if !allowed.contains(&v) {
+        return Err(ConfigError::Invalid(format!(
+            "{key} option '{v}' ({})",
+            allowed.join(", ")
+        )));
+    }
+    Ok(match v {
+        "0" | "none" => 0,
+        "256k" => 0x4_0000,
+        "512k" => 0x8_0000,
+        "1m" => 0x10_0000,
+        "2m" => 0x20_0000,
+        "4m" => 0x40_0000,
+        "8m" => 0x80_0000,
+        _ => 0,
+    })
 }
 
 fn option<'a>(config: &'a MachineConfig, key: &str, default: &'a str) -> &'a str {
@@ -217,8 +280,13 @@ struct Board {
     cck_hz: u32,
     disk_acc: u32,
     decimators: [Decimator; 2],
-    /// Output filter states (fixed, LED) per side, 16.16 fixed point.
-    filter: [[i32; 2]; 2],
+    /// Output filter states per side: the fixed stage (16.16) and the LED
+    /// biquad's x[n-1], x[n-2], y[n-1], y[n-2] (16.16).
+    filter: [[i32; 5]; 2],
+    /// Address bits Agnus keeps in its pointers (512 KB: $7FFFE).
+    ptr_mask: u32,
+    /// Byte addresses in chip RAM (512 KB: $7FFFF).
+    ptr_mask_byte: u32,
     /// Interleaved stereo samples since the last `audio` call.
     samples: Vec<i16>,
     keyboard: Keyboard,
@@ -241,10 +309,15 @@ struct Board {
 /// vertical blank interrupt is taken one instruction later.
 const IPL_DELAY: u64 = 7;
 
-/// One-pole low-pass coefficients at 48 kHz (16-bit fraction):
-/// 1 − e^(−2π·fc/48000) for 4.9 kHz and 3.3 kHz.
+/// One-pole low-pass coefficient at 48 kHz (16-bit fraction):
+/// 1 − e^(−2π·fc/48000) for 4.9 kHz.
 const FILTER_FIXED: i32 = 31_025;
-const FILTER_LED: i32 = 22_853;
+/// The LED filter: a second-order Butterworth low-pass at 3.3 kHz,
+/// bilinear transform at 48 kHz; b0, b1, b2, a1, a2 with a 24-bit
+/// fraction (DC gain exactly 1 within the rounding).
+const LED_B: [i64; 3] = [594_544, 1_189_088, 594_544];
+const LED_A: [i64; 2] = [-23_511_848, 9_112_808];
+const LED_ONE: i64 = 1 << 24;
 
 impl Board {
     /// One colour clock. Returns true if a waiting CPU got the slot.
@@ -331,13 +404,20 @@ impl Board {
             let f = &mut self.filter[side];
             let x = i32::from(x) << 16;
             f[0] += (((x - f[0]) as i64 * i64::from(FILTER_FIXED)) >> 16) as i32;
-            let mut y = f[0];
-            if led {
-                f[1] += (((y - f[1]) as i64 * i64::from(FILTER_LED)) >> 16) as i32;
-                y = f[1];
+            let x = f[0];
+            let y = if led {
+                let [x1, x2, y1, y2] = [f[1], f[2], f[3], f[4]].map(i64::from);
+                let acc = LED_B[0] * i64::from(x) + LED_B[1] * x1 + LED_B[2] * x2
+                    - LED_A[0] * y1
+                    - LED_A[1] * y2;
+                (acc / LED_ONE).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
             } else {
-                f[1] = y;
-            }
+                x
+            };
+            f[2] = f[1];
+            f[1] = x;
+            f[4] = f[3];
+            f[3] = y;
             self.samples
                 .push((y >> 16).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16);
         }
@@ -364,10 +444,12 @@ impl Board {
         }
     }
 
-    /// /RSTO (68000 RESET instruction) or power-on: the CIAs reset.
+    /// /RSTO (68000 RESET instruction) or power-on: the CIAs reset, the
+    /// expansion board goes back to autoconfig.
     fn reset_devices(&mut self) {
         self.cia_a.reset();
         self.cia_b.reset();
+        self.mem.reset_expansion();
         self.cia_outputs();
     }
 
@@ -410,7 +492,13 @@ impl Board {
         match region {
             Region::Chip => self.mem.chip.word(addr),
             Region::Slow => self.mem.slow_word(addr),
-            Region::Rom => self.mem.rom_word(addr),
+            Region::Fast => self.mem.fast_word(addr),
+            Region::Rom | Region::Wcs => self.mem.rom_word(addr),
+            Region::Boot => self.mem.boot_word(addr),
+            Region::Autoconfig => {
+                let f = self.mem.fast.as_ref();
+                u16::from(f.map_or(0xff, |f| f.read(addr & 0xffff))) << 8 | 0xff
+            }
             Region::Custom => {
                 if peek {
                     self.custom.peek(addr as u16)
@@ -433,6 +521,12 @@ impl Board {
             Size::Byte => match region {
                 Region::Chip => u32::from(self.mem.chip.byte(addr)),
                 Region::Cia => u32::from(self.read_cia(addr, peek)),
+                Region::Autoconfig => u32::from(
+                    self.mem
+                        .fast
+                        .as_ref()
+                        .map_or(0xff, |f| f.read(addr & 0xffff)),
+                ),
                 _ => {
                     let w = self.word(region, addr & !1, peek);
                     u32::from(if addr & 1 == 0 { w >> 8 } else { w & 0xff })
@@ -464,6 +558,14 @@ impl Board {
         match self.mem.region(addr, true) {
             Region::Chip => self.mem.chip.set_word(addr, v),
             Region::Slow => self.mem.set_slow_word(addr, v),
+            Region::Fast => self.mem.set_fast_word(addr, v),
+            Region::Wcs => self.mem.set_wcs_word(addr, v),
+            Region::Boot => self.mem.protect_wcs(),
+            Region::Autoconfig => {
+                if let Some(f) = &mut self.mem.fast {
+                    f.write(addr & 0xffff, (v >> 8) as u8);
+                }
+            }
             Region::Custom => self.custom.write(addr as u16, v),
             Region::Cia => {
                 self.write_cia(addr & !1, (v >> 8) as u8);
@@ -479,6 +581,22 @@ impl Board {
         match self.mem.region(addr, true) {
             Region::Chip => self.mem.chip.set_byte(addr, v),
             Region::Slow => self.mem.set_slow_byte(addr, v),
+            Region::Fast => {
+                let w = self.mem.fast_word(addr & !1);
+                self.mem
+                    .set_fast_word(addr & !1, memory::merge_byte(w, addr, v));
+            }
+            Region::Wcs => {
+                let w = self.mem.rom_word(addr & !1);
+                self.mem
+                    .set_wcs_word(addr & !1, memory::merge_byte(w, addr, v));
+            }
+            Region::Boot => self.mem.protect_wcs(),
+            Region::Autoconfig => {
+                if let Some(f) = &mut self.mem.fast {
+                    f.write(addr & 0xffff, v);
+                }
+            }
             Region::Custom => self
                 .custom
                 .write(addr as u16, u16::from(v) << 8 | u16::from(v)),
@@ -521,7 +639,7 @@ impl Bus for AmigaBus<'_> {
             // Chip RAM by its physical address (freezes and watchpoints
             // set on the "chip" space).
             if dbg.read_armed(CHIP_SPACE) && self.b.mem.region(addr, false) == Region::Chip {
-                v = dbg.on_read(CHIP_SPACE, addr & PTR_MASK_BYTE, size, v);
+                v = dbg.on_read(CHIP_SPACE, addr & self.b.ptr_mask_byte, size, v);
             }
         }
         v
@@ -542,7 +660,7 @@ impl Bus for AmigaBus<'_> {
             }
             if dbg.write_armed(CHIP_SPACE)
                 && self.b.mem.region(addr, true) == Region::Chip
-                && !dbg.on_write(CHIP_SPACE, addr & PTR_MASK_BYTE, size, v)
+                && !dbg.on_write(CHIP_SPACE, addr & self.b.ptr_mask_byte, size, v)
             {
                 return;
             }
@@ -598,9 +716,6 @@ impl TimedBus68 for AmigaBus<'_> {
 fn peek(b: &Board, addr: u32, size: Size) -> u32 {
     let addr = addr & 0xff_ffff;
     match b.mem.region(addr, false) {
-        Region::Chip | Region::Slow | Region::Rom | Region::Open | Region::Custom => {
-            peek_plain(b, addr, size)
-        }
         Region::Cia => {
             let byte = |a: u32| -> u32 {
                 let reg = ((a >> 8) & 15) as u8;
@@ -627,6 +742,7 @@ fn peek(b: &Board, addr: u32, size: Size) -> u32 {
                 }
             }
         }
+        _ => peek_plain(b, addr, size),
     }
 }
 
@@ -637,7 +753,13 @@ fn peek_plain(b: &Board, addr: u32, size: Size) -> u32 {
         match b.mem.region(a, false) {
             Region::Chip => b.mem.chip.word(a),
             Region::Slow => b.mem.slow_word(a),
-            Region::Rom => b.mem.rom_word(a),
+            Region::Fast => b.mem.fast_word(a),
+            Region::Rom | Region::Wcs => b.mem.rom_word(a),
+            Region::Boot => b.mem.boot_word(a),
+            Region::Autoconfig => {
+                let f = b.mem.fast.as_ref();
+                u16::from(f.map_or(0xff, |f| f.read(a & 0xffff))) << 8 | 0xff
+            }
             Region::Custom => b.custom.peek(a as u16),
             Region::Cia | Region::Open => 0,
         }
@@ -703,6 +825,7 @@ impl Bus for PeekBus<'_> {
 }
 
 pub struct Amiga {
+    model: Model,
     standard: Standard,
     cpu: M68000,
     board: Board,
@@ -719,17 +842,50 @@ pub struct Amiga {
 
 impl Amiga {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let standard = match config.model.as_deref() {
-            None | Some("pal") => Standard::Pal,
-            Some("ntsc") => Standard::Ntsc,
-            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        let (model, standard) = parse_model(config.model.as_deref())?;
+        let (chip_default, slow_default) = match model {
+            Model::A500 => ("512k", "512k"),
+            Model::A1000 => ("256k", "0"),
+            Model::A2000 => ("1m", "0"),
         };
-        let slow = match option(config, "slow", "512k") {
-            "512k" => 0x8_0000,
-            "0" | "none" => 0,
+        let chip = size_option(config, "chip", chip_default, &["256k", "512k", "1m"])?;
+        let slow = size_option(config, "slow", slow_default, &["0", "none", "512k"])?;
+        let fast = size_option(
+            config,
+            "fast",
+            "0",
+            &["0", "none", "512k", "1m", "2m", "4m", "8m"],
+        )?;
+        let loopback = match option(config, "serial", "none") {
+            "none" => false,
+            "loopback" => true,
             other => {
                 return Err(ConfigError::Invalid(format!(
-                    "slow option '{other}' (512k or 0)"
+                    "serial option '{other}' (none or loopback)"
+                )))
+            }
+        };
+        let hd = match option(config, "drivetype", "dd") {
+            "dd" => false,
+            "hd" => true,
+            other => {
+                return Err(ConfigError::Invalid(format!(
+                    "drivetype option '{other}' (dd or hd)"
+                )))
+            }
+        };
+        let boot_rom = match (model, option(config, "wcs", "rom")) {
+            (Model::A1000, "disk") => Some(
+                config
+                    .roms
+                    .get("a1000boot")
+                    .ok_or_else(|| ConfigError::MissingRom("a1000boot".into()))?
+                    .clone(),
+            ),
+            (_, "rom") | (_, "disk") => None,
+            (_, other) => {
+                return Err(ConfigError::Invalid(format!(
+                    "wcs option '{other}' (rom or disk)"
                 )))
             }
         };
@@ -741,16 +897,28 @@ impl Amiga {
                 )))
             }
         };
-        let rom = load_rom(config)?;
+        let rom = if boot_rom.is_some() {
+            Vec::new()
+        } else {
+            load_rom(config)?
+        };
+        let mut mem = Memory::new(chip, slow, &rom).with_fast(fast);
+        if model == Model::A1000 {
+            mem = mem.with_a1000(boot_rom.as_deref());
+        }
+        let ptr_mask_byte = chip as u32 - 1;
+        let mut custom = Custom::new(standard, ptr_mask_byte & !1);
+        custom.paula.uart.loopback = loopback;
         let mut m = Self {
+            model,
             standard,
             cpu: M68000::new(),
             board: Board {
-                mem: Memory::new(CHIP_RAM, slow, &rom),
-                custom: Custom::new(standard, PTR_MASK),
+                mem,
+                custom,
                 cia_a: Cia::new(CiaModel::Mos8520),
                 cia_b: Cia::new(CiaModel::Mos8520),
-                drives: vec![AmigaDrive::new(); drives],
+                drives: vec![AmigaDrive::with_type(hd); drives],
                 cck: 0,
                 ipl: 0,
                 ipl_before: 0,
@@ -762,7 +930,9 @@ impl Amiga {
                 decimators: [Decimator::new(cpu_hz(standard) / 2, emu_core::SAMPLE_RATE)
                     .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?;
                     2],
-                filter: [[0; 2]; 2],
+                filter: [[0; 5]; 2],
+                ptr_mask: ptr_mask_byte & !1,
+                ptr_mask_byte,
                 samples: Vec::new(),
                 keyboard: Keyboard::new(),
             },
@@ -787,6 +957,10 @@ impl Amiga {
 
     pub fn standard(&self) -> Standard {
         self.standard
+    }
+
+    pub fn model(&self) -> Model {
+        self.model
     }
 
     fn beam_pos(&self) -> BeamPos {
@@ -1096,14 +1270,14 @@ impl Machine for Amiga {
                 id: CHIP_SPACE,
                 name: "chip",
                 device: CPU,
-                addr_bits: 19,
+                addr_bits: self.board.mem.chip_bits(),
                 big_endian: true,
             },
             MemSpace {
                 id: COPPER_SPACE,
                 name: "copper",
                 device: COPPER,
-                addr_bits: 19,
+                addr_bits: self.board.mem.chip_bits(),
                 big_endian: true,
             },
         ]
@@ -1155,6 +1329,8 @@ impl Machine for Amiga {
             r("BPLCON0", 0x100, u32::from(d.bplcon0), 16),
             r("BPLCON1", 0x102, u32::from(d.bplcon1), 16),
             r("BPLCON2", 0x104, u32::from(d.bplcon2), 16),
+            r("CLXCON", 0x098, u32::from(d.clxcon), 16),
+            r("CLXDAT", 0x00e, u32::from(c.peek(0x00e)), 16),
         ];
         const COLORS: [&str; 32] = [
             "COLOR00", "COLOR01", "COLOR02", "COLOR03", "COLOR04", "COLOR05", "COLOR06", "COLOR07",
@@ -1176,6 +1352,8 @@ impl Machine for Amiga {
             r("DSKSYNC", 0x07e, u32::from(p.dsksync), 16),
             r("DSKBYTR", 0x01a, u32::from(p.disk.dskbytr()), 16),
             ("DSKLEFT", None, u32::from(p.disk.remaining), 16),
+            r("SERPER", 0x032, u32::from(p.uart.serper), 16),
+            r("SERDATR", 0x018, u32::from(p.uart.serdatr()), 16),
         ];
         const AUD: [[&str; 4]; 4] = [
             ["AUD0LC", "AUD0LEN", "AUD0PER", "AUD0VOL"],
@@ -1314,7 +1492,8 @@ impl Machine for Amiga {
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         let b = &self.board;
-        w.chunk(*b"A500", 4, |w| {
+        // Version 5: the LED filter is a biquad (five states per side).
+        w.chunk(*b"A500", 5, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1363,7 +1542,7 @@ impl Machine for Amiga {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"A500", 4)?;
+        let (version, mut c) = r.chunk(*b"A500", 5)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -1388,8 +1567,12 @@ impl Machine for Amiga {
         for d in &mut board.decimators {
             d.load(&mut c)?;
         }
-        for v in board.filter.iter_mut().flatten() {
-            *v = c.u32()? as i32;
+        let states = if version >= 5 { 5 } else { 2 };
+        for side in board.filter.iter_mut() {
+            *side = [0; 5];
+            for v in side.iter_mut().take(states) {
+                *v = c.u32()? as i32;
+            }
         }
         if version >= 4 {
             board.ipl = c.u8()? & 7;
@@ -1528,16 +1711,17 @@ impl DebugTarget for Amiga {
     /// Blitter: its registers by name (written like the CPU would).
     fn set_reg(&mut self, name: &str, v: u32) {
         let upper = name.to_ascii_uppercase();
+        let mask = self.board.ptr_mask;
         match self.debug_dev {
             COPPER => {
                 let c = &mut self.board.custom.copper;
                 match upper.as_str() {
                     "PC" => {
-                        c.pc = v & PTR_MASK;
+                        c.pc = v & mask;
                         c.state = chips_amiga::copper::State::Fetch1;
                     }
-                    "COP1LC" => c.cop1lc = v & PTR_MASK,
-                    "COP2LC" => c.cop2lc = v & PTR_MASK,
+                    "COP1LC" => c.cop1lc = v & mask,
+                    "COP2LC" => c.cop2lc = v & mask,
                     "DANGER" => c.danger = v != 0,
                     _ => {}
                 }
@@ -1601,7 +1785,7 @@ impl DebugTarget for Amiga {
     fn disassemble(&self, addr: u32) -> Instr {
         match self.debug_dev {
             COPPER => {
-                let addr = addr & PTR_MASK;
+                let addr = addr & self.board.ptr_mask;
                 let (ir1, ir2) = (
                     self.chip_peek(addr, Size::Word) as u16,
                     self.chip_peek(addr + 2, Size::Word) as u16,

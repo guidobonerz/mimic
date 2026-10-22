@@ -495,3 +495,235 @@ mod debugger {
         assert_eq!(bus.read(0x8_0102, Size::Word), 0x0042, "through the mirror");
     }
 }
+
+fn stub_with(model: Option<&str>, options: &[(&str, &str)]) -> Amiga {
+    let mut config = MachineConfig {
+        model: model.map(str::to_string),
+        ..MachineConfig::default()
+    };
+    config.options.insert("roms".into(), "stub".into());
+    for (k, v) in options {
+        config.options.insert((*k).into(), (*v).into());
+    }
+    Amiga::new(&config).unwrap()
+}
+
+#[test]
+fn models_fit_their_memory() {
+    let m = stub_with(None, &[]);
+    assert_eq!((m.model(), m.standard()), (Model::A500, Standard::Pal));
+    assert_eq!(m.board.mem.chip.len_bytes(), 0x8_0000);
+    assert_eq!(m.board.mem.slow.len() * 2, 0x8_0000);
+    let m = stub_with(Some("1000-ntsc"), &[]);
+    assert_eq!((m.model(), m.standard()), (Model::A1000, Standard::Ntsc));
+    assert_eq!(m.board.mem.chip.len_bytes(), 0x4_0000);
+    assert!(m.board.mem.slow.is_empty());
+    assert!(m.board.mem.a1000.as_ref().is_some_and(|w| w.protected));
+    let m = stub_with(Some("2000"), &[]);
+    assert_eq!(m.model(), Model::A2000);
+    assert_eq!(m.board.mem.chip.len_bytes(), 0x10_0000);
+    assert_eq!(m.memory_spaces()[1].addr_bits, 20);
+    let m = stub_with(
+        Some("500"),
+        &[("chip", "1m"), ("slow", "0"), ("drivetype", "hd")],
+    );
+    assert_eq!(m.board.mem.chip.len_bytes(), 0x10_0000);
+    assert!(m.board.drives[0].hd);
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("fast".into(), "3m".into());
+    assert!(Amiga::new(&config).is_err(), "bad size");
+    config.options.insert("fast".into(), "2m".into());
+    config.model = Some("3000".into());
+    assert!(Amiga::new(&config).is_err(), "unknown model");
+}
+
+#[test]
+fn one_megabyte_chip_ram_mirrors_once_and_runs() {
+    let mut m = stub_with(None, &[("chip", "1m")]);
+    frames(&mut m, 3);
+    let b = &mut m.board;
+    b.write(0x8_1234, Size::Word, 0xbeef);
+    assert_eq!(
+        b.read(0x18_1234, Size::Word, true),
+        0xbeef,
+        "mirror at 1 MB"
+    );
+    assert_eq!(b.read(0x1234, Size::Word, true), 0, "not at 512 KB");
+    assert!(peek_cpu(&m, 0x100, Size::Long) >= 2, "the stub runs");
+}
+
+#[test]
+fn fast_ram_board_goes_through_autoconfig() {
+    let mut m = stub_with(None, &[("fast", "1m")]);
+    frames(&mut m, 1);
+    let b = &mut m.board;
+    // er_Type: Zorro II, memory list, 1 MB = $E5.
+    assert_eq!(b.read(0xe8_0000, Size::Byte, false) & 0xf0, 0xe0);
+    assert_eq!(b.read(0xe8_0002, Size::Byte, false) & 0xf0, 0x50);
+    assert_eq!(
+        b.read(0x20_0000, Size::Word, true),
+        0,
+        "nothing at $200000 yet"
+    );
+    b.write(0x20_0000, Size::Word, 0x1234);
+    assert_eq!(b.read(0x20_0000, Size::Word, true), 0, "writes go nowhere");
+    // Kickstart's way: low nibble to $4A, high nibble to $48.
+    b.write(0xe8_004a, Size::Byte, 0x00);
+    b.write(0xe8_0048, Size::Byte, 0x20);
+    assert_eq!(
+        b.read(0xe8_0000, Size::Byte, false),
+        0,
+        "configured: open bus"
+    );
+    b.write(0x20_0000, Size::Long, 0xcafe_babe);
+    assert_eq!(b.read(0x20_0000, Size::Long, true), 0xcafe_babe);
+    b.write(0x20_0001, Size::Byte, 0x11);
+    assert_eq!(b.read(0x20_0000, Size::Word, true), 0xca11);
+    assert_eq!(b.read(0x30_0000, Size::Word, true), 0, "ends after 1 MB");
+    // A savestate keeps the configuration and the contents.
+    let s = m.save_state();
+    let mut n = stub_with(None, &[("fast", "1m")]);
+    n.load_state(&s).unwrap();
+    assert_eq!(n.board.read(0x20_0000, Size::Long, true), 0xca11_babe);
+    assert_eq!(
+        n.memory_spaces().len(),
+        3,
+        "fast RAM is in the CPU space, no space of its own"
+    );
+    // A soft reset puts the board back into autoconfig; the RAM stays.
+    Machine::reset(&mut n, ResetKind::Soft);
+    assert_eq!(n.board.read(0xe8_0000, Size::Byte, false) & 0xf0, 0xe0);
+    let mut other = stub_with(None, &[]);
+    assert!(
+        other.load_state(&s).is_err(),
+        "fast RAM size is configuration"
+    );
+}
+
+#[test]
+fn a1000_boots_from_the_bootstrap_rom_and_protects_the_wcs() {
+    let mut config = MachineConfig {
+        model: Some("1000".into()),
+        ..MachineConfig::default()
+    };
+    config.options.insert("wcs".into(), "disk".into());
+    assert!(Amiga::new(&config).is_err(), "needs the bootstrap ROM");
+    // The stub as a bootstrap ROM: it runs from $F80008 either way.
+    config
+        .roms
+        .insert("a1000boot".into(), stub::rom()[..0x2000].to_vec());
+    let mut m = Amiga::new(&config).unwrap();
+    assert_eq!(m.board.mem.region(0, false), Region::Boot);
+    assert_eq!(m.board.read(0xfc_0000, Size::Long, true), 0, "WCS empty");
+    frames(&mut m, 3);
+    assert!(
+        peek_cpu(&m, 0x100, Size::Long) >= 2,
+        "runs from the bootstrap ROM"
+    );
+    let b = &mut m.board;
+    b.write(0xfc_0100, Size::Long, 0x1234_5678);
+    assert_eq!(
+        b.read(0xfc_0100, Size::Long, true),
+        0x1234_5678,
+        "the WCS is RAM"
+    );
+    assert_eq!(
+        b.read(0xf8_0100, Size::Long, true),
+        0x52b8_0100,
+        "bootstrap ROM still in front (the stub's handler)"
+    );
+    b.write(0xf8_0000, Size::Word, 0);
+    assert!(
+        b.mem.a1000.as_ref().unwrap().protected,
+        "a write to the bootstrap range latches"
+    );
+    assert_eq!(
+        b.read(0xf8_0100, Size::Long, true),
+        0x1234_5678,
+        "the WCS shows twice"
+    );
+    b.write(0xfc_0100, Size::Long, 0);
+    assert_eq!(
+        b.read(0xfc_0100, Size::Long, true),
+        0x1234_5678,
+        "write-protected"
+    );
+    // Soft reset keeps the WCS, a power cycle clears it.
+    Machine::reset(&mut m, ResetKind::Soft);
+    assert_eq!(m.board.read(0xfc_0100, Size::Long, true), 0x1234_5678);
+    Machine::reset(&mut m, ResetKind::Hard);
+    assert_eq!(m.board.read(0xfc_0100, Size::Long, true), 0);
+    assert_eq!(m.board.mem.region(0, false), Region::Boot);
+    // Preloaded Kickstart: the stub in the WCS, protected.
+    let mut m = stub_with(Some("1000"), &[]);
+    frames(&mut m, 3);
+    assert!(peek_cpu(&m, 0x100, Size::Long) >= 2);
+    assert_eq!(m.board.mem.region(0xf8_0000, false), Region::Rom);
+}
+
+#[test]
+fn serial_loopback_returns_what_was_sent() {
+    let mut m = stub_with(None, &[("serial", "loopback")]);
+    frames(&mut m, 1);
+    let b = &mut m.board;
+    b.write(0xdf_f032, Size::Word, 0x0173); // 9600 baud: 3 546 895 / 372
+    b.write(0xdf_f09c, Size::Word, 0x0801); // clear RBF, TBE
+    b.write(0xdf_f030, Size::Word, 0x0100 | 0x41);
+    assert_eq!(
+        b.read(0xdf_f01e, Size::Word, true) & 0x0001,
+        0x0001,
+        "TBE: buffer taken"
+    );
+    assert_eq!(
+        b.read(0xdf_f018, Size::Word, true) & 0x1000,
+        0,
+        "TSRE clear: sending"
+    );
+    frames(&mut m, 1);
+    let b = &mut m.board;
+    let serdatr = b.read(0xdf_f018, Size::Word, true);
+    assert_eq!(
+        serdatr & 0x43ff,
+        0x4141,
+        "RBF with the data and stop bit: {serdatr:04x}"
+    );
+    assert_eq!(
+        b.read(0xdf_f01e, Size::Word, true) & 0x0800,
+        0x0800,
+        "INTREQ RBF"
+    );
+    b.write(0xdf_f09c, Size::Word, 0x0800);
+    assert_eq!(
+        b.read(0xdf_f018, Size::Word, true) & 0xc000,
+        0,
+        "RBF and OVRUN cleared"
+    );
+    // Without loopback nothing comes back.
+    let mut m = stub_with(None, &[]);
+    frames(&mut m, 1);
+    m.board.write(0xdf_f030, Size::Word, 0x0141);
+    frames(&mut m, 1);
+    assert_eq!(m.board.read(0xdf_f018, Size::Word, true) & 0x4000, 0);
+}
+
+#[test]
+fn attached_audio_channel_modulates_the_next() {
+    let mut m = stub_with(None, &[]);
+    frames(&mut m, 1);
+    let b = &mut m.board;
+    // Channel 0 attached to channel 1's volume (ADKCON USE0V); CPU-written
+    // words: the word $0020 sets AUD1VOL to 32.
+    b.write(0xdf_f09e, Size::Word, 0x8001);
+    b.write(0xdf_f0a6, Size::Word, 200); // AUD0PER
+    b.write(0xdf_f0b8, Size::Word, 64); // AUD1VOL
+    b.write(0xdf_f0aa, Size::Word, 0x0020); // AUD0DAT
+    for _ in 0..4 {
+        b.tick(false);
+    }
+    assert_eq!(b.custom.paula.audio[1].vol, 32);
+    assert_eq!(
+        b.custom.paula.audio[0].output, 0,
+        "an attached channel is silent"
+    );
+}

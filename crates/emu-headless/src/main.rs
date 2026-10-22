@@ -24,8 +24,9 @@ usage: mimic-headless [options]
   --model NAME          model variant
   --prg FILE            program (PRG/T64, Atari XEX) into the machine's program slot,
                         or as its \"program\" ROM role (sim6502)
-  --disk FILE           disk image into the first disk drive (drive 8, Atari D1: ATR);
-                        repeat for the next drives (Amiga DF1: with --option drives=2)
+  --disk FILE           disk image into the first disk drive (drive 8, Atari D1: ATR;
+                        Amiga ADF, HD ADF, extended ADF or DMS); repeat for the
+                        next drives (Amiga DF1: with --option drives=2)
   --tape FILE           TAP image into the datasette, CAS into the Atari
                         program recorder (PLAY pressed); a PRG is recorded
                         in the machine's tape format first

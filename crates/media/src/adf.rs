@@ -1,8 +1,11 @@
 //! ADF (Amiga Disk File) images and their tracks as Amiga MFM bit streams.
 //!
-//! An ADF holds the 512-byte sectors of a double-density disk in order:
-//! 80 cylinders × 2 heads × 11 sectors (901 120 bytes); track `t` is
-//! cylinder `t / 2`, head `t % 2` (head 0 = lower side).
+//! An ADF holds the 512-byte sectors of a disk in order: 80 cylinders ×
+//! 2 heads × 11 sectors (901 120 bytes) for a double-density disk, 22
+//! sectors per track (1 802 240 bytes) for a high-density one; track `t`
+//! is cylinder `t / 2`, head `t % 2` (head 0 = lower side). The Amiga's
+//! high-density drive turns HD disks at half speed (150 rpm), so a track
+//! has twice the bit cells at the same bit clock ([`Density`]).
 //!
 //! **Track format** as the trackdisk.device writes it (Amiga Hardware
 //! Reference Manual chapter 8 "Disk"; Laurent Clévy, "The .ADF (Amiga Disk
@@ -23,25 +26,60 @@ use emu_core::media::MediaError;
 
 /// Bytes of a double-density image.
 pub const ADF_SIZE: usize = 901_120;
+/// Bytes of a high-density image.
+pub const ADF_HD_SIZE: usize = 1_802_240;
 pub const TRACKS: usize = 160;
+/// Sectors per track, double density.
 pub const SECTORS: usize = 11;
 pub const SECTOR_SIZE: usize = 512;
-/// MFM bytes on a track: 2 µs cells at 300 rpm, as commonly used.
+/// MFM bytes on a double-density track: 2 µs cells at 300 rpm, as
+/// commonly used.
 pub const TRACK_BYTES: usize = 12_668;
 /// MFM bytes of one sector.
 pub const SECTOR_MFM: usize = 1088;
 pub const SYNC: u16 = 0x4489;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Density {
+    Double,
+    High,
+}
+
+impl Density {
+    pub fn sectors(self) -> usize {
+        match self {
+            Density::Double => SECTORS,
+            Density::High => 2 * SECTORS,
+        }
+    }
+
+    pub fn image_size(self) -> usize {
+        self.sectors() * SECTOR_SIZE * TRACKS
+    }
+
+    /// MFM bytes on a track.
+    pub fn track_bytes(self) -> usize {
+        match self {
+            Density::Double => TRACK_BYTES,
+            Density::High => 2 * TRACK_BYTES,
+        }
+    }
+
+    /// The density of an image by its size.
+    pub fn of_image(image: &[u8]) -> Result<Density, MediaError> {
+        match image.len() {
+            ADF_SIZE => Ok(Density::Double),
+            ADF_HD_SIZE => Ok(Density::High),
+            n => Err(MediaError::Format(format!(
+                "ADF must be {ADF_SIZE} (double density) or {ADF_HD_SIZE} (high density) bytes, got {n}"
+            ))),
+        }
+    }
+}
+
 /// Check an image's size.
 pub fn check(image: &[u8]) -> Result<(), MediaError> {
-    if image.len() == ADF_SIZE {
-        Ok(())
-    } else {
-        Err(MediaError::Format(format!(
-            "ADF must be {ADF_SIZE} bytes (double density), got {}",
-            image.len()
-        )))
-    }
+    Density::of_image(image).map(|_| ())
 }
 
 /// MFM writer: data bits get clock bits (1 between two zeros).
@@ -87,14 +125,17 @@ fn longs(bytes: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-/// Encode track `track` (0–159) of an image.
+/// Encode track `track` (0–159) of an image (its size gives the density).
 pub fn encode_track(image: &[u8], track: usize) -> Vec<u8> {
+    let density = Density::of_image(image).unwrap_or(Density::Double);
+    let sectors = density.sectors();
+    let track_bytes = density.track_bytes();
     let mut w = Writer {
-        out: Vec::with_capacity(TRACK_BYTES),
+        out: Vec::with_capacity(track_bytes),
         last: false,
     };
-    for s in 0..SECTORS {
-        let off = (track * SECTORS + s) * SECTOR_SIZE;
+    for s in 0..sectors {
+        let off = (track * sectors + s) * SECTOR_SIZE;
         let data = longs(
             image
                 .get(off..off + SECTOR_SIZE)
@@ -103,7 +144,7 @@ pub fn encode_track(image: &[u8], track: usize) -> Vec<u8> {
         w.data32(0);
         w.raw16(SYNC);
         w.raw16(SYNC);
-        let info = 0xff00_0000 | (track as u32) << 16 | (s as u32) << 8 | (SECTORS - s) as u32;
+        let info = 0xff00_0000 | (track as u32) << 16 | (s as u32) << 8 | (sectors - s) as u32;
         let label = [0u32; 4];
         let mut hsum = odd(info) ^ even(info);
         for l in label {
@@ -129,10 +170,10 @@ pub fn encode_track(image: &[u8], track: usize) -> Vec<u8> {
             w.data32(even(l));
         }
     }
-    while w.out.len() < TRACK_BYTES {
+    while w.out.len() < track_bytes {
         w.data16(0);
     }
-    w.out.truncate(TRACK_BYTES);
+    w.out.truncate(track_bytes);
     w.out
 }
 
@@ -240,7 +281,8 @@ pub fn decode_track(bits: &[u8]) -> Vec<Sector> {
             sector: (info >> 8) as u8,
             data,
         };
-        if usize::from(sector.sector) < SECTORS && !found.iter().any(|s| s.sector == sector.sector)
+        if usize::from(sector.sector) < 2 * SECTORS
+            && !found.iter().any(|s| s.sector == sector.sector)
         {
             found.push(sector);
         }
@@ -248,12 +290,19 @@ pub fn decode_track(bits: &[u8]) -> Vec<Sector> {
     found
 }
 
-/// Store decoded sectors of track `track` into an image. Returns how many
-/// sectors were stored (sectors of other tracks are ignored).
+/// Store decoded sectors of track `track` into an image (its size gives
+/// the density). Returns how many sectors were stored (sectors of other
+/// tracks or beyond the track's count are ignored).
 pub fn store_track(image: &mut [u8], track: usize, sectors: &[Sector]) -> usize {
+    let per_track = Density::of_image(image)
+        .unwrap_or(Density::Double)
+        .sectors();
     let mut n = 0;
-    for s in sectors.iter().filter(|s| usize::from(s.track) == track) {
-        let off = (track * SECTORS + usize::from(s.sector)) * SECTOR_SIZE;
+    for s in sectors
+        .iter()
+        .filter(|s| usize::from(s.track) == track && usize::from(s.sector) < per_track)
+    {
+        let off = (track * per_track + usize::from(s.sector)) * SECTOR_SIZE;
         if let Some(dst) = image.get_mut(off..off + SECTOR_SIZE) {
             dst.copy_from_slice(&s.data);
             n += 1;
@@ -297,6 +346,23 @@ mod tests {
                 img[off..off + SECTORS * SECTOR_SIZE]
             );
         }
+    }
+
+    #[test]
+    fn high_density_tracks_hold_22_sectors() {
+        let img: Vec<u8> = (0..ADF_HD_SIZE).map(|i| (i / 512) as u8).collect();
+        assert_eq!(Density::of_image(&img), Ok(Density::High));
+        let mfm = encode_track(&img, 5);
+        assert_eq!(mfm.len(), 2 * TRACK_BYTES);
+        let sectors = decode_track(&mfm);
+        assert_eq!(sectors.len(), 22);
+        let mut out = vec![0; ADF_HD_SIZE];
+        assert_eq!(store_track(&mut out, 5, &sectors), 22);
+        assert_eq!(
+            out[5 * 22 * 512..6 * 22 * 512],
+            img[5 * 22 * 512..6 * 22 * 512]
+        );
+        assert!(Density::of_image(&img[..100]).is_err());
     }
 
     #[test]

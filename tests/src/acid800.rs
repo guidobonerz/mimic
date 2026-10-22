@@ -115,7 +115,7 @@ pub fn run(
     let [passed, failed, skipped] =
         result_labels(labels).ok_or("label file without _testPassed/_testFailed/_testSkipped")?;
     let mut m = registry
-        .create("atari800xl", config)
+        .create("atari8", config)
         .map_err(|e| e.to_string())?;
     if let Some(disk) = disk {
         if let Some(d1) = m

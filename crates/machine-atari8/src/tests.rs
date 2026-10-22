@@ -1,33 +1,33 @@
 use super::*;
 use emu_core::input::{Dirs, MachineKey};
 
-fn stub(model: &str) -> Atari800Xl {
+fn stub(model: &str) -> Atari8 {
     let mut config = MachineConfig {
         model: Some(model.into()),
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());
-    Atari800Xl::new(&config).unwrap()
+    Atari8::new(&config).unwrap()
 }
 
-fn frames(m: &mut Atari800Xl, n: usize) {
+fn frames(m: &mut Atari8, n: usize) {
     let mut dbg = DebugHooks::default();
     for _ in 0..n {
         assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
     }
 }
 
-fn byte(m: &Atari800Xl, addr: u16) -> u8 {
+fn byte(m: &Atari8, addr: u16) -> u8 {
     m.peek(CPU_SPACE, u32::from(addr), Size::Byte).unwrap() as u8
 }
 
-fn poke(m: &mut Atari800Xl, addr: u16, v: u8) {
+fn poke(m: &mut Atari8, addr: u16, v: u8) {
     assert!(m.poke(CPU_SPACE, u32::from(addr), Size::Byte, u32::from(v)));
 }
 
 #[test]
 fn stub_boots_and_counts_fields() {
-    for (model, lines) in [("pal", 312u64), ("ntsc", 262)] {
+    for (model, lines) in [("800xl", 312u64), ("800xl-ntsc", 262)] {
         let mut m = stub(model);
         frames(&mut m, 10);
         // RTCLOK ($14) counts VBIs: one per field.
@@ -45,13 +45,13 @@ fn stub_boots_and_counts_fields() {
 fn antic_dma_slows_the_cpu() {
     // Mode 2 lines steal cycles: the stub's display costs CPU time. With
     // the display off a busy loop runs more often per field.
-    let mut on = stub("pal");
+    let mut on = stub("800xl");
     frames(&mut on, 2);
-    let mut off = stub("pal");
+    let mut off = stub("800xl");
     frames(&mut off, 2);
     poke(&mut off, 0xd400, 0x00);
     // Count instructions over one field.
-    let count = |m: &mut Atari800Xl| {
+    let count = |m: &mut Atari8| {
         // Instruction starts: the CPU reaches a boundary (it stays there
         // while halted, so count transitions).
         let (mut n, mut prev) = (0, true);
@@ -74,7 +74,7 @@ fn antic_dma_slows_the_cpu() {
 
 #[test]
 fn text_reaches_the_screen() {
-    let mut m = stub("pal");
+    let mut m = stub("800xl");
     // A solid character 1 in the stub's (RAM-copied) character set: point
     // CHBASE at RAM and put the block there.
     frames(&mut m, 2);
@@ -100,7 +100,7 @@ fn text_reaches_the_screen() {
 
 #[test]
 fn portb_banks_the_roms() {
-    let mut m = stub("pal");
+    let mut m = stub("800xl");
     frames(&mut m, 1);
     m.mem.ram[0xc000] = 0x5a;
     assert_ne!(byte(&m, 0xc000), 0x5a, "OS ROM on after power-up");
@@ -119,7 +119,7 @@ fn portb_banks_the_roms() {
 
 #[test]
 fn keyboard_reaches_pokey() {
-    let mut m = stub("pal");
+    let mut m = stub("800xl");
     frames(&mut m, 1);
     let at = m.now();
     m.input(TimedInput {
@@ -150,7 +150,7 @@ fn keyboard_reaches_pokey() {
 
 #[test]
 fn joystick_reaches_pia_and_gtia() {
-    let mut m = stub("pal");
+    let mut m = stub("800xl");
     let at = m.now();
     m.input(TimedInput {
         at,
@@ -178,13 +178,13 @@ fn joystick_reaches_pia_and_gtia() {
 
 #[test]
 fn savestate_round_trip() {
-    let mut a = stub("ntsc");
+    let mut a = stub("800xl-ntsc");
     frames(&mut a, 3);
     for _ in 0..12_345 {
         a.step_cycle();
     }
     let state = a.save_state();
-    let mut b = stub("ntsc");
+    let mut b = stub("800xl-ntsc");
     b.load_state(&state).unwrap();
     frames(&mut a, 3);
     frames(&mut b, 3);
@@ -202,18 +202,18 @@ fn options() {
     config.options.insert("roms".into(), "stub".into());
     config.options.insert("port2".into(), "joystick".into());
     config.options.insert("basic".into(), "off".into());
-    let m = Atari800Xl::new(&config).unwrap();
+    let m = Atari8::new(&config).unwrap();
     assert!(m.ports().iter().all(|p| p.connected));
     assert_eq!(m.io.gtia.peek(0x1f) & 0x04, 0, "OPTION held for boot");
     config.options.insert("port1".into(), "mouse".into());
-    assert!(Atari800Xl::new(&config).is_err());
+    assert!(Atari8::new(&config).is_err());
     let mut config = MachineConfig::default();
     assert!(matches!(
-        Atari800Xl::new(&config),
+        Atari8::new(&config),
         Err(ConfigError::MissingRom(_))
     ));
-    config.model = Some("secam".into());
-    assert!(Atari800Xl::new(&config).is_err());
+    config.model = Some("800xl-secam".into());
+    assert!(Atari8::new(&config).is_err());
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn paddles_turn_pokey_pots() {
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
     config.options.insert("port2".into(), "paddles".into());
-    let mut m = Atari800Xl::new(&config).unwrap();
+    let mut m = Atari8::new(&config).unwrap();
     let at = m.now();
     for (axis, value) in [(0u8, 0u16), (1, 0x8000)] {
         m.input(TimedInput {
@@ -254,7 +254,7 @@ fn drive_slots_and_options() {
     config.options.insert("roms".into(), "stub".into());
     config.options.insert("drives".into(), "2".into());
     config.options.insert("drive".into(), "810".into());
-    let mut m = Atari800Xl::new(&config).unwrap();
+    let mut m = Atari8::new(&config).unwrap();
     let names: Vec<_> = m.media_slots().iter().map(|s| s.name).collect();
     assert_eq!(names, ["D1:", "D2:", "program", "tape", "cartridge"]);
     assert!(m.media_slot(SlotId(2)).is_none(), "no D3:");
@@ -271,12 +271,12 @@ fn drive_slots_and_options() {
     for (k, v) in [("drives", "5"), ("drive", "1541")] {
         let mut c = config.clone();
         c.options.insert(k.into(), v.into());
-        assert!(Atari800Xl::new(&c).is_err(), "{k}={v}");
+        assert!(Atari8::new(&c).is_err(), "{k}={v}");
     }
     // Savestates carry the drive configuration.
     let state = m.save_state();
     config.options.insert("drives".into(), "1".into());
-    let mut other = Atari800Xl::new(&config).unwrap();
+    let mut other = Atari8::new(&config).unwrap();
     assert!(other.load_state(&state).is_err());
 }
 
@@ -307,7 +307,7 @@ mod media_backends_free {
 
 #[test]
 fn cartridge_maps_banks_and_drives_trig3() {
-    let mut m = stub("pal");
+    let mut m = stub("800xl");
     frames(&mut m, 1);
     assert_eq!(byte(&m, 0xd013), 0, "TRIG3: no cartridge");
     m.mem.ram[0x8000] = 0x11;
@@ -339,7 +339,7 @@ fn cartridge_maps_banks_and_drives_trig3() {
 
 #[test]
 fn chips_show_both_register_sides() {
-    let mut m = stub("pal");
+    let mut m = stub("800xl");
     frames(&mut m, 1);
     poke(&mut m, 0xd012, 0x46);
     let chips = m.chips();
@@ -356,4 +356,127 @@ fn chips_show_both_register_sides() {
     assert_eq!(find("pokey", "POT0"), Some((Some(0xd200), 228)));
     assert_eq!(find("antic", "DMACTL"), Some((Some(0xd400), 0x22)));
     assert!(find("pia", "PORTB").is_some());
+}
+
+#[test]
+fn models_choose_memory_ports_and_reset_behaviour() {
+    let m = stub("65xe");
+    assert_eq!(m.model(), Model::A65Xe);
+    assert_eq!(m.ports().len(), 2);
+    assert!(m.mem.banks_with_portb());
+    let m = stub("130xe-ntsc");
+    assert_eq!(
+        (m.model(), m.standard),
+        (Model::A130Xe, VideoStandard::Ntsc)
+    );
+    assert_eq!(m.mem.extended.len(), 0x1_0000);
+    let m = stub("800");
+    assert_eq!(m.ports().len(), 4, "four joystick ports");
+    assert_eq!(m.mem.kind, Kind::Old { ram: 0xc000 });
+    assert_eq!(m.mem.roms.os.len(), OS_AB_SIZE);
+    let m = stub("400");
+    assert_eq!(m.mem.kind, Kind::Old { ram: 0x4000 });
+    let mut config = MachineConfig {
+        model: Some("400".into()),
+        ..MachineConfig::default()
+    };
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("ram".into(), "48k".into());
+    assert_eq!(
+        Atari8::new(&config).unwrap().mem.kind,
+        Kind::Old { ram: 0xc000 }
+    );
+    config.options.insert("ram".into(), "64k".into());
+    assert!(Atari8::new(&config).is_err());
+    config.options.remove("ram");
+    config.options.insert("port4".into(), "joystick".into());
+    assert!(Atari8::new(&config).unwrap().ports()[3].connected);
+    config.model = Some("800xl".into());
+    assert!(
+        Atari8::new(&config).is_ok(),
+        "port4 is ignored on two-port models"
+    );
+}
+
+#[test]
+fn the_800_runs_the_stub_without_banking_and_resets_through_an_nmi() {
+    let mut m = stub("800");
+    frames(&mut m, 3);
+    assert!(
+        byte(&m, 0xd800) != 0 || byte(&m, 0xf000) != 0,
+        "OS-B area from the stub"
+    );
+    // PORTB is joystick ports 3/4: writing it banks nothing.
+    poke(&mut m, 0xd303, 0x34); // PBCTL: port
+    poke(&mut m, 0xd301, 0x00);
+    assert_eq!(
+        byte(&m, 0xd301),
+        0xff,
+        "an input port reads the pulled-up lines"
+    );
+    assert_eq!(byte(&m, 0xc000), 0xff, "nothing at $C000");
+    // Joystick in port 3 pulls PORTB bits 0-3 and TRIG2.
+    let at = m.now();
+    let joy = Box::new(devices_input::Joystick::new(PortKind::AtariJoy));
+    m.connect(PORT3, joy).unwrap();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(PORT3),
+        event: InputEvent::Digital {
+            dirs: Dirs::DOWN,
+            buttons: 1,
+        },
+    });
+    frames(&mut m, 1);
+    assert_eq!(byte(&m, 0xd301), 0xfd, "down on stick 3");
+    assert_eq!(byte(&m, 0xd012), 0, "TRIG2 pressed");
+    assert_eq!(byte(&m, 0xd013), 1, "TRIG3 is port 4, not the cartridge");
+    // The RESET key is an NMI: NMIST bit 5 appears within the line (the
+    // stub's handler clears NMIST again at the next vertical blank).
+    let fields = m.io.antic.frame();
+    m.key(keys::RESET.0, true);
+    let mut seen = false;
+    for _ in 0..2000 {
+        m.step_cycle();
+        if byte(&m, 0xd40f) & 0x20 != 0 {
+            seen = true;
+            break;
+        }
+    }
+    assert!(seen, "NMIST RNMI");
+    frames(&mut m, 2);
+    assert!(m.io.antic.frame() > fields, "the machine kept running");
+    assert_eq!(
+        m.mem.portb & 0x0f,
+        0xfd & 0x0f,
+        "no system reset: PORTB inputs still read the stick"
+    );
+}
+
+#[test]
+fn the_130xe_switches_banks_for_cpu_and_antic() {
+    let mut m = stub("130xe");
+    frames(&mut m, 1);
+    poke(&mut m, 0xd303, 0x30); // PBCTL: DDR
+    poke(&mut m, 0xd301, 0xff); // all outputs
+    poke(&mut m, 0xd303, 0x34); // PBCTL: port
+    poke(&mut m, 0xd301, 0xff);
+    poke(&mut m, 0x4000, 0x11);
+    // CPU bank 1 ($E7 = bits 2-3: 01, bit 4 clear), ANTIC main RAM.
+    poke(&mut m, 0xd301, 0xe7);
+    poke(&mut m, 0x4000, 0x22);
+    assert_eq!(byte(&m, 0x4000), 0x22);
+    assert_eq!(m.mem.read_dma(0x4000), 0x11);
+    assert_eq!(m.mem.extended[0x4000], 0x22, "bank 1");
+    // ANTIC bank 1, CPU main RAM.
+    poke(&mut m, 0xd301, 0xd7);
+    assert_eq!(byte(&m, 0x4000), 0x11);
+    assert_eq!(m.mem.read_dma(0x4000), 0x22);
+    // A savestate round trip keeps the extended RAM and refuses the XL.
+    let s = m.save_state();
+    let mut n = stub("130xe");
+    n.load_state(&s).unwrap();
+    assert_eq!(n.mem.extended[0x4000], 0x22);
+    let mut xl = stub("800xl");
+    assert!(xl.load_state(&s).is_err());
 }

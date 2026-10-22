@@ -73,6 +73,8 @@ own section.
 | POKEY | POKEY data sheet (C012294) | `chips-atari/src/pokey.rs` |
 | Keyboard codes, controllers | *Atari 400/800 (and XL) Technical Reference Notes* | `machine-atari8/src/keyboard.rs`, `devices-input/src/paddles.rs` |
 | Memory map, PORTB banking | *Atari 800XL Field Service Manual* | `machine-atari8/src/memory.rs` |
+| 130XE: 64 KB extended RAM in four 16 KB banks at $4000–$7FFF, PORTB bit 4 (CPU) and bit 5 (ANTIC) enable them separately, bits 2–3 select the bank | *Atari 130XE Field Service Manual*; Altirra Hardware Reference Manual, "PORTB" / "Extended memory" | `machine-atari8/src/memory.rs` (`Kind::Xe130`) |
+| 400/800: 8–48 KB RAM, 10 KB OS-A/OS-B at $D800–$FFFF, nothing at $C000–$CFFF, left/right cartridge slots, PIA port B = joystick ports 3/4 (TRIG2/3, POT4–7), the RESET key wired to ANTIC's /RNMI (NMIST/NMIEN bit 5) | *Atari 400/800 Operating System User's Manual* (memory map, RNMI); *Atari 400/800 Hardware Manual* (PIA and port wiring); Altirra Hardware Reference Manual, "ANTIC" NMIEN/NMIST | `machine-atari8/src/memory.rs` (`Kind::Old`), `lib.rs`, `chips-atari/src/antic.rs` (`reset_key`) |
 | SIO protocol | *Atari 400/800 OS Manual*, "Serial I/O" | `drives-other/src/sio.rs` |
 | XEX | *Atari DOS 2.0S Reference Manual*, "Binary file format" | `media/src/xex.rs` |
 | ATR | ATR format as published with the SIO2PC project (Nick Kennedy) | `media/src/atr.rs` |
@@ -120,6 +122,17 @@ own section.
 | Mouse quadrature signals, game port pinout, JOYxDAT counters, JOYTEST | HRM chapter 8 "Controller ports", "Reading the mouse" | `devices-input/src/amiga_mouse.rs`, `chips-amiga/src/custom.rs` |
 | Interlace: long/short fields (LOF), field order | HRM chapter 3 "Interlaced mode" | `chips-amiga/src/custom.rs`, `video-crt/src/field.rs` |
 | VPA/E-clock bus cycles (CIA accesses, autovector acknowledge) | Motorola, *M68000 User's Manual*, "Synchronous operation" | `machine-amiga` (`e_clock_waits`) |
+| Audio attach modes (ADKCON USExV/USExP: a channel's words set the next channel's volume or period, both alternating volume first; the attached channel is silent) | HRM chapter 5 "Producing complex sounds", "Modulating sound", ADKCON in appendix A | `chips-amiga/src/audio.rs`, `custom.rs` |
+| Serial port: SERPER (bit period in colour clocks, LONG), SERDAT (data with stop bits, shifted out LSB first after a start bit until empty), SERDATR bits (OVRUN, RBF, TBE, TSRE, RXD), TBE/RBF interrupts, UARTBRK | HRM chapter 8 "Serial port", appendix A | `chips-amiga/src/uart.rs` |
+| ADKCON PRECOMP/MFMPREC: write precompensation shifts flux transitions by 0/140/280/560 ns; no effect on a bit-cell model, the bits read back | HRM appendix A, ADKCON | `chips-amiga/src/paula.rs` (doc) |
+| A500 output filters: fixed first-order low-pass about 4.9 kHz; LED filter a second-order Butterworth (Sallen-Key) low-pass about 3.3 kHz switched by CIA-A PA1 | HRM chapter 5 "Audio filter"; corner frequencies as commonly derived from the A500 schematic (Rev 6A, audio output stage) | `machine-amiga/src/lib.rs` (`LED_B`, `LED_A`) |
+| Zorro II autoconfig: configuration ROM as nibbles at $E80000 (byte n at 4n / 4n+2, upper data bits, all but er_Type inverted), er_Type bits (Zorro II $C0, memory list $20, size code), base address written to $E80048/$E8004A, shut-up at $E8004C, expansion space $200000–$9FFFFF | HRM appendix "Expansion", `libraries/configregs.h` of the Amiga ROM Kernel Reference Manual: Includes and Autodocs (3rd ed.) | `machine-amiga/src/memory.rs` (`Autoconfig`) |
+| A1000 writable control store: 256 KB RAM at $FC0000 loaded by the bootstrap ROM from the Kickstart disk, write-protect latch set by a write into the bootstrap ROM's range, the WCS then showing at $F80000–$FFFFFF; 256 KB chip RAM standard | *Amiga 1000* schematics and service documentation (Commodore), the HRM memory map; behaviour also described in the Amiga Hardware Database (A1000 page) | `machine-amiga/src/memory.rs` (`Wcs`) |
+| 1 MB chip RAM (Agnus 8372 "Fat Agnus" in A500 rev 6A and A2000), its address range and mirroring; A2000 as a 1 MB chip RAM board without trapdoor RAM | Amiga Hardware Database, A500 and A2000 pages; HRM memory map | `machine-amiga` (`chip` option, models) |
+| High-density floppy drive: $AAAAAAAA identification with an HD disk, DD identification with a DD disk, 150 rpm for HD disks (twice the bit cells per track at Paula's clock), 22 sectors per track, 1 760 KB ADF | Commodore *A3000/A4000 HD floppy* documentation as summarised by the trackdisk.device autodocs (`TD_GETDRIVETYPE`, `DRIVE3_5_150RPM`) and the ADF FAQ | `drives-other/src/amiga_drive.rs`, `media/src/adf.rs` (`Density`) |
+| Extended ADF layouts `UAE--ADF` (sync/length table) and `UAE-1ADF` (reserved, type, length, bit length per track) | Laurent Clévy, "The .ADF (Amiga Disk File) format FAQ", section on the UAE extended ADF; format description only, no code | `media/src/adfx.rs` |
+| Sprite behaviour checks: display-window clipping of sprites (shown only after the line's first BPL1DAT, or on lines without planes), sprite/playfield and sprite/sprite collisions (CLXCON/CLXDAT: bit 0 follows the odd planes alone, the odd-plane sprite bits need the even planes too in single-playfield mode, nothing counts outside the window or on lines without bitplane data), playfield priorities, SPRxPOS/CTL/DATA write timing | vAmiga test suite (github.com/dirkwhoffmann/vAmigaTS, GPL-3.0; the test programs are mostly Alpine9000's Amiga examples) — run as test data only with `tests/tests/vamigats.rs`, compared against the repository's photographs of real A500s; no code or images copied into this repository | `tests/tests/vamigats.rs`, `chips-amiga/src/denise.rs` |
+| DMS archive layout (file header, track headers, CRC-16/ARC, checksums), compression modes NOCOMP/SIMPLE/QUICK/MEDIUM/DEEP/HEAVY1/HEAVY2 and the track flags (state carry-over, new trees, RLE) | xDMS 1.3.2 by André Rodrigues de la Rocha (public domain, `COPYING`: "xdms is licensed under PUBLIC DOMAIN"), read as the format's documentation; its decoders derive from LZHUF (Haruyasu Yoshizaki, public domain) and UNIX LHA (Masaru Oki); verified with freely distributed DMS archives from Aminet | `media/src/dms.rs` |
 
 ### Video, colour and host conventions
 
@@ -182,5 +195,5 @@ the Python standard library only.
 Not in the repository (golden rule 6): Commodore KERNAL/BASIC/character
 ROMs (C64, VIC-20, PET, C16/Plus/4, C128), drive DOS ROMs (1541, 1571,
 1581), Atari XL OS and BASIC, Amstrad CPC ROMs, Amiga Kickstart (1.2, 1.3,
-2.0, 3.1; 256 or 512 KB images). Users put them into
-`roms/<machine>/` and `roms/drives/`.
+2.0, 3.1; 256 or 512 KB images), the A1000 bootstrap ROM. Users put them
+into `roms/<machine>/` and `roms/drives/`.

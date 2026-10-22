@@ -35,7 +35,7 @@
 
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -52,7 +52,9 @@ use video_crt::Profile;
 use emu_core::{AudioFormat, ControlInfo, ControlKind, Machine};
 
 use crate::raw::{audio_message, RawEncoder};
+use crate::OwnedPixels;
 use crate::{dirty_rect, stream_message, Filter, Format, OwnedFrame, Rect, RgbImage};
+use video_crt::field::FieldStage;
 
 const VIEWER: &str = include_str!("viewer.html");
 /// Longest accepted request head.
@@ -84,6 +86,9 @@ impl Screens {
 pub struct FrameTap {
     tx: Arc<watch::Sender<Option<Arc<Screens>>>>,
     audio: Arc<broadcast::Sender<Arc<Vec<u8>>>>,
+    /// Interlace weaving per output (Amiga LACE): viewers get whole
+    /// frames, the field parity stays in the signal.
+    fields: Arc<Mutex<Vec<(&'static str, FieldStage)>>>,
 }
 
 impl Default for FrameTap {
@@ -97,16 +102,34 @@ impl FrameTap {
         Self {
             tx: Arc::new(watch::channel(None).0),
             audio: Arc::new(broadcast::channel(AUDIO_BACKLOG).0),
+            fields: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    /// Copy the machine's current frames (every output) for the preview.
-    /// Never blocks.
+    /// Copy the machine's current frames (every output) for the preview;
+    /// interlaced fields are woven into frames of twice the lines. Never
+    /// blocks on viewers.
     pub fn publish(&self, m: &dyn Machine, running: bool) {
+        let mut fields = self.fields.lock().unwrap_or_else(|e| e.into_inner());
         let screens = m
             .screens()
             .into_iter()
-            .filter_map(|s| Some((s.name, OwnedFrame::from_screen(m, s.id, running)?)))
+            .filter_map(|s| {
+                let mut frame = OwnedFrame::from_screen(m, s.id, running)?;
+                let stage = match fields.iter_mut().position(|(n, _)| *n == s.name) {
+                    Some(i) => &mut fields[i].1,
+                    None => {
+                        fields.push((s.name, FieldStage::default()));
+                        &mut fields.last_mut().expect("just pushed").1
+                    }
+                };
+                if let Some((w, h, px)) = stage.process(&frame.as_frame_ref()) {
+                    frame.pixels = OwnedPixels::Rgb(px.to_vec());
+                    frame.width = w;
+                    frame.height = h;
+                }
+                Some((s.name, frame))
+            })
             .collect();
         self.tx
             .send_replace(Some(Arc::new(Screens(screens, m.controls()))));

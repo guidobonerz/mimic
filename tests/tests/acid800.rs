@@ -34,11 +34,11 @@ fn testdata() -> PathBuf {
 #[test]
 #[ignore = "needs EMU_TESTDATA_DIR (tools/fetch-testdata.sh) and Atari ROMs in EMU_ROM_DIR"]
 fn acid800_suite() {
-    let model = std::env::var("EMU_ACID_MODEL").unwrap_or_else(|_| "pal".into());
+    let model = std::env::var("EMU_ACID_MODEL").unwrap_or_else(|_| "800xl".into());
     let filter = std::env::var("EMU_ACID_FILTER").unwrap_or_default();
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
-        roms: media_backends::roms::load(&dir, "atari800xl").expect("ROMs"),
+        roms: media_backends::roms::load(&dir, "atari8").expect("ROMs"),
         model: Some(model.clone()),
         ..MachineConfig::default()
     };

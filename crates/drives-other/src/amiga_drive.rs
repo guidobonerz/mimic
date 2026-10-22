@@ -1,7 +1,7 @@
-//! Amiga 3.5" double-density floppy drive: select, motor, head stepping,
-//! the status lines, the drive identification and the disk as rotating
-//! MFM tracks, on the CIA lines the Amiga wires them to (HRM appendix F;
-//! chapter 8 "Disk"):
+//! Amiga 3.5" floppy drive: select, motor, head stepping, the status
+//! lines, the drive identification and the disk as rotating MFM tracks,
+//! on the CIA lines the Amiga wires them to (HRM appendix F; chapter 8
+//! "Disk"):
 //!
 //! - CIA-B port B (outputs): 7 /MTR, 6–3 /SEL3–/SEL0, 2 /SIDE, 1 DIR
 //!   (1 = outward, towards cylinder 0), 0 /STEP.
@@ -13,41 +13,87 @@
 //! the falling edge. /CHNG goes low when the disk is removed and stays low
 //! until a step pulse with a disk inside. With the motor off, /RDY carries
 //! the drive's 32-bit identification, one bit per select: turning the
-//! motor on and off restarts it (3.5" double-density drives send all ones).
+//! motor on and off restarts it. A double-density drive sends all ones
+//! ([`ID_35_DD`]); the high-density drive sends [`ID_35_HD`] with a
+//! high-density disk (or none) inside and the double-density pattern with
+//! a double-density disk, and turns high-density disks at half speed, so
+//! their tracks hold twice the bit cells at Paula's bit clock.
 //!
-//! **Disks.** An ADF is encoded into 160 MFM tracks on insert
-//! (`media::adf`); written tracks are decoded back into the image and
-//! written through the backend on flush and eject. The disk is media, not
-//! state: savestates keep the mechanics only.
+//! **Disks.** A plain ADF is encoded into 160 MFM tracks on insert
+//! (`media::adf`; 22 sectors per track for a 1.76 MB image); written
+//! tracks are decoded back into the image and written through the backend
+//! on flush and eject. An extended ADF (`media::adfx`) keeps raw tracks
+//! bit for bit and writes them back the same way. A DMS archive
+//! (`media::dms`) is unpacked on insert and is read-only. The disk is
+//! media, not state: savestates keep the mechanics only.
 
 use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{StateError, StateReader, StateWriter};
-use media::adf;
+use media::adf::{self, Density};
+use media::{adfx, dms};
 
 /// Identification of a 3.5" double-density drive.
 pub const ID_35_DD: u32 = 0xffff_ffff;
+/// Identification of a 3.5" high-density drive (with an HD disk inside).
+pub const ID_35_HD: u32 = 0xaaaa_aaaa;
 /// Highest cylinder the head reaches.
 pub const LAST_CYLINDER: u8 = 81;
-/// Bit cells on a track.
+/// Bit cells on a double-density track.
 pub const TRACK_BITS: u32 = (adf::TRACK_BYTES * 8) as u32;
+
+enum Layout {
+    /// A plain ADF of the given density.
+    Plain(Density),
+    /// An extended ADF: the file layout; raw tracks keep their length.
+    Extended(adfx::Image),
+    /// Unpacked from a DMS archive: never written back.
+    ReadOnly,
+}
 
 struct Disk {
     media: Media,
+    /// The file as it is written back (plain/extended ADF), or the
+    /// unpacked image (DMS).
     image: Vec<u8>,
+    layout: Layout,
     tracks: Vec<Vec<u8>>,
+    /// Bit cells per track.
+    bits: Vec<u32>,
     dirty: Vec<bool>,
     protected: bool,
 }
 
 impl Disk {
+    fn density(&self) -> Density {
+        match &self.layout {
+            Layout::Plain(d) => *d,
+            Layout::Extended(_) | Layout::ReadOnly => Density::Double,
+        }
+    }
+
     fn write_back(&mut self) -> Result<(), MediaError> {
         if !self.dirty.iter().any(|&d| d) {
             return Ok(());
         }
-        for t in 0..adf::TRACKS {
-            if std::mem::take(&mut self.dirty[t]) {
-                let sectors = adf::decode_track(&self.tracks[t]);
-                adf::store_track(&mut self.image, t, &sectors);
+        match &self.layout {
+            Layout::ReadOnly => {
+                self.dirty.fill(false);
+                return Err(MediaError::WriteProtected);
+            }
+            Layout::Plain(_) => {
+                for t in 0..adf::TRACKS {
+                    if std::mem::take(&mut self.dirty[t]) {
+                        let sectors = adf::decode_track(&self.tracks[t]);
+                        adf::store_track(&mut self.image, t, &sectors);
+                    }
+                }
+            }
+            Layout::Extended(img) => {
+                for t in 0..self.tracks.len() {
+                    if std::mem::take(&mut self.dirty[t]) {
+                        img.store_track(&mut self.image, t, &self.tracks[t]);
+                    }
+                }
             }
         }
         self.media.backend.write(0, &self.image)
@@ -55,7 +101,8 @@ impl Disk {
 }
 
 pub struct AmigaDrive {
-    pub id: u32,
+    /// High-density drive.
+    pub hd: bool,
     pub motor: bool,
     pub selected: bool,
     pub cylinder: u8,
@@ -74,6 +121,7 @@ pub struct AmigaDrive {
 impl std::fmt::Debug for AmigaDrive {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AmigaDrive")
+            .field("hd", &self.hd)
             .field("motor", &self.motor)
             .field("cylinder", &self.cylinder)
             .field("upper", &self.upper)
@@ -87,7 +135,7 @@ impl std::fmt::Debug for AmigaDrive {
 impl Clone for AmigaDrive {
     fn clone(&self) -> Self {
         Self {
-            id: self.id,
+            hd: self.hd,
             motor: self.motor,
             selected: self.selected,
             cylinder: self.cylinder,
@@ -109,19 +157,41 @@ impl Default for AmigaDrive {
 }
 
 impl AmigaDrive {
+    /// A double-density drive.
     pub fn new() -> Self {
-        Self {
-            id: ID_35_DD,
+        Self::with_type(false)
+    }
+
+    /// A double-density (`false`) or high-density drive.
+    pub fn with_type(hd: bool) -> Self {
+        let mut d = Self {
+            hd,
             motor: false,
             selected: false,
             cylinder: 0,
             upper: false,
             changed: true,
             pos: 0,
-            id_shift: ID_35_DD,
+            id_shift: 0,
             id_bit: false,
             step_level: true,
             disk: None,
+        };
+        d.id_shift = d.id();
+        d
+    }
+
+    /// The identification the drive sends now.
+    pub fn id(&self) -> u32 {
+        if self.hd
+            && self
+                .disk
+                .as_ref()
+                .is_none_or(|d| d.density() == Density::High)
+        {
+            ID_35_HD
+        } else {
+            ID_35_DD
         }
     }
 
@@ -141,7 +211,7 @@ impl AmigaDrive {
             let motor = prb & 0x80 == 0;
             if self.motor && !motor {
                 // Motor turned off: the identification starts again.
-                self.id_shift = self.id;
+                self.id_shift = self.id();
             }
             if !motor && !self.motor {
                 self.id_bit = self.id_shift & 0x8000_0000 != 0;
@@ -184,6 +254,15 @@ impl AmigaDrive {
         usize::from(self.cylinder) * 2 + usize::from(self.upper)
     }
 
+    /// Bit cells on the track under the head.
+    pub fn track_bits(&self) -> u32 {
+        let t = self.track();
+        self.disk
+            .as_ref()
+            .and_then(|d| d.bits.get(t).copied())
+            .unwrap_or(TRACK_BITS)
+    }
+
     /// One 2 µs bit cell while the motor turns: the bit under the head
     /// (written first if `write` is given and the disk is not protected)
     /// and whether the index hole passed.
@@ -192,24 +271,27 @@ impl AmigaDrive {
             return (false, false);
         }
         let t = self.track();
+        let bits = self.track_bits();
         let pos = self.pos as usize;
         let mut bit = false;
         if let Some(d) = &mut self.disk {
             if let Some(track) = d.tracks.get_mut(t) {
-                let mask = 0x80 >> (pos % 8);
-                if let (Some(b), false) = (write, d.protected) {
-                    if b {
-                        track[pos / 8] |= mask;
-                    } else {
-                        track[pos / 8] &= !mask;
+                if let Some(byte) = track.get_mut(pos / 8) {
+                    let mask = 0x80 >> (pos % 8);
+                    if let (Some(b), false) = (write, d.protected) {
+                        if b {
+                            *byte |= mask;
+                        } else {
+                            *byte &= !mask;
+                        }
+                        d.dirty[t] = true;
                     }
-                    d.dirty[t] = true;
+                    bit = *byte & mask != 0;
                 }
-                bit = track[pos / 8] & mask != 0;
             }
         }
         self.pos += 1;
-        let index = self.pos >= TRACK_BITS;
+        let index = self.pos >= bits;
         if index {
             self.pos = 0;
         }
@@ -217,8 +299,9 @@ impl AmigaDrive {
     }
 
     pub fn save(&self, w: &mut StateWriter) {
-        w.chunk(*b"AFDD", 2, |w| {
-            w.u32(self.id);
+        // Version 3: the drive type.
+        w.chunk(*b"AFDD", 3, |w| {
+            w.u32(self.id());
             w.u32(self.id_shift);
             w.u8(self.cylinder);
             w.u32(self.pos);
@@ -232,18 +315,19 @@ impl AmigaDrive {
             ] {
                 w.bool(b);
             }
+            w.bool(self.hd);
         });
     }
 
     /// Atomic: on error the drive is unchanged. The disk stays.
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(*b"AFDD", 2)?;
-        let mut n = Self::new();
-        n.id = c.u32()?;
+        let (version, mut c) = r.chunk(*b"AFDD", 3)?;
+        let mut n = Self::with_type(self.hd);
+        let _id = c.u32()?;
         n.id_shift = c.u32()?;
         n.cylinder = c.u8()?;
         n.pos = c.u32()?;
-        if n.cylinder > LAST_CYLINDER || n.pos >= TRACK_BITS {
+        if n.cylinder > LAST_CYLINDER || n.pos >= 2 * TRACK_BITS {
             return Err(StateError::Invalid("floppy head position"));
         }
         for b in [
@@ -256,7 +340,13 @@ impl AmigaDrive {
         ] {
             *b = c.bool()?;
         }
+        if version >= 3 && c.bool()? != self.hd {
+            return Err(StateError::Invalid("floppy drive type differs"));
+        }
         n.disk = self.disk.take();
+        if n.pos >= n.track_bits() {
+            n.pos = 0;
+        }
         *self = n;
         Ok(())
     }
@@ -267,20 +357,49 @@ impl MediaSlot for AmigaDrive {
         if media.kind != MediaKind::Disk {
             return Err(MediaError::Unsupported(media.kind));
         }
-        let mut image = vec![0; media.backend.len() as usize];
-        media.backend.read(0, &mut image)?;
-        adf::check(&image)?;
-        let tracks = (0..adf::TRACKS)
-            .map(|t| adf::encode_track(&image, t))
-            .collect();
+        let mut file = vec![0; media.backend.len() as usize];
+        media.backend.read(0, &mut file)?;
+        let (image, layout, tracks, bits) = if dms::is_dms(&file) {
+            let image = dms::unpack(&file)?;
+            let density = Density::of_image(&image)?;
+            let tracks: Vec<Vec<u8>> = (0..adf::TRACKS)
+                .map(|t| adf::encode_track(&image, t))
+                .collect();
+            let bits = vec![8 * density.track_bytes() as u32; adf::TRACKS];
+            (image, Layout::ReadOnly, tracks, bits)
+        } else if adfx::is_extended(&file) {
+            let img = adfx::Image::parse(&file)?;
+            let (tracks, bits): (Vec<_>, Vec<_>) =
+                (0..adf::TRACKS).map(|t| img.track_bits(&file, t)).unzip();
+            (file, Layout::Extended(img), tracks, bits)
+        } else {
+            let density = Density::of_image(&file)?;
+            if density == Density::High && !self.hd {
+                return Err(MediaError::Format(
+                    "a high-density disk needs a high-density drive (option drivetype=hd)".into(),
+                ));
+            }
+            let tracks: Vec<Vec<u8>> = (0..adf::TRACKS)
+                .map(|t| adf::encode_track(&file, t))
+                .collect();
+            let bits = vec![8 * density.track_bytes() as u32; adf::TRACKS];
+            (file, Layout::Plain(density), tracks, bits)
+        };
         let _ = self.eject();
+        let read_only = matches!(layout, Layout::ReadOnly);
         self.disk = Some(Disk {
             media,
             image,
+            layout,
+            dirty: vec![false; tracks.len()],
             tracks,
-            dirty: vec![false; adf::TRACKS],
-            protected: false,
+            bits,
+            protected: read_only,
         });
+        self.id_shift = self.id();
+        if self.pos >= self.track_bits() {
+            self.pos = 0;
+        }
         Ok(())
     }
 
@@ -288,12 +407,14 @@ impl MediaSlot for AmigaDrive {
         let mut d = self.disk.take()?;
         let _ = d.write_back();
         self.changed = true;
+        self.id_shift = self.id();
         Some(d.media)
     }
 
+    /// A DMS disk stays protected.
     fn write_protect(&mut self, on: bool) {
         if let Some(d) = &mut self.disk {
-            d.protected = on;
+            d.protected = on || matches!(d.layout, Layout::ReadOnly);
         }
     }
 
@@ -362,6 +483,21 @@ mod tests {
         d.write_prb(0xff, 3);
     }
 
+    /// Read the 32 identification bits.
+    fn read_id(d: &mut AmigaDrive) -> u32 {
+        sel(d, true, true, false);
+        deselect(d);
+        sel(d, false, true, false);
+        deselect(d);
+        let mut id = 0;
+        for _ in 0..32 {
+            sel(d, false, true, false);
+            id = id << 1 | u32::from(d.pulled_low() & 0x20 != 0);
+            deselect(d);
+        }
+        id
+    }
+
     #[test]
     fn steps_and_reports_track_zero() {
         let mut d = AmigaDrive::new();
@@ -382,15 +518,7 @@ mod tests {
     #[test]
     fn identification_sends_all_ones() {
         let mut d = AmigaDrive::new();
-        sel(&mut d, true, true, false);
-        deselect(&mut d);
-        sel(&mut d, false, true, false);
-        deselect(&mut d);
-        for _ in 0..32 {
-            sel(&mut d, false, true, false);
-            assert_eq!(d.pulled_low() & 0x20, 0x20);
-            deselect(&mut d);
-        }
+        assert_eq!(read_id(&mut d), ID_35_DD);
     }
 
     #[test]
@@ -447,6 +575,144 @@ mod tests {
     }
 
     #[test]
+    fn high_density_drive_and_disks() {
+        let mut d = AmigaDrive::with_type(true);
+        assert_eq!(read_id(&mut d), ID_35_HD, "empty: an HD drive");
+        let dd = Arc::new(Mutex::new(vec![0x11; adf::ADF_SIZE]));
+        d.insert(disk(dd)).unwrap();
+        assert_eq!(read_id(&mut d), ID_35_DD, "a DD disk reads as a DD drive");
+        assert_eq!(d.track_bits(), TRACK_BITS);
+        let hd = Arc::new(Mutex::new(vec![0x22; adf::ADF_HD_SIZE]));
+        d.insert(disk(hd.clone())).unwrap();
+        assert_eq!(read_id(&mut d), ID_35_HD);
+        assert_eq!(
+            d.track_bits(),
+            2 * TRACK_BITS,
+            "half speed: twice the cells"
+        );
+        sel(&mut d, true, true, false);
+        let mut bytes = Vec::new();
+        let mut acc = 0u8;
+        for i in 0..2 * TRACK_BITS as usize {
+            let (b, _) = d.cell(None);
+            acc = acc << 1 | u8::from(b);
+            if i % 8 == 7 {
+                bytes.push(acc);
+            }
+        }
+        assert_eq!(adf::decode_track(&bytes).len(), 22);
+        // Write sector 15 of track 0 and flush: it lands in the HD image.
+        let mut img = vec![0u8; adf::ADF_HD_SIZE];
+        img[15 * 512..16 * 512].fill(0x77);
+        let track = adf::encode_track(&img, 0);
+        for i in 0..2 * TRACK_BITS as usize {
+            d.cell(Some(track[i / 8] >> (7 - i % 8) & 1 != 0));
+        }
+        d.flush().unwrap();
+        let b = hd.lock().unwrap();
+        assert!(b[15 * 512..16 * 512].iter().all(|&v| v == 0x77));
+        assert!(b[14 * 512..15 * 512].iter().all(|&v| v == 0));
+        drop(b);
+        // A DD drive refuses an HD disk.
+        let mut dd_drive = AmigaDrive::new();
+        let hd2 = Arc::new(Mutex::new(vec![0x22; adf::ADF_HD_SIZE]));
+        assert!(dd_drive.insert(disk(hd2)).is_err());
+    }
+
+    #[test]
+    fn extended_adf_raw_tracks_read_and_write_back_in_place() {
+        let raw: Vec<u8> = (0..2000u32).map(|i| (i * 13 + 1) as u8).collect();
+        let sectors: Vec<u8> = (0..adf::SECTORS * 512).map(|i| (i % 251) as u8).collect();
+        let mut tracks: Vec<adfx::BuildTrack<'_>> =
+            vec![(Some((&raw, 16_000)), &[]), (None, &sectors)];
+        tracks.resize(adf::TRACKS, (None, &[]));
+        let file = Arc::new(Mutex::new(adfx::build(&tracks)));
+        let mut d = AmigaDrive::new();
+        d.insert(disk(file.clone())).unwrap();
+        assert_eq!(d.track_bits(), 16_000);
+        sel(&mut d, true, true, false);
+        // Reading the raw track returns its bits and the index after 16 000.
+        let mut got = Vec::new();
+        let mut index = 0;
+        for _ in 0..16_000 {
+            let (b, i) = d.cell(None);
+            got.push(b);
+            index += usize::from(i);
+        }
+        assert_eq!(index, 1);
+        assert!(got
+            .iter()
+            .enumerate()
+            .all(|(i, &b)| b == (raw[i / 8] >> (7 - i % 8) & 1 != 0)));
+        // Writing the raw track inverts the bits in the file.
+        for i in 0..16_000 {
+            d.cell(Some(!(raw[i / 8] >> (7 - i % 8) & 1 != 0)));
+        }
+        d.flush().unwrap();
+        let f = file.lock().unwrap();
+        let img = adfx::Image::parse(&f).unwrap();
+        let (bits, n) = img.track_bits(&f, 0);
+        assert_eq!(n, 16_000);
+        assert!(bits[..2000].iter().zip(&raw).all(|(a, b)| *a == !*b));
+        // The sector track reads as AmigaDOS sectors.
+        drop(f);
+        d.write_prb(0x78 & !0x08 | 0x01, 3); // select, lower side, step high
+        d.write_prb(0x78 & !0x08, 3); // /SIDE low: upper head → track 1
+        assert_eq!(d.track_bits(), TRACK_BITS);
+    }
+
+    #[test]
+    fn dms_archives_unpack_and_stay_read_only() {
+        // A stored DMS of two cylinders.
+        let cyl: Vec<u8> = (0..2 * adf::SECTORS * 512).map(|i| (i % 7) as u8).collect();
+        let mut file = b"DMS!".to_vec();
+        file.extend([0; 52]);
+        let crc = dms::crc16(&file[4..54]);
+        file[54..56].copy_from_slice(&crc.to_be_bytes());
+        for n in 0..2u16 {
+            let mut h = b"TR".to_vec();
+            h.extend(n.to_be_bytes());
+            h.extend(0u16.to_be_bytes());
+            h.extend((cyl.len() as u16).to_be_bytes());
+            h.extend((cyl.len() as u16).to_be_bytes());
+            h.extend((cyl.len() as u16).to_be_bytes());
+            h.extend([0, 0]);
+            let sum = cyl.iter().fold(0u16, |a, &b| a.wrapping_add(u16::from(b)));
+            h.extend(sum.to_be_bytes());
+            h.extend(dms::crc16(&cyl).to_be_bytes());
+            let hcrc = dms::crc16(&h);
+            h.extend(hcrc.to_be_bytes());
+            file.extend(h);
+            file.extend(&cyl);
+        }
+        let shared = Arc::new(Mutex::new(file.clone()));
+        let mut d = AmigaDrive::new();
+        d.insert(disk(shared.clone())).unwrap();
+        assert_eq!(d.pulled_low(), 0);
+        sel(&mut d, true, true, false);
+        assert_eq!(d.pulled_low() & 0x08, 0x08, "/WPRO: read-only");
+        d.write_protect(false);
+        assert_eq!(d.pulled_low() & 0x08, 0x08, "stays protected");
+        let mut bytes = Vec::new();
+        let mut acc = 0u8;
+        for i in 0..TRACK_BITS as usize {
+            let (b, _) = d.cell(None);
+            acc = acc << 1 | u8::from(b);
+            if i % 8 == 7 {
+                bytes.push(acc);
+            }
+        }
+        let sectors = adf::decode_track(&bytes);
+        assert_eq!(sectors.len(), adf::SECTORS);
+        assert_eq!(
+            sectors.iter().find(|s| s.sector == 1).unwrap().data[..7],
+            cyl[512..519]
+        );
+        assert!(d.eject().is_some());
+        assert_eq!(*shared.lock().unwrap(), file, "the archive is untouched");
+    }
+
+    #[test]
     fn savestate_round_trip_keeps_the_disk() {
         let mut d = AmigaDrive::new();
         d.insert(disk(Arc::new(Mutex::new(vec![0; adf::ADF_SIZE]))))
@@ -459,5 +725,10 @@ mod tests {
         assert!(d.has_disk() && d.motor);
         assert!(d.load(&mut StateReader::new(&data[..4])).is_err());
         assert!(d.has_disk(), "a failed load keeps the disk");
+        let mut hd = AmigaDrive::with_type(true);
+        assert!(
+            hd.load(&mut StateReader::new(&data)).is_err(),
+            "drive type is configuration"
+        );
     }
 }

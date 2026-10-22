@@ -199,6 +199,15 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             &["co24947", "ataribas", "atari-basic", "basic-revc", "basic"],
             0x2000,
         ),
+        // 400/800 OS-A/OS-B (10 KB): ATARIOSB.ROM, atariosa.rom, co12499 …
+        optional(
+            "osb",
+            &[
+                "atariosb", "atariosa", "osb", "osa", "os-b", "os-a", "co12499", "co14599",
+                "co12399", "co14699", "os400", "os800",
+            ],
+            0x2800,
+        ),
     ];
     // Amstrad CPC 464/664/6128 (one machine, the model picks the ROMs):
     // 16 KB OS and BASIC per model (BASIC 1.0 on the 464, 1.1 on the
@@ -311,10 +320,16 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             ],
             0x8_0000,
         ),
+        // A1000 bootstrap ROM (8 KB; loads the Kickstart disk into the WCS).
+        optional(
+            "a1000boot",
+            &["a1000boot", "a1000-boot", "a1000 boot", "bootstrap"],
+            0x2000,
+        ),
     ];
     match machine {
         "amiga" => AMIGA,
-        "atari800xl" => ATARI800XL,
+        "atari8" => ATARI800XL,
         "cpc" => CPC,
         "c64" => C64,
         "c128" => C128,
@@ -335,7 +350,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "c128" => &["c128"],
         "plus4" => &["plus4"],
         "c16" => &["c16", "plus4"],
-        "atari800xl" => &["atari800xl", "atari8", "atari"],
+        "atari8" => &["atari8", "atari800xl", "atari"],
         "cpc" => &["cpc", "amstrad"],
         "amiga" => &["amiga"],
         _ => &[],
@@ -489,11 +504,11 @@ mod tests {
         // The 400/800 OS-B has another size and must not match.
         fs::write(dir.join("atari/ATARIOSB.ROM"), vec![2; 0x2800]).unwrap();
         fs::write(dir.join("atari/ATARIBAS.ROM"), vec![3; 0x2000]).unwrap();
-        let roms = load(&dir, "atari800xl").unwrap();
+        let roms = load(&dir, "atari8").unwrap();
         assert_eq!(roms["os"][0], 1);
         assert_eq!(roms["basic"][0], 3);
         fs::remove_file(dir.join("atari/ATARIBAS.ROM")).unwrap();
-        let roms = load(&dir, "atari800xl").unwrap();
+        let roms = load(&dir, "atari8").unwrap();
         assert!(!roms.contains_key("basic"), "BASIC is optional");
         fs::remove_dir_all(&dir).unwrap();
     }

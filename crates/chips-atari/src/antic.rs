@@ -202,6 +202,8 @@ pub struct Antic {
     nmien_at_event: u8,
     /// NMIST bits set in the current cycle (immune to NMIRES).
     nmist_fresh: u8,
+    /// The 400/800 RESET key was pressed: an RNMI on the next NMI cycle.
+    rnmi: bool,
     /// Waiting for vertical blank after a JVB.
     jvb_wait: bool,
     /// Current display-list instruction (`None`: none fetched since power-on;
@@ -266,6 +268,7 @@ impl Antic {
             nmi_event: 0,
             nmien_at_event: 0,
             nmist_fresh: 0,
+            rnmi: false,
             jvb_wait: false,
             ir: None,
             row: 0,
@@ -293,6 +296,12 @@ impl Antic {
 
     pub fn standard(&self) -> VideoStandard {
         self.standard
+    }
+
+    /// The 400/800 RESET key (wired to ANTIC's /RNMI, not to the system
+    /// reset): NMIST bit 5 and an NMI if enabled, on the next NMI cycle.
+    pub fn reset_key(&mut self) {
+        self.rnmi = true;
     }
 
     /// RESET only clears NMIEN (ANTIC has no reset pin; the OS relies on
@@ -347,7 +356,7 @@ impl Antic {
             0x07 => self.pmbase = v,
             0x09 => self.chbase = v,
             0x0a => self.wsync = true,
-            0x0e => self.nmien = v & 0xc0,
+            0x0e => self.nmien = v & 0xe0,
             0x0f => self.nmist = 0x1f | (self.nmist & self.nmist_fresh),
             _ => {}
         }
@@ -628,7 +637,13 @@ impl Antic {
             }
         }
         if self.cycle == NMI_CYCLE {
-            let event = self.nmi_check();
+            let mut event = self.nmi_check();
+            if std::mem::take(&mut self.rnmi) {
+                // The 400/800 RESET key: NMIST bit 5 (RNMI), an NMI when
+                // NMIEN bit 5 allows it (the OS enables it at boot).
+                self.nmist |= 0x20;
+                event |= 0x20;
+            }
             self.nmist_fresh = event;
             self.nmi_event = event;
             self.nmien_at_event = self.nmien;
@@ -877,7 +892,8 @@ fn slot_from_u8(kind: u8, arg: u8) -> Result<Slot, StateError> {
 
 const TAG: [u8; 4] = *b"ANTC";
 /// Version 2: WSYNC request latch, NMI timing, scrolled-region end.
-const VERSION: u16 = 2;
+/// Version 3: the pending RESET-key NMI.
+const VERSION: u16 = 3;
 
 impl Savestate for Antic {
     fn save(&self, w: &mut StateWriter) {
@@ -916,6 +932,7 @@ impl Savestate for Antic {
             w.u8(self.nmi_event);
             w.u8(self.nmist_fresh);
             w.u8(self.nmien_at_event);
+            w.bool(self.rnmi);
             w.bool(self.jvb_wait);
             w.bool(self.prev_vscrol);
             w.bool(self.scroll_end);
@@ -967,6 +984,9 @@ impl Savestate for Antic {
             n.nmi_event = c.u8()?;
             n.nmist_fresh = c.u8()?;
             n.nmien_at_event = c.u8()?;
+        }
+        if version >= 3 {
+            n.rnmi = c.bool()?;
         }
         n.jvb_wait = c.bool()?;
         n.prev_vscrol = c.bool()?;

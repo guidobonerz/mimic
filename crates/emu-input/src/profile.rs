@@ -186,7 +186,7 @@ impl Profile {
         // games' joysticks.
         let port = match machine {
             "c64" | "c128" => Some(1),
-            "vic20" | "c16" | "plus4" | "atari800xl" | "atari2600" | "cpc" => Some(0),
+            "vic20" | "c16" | "plus4" | "atari8" | "atari2600" | "cpc" => Some(0),
             // The Amiga's joystick port is game port 1 (port 0 is the mouse's).
             "amiga" => Some(1),
             _ => None,

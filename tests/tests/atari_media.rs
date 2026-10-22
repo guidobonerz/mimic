@@ -14,12 +14,10 @@ use media_backends::image::MemoryBackend;
 fn machine() -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let config = MachineConfig {
-        roms: media_backends::roms::load(&dir, "atari800xl").expect("ROMs"),
+        roms: media_backends::roms::load(&dir, "atari8").expect("ROMs"),
         ..MachineConfig::default()
     };
-    emu_machines::registry()
-        .create("atari800xl", &config)
-        .unwrap()
+    emu_machines::registry().create("atari8", &config).unwrap()
 }
 
 fn run(m: &mut dyn Machine, fields: usize) {

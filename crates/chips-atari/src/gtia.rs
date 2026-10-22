@@ -79,6 +79,8 @@ pub struct Gtia {
     trig_latched: [bool; 4],
     /// XL/XE: TRIG3 reads the cartridge's RD5 line (1 = cartridge present).
     cartridge: bool,
+    /// False on the 400/800, where TRIG3 is joystick port 4's button.
+    trig3_is_cartridge: bool,
     /// The hires bits of the previous cycle (GTIA mode 10's delay).
     prev_nibble: u8,
     /// Player shift registers, width counters, the HPOSP and SIZEP values
@@ -145,6 +147,7 @@ impl Gtia {
             trig_down: [false; 4],
             trig_latched: [false; 4],
             cartridge: false,
+            trig3_is_cartridge: true,
             prev_nibble: 0,
             p_shift: [0; 4],
             p_ctr: [0; 4],
@@ -177,6 +180,11 @@ impl Gtia {
         self.cartridge = rd5;
     }
 
+    /// 400/800: TRIG3 is a joystick button, not the cartridge sense.
+    pub fn set_trig3_is_cartridge(&mut self, on: bool) {
+        self.trig3_is_cartridge = on;
+    }
+
     pub fn set_trigger(&mut self, n: usize, down: bool) {
         if let Some(t) = self.trig_down.get_mut(n) {
             *t = down;
@@ -193,8 +201,8 @@ impl Gtia {
             0x04..=0x07 => self.p_pf[r - 4],
             0x08..=0x0b => self.m_pl[r - 8],
             0x0c..=0x0f => self.p_pl[r - 0x0c],
-            0x13 => u8::from(self.cartridge),
-            0x10..=0x12 => {
+            0x13 if self.trig3_is_cartridge => u8::from(self.cartridge),
+            0x10..=0x13 => {
                 let n = r - 0x10;
                 u8::from(!(self.trig_down[n] || self.trig_latched[n]))
             }

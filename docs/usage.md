@@ -90,9 +90,9 @@ Größe** erkannt.
 | `pet/` | PET | BASIC, Editor, KERNAL, Zeichensatz je Modell |
 | `plus4/` (auch für `c16`) | C16/Plus/4 | KERNAL, BASIC, optional 3-plus-1 |
 | `c128/` | C128 | KERNAL, BASIC, Zeichensatz, optional Funktions-ROM |
-| `atari/` (`atari8/`, `atari800xl/`) | Atari 800XL | XL-OS (`atarixl.rom`, 16 KB), BASIC (`ataribas.rom`, 8 KB) |
+| `atari/` (`atari8/`, `atari800xl/`) | Atari 400/800/XL/XE | XL-OS (`atarixl.rom`, 16 KB), BASIC (`ataribas.rom`, 8 KB), für 400/800 das OS-A/OS-B (`atariosb.rom`, 10 KB) |
 | `cpc/` (`amstrad/`) | Amstrad CPC | `os464`/`basic1-0`, `os664`/`basic664`, `os6128`/`basic1-1` (je 16 KB) oder 32-KB-Kombidateien `cpc464`/`cpc664`/`cpc6128`; `amsdos`, optional `parados` |
-| `amiga/` | Amiga 500 | Kickstart als 256 KB oder 512 KB, Name z. B. `Kickstart 1.3.rom`, `kick13.rom`, `kick34005.rom`; je Version eine Datei (1.2, 1.3, 2.0, 3.1), Auswahl mit `--option kickstart=` |
+| `amiga/` | Amiga 500/1000/2000 | Kickstart als 256 KB oder 512 KB, Name z. B. `Kickstart 1.3.rom`, `kick13.rom`, `kick34005.rom`; je Version eine Datei (1.2, 1.3, 2.0, 3.1), Auswahl mit `--option kickstart=`; optional das A1000-Bootstrap-ROM (8 KB, `a1000boot.rom`) für `--option wcs=disk` |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
 Der Atari 2600 hat kein System-ROM: das Programm kommt vom Modul (`--cart`).
@@ -115,10 +115,10 @@ Programm statt der echten ROMs, nur für Tests.
 | `pet` | PET | `4032` (Standard), `2001`, `3032`, `8032` |
 | `c16`, `plus4` | C16, Plus/4 | `pal`, `ntsc` |
 | `c128` | C128 | `pal`, `ntsc` |
-| `atari800xl` | Atari 800XL | `pal`, `ntsc` |
+| `atari8` | Atari 400/800/800XL/65XE/130XE | `800xl` (Standard), `65xe`, `130xe`, `800`, `400`, jeweils auch mit `-ntsc` (z. B. `130xe-ntsc`) |
 | `atari2600` | Atari 2600 (VCS) | `ntsc` (Standard), `pal` |
 | `cpc` | Amstrad CPC | `6128` (Standard), `664`, `464` |
-| `amiga` | Commodore Amiga 500 (OCS) | `pal` (Standard), `ntsc` |
+| `amiga` | Commodore Amiga 500/1000/2000 (OCS) | `500` (Standard), `500-ntsc`, `1000`, `1000-ntsc`, `2000`, `2000-ntsc` |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
 
 Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
@@ -130,10 +130,10 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | PET | `ram=8k\|16k\|32k`, `keyboard=graphics\|business`, `hz=50\|60`, `drive8=virtual\|none` |
 | C16/Plus/4 | `ram=16k\|64k`, `drive8=…`, `port1=joystick\|none`, `autostart=on` |
 | C128 | `display=40\|80`, `vdc_ram=16k\|64k`, `sid=…`, `drive8=1571\|1541\|1581\|virtual\|none`, `port2=…`, `autostart=on` |
-| Atari 800XL | `port1`/`port2=joystick\|paddles\|none`, `basic=on\|off`, `drives=0..4`, `drive=1050\|810\|xf551` |
+| Atari 8-Bit | `port1`/`port2=joystick\|paddles\|none` (400/800 auch `port3`/`port4`), `basic=on\|off` (XL/XE: OPTION beim Start; 400/800: BASIC-Modul im linken Schacht), `ram=8k\|16k\|32k\|48k` (nur 400/800; Standard 16k bzw. 48k), `drives=0..4`, `drive=1050\|810\|xf551` |
 | Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`) |
 | CPC | `crtc=0\|1\|2` (Standard 464: 0, sonst 1), `dos=amsdos\|parados\|none`, `joy1=joystick\|amx\|none`, `joy2=joystick\|none` |
-| Amiga 500 | `kickstart=1.3\|1.2\|2.0\|3.1` (Standard 1.3), `slow=512k\|0` (Trapdoor-Erweiterung, Standard 512 KB), `drives=1..4` (DF0:–DF3:, Standard 1), `port0=mouse\|joystick\|none` (Standard Maus), `port1=joystick\|mouse\|none` (Standard Joystick) |
+| Amiga | `kickstart=1.3\|1.2\|2.0\|3.1` (Standard 1.3), `chip=256k\|512k\|1m` (Chip-RAM; Standard A500 512k, A1000 256k, A2000 1m), `slow=512k\|0` (Trapdoor-Erweiterung, Standard A500 512 KB, sonst 0), `fast=0\|512k\|1m\|2m\|4m\|8m` (Zorro-II-Fast-RAM per Autoconfig, Standard 0), `drives=1..4` (DF0:–DF3:, Standard 1), `drivetype=dd\|hd` (HD-Laufwerke für 1,76-MB-ADFs), `port0=mouse\|joystick\|none` (Standard Maus), `port1=joystick\|mouse\|none` (Standard Joystick), `serial=none\|loopback` (TXD mit RXD verbunden), `wcs=rom\|disk` (A1000: Kickstart vorgeladen oder per Bootstrap-ROM von der Kickstart-Diskette laden) |
 
 `drive8=virtual` bedient Laufwerk 8 auf Protokollebene (schnell, nur
 KERNAL-LOAD/SAVE), die anderen Werte emulieren das echte Laufwerk mit eigener
@@ -146,7 +146,9 @@ Diskette dienen (`--disk ./ordner`).
 cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms
 cargo run --release -p emu-desktop -- --machine c64 --disk spiel.d64 --autostart
 cargo run --release -p emu-desktop -- --machine vic20 --tape spiel.tap
-cargo run --release -p emu-desktop -- --machine atari800xl --disk spiel.atr
+cargo run --release -p emu-desktop -- --machine atari8 --disk spiel.atr
+cargo run --release -p emu-desktop -- --machine atari8 --model 130xe --disk spiel.atr
+cargo run --release -p emu-desktop -- --machine atari8 --model 800 --option port3=joystick --cart spiel.car
 cargo run --release -p emu-desktop -- --machine atari2600 --cart spiel.a26
 cargo run --release -p emu-desktop -- --machine atari2600 --model pal --cart spiel.bin --option port1=paddles
 cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
@@ -154,6 +156,8 @@ cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk workbench13.adf
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk demo-a.adf --disk demo-b.adf
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --option drives=2 --disk demo-a.adf --disk demo-b.adf
+cargo run --release -p emu-desktop -- --machine amiga --model 2000 --rom-dir roms --option fast=8m --disk spiel.dms
+cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --option kickstart=3.1 --option drivetype=hd --disk gross.adf
 ```
 
 Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
@@ -242,8 +246,20 @@ sie ein, mittlere Taste gibt sie frei), der Joystick in Port 1.
 **Amiga.** Ohne Diskette zeigt die Kickstart den „Insert disk“-Bildschirm;
 eine ADF in DF0: (`--disk`) bootet. Workbench 1.3 braucht von Diskette
 etwa drei Minuten emulierte Zeit bis zum Workbench-Bildschirm. Der Ton ist Stereo (Paula, Kanäle 0/3 links,
-1/2 rechts) mit dem Tiefpass des A500. Interlace-Bilder (Workbench mit LACE)
-werden aus beiden Halbbildern zusammengesetzt.
+1/2 rechts) mit dem festen Tiefpass des A500 und dem LED-Filter (Butterworth
+zweiter Ordnung, etwa 3,3 kHz), solange die Power-LED-Leitung ihn einschaltet.
+Interlace-Bilder (Workbench mit LACE) werden aus beiden Halbbildern
+zusammengesetzt („weave“); `--deinterlace bob` verdoppelt stattdessen die
+Zeilen des aktuellen Halbbilds (kein Kammeffekt bei Bewegung, flimmert),
+**Strg+I** schaltet zur Laufzeit um. Der Preview-Stream liefert ebenfalls
+zusammengesetzte Vollbilder.
+
+Modelle (`--model`): `500` (Standard), `1000` (256 KB Chip-RAM, Kickstart im
+„Writable Control Store“; mit `--option wcs=disk` und dem Bootstrap-ROM
+lädt sie das ROM wie das Original von der Kickstart-Diskette in DF0:) und
+`2000` (1 MB Chip-RAM); jeweils auch `-ntsc` (`500-ntsc`). Speicher über
+`--option chip=`, `slow=`, `fast=` (Fast-RAM meldet sich wie eine
+Zorro-II-Karte per Autoconfig, Kickstart 1.2 und neuer finden es).
 
 `EMU_DESKTOP_DEBUG=1` gibt alle 5 Sekunden Bild- und Audio-Statistik aus.
 
@@ -287,7 +303,7 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 
 | Art | Formate | Frontend-Option |
 | --- | --- | --- |
-| Diskette (mehrfach: weitere Laufwerke, Rest per Strg+D) | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga, DD 880 KB; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF); ein **Ordner** als virtuelle Diskette | `--disk` |
+| Diskette (mehrfach: weitere Laufwerke, Rest per Strg+D) | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga: DD 880 KB, HD 1,76 MB mit `--option drivetype=hd`; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF), extended ADF (`UAE-1ADF`/`UAE--ADF` mit Rohspuren, die bitgenau erhalten und zurückgeschrieben werden), DMS (DISK-Masher-Archiv, wird beim Einlegen entpackt, nur lesen); ein **Ordner** als virtuelle Diskette | `--disk` |
 | Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
 | Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt) | `--cart` |
 | Programm | PRG, T64, XEX | `--prg` |
