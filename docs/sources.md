@@ -134,6 +134,15 @@ own section.
 | Sprite behaviour checks: display-window clipping of sprites (shown only after the line's first BPL1DAT, or on lines without planes), sprite/playfield and sprite/sprite collisions (CLXCON/CLXDAT: bit 0 follows the odd planes alone, the odd-plane sprite bits need the even planes too in single-playfield mode, nothing counts outside the window or on lines without bitplane data), playfield priorities, SPRxPOS/CTL/DATA write timing | vAmiga test suite (github.com/dirkwhoffmann/vAmigaTS, GPL-3.0; the test programs are mostly Alpine9000's Amiga examples) — run as test data only with `tests/tests/vamigats.rs`, compared against the repository's photographs of real A500s; no code or images copied into this repository | `tests/tests/vamigats.rs`, `chips-amiga/src/denise.rs` |
 | DMS archive layout (file header, track headers, CRC-16/ARC, checksums), compression modes NOCOMP/SIMPLE/QUICK/MEDIUM/DEEP/HEAVY1/HEAVY2 and the track flags (state carry-over, new trees, RLE) | xDMS 1.3.2 by André Rodrigues de la Rocha (public domain, `COPYING`: "xdms is licensed under PUBLIC DOMAIN"), read as the format's documentation; its decoders derive from LZHUF (Haruyasu Yoshizaki, public domain) and UNIX LHA (Masaru Oki); verified with freely distributed DMS archives from Aminet | `media/src/dms.rs` |
 
+### Sinclair ZX81
+
+| Topic | Document | Used in |
+| --- | --- | --- |
+| Memory map (ROM $0000 with shadow, RAM from $4000, A15 undecoded), keyboard matrix and port $FE, 3.25 MHz clock | Sinclair ZX81 Service Manual | `machine-zx81/src/memory.rs`, `keyboard.rs` |
+| The ULA's display mechanism: NOP substitution on M1 fetches with A15 set and D6 clear, the pattern address from I, the character code and the 3-bit line counter LCNTR, the shift register at 6.5 MHz; /INT from refresh address line A6 (R bit 6); the NMI generator (207 T-states per line) and /WAIT while halted; VSYNC on `IN ($FE)`, off on any `OUT`; `OUT ($FD)`/`OUT ($FE)` NMI off/on | Wilf Rigter, "The ZX81 Video Display System" and his ULA notes (as reproduced in the ZX81 community's hardware documentation); Sinclair ZX81 Service Manual (ULA pinout); observable behaviour only, no emulator code | `chips-sinclair/src/ula.rs`, `machine-zx81/src/lib.rs` |
+| ROM entry points for the tape traps (NEXT-PROG $0347, HEADER $02FF, SLOW/FAST $0207), system variables D_FILE $400C, E_LINE $4014, the program area from VERSN $4009, character codes | Ian Logan and Frank O'Hara, *The Complete ZX81 ROM Disassembly* (Melbourne House, 1983); the user's `zx81.edition3.sym` label file | `machine-zx81/src/lib.rs`, `tests/tests/zx81_boot.rs` |
+| .P file layout: the bytes from $4009 up to E_LINE as the ROM saves them | Logan/O'Hara (SAVE routine); common ZX81 emulator documentation of the ".P" format | `machine-zx81/src/lib.rs` (`PTape`) |
+
 ### Video, colour and host conventions
 
 | Topic | Document | Used in |

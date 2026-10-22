@@ -118,6 +118,7 @@ Multi-CPU machines (C64 + 1541, C128 8502 + Z80, Amiga Copper/Blitter) expose ea
 | Atari 2600 | colour clock 3.546894 MHz, CPU ÷3 (NTSC 3.579545) | No frame buffer: the CPU races the beam; WSYNC halts it via RDY; fields follow VSYNC; bank switching by cartridge hotspots |
 | Atari 400/800/800XL/65XE/130XE | CPU 1.773447 MHz | ANTIC DMA steals cycles; display lists; DLIs; XL/XE bank ROMs by PORTB, the 130XE banks 64 KB extended RAM for CPU and ANTIC separately; 400/800: OS-B, four joystick ports, RESET key is an NMI |
 | CPC 464/664/6128 | Z80 4 MHz | Wait states align memory access to 1 µs; CRTC register tricks; 464 tape only, 664/6128 FDC, 6128 128 KB banking |
+| ZX81 / TS1000 | Z80 3.25 MHz | No frame buffer: the CPU executes the display file and the ULA turns the fetches into pixels (NOP substitution, I register, R bit 6 as /INT, NMI generator, /WAIT while halted); 207 T-states per line; LOAD/SAVE by ROM traps on .P files |
 
 Model variants (PAL/NTSC, Kernal revisions, RAM sizes) are **configuration**, not separate machine crates.
 
@@ -380,6 +381,8 @@ EMU_ROM_DIR=$PWD/roms EMU_VAMIGATS_DIR=/path/to/vAmigaTS/Denise/Sprites EMU_CLXD
 EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test amiga_boot -- --ignored --nocapture   # Kickstarts reach "insert disk" and boot a generated boot block; trace_kickstart: EMU_KICK=1.3, EMU_FRAMES=n, EMU_DISK=a.adf, EMU_DISK1=b.adf, EMU_OPTION=drives=2; workbench_13_boots (Phase 7 gate) with EMU_WB_ADF=workbench1.3.adf
 python tools/amiga_bustest.py bustest.adf [tests/data/amiga_bustest.bootblock]   # chip-bus timing test disk (boot it in WinUAE/on hardware; the test chip_bus_arbitration_matches_the_bus_test compares us with WinUAE's numbers)
 cargo run --release -p emu-desktop -- --machine amiga --disk demo-a.adf --disk demo-b.adf   # disks fill DF0:, DF1: … (--option drives=N), extra ones swap into DF0: with Ctrl+D (or drop an image on the window); ADF/HD ADF/extended ADF/DMS; stereo Paula audio; mouse in port 0 (click to capture), joystick port 1, Amiga keys on the Windows keys, HELP on Insert, Ctrl+Win+Win resets; --deinterlace weave|bob (Ctrl+I)
+cargo run -p emu-headless -- --machine zx81 --rom-dir roms --frames 200 --snapshot zx81.png   # ROMs in roms/zx81/; --model ts1000; --option ram=1k|2k|16k, traps=off, roms=stub; --tape program.p
+EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test zx81_boot -- --ignored --nocapture   # Phase 10 gate (ZX81): boots, PRINT, a .P file saved and loaded through the traps
 cargo run -p emu-headless -- --machine cpc --rom-dir roms --frames 150 --snapshot cpc.png   # ROMs in roms/cpc/; --model 6128|664|464, --option crtc=0|1|2, dos=amsdos|parados|none
 cargo run --release -p emu-desktop -- --machine cpc --option joy1=amx   # AMX mouse (click to capture); joy2=joystick daisy-chains a second stick; --crt gt65 green monitor
 cargo run --release -p emu-desktop -- --machine cpc --disk game.dsk   # CPC 664/6128: DSK/EDSK in drive A (RUN"DISC or CAT)
@@ -428,6 +431,7 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 8 (o
 | 12 | Nintendo NES/Famicom (`machine-nes`): 2A03 as a cpu-6502 variant (no decimal mode, APU on chip), PPU 2C02/2C07 with VRAM/OAM (`chips-nintendo`), mappers NROM, MMC1, UxROM, CNROM, MMC3 (`devices-cartridge::nes`, iNES/NES 2.0), controllers; console panel POWER/RESET | 8 wk | nestest and blargg's CPU/PPU/APU test ROMs green; user-supplied games run |
 | 13 | Mattel Intellivision (`machine-intv`): new `cpu-cp1610` (16-bit), STIC (MOBs, GRAM/GROM), AY-3-8914 PSG, hand controllers; Executive ROM and GROM user-supplied | 6 wk | Executive ROM title screen; user-supplied cartridges run; CP1610 instruction tests |
 | 14 | Vectrex (`machine-vectrex`): new `cpu-6809`, VIA 6522 (reuse `chips-cbm`), AY-3-8912 (reuse `chips-amstrad`), vector display with a vector frame type next to `FrameRef` (beam segments with intensity; phosphor decay in `video-crt`; debugger/preview carry the segments and a rasterised picture — core trait extension, ask first), cartridges, controllers | 6 wk | built-in Mine Storm plays; 6809 instruction tests green |
+| 15 | Sinclair ZX Spectrum 48K and 128K (`machine-spectrum`, added 2026-10-22 on the user's request): Z80 at 3.5 MHz with the ULA's memory contention (`chips-sinclair`), 48K and 128K/+2 paging with AY sound, border and attribute display with the floating bus, TAP/TZX tape, SNA/Z80 snapshots, Kempston and Sinclair joysticks; ROMs user-supplied | 6 wk | 48K and 128K boot to BASIC with real ROMs; a TAP game loads; contention and border timing checked against known test programs |
 
 Device work by phase (part of each gate):
 

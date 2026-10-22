@@ -327,7 +327,21 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             0x2000,
         ),
     ];
+    // Sinclair ZX81: the 8 KB ROM; the "improved" third edition first.
+    const ZX81: &[RomSpec] = &[rom(
+        "zx81",
+        &[
+            "zx81-edition3",
+            "zx81-edition2",
+            "zx81-edition1",
+            "zx81",
+            "zx-81",
+            "sinclair-zx81",
+        ],
+        0x2000,
+    )];
     match machine {
+        "zx81" => ZX81,
         "amiga" => AMIGA,
         "atari8" => ATARI800XL,
         "cpc" => CPC,
@@ -353,6 +367,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "atari8" => &["atari8", "atari800xl", "atari"],
         "cpc" => &["cpc", "amstrad"],
         "amiga" => &["amiga"],
+        "zx81" => &["zx81", "sinclair"],
         _ => &[],
     }
 }

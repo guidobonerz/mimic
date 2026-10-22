@@ -1,4 +1,4 @@
-//! Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM; extended ADF, DMS), ATR, XEX, CAS, DSK, CDT.
+//! Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM; extended ADF, DMS), ATR, XEX, CAS, DSK, CDT, DMK/JV1/JV3.
 //!
 //! Pure parsing and encoding: no files, no host access (golden rule 10).
 //! Bytes come from a `MediaBackend`.
@@ -13,6 +13,7 @@ pub mod cas;
 pub mod cdt;
 pub mod crt;
 pub mod d64;
+pub mod dmk;
 pub mod dms;
 pub mod dsk;
 pub mod gcr;

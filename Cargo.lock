@@ -357,6 +357,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "chips-sinclair"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "ciborium"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -812,6 +819,7 @@ dependencies = [
  "machine-sim6502",
  "machine-ted",
  "machine-vic20",
+ "machine-zx81",
 ]
 
 [[package]]
@@ -847,6 +855,7 @@ dependencies = [
  "machine-pet",
  "machine-ted",
  "machine-vic20",
+ "machine-zx81",
  "media",
  "media-backends",
  "png",
@@ -1579,6 +1588,15 @@ dependencies = [
  "drives-other",
  "emu-core",
  "media",
+]
+
+[[package]]
+name = "machine-zx81"
+version = "0.1.0"
+dependencies = [
+ "chips-sinclair",
+ "cpu-z80",
+ "emu-core",
 ]
 
 [[package]]

@@ -821,6 +821,65 @@ pub static CPC: Keymap = Keymap {
     entries: CPC_POSITIONAL,
 };
 
+/// ZX81: row · 5 + column of its 8 × 5 matrix (see
+/// `machine-zx81::keyboard`). Letters, digits, SHIFT, SPACE, NEW LINE
+/// (Enter) and `.`; the keyword symbols come from SHIFT on the machine.
+const ZX81_POSITIONAL: &[(&str, &[u16])] = &[
+    ("ShiftLeft", &[0]),
+    ("ShiftRight", &[0]),
+    ("KeyZ", &[1]),
+    ("KeyX", &[2]),
+    ("KeyC", &[3]),
+    ("KeyV", &[4]),
+    ("KeyA", &[5]),
+    ("KeyS", &[6]),
+    ("KeyD", &[7]),
+    ("KeyF", &[8]),
+    ("KeyG", &[9]),
+    ("KeyQ", &[10]),
+    ("KeyW", &[11]),
+    ("KeyE", &[12]),
+    ("KeyR", &[13]),
+    ("KeyT", &[14]),
+    ("Digit1", &[15]),
+    ("Digit2", &[16]),
+    ("Digit3", &[17]),
+    ("Digit4", &[18]),
+    ("Digit5", &[19]),
+    ("Digit0", &[20]),
+    ("Digit9", &[21]),
+    ("Digit8", &[22]),
+    ("Digit7", &[23]),
+    ("Digit6", &[24]),
+    ("KeyP", &[25]),
+    ("KeyO", &[26]),
+    ("KeyI", &[27]),
+    ("KeyU", &[28]),
+    ("KeyY", &[29]),
+    ("Enter", &[30]),
+    ("NumpadEnter", &[30]),
+    ("KeyL", &[31]),
+    ("KeyK", &[32]),
+    ("KeyJ", &[33]),
+    ("KeyH", &[34]),
+    ("Space", &[35]),
+    ("Period", &[36]),
+    ("KeyM", &[37]),
+    ("KeyN", &[38]),
+    ("KeyB", &[39]),
+    // Convenience: Backspace = SHIFT+0 (RUBOUT), arrows = SHIFT+5…8.
+    ("Backspace", &[0, 20]),
+    ("ArrowLeft", &[0, 19]),
+    ("ArrowDown", &[0, 24]),
+    ("ArrowUp", &[0, 23]),
+    ("ArrowRight", &[0, 22]),
+];
+
+pub static ZX81: Keymap = Keymap {
+    machine: "zx81",
+    entries: ZX81_POSITIONAL,
+};
+
 /// The positional keymap for a machine id.
 pub fn positional(machine: &str) -> Option<&'static Keymap> {
     match machine {
@@ -833,6 +892,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "atari2600" => Some(&ATARI2600),
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
+        "zx81" => Some(&ZX81),
         _ => None,
     }
 }

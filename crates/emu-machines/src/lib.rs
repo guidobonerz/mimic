@@ -69,6 +69,7 @@ pub fn registry() -> Registry {
     r.register(machine_atari2600::entry());
     r.register(machine_cpc::entry());
     r.register(machine_amiga::entry());
+    r.register(machine_zx81::entry());
     r
 }
 

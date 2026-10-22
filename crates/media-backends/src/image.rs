@@ -183,7 +183,7 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
             Some(MediaKind::Disk)
         }
         "prg" | "p00" | "t64" | "xex" | "com" | "exe" => Some(MediaKind::Program),
-        "tap" | "cas" | "cdt" | "tzx" => Some(MediaKind::Tape),
+        "tap" | "cas" | "cdt" | "tzx" | "p" | "81" => Some(MediaKind::Tape),
         "crt" | "car" | "a26" => Some(MediaKind::Cartridge),
         _ => None,
     }

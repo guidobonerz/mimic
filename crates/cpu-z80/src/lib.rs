@@ -203,6 +203,11 @@ impl Z80 {
         self.nmi_line = active;
     }
 
+    /// An NMI edge was latched and not yet taken.
+    pub fn nmi_pending(&self) -> bool {
+        self.nmi_pending
+    }
+
     /// The byte a device puts on the data bus when /INT is acknowledged.
     pub fn set_int_vector(&mut self, v: u8) {
         self.int_vector = v;

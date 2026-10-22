@@ -93,6 +93,7 @@ Größe** erkannt.
 | `atari/` (`atari8/`, `atari800xl/`) | Atari 400/800/XL/XE | XL-OS (`atarixl.rom`, 16 KB), BASIC (`ataribas.rom`, 8 KB), für 400/800 das OS-A/OS-B (`atariosb.rom`, 10 KB) |
 | `cpc/` (`amstrad/`) | Amstrad CPC | `os464`/`basic1-0`, `os664`/`basic664`, `os6128`/`basic1-1` (je 16 KB) oder 32-KB-Kombidateien `cpc464`/`cpc664`/`cpc6128`; `amsdos`, optional `parados` |
 | `amiga/` | Amiga 500/1000/2000 | Kickstart als 256 KB oder 512 KB, Name z. B. `Kickstart 1.3.rom`, `kick13.rom`, `kick34005.rom`; je Version eine Datei (1.2, 1.3, 2.0, 3.1), Auswahl mit `--option kickstart=`; optional das A1000-Bootstrap-ROM (8 KB, `a1000boot.rom`) für `--option wcs=disk` |
+| `zx81/` (`sinclair/`) | Sinclair ZX81 | `zx81.rom` (8 KB; `zx81.edition3.rom` wird bevorzugt) |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
 Der Atari 2600 hat kein System-ROM: das Programm kommt vom Modul (`--cart`).
@@ -119,6 +120,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `atari2600` | Atari 2600 (VCS) | `ntsc` (Standard), `pal` |
 | `cpc` | Amstrad CPC | `6128` (Standard), `664`, `464` |
 | `amiga` | Commodore Amiga 500/1000/2000 (OCS) | `500` (Standard), `500-ntsc`, `1000`, `1000-ntsc`, `2000`, `2000-ntsc` |
+| `zx81` | Sinclair ZX81 / Timex Sinclair 1000 | `zx81` (Standard, PAL), `ts1000` (NTSC, 60 Hz) |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
 
 Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
@@ -132,6 +134,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | C128 | `display=40\|80`, `vdc_ram=16k\|64k`, `sid=…`, `drive8=1571\|1541\|1581\|virtual\|none`, `port2=…`, `autostart=on` |
 | Atari 8-Bit | `port1`/`port2=joystick\|paddles\|none` (400/800 auch `port3`/`port4`), `basic=on\|off` (XL/XE: OPTION beim Start; 400/800: BASIC-Modul im linken Schacht), `ram=8k\|16k\|32k\|48k` (nur 400/800; Standard 16k bzw. 48k), `drives=0..4`, `drive=1050\|810\|xf551` |
 | Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`) |
+| ZX81 | `ram=16k\|1k\|2k` (Standard 16k), `traps=on\|off` (LOAD/SAVE der .P-Datei im Bandschacht über ROM-Traps) |
 | CPC | `crtc=0\|1\|2` (Standard 464: 0, sonst 1), `dos=amsdos\|parados\|none`, `joy1=joystick\|amx\|none`, `joy2=joystick\|none` |
 | Amiga | `kickstart=1.3\|1.2\|2.0\|3.1` (Standard 1.3), `chip=256k\|512k\|1m` (Chip-RAM; Standard A500 512k, A1000 256k, A2000 1m), `slow=512k\|0` (Trapdoor-Erweiterung, Standard A500 512 KB, sonst 0), `fast=0\|512k\|1m\|2m\|4m\|8m` (Zorro-II-Fast-RAM per Autoconfig, Standard 0), `drives=1..4` (DF0:–DF3:, Standard 1), `drivetype=dd\|hd` (HD-Laufwerke für 1,76-MB-ADFs), `port0=mouse\|joystick\|none` (Standard Maus), `port1=joystick\|mouse\|none` (Standard Joystick), `serial=none\|loopback` (TXD mit RXD verbunden), `wcs=rom\|disk` (A1000: Kickstart vorgeladen oder per Bootstrap-ROM von der Kickstart-Diskette laden) |
 
@@ -153,6 +156,7 @@ cargo run --release -p emu-desktop -- --machine atari2600 --cart spiel.a26
 cargo run --release -p emu-desktop -- --machine atari2600 --model pal --cart spiel.bin --option port1=paddles
 cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
 cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
+cargo run --release -p emu-desktop -- --machine zx81 --rom-dir roms --tape programm.p
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk workbench13.adf
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk demo-a.adf --disk demo-b.adf
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --option drives=2 --disk demo-a.adf --disk demo-b.adf
@@ -304,7 +308,7 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 | Art | Formate | Frontend-Option |
 | --- | --- | --- |
 | Diskette (mehrfach: weitere Laufwerke, Rest per Strg+D) | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga: DD 880 KB, HD 1,76 MB mit `--option drivetype=hd`; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF), extended ADF (`UAE-1ADF`/`UAE--ADF` mit Rohspuren, die bitgenau erhalten und zurückgeschrieben werden), DMS (DISK-Masher-Archiv, wird beim Einlegen entpackt, nur lesen); ein **Ordner** als virtuelle Diskette | `--disk` |
-| Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
+| Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81: der Programmspeicher ab $4009, geladen und gesichert über ROM-Traps mit `LOAD ""`/`SAVE "NAME"`); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
 | Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt) | `--cart` |
 | Programm | PRG, T64, XEX | `--prg` |
 
