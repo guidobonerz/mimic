@@ -3,7 +3,10 @@
 //!
 //! **Area mode.** Up to three sources (A, B, C) and a destination D, each
 //! with a pointer and a modulo; `BLTSIZE` (height bits 15–6, 0 = 1024;
-//! width in words bits 5–0, 0 = 64) starts the blit. A is masked by
+//! width in words bits 5–0, 0 = 64) starts the blit. The ECS Agnus adds
+//! `BLTSIZV` (height, bits 14–0, 0 = 32768) and `BLTSIZH` (width in words,
+//! bits 10–0, 0 = 2048), the latter starting the blit (HRM appendix C,
+//! "ECS" entries). A is masked by
 //! BLTAFWM in the first and BLTALWM in the last word of a row; A and B are
 //! shifted right by ASH/BSH (BLTCON0/BLTCON1 bits 15–12), the bits shifted
 //! out entering the next word (left shifts in descending mode, BLTCON1
@@ -91,6 +94,8 @@ pub struct Blitter {
     pub cdat: u16,
     pub busy: bool,
     pub zero: bool,
+    /// BLTSIZV (ECS): the height of the next BLTSIZH blit.
+    pub sizv: u16,
     job: Option<Job>,
 }
 
@@ -151,6 +156,23 @@ impl Blitter {
             0 => 64,
             w => w,
         };
+        self.start_sized(width, height);
+    }
+
+    /// BLTSIZH (ECS): start a blit of the BLTSIZV height.
+    pub fn start_ecs(&mut self, sizh: u16) {
+        let height = match self.sizv & 0x7fff {
+            0 => 32768,
+            h => h,
+        };
+        let width = match sizh & 0x7ff {
+            0 => 2048,
+            w => w,
+        };
+        self.start_sized(width, height);
+    }
+
+    fn start_sized(&mut self, width: u16, height: u16) {
         self.busy = true;
         self.zero = true;
         self.job = Some(Job {
@@ -414,9 +436,12 @@ impl Blitter {
         w.u8(j.delay);
         w.bool(j.carry);
         w.bool(j.row_drawn);
+        w.u16(self.sizv);
     }
 
-    pub(crate) fn load(r: &mut StateReader<'_>) -> Result<Self, StateError> {
+    /// `version`: the enclosing chunk's; before 7 there was no BLTSIZV and
+    /// no blit wider than 64 words.
+    pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let mut b = Self::new();
         for v in [&mut b.con0, &mut b.con1, &mut b.afwm, &mut b.alwm] {
             *v = r.u16()?;
@@ -448,8 +473,15 @@ impl Blitter {
         j.delay = r.u8()?;
         j.carry = r.bool()?;
         j.row_drawn = r.bool()?;
+        if version >= 7 {
+            b.sizv = r.u16()? & 0x7fff;
+        }
         if has_job {
-            if j.width == 0 || j.width > 64 || j.height == 0 || j.height > 1024 || j.col >= j.width
+            if j.width == 0
+                || j.width > 2048
+                || j.height == 0
+                || j.height > 32768
+                || j.col >= j.width
             {
                 return Err(StateError::Invalid("blitter job"));
             }

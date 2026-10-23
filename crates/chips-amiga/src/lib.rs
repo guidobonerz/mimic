@@ -1,8 +1,11 @@
-//! Amiga OCS custom chips: Agnus (beam counters, DMA slot allocation,
-//! bitplane fetch, [`copper`], [`blitter`]), [`denise`] (bitplane display,
-//! colours) and [`paula`] (interrupts, audio, disk, serial port), joined in
-//! [`custom::Custom`], which runs them one colour clock (CCK, one DMA slot)
-//! at a time against [`chipram::ChipRam`].
+//! Amiga OCS and ECS custom chips: Agnus (beam counters, DMA slot
+//! allocation, bitplane fetch, [`copper`], [`blitter`]), [`denise`]
+//! (bitplane display, colours) and [`paula`] (interrupts, audio, disk,
+//! serial port), joined in [`custom::Custom`], which runs them one colour
+//! clock (CCK, one DMA slot) at a time against [`chipram::ChipRam`]. The
+//! ECS Agnus 8372A/8375 and Denise 8373, and the AGA Alice and Lisa of the
+//! A1200, are selected with [`custom::Chipset`] (see `custom` and `denise`
+//! for what they add).
 //!
 //! The 8520 CIAs are `chips_cbm::cia` with `CiaModel::Mos8520`.
 //!
@@ -26,7 +29,7 @@ pub mod regnames;
 pub mod uart;
 
 pub use chipram::ChipRam;
-pub use custom::{Custom, Standard, TickOut};
+pub use custom::{Chipset, Custom, Standard, TickOut};
 
 /// Custom chip register offsets from $DFF000 (HRM appendix A).
 pub mod reg {
@@ -64,6 +67,8 @@ pub mod reg {
     pub const BLTAPTL: u16 = 0x052;
     pub const BLTDPTL: u16 = 0x056;
     pub const BLTSIZE: u16 = 0x058;
+    pub const BLTSIZV: u16 = 0x05c;
+    pub const BLTSIZH: u16 = 0x05e;
     pub const BLTCMOD: u16 = 0x060;
     pub const BLTDMOD: u16 = 0x066;
     pub const BLTCDAT: u16 = 0x070;
@@ -87,13 +92,20 @@ pub mod reg {
     pub const ADKCON: u16 = 0x09e;
     pub const BPL1PTH: u16 = 0x0e0;
     pub const BPL6PTL: u16 = 0x0f6;
+    pub const BPL7PTH: u16 = 0x0f8;
+    pub const BPL8PTL: u16 = 0x0fe;
     pub const BPLCON0: u16 = 0x100;
     pub const BPLCON1: u16 = 0x102;
     pub const BPLCON2: u16 = 0x104;
+    pub const BPLCON3: u16 = 0x106;
+    pub const BPLCON4: u16 = 0x10c;
+    pub const CLXCON2: u16 = 0x10e;
     pub const BPL1MOD: u16 = 0x108;
     pub const BPL2MOD: u16 = 0x10a;
     pub const BPL1DAT: u16 = 0x110;
     pub const BPL6DAT: u16 = 0x11a;
+    pub const BPL7DAT: u16 = 0x11c;
+    pub const BPL8DAT: u16 = 0x11e;
     pub const SPR0PTH: u16 = 0x120;
     pub const DSKDAT: u16 = 0x026;
     pub const AUD0LCH: u16 = 0x0a0;
@@ -101,6 +113,12 @@ pub mod reg {
     pub const COLOR00: u16 = 0x180;
     pub const COLOR31: u16 = 0x1be;
     pub const DENISEID: u16 = 0x07c;
+    pub const HTOTAL: u16 = 0x1c0;
+    pub const VTOTAL: u16 = 0x1c8;
+    pub const BEAMCON0: u16 = 0x1dc;
+    pub const HCENTER: u16 = 0x1e2;
+    pub const DIWHIGH: u16 = 0x1e4;
+    pub const FMODE: u16 = 0x1fc;
 }
 
 /// DMACON bits (HRM appendix A, DMACON).

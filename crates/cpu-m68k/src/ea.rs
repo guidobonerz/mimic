@@ -1,6 +1,9 @@
 //! Effective addresses: calculation (with its bus cycles: extension words
 //! and internal clocks, as in the "effective address calculation" table of
-//! the 68000 User's Manual) and operand access.
+//! the 68000 User's Manual) and operand access. On the 68020 the indexed
+//! modes also take the full-format extension word (M68000PRM section 2.2:
+//! base displacement, scaled index, base/index suppress, memory indirect
+//! pre-/post-indexed with an outer displacement).
 
 use emu_core::Size;
 
@@ -83,8 +86,8 @@ impl M68000 {
         }
     }
 
-    /// Brief extension word (d8,An,Xn): base + index + displacement.
-    pub(crate) fn index(&self, base: u32, ext: u16) -> u32 {
+    /// The index register of an extension word, sized and (68020) scaled.
+    fn index_value(&self, ext: u16) -> u32 {
         let r = usize::from((ext >> 12) & 7);
         let xn = if ext & 0x8000 != 0 {
             self.a[r]
@@ -96,8 +99,77 @@ impl M68000 {
         } else {
             xn as u16 as i16 as i32 as u32
         };
-        base.wrapping_add(xn)
+        if self.is_020() {
+            xn << ((ext >> 9) & 3)
+        } else {
+            xn
+        }
+    }
+
+    /// Brief extension word (d8,An,Xn): base + index + displacement.
+    pub(crate) fn index(&self, base: u32, ext: u16) -> u32 {
+        base.wrapping_add(self.index_value(ext))
             .wrapping_add(ext as u8 as i8 as i32 as u32)
+    }
+
+    /// Is the extension word in IRC a 68020 full-format one?
+    pub(crate) fn full_format_next(&self) -> bool {
+        self.is_020() && self.irc() & 0x100 != 0
+    }
+
+    /// The rest of a 68020 full-format extension word `ext` (already
+    /// taken): base displacement, index, memory indirection with the outer
+    /// displacement. `base` is An or the PC of the extension word.
+    pub(crate) fn full_format(
+        &mut self,
+        bus: &mut dyn TimedBus68,
+        base: u32,
+        ext: u16,
+    ) -> Res<u32> {
+        let base = if ext & 0x80 != 0 { 0 } else { base };
+        let index = if ext & 0x40 != 0 {
+            0
+        } else {
+            self.index_value(ext)
+        };
+        let bd = match (ext >> 4) & 3 {
+            2 => self.ext(bus)? as i16 as i32 as u32,
+            3 => self.ext_long(bus)?,
+            _ => 0,
+        };
+        let iis = ext & 7;
+        if iis == 0 {
+            // No memory indirection.
+            return Ok(base.wrapping_add(bd).wrapping_add(index));
+        }
+        let od = match iis & 3 {
+            2 => self.ext(bus)? as i16 as i32 as u32,
+            3 => self.ext_long(bus)?,
+            _ => 0,
+        };
+        let post = iis & 4 != 0;
+        let inner = if post {
+            base.wrapping_add(bd)
+        } else {
+            base.wrapping_add(bd).wrapping_add(index)
+        };
+        let fc = self.data_fc_pub();
+        let pointer = self.read_long_at(bus, fc, inner)?;
+        Ok(if post {
+            pointer.wrapping_add(index).wrapping_add(od)
+        } else {
+            pointer.wrapping_add(od)
+        })
+    }
+
+    /// (d8,An,Xn) / (d8,PC,Xn) or their 68020 full formats: `base` is An
+    /// or the extension word's PC; the extension word is taken here.
+    pub(crate) fn indexed(&mut self, bus: &mut dyn TimedBus68, base: u32) -> Res<u32> {
+        let ext = self.ext(bus)?;
+        if self.is_020() && ext & 0x100 != 0 {
+            return self.full_format(bus, base, ext);
+        }
+        Ok(self.index(base, ext))
     }
 
     /// Calculate the effective address of mode `m`, register `r`: the
@@ -130,8 +202,8 @@ impl M68000 {
             }
             6 => {
                 self.idle(bus, 2);
-                let ext = self.ext(bus)?;
-                Ea::Mem(self.index(self.a[r], ext))
+                let base = self.a[r];
+                Ea::Mem(self.indexed(bus, base)?)
             }
             7 => match r {
                 0 => Ea::Mem(self.ext(bus)? as i16 as i32 as u32),
@@ -144,8 +216,7 @@ impl M68000 {
                 3 => {
                     self.idle(bus, 2);
                     let base = self.ext_pc();
-                    let ext = self.ext(bus)?;
-                    Ea::Mem(self.index(base, ext))
+                    Ea::Mem(self.indexed(bus, base)?)
                 }
                 4 => Ea::Imm(match sz {
                     Sz::B => u32::from(self.ext(bus)?) & 0xff,
@@ -173,9 +244,8 @@ impl M68000 {
             Sz::B => self.read(bus, addr, Size::Byte),
             Sz::W => self.read(bus, addr, Size::Word),
             Sz::L => {
-                let hi = self.read(bus, addr, Size::Word)?;
-                let lo = self.read(bus, addr.wrapping_add(2), Size::Word)?;
-                Ok(hi << 16 | lo)
+                let fc = self.data_fc_pub();
+                self.read_long_at(bus, fc, addr)
             }
         }
     }
@@ -193,6 +263,10 @@ impl M68000 {
         match sz {
             Sz::B => self.write(bus, addr, Size::Byte, v & 0xff),
             Sz::W => self.write(bus, addr, Size::Word, v & 0xffff),
+            Sz::L if self.long_cycle(addr) => {
+                let fc = self.data_fc_pub();
+                self.write_long_at(bus, fc, addr, v)
+            }
             Sz::L if low_first => {
                 self.write(bus, addr.wrapping_add(2), Size::Word, v & 0xffff)?;
                 self.write(bus, addr, Size::Word, v >> 16)

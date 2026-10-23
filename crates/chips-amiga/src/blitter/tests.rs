@@ -194,8 +194,28 @@ fn savestate_round_trip_mid_blit() {
     let mut w = StateWriter::new();
     b.save(&mut w);
     let data = w.into_bytes();
-    let c = Blitter::load(&mut StateReader::new(&data)).unwrap();
+    let c = Blitter::load(&mut StateReader::new(&data), 7).unwrap();
     assert_eq!(c, b);
+}
+
+#[test]
+fn ecs_sizes_allow_wide_and_tall_blits() {
+    let mut chip = ChipRam::new(0x8_0000);
+    let mut b = Blitter::new();
+    // D only, 100 words wide, 3 rows: more than BLTSIZE's 64 words.
+    b.pt[3] = 0x1000;
+    b.con0 = 0x0100 | 0xff;
+    b.sizv = 3;
+    b.start_ecs(100);
+    assert_eq!(b.job_size(), Some((100, 3)));
+    run(&mut b, &mut chip);
+    assert!(!b.busy);
+    assert_eq!(b.pt[3], 0x1000 + 2 * 300);
+    assert_eq!(chip.word(0x1000 + 2 * 299), 0xffff);
+    assert_eq!(chip.word(0x1000 + 2 * 300), 0);
+    b.sizv = 0;
+    b.start_ecs(0);
+    assert_eq!(b.job_size(), Some((2048, 32768)), "0 means the maximum");
 }
 
 #[test]

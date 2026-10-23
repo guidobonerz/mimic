@@ -1,7 +1,8 @@
-//! Commodore Amiga 500, 1000 and 2000 (OCS).
+//! Commodore Amiga 500, 1000, 2000 (OCS), 500+ (ECS) and 1200 (AGA).
 //!
-//! 68000 at 7.09379 MHz (PAL; NTSC 7.15909 MHz), the OCS custom chips
-//! (`chips-amiga`: Agnus with Copper and Blitter, Denise, Paula), two 8520
+//! 68000 at 7.09379 MHz (PAL; NTSC 7.15909 MHz; the A1200's 68EC020 at
+//! twice that), the OCS, ECS or AGA custom chips (`chips-amiga`: Agnus with
+//! Copper and Blitter, Denise, Paula), two 8520
 //! CIAs (`chips-cbm`, [`CiaModel::Mos8520`]), chip RAM, slow RAM, Zorro II
 //! fast RAM, the Kickstart ROM (see [`memory`] for the map) and up to four
 //! floppy drives ("DF0:"–"DF3:", ADF images; `drives_other::amiga_drive`).
@@ -15,6 +16,18 @@
 //!   default, or loaded from a Kickstart disk by the bootstrap ROM (ROM
 //!   role `a1000boot`, option `wcs=disk`).
 //! - `2000`: 1 MB chip RAM, no slow RAM, Kickstart in ROM.
+//! - `500plus`: the A500+ with the ECS chip set (Agnus 8375, Denise 8373),
+//!   1 MB chip RAM (`chip=2m` with the trapdoor expansion), no slow RAM,
+//!   Kickstart 2.0 by default.
+//! - `1200`: 68EC020 at 14.18 MHz (four CPU clocks per colour clock; the
+//!   68020's bus cycles take three of them, a long-word aligned long is
+//!   one cycle on the 32-bit chip RAM), the AGA chip set (Alice, Lisa), 2 MB
+//!   chip RAM, Gayle (its id register only; no IDE drive, no PCMCIA),
+//!   Kickstart 3.1 by default (the A500/A600/A2000 image 40.063 boots the
+//!   A1200 model; an A1200 image, 3.0 39.106 or 3.1 40.068, goes in as
+//!   `kick30`/`kick31` too — the A4000's 3.0 does not fit: it scans for
+//!   32-bit RAM at $08000000, which the 68EC020's 24-bit bus folds onto
+//!   chip RAM). The E clock stays at the 7 MHz clock's tenth.
 //!
 //! **Disks.** Paula reads and writes the selected drive one bit cell at a
 //! time: every 2 µs with ADKCON FAST, else every 4 µs. The index hole
@@ -32,9 +45,18 @@
 //! corner frequencies as derived from the A500 schematics).
 //!
 //! Options:
-//! - `kickstart`: "1.3" (default), "1.2", "2.0", "3.1" — which ROM role to
-//!   use (`kick13` …, 256 or 512 KB images).
-//! - `chip`: chip RAM, "256k", "512k" or "1m" (default per model).
+//! - `kickstart`: "1.3" (default; A500+ "2.0", A1200 "3.1"), "1.2", "2.0",
+//!   "3.0", "3.1" — which ROM role to use (`kick13` …, 256 or 512 KB
+//!   images).
+//! - `chip`: chip RAM, "256k", "512k", "1m" or "2m" (default per model;
+//!   2 MB needs the ECS Agnus).
+//! - `chipset`: "ocs", "ecs" or "aga" (default per model); `agnus=ocs|ecs` and
+//!   `denise=ocs|ecs` pick the chips separately (an A500 rev 6A with the
+//!   ECS Agnus 8372A and the OCS Denise is `agnus=ecs`). The ECS Agnus
+//!   reports its id in VPOSR, follows BEAMCON0 (PAL/NTSC switch,
+//!   programmable beam), DIWHIGH and BLTSIZV/BLTSIZH; the ECS Denise
+//!   answers DENISEID and adds border blank, border sprites and
+//!   super-hires (see `chips_amiga::custom` and `chips_amiga::denise`).
 //! - `slow`: slow RAM, "512k" (A500 default) or "0".
 //! - `fast`: Zorro II fast RAM on an autoconfig board, "0" (default),
 //!   "512k", "1m", "2m", "4m" or "8m".
@@ -75,8 +97,9 @@ pub mod keyboard;
 pub mod memory;
 pub mod stub;
 
-use chips_amiga::custom::{self, Custom, Standard, FIRST_CCK, WIDTH};
+use chips_amiga::custom::{self, Chipset, Custom, Standard, FIRST_CCK, WIDTH};
 use chips_cbm::cia::{Cia, CiaModel};
+use cpu_m68k::Model as CpuModel;
 use cpu_m68k::{Access, Step, TimedBus68, M68000};
 use drives_other::amiga_drive::AmigaDrive;
 use emu_core::audio::Decimator;
@@ -115,6 +138,7 @@ pub const PORT1: PortId = PortId(1);
 pub const CPU_HZ_PAL: u32 = 7_093_790;
 pub const CPU_HZ_NTSC: u32 = 7_159_090;
 
+/// The 68000's clock (colour clocks times two).
 fn cpu_hz(standard: Standard) -> u32 {
     match standard {
         Standard::Pal => CPU_HZ_PAL,
@@ -122,11 +146,27 @@ fn cpu_hz(standard: Standard) -> u32 {
     }
 }
 
+/// Colour clocks per second.
+fn cck_hz(standard: Standard) -> u32 {
+    cpu_hz(standard) / 2
+}
+
 pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "amiga",
-        name: "Commodore Amiga 500/1000/2000",
-        models: &["500", "500-ntsc", "1000", "1000-ntsc", "2000", "2000-ntsc"],
+        name: "Commodore Amiga 500/1000/2000/500+/1200",
+        models: &[
+            "500",
+            "500-ntsc",
+            "1000",
+            "1000-ntsc",
+            "2000",
+            "2000-ntsc",
+            "500plus",
+            "500plus-ntsc",
+            "1200",
+            "1200-ntsc",
+        ],
         create: |config| Ok(Box::new(Amiga::new(config)?)),
     }
 }
@@ -137,9 +177,32 @@ pub enum Model {
     A500,
     A1000,
     A2000,
+    A500Plus,
+    A1200,
 }
 
-/// `--machine amiga --model 500|1000|2000`, "-ntsc" for the NTSC version.
+impl Model {
+    /// CPU clocks per colour clock: two for the 68000 at 7 MHz, four for
+    /// the A1200's 68EC020 at 14 MHz.
+    pub fn clocks_per_cck(self) -> u64 {
+        if self == Model::A1200 {
+            4
+        } else {
+            2
+        }
+    }
+
+    pub fn cpu(self) -> CpuModel {
+        if self == Model::A1200 {
+            CpuModel::Mc68020
+        } else {
+            CpuModel::Mc68000
+        }
+    }
+}
+
+/// `--machine amiga --model 500|1000|2000|500plus|1200`, "-ntsc" for the
+/// NTSC version.
 fn parse_model(model: Option<&str>) -> Result<(Model, Standard), ConfigError> {
     let Some(model) = model else {
         return Ok((Model::A500, Standard::Pal));
@@ -152,9 +215,50 @@ fn parse_model(model: Option<&str>) -> Result<(Model, Standard), ConfigError> {
         "500" => Model::A500,
         "1000" => Model::A1000,
         "2000" => Model::A2000,
+        "500plus" => Model::A500Plus,
+        "1200" => Model::A1200,
         _ => return Err(ConfigError::UnknownModel(model.into())),
     };
     Ok((board, standard))
+}
+
+/// `chipset`, `agnus` and `denise` options: the chips fitted.
+fn chipset_option(config: &MachineConfig, default: Chipset) -> Result<Chipset, ConfigError> {
+    let parse = |key: &str, default: bool| -> Result<bool, ConfigError> {
+        let fallback = if default { "ecs" } else { "ocs" };
+        match option(config, key, fallback) {
+            "ocs" => Ok(false),
+            "ecs" => Ok(true),
+            other => Err(ConfigError::Invalid(format!(
+                "{key} option '{other}' (ocs or ecs)"
+            ))),
+        }
+    };
+    let both = match config.options.get("chipset").map(String::as_str) {
+        None => default,
+        Some("aga") => Chipset::AGA,
+        Some(_) => {
+            let ecs = parse("chipset", false)?;
+            Chipset {
+                ecs_agnus: ecs,
+                ecs_denise: ecs,
+                aga: false,
+            }
+        }
+    };
+    if both.aga {
+        if config.options.contains_key("agnus") || config.options.contains_key("denise") {
+            return Err(ConfigError::Invalid(
+                "agnus/denise options do not apply to the AGA chip set".into(),
+            ));
+        }
+        return Ok(both);
+    }
+    Ok(Chipset {
+        ecs_agnus: parse("agnus", both.ecs_agnus)?,
+        ecs_denise: parse("denise", both.ecs_denise)?,
+        aga: false,
+    })
 }
 
 /// A size option: "0", "256k", "512k", "1m" … from `allowed`.
@@ -191,21 +295,22 @@ fn option<'a>(config: &'a MachineConfig, key: &str, default: &'a str) -> &'a str
         .unwrap_or(default)
 }
 
-fn load_rom(config: &MachineConfig) -> Result<Vec<u8>, ConfigError> {
+fn load_rom(config: &MachineConfig, default_kick: &str) -> Result<Vec<u8>, ConfigError> {
     if let Some(v) = config.options.get("roms") {
         return match v.as_str() {
             "stub" => Ok(stub::rom()),
             other => Err(ConfigError::Invalid(format!("roms option '{other}'"))),
         };
     }
-    let role = match option(config, "kickstart", "1.3") {
+    let role = match option(config, "kickstart", default_kick) {
         "1.2" => "kick12",
         "1.3" => "kick13",
         "2.0" => "kick20",
+        "3.0" => "kick30",
         "3.1" => "kick31",
         other => {
             return Err(ConfigError::Invalid(format!(
-                "kickstart option '{other}' (1.2, 1.3, 2.0 or 3.1)"
+                "kickstart option '{other}' (1.2, 1.3, 2.0, 3.0 or 3.1)"
             )))
         }
     };
@@ -253,8 +358,8 @@ fn phases(lines: PortLines) -> (u8, u8) {
     (right << 1 | (right ^ down), left << 1 | (left ^ up))
 }
 
-/// CPU clocks between port samples (one raster line).
-const PORT_SAMPLE: u64 = 2 * custom::PAL_LINE as u64;
+/// Colour clocks between port samples (one raster line).
+const PORT_SAMPLE_CCK: u64 = custom::PAL_LINE as u64;
 
 /// Everything on the boards' buses except the CPU and the port devices.
 #[derive(Clone, Debug)]
@@ -266,6 +371,10 @@ struct Board {
     drives: Vec<AmigaDrive>,
     /// Colour clocks the chips have run.
     cck: u64,
+    /// CPU clocks per colour clock (2 for the 68000, 4 for the A1200).
+    clk: u64,
+    /// Clocks of a CPU bus cycle (4 on the 68000, 3 on the 68020).
+    bus_clocks: u64,
     /// The interrupt level Paula drives on IPL0–2, the level before its
     /// last change and the colour clock of that change: the CPU sees a
     /// change only [`IPL_DELAY`] later.
@@ -510,7 +619,16 @@ impl Board {
                 u16::from(self.read_cia(addr & !1, peek)) << 8
                     | u16::from(self.read_cia(addr | 1, peek))
             }
+            Region::Gayle => u16::from(self.read_gayle(addr & !1, peek)) << 8,
             Region::Open => 0,
+        }
+    }
+
+    fn read_gayle(&mut self, addr: u32, peek: bool) -> u8 {
+        match &mut self.mem.gayle {
+            Some(g) if peek => g.peek(addr),
+            Some(g) => g.read(addr),
+            None => 0,
         }
     }
 
@@ -521,6 +639,7 @@ impl Board {
             Size::Byte => match region {
                 Region::Chip => u32::from(self.mem.chip.byte(addr)),
                 Region::Cia => u32::from(self.read_cia(addr, peek)),
+                Region::Gayle => u32::from(self.read_gayle(addr, peek)),
                 Region::Autoconfig => u32::from(
                     self.mem
                         .fast
@@ -571,6 +690,11 @@ impl Board {
                 self.write_cia(addr & !1, (v >> 8) as u8);
                 self.write_cia(addr | 1, v as u8);
             }
+            Region::Gayle => {
+                if let Some(g) = &mut self.mem.gayle {
+                    g.write(addr, (v >> 8) as u8);
+                }
+            }
             Region::Rom | Region::Open => {}
         }
     }
@@ -601,17 +725,24 @@ impl Board {
                 .custom
                 .write(addr as u16, u16::from(v) << 8 | u16::from(v)),
             Region::Cia => self.write_cia(addr, v),
+            Region::Gayle => {
+                if let Some(g) = &mut self.mem.gayle {
+                    g.write(addr, v);
+                }
+            }
             Region::Rom | Region::Open => {}
         }
     }
 }
 
 /// Clocks a VPA (E-clock synchronous) cycle starting at CPU clock `at`
-/// waits: it ends on an E-clock edge (every ten clocks) at least ten
-/// clocks after it began.
-fn e_clock_waits(at: u64) -> u32 {
-    let end = (at + 10).div_ceil(10) * 10;
-    (end - at - 4) as u32
+/// waits: it ends on an E-clock edge (every ten 7 MHz clocks, i.e. five
+/// colour clocks) at least one E period after it began. `clk` is the
+/// CPU's clocks per colour clock, `bus` its bus cycle length.
+fn e_clock_waits(at: u64, clk: u64, bus: u64) -> u32 {
+    let period = 5 * clk;
+    let end = (at + period).div_ceil(period) * period;
+    (end - at - bus) as u32
 }
 
 /// The 68000's bus for one instruction.
@@ -677,17 +808,20 @@ impl TimedBus68 for AmigaBus<'_> {
     fn bus_cycle(&mut self, access: Access, _fc: u8, addr: u32, _size: Size, t: u32) -> u32 {
         let at = self.start + u64::from(t);
         self.bus_start = at;
+        let (clk, bus) = (self.b.clk, self.b.bus_clocks);
         if access == Access::IntAck {
-            let w = e_clock_waits(at);
-            self.b.run_to((at + 4 + u64::from(w)) / 2);
+            let w = e_clock_waits(at, clk, bus);
+            self.b.run_to((at + bus + u64::from(w)) / clk);
             return w;
         }
         let region = self.b.mem.region(addr, access == Access::Write);
         if region.chip_bus() {
             // The CPU's data slot is the second colour clock of its cycle;
             // in the first it already asks for the bus (the Blitter's
-            // starvation count sees it).
-            let c0 = at / 2 + 1;
+            // starvation count sees it). On the A1200 the request comes
+            // with the cycle's start, its data slot being the next colour
+            // clock.
+            let c0 = at / clk + 1;
             self.b.run_to(c0 - 1);
             if self.b.cck == c0 - 1 {
                 self.b.custom.cpu_request();
@@ -696,13 +830,13 @@ impl TimedBus68 for AmigaBus<'_> {
             loop {
                 let c = self.b.cck;
                 if self.b.tick(true) {
-                    return (2 * (c - c0)) as u32;
+                    return (clk * (c - c0)) as u32;
                 }
             }
         }
         if region == Region::Cia {
-            let w = e_clock_waits(at);
-            self.b.run_to((at + 4 + u64::from(w)) / 2 - 1);
+            let w = e_clock_waits(at, clk, bus);
+            self.b.run_to((at + bus + u64::from(w)) / clk - 1);
             return w;
         }
         0
@@ -761,6 +895,7 @@ fn peek_plain(b: &Board, addr: u32, size: Size) -> u32 {
                 u16::from(f.map_or(0xff, |f| f.read(a & 0xffff))) << 8 | 0xff
             }
             Region::Custom => b.custom.peek(a as u16),
+            Region::Gayle => u16::from(b.mem.gayle.as_ref().map_or(0, |g| g.peek(a))) << 8,
             Region::Cia | Region::Open => 0,
         }
     };
@@ -843,12 +978,20 @@ pub struct Amiga {
 impl Amiga {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
         let (model, standard) = parse_model(config.model.as_deref())?;
-        let (chip_default, slow_default) = match model {
-            Model::A500 => ("512k", "512k"),
-            Model::A1000 => ("256k", "0"),
-            Model::A2000 => ("1m", "0"),
+        let (chip_default, slow_default, chipset_default, kick_default) = match model {
+            Model::A500 => ("512k", "512k", Chipset::OCS, "1.3"),
+            Model::A1000 => ("256k", "0", Chipset::OCS, "1.3"),
+            Model::A2000 => ("1m", "0", Chipset::OCS, "1.3"),
+            Model::A500Plus => ("1m", "0", Chipset::ECS, "2.0"),
+            Model::A1200 => ("2m", "0", Chipset::AGA, "3.1"),
         };
-        let chip = size_option(config, "chip", chip_default, &["256k", "512k", "1m"])?;
+        let chipset = chipset_option(config, chipset_default)?;
+        let chip = size_option(config, "chip", chip_default, &["256k", "512k", "1m", "2m"])?;
+        if chip > 0x10_0000 && !chipset.ecs_agnus {
+            return Err(ConfigError::Invalid(
+                "chip=2m needs the ECS Agnus (agnus=ecs or chipset=ecs)".into(),
+            ));
+        }
         let slow = size_option(config, "slow", slow_default, &["0", "none", "512k"])?;
         let fast = size_option(
             config,
@@ -900,19 +1043,22 @@ impl Amiga {
         let rom = if boot_rom.is_some() {
             Vec::new()
         } else {
-            load_rom(config)?
+            load_rom(config, kick_default)?
         };
         let mut mem = Memory::new(chip, slow, &rom).with_fast(fast);
         if model == Model::A1000 {
             mem = mem.with_a1000(boot_rom.as_deref());
         }
+        if model == Model::A1200 {
+            mem = mem.with_gayle();
+        }
         let ptr_mask_byte = chip as u32 - 1;
-        let mut custom = Custom::new(standard, ptr_mask_byte & !1);
+        let mut custom = Custom::new(standard, ptr_mask_byte & !1, chipset);
         custom.paula.uart.loopback = loopback;
         let mut m = Self {
             model,
             standard,
-            cpu: M68000::new(),
+            cpu: M68000::with_model(model.cpu()),
             board: Board {
                 mem,
                 custom,
@@ -920,14 +1066,20 @@ impl Amiga {
                 cia_b: Cia::new(CiaModel::Mos8520),
                 drives: vec![AmigaDrive::with_type(hd); drives],
                 cck: 0,
+                clk: model.clocks_per_cck(),
+                bus_clocks: if model.cpu() == CpuModel::Mc68020 {
+                    3
+                } else {
+                    4
+                },
                 ipl: 0,
                 ipl_before: 0,
                 ipl_changed: 0,
                 field_done: false,
                 fire_low: 0,
-                cck_hz: cpu_hz(standard) / 2,
+                cck_hz: cck_hz(standard),
                 disk_acc: 0,
-                decimators: [Decimator::new(cpu_hz(standard) / 2, emu_core::SAMPLE_RATE)
+                decimators: [Decimator::new(cck_hz(standard), emu_core::SAMPLE_RATE)
                     .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?;
                     2],
                 filter: [[0; 5]; 2],
@@ -1013,7 +1165,7 @@ impl Amiga {
         }
         let now = self.sched.now().0;
         if now >= self.ports_due && self.ports.iter().any(Option::is_some) {
-            self.ports_due = now + PORT_SAMPLE;
+            self.ports_due = now + PORT_SAMPLE_CCK * self.board.clk;
             self.refresh_ports();
         }
         let start = self.sched.now().0;
@@ -1035,12 +1187,13 @@ impl Amiga {
             Step::Halted => 4,
         };
         let end = start + u64::from(clocks);
-        self.board.run_to(end / 2);
+        let clk = self.board.clk;
+        self.board.run_to(end / clk);
         self.sched.advance(u64::from(clocks));
         // The interrupt decision at the end of this instruction uses the
         // level as it stood when its last bus cycle began (the next step
         // acts on it).
-        self.cpu.set_ipl(self.board.ipl_seen_at(sampled / 2));
+        self.cpu.set_ipl(self.board.ipl_seen_at(sampled / clk));
         if step == Step::Halted {
             if !self.jam_reported {
                 self.jam_reported = true;
@@ -1129,9 +1282,12 @@ impl Amiga {
 
     fn signal(&self) -> SignalInfo {
         let c = &self.board.custom;
-        let (clock, standard) = match self.standard {
-            Standard::Pal => (4 * CPU_HZ_PAL / 2, VideoStandard::Pal),
-            Standard::Ntsc => (4 * CPU_HZ_NTSC / 2, VideoStandard::Ntsc),
+        // The pixel clock is the crystal's; the beam standard can differ
+        // on the ECS Agnus (BEAMCON0).
+        let clock = 4 * cck_hz(self.standard);
+        let standard = match c.standard {
+            Standard::Pal => VideoStandard::Pal,
+            Standard::Ntsc => VideoStandard::Ntsc,
         };
         SignalInfo {
             pixel_clock_hz: clock,
@@ -1238,7 +1394,7 @@ impl Machine for Amiga {
     fn framebuffer(&self) -> FrameRef<'_> {
         FrameRef {
             width: WIDTH,
-            height: self.standard.height(),
+            height: self.board.custom.standard.height(),
             pixels: PixelData::Rgb(self.board.custom.frame()),
             luma_chroma: None,
             signal: self.signal(),
@@ -1300,6 +1456,17 @@ impl Machine for Amiga {
             r("BPL1MOD", 0x108, u32::from(c.bpl1mod), 16),
             r("BPL2MOD", 0x10a, u32::from(c.bpl2mod), 16),
         ];
+        if c.chipset.aga {
+            agnus.push(r("BPL7PT", 0x0f8, c.bplpt[6], 32));
+            agnus.push(r("BPL8PT", 0x0fc, c.bplpt[7], 32));
+            agnus.push(r("FMODE", 0x1fc, u32::from(c.fmode), 16));
+        }
+        if c.chipset.ecs_agnus {
+            agnus.push(r("DIWHIGH", 0x1e4, u32::from(c.diwhigh), 16));
+            for (i, n) in custom::BEAM_REG_NAMES.iter().enumerate() {
+                agnus.push(r(n, 0x1c0 + 2 * i as u16, u32::from(c.beam_regs[i]), 16));
+            }
+        }
         const BPL: [&str; 6] = ["BPL1PT", "BPL2PT", "BPL3PT", "BPL4PT", "BPL5PT", "BPL6PT"];
         for (i, n) in BPL.iter().enumerate() {
             agnus.push(r(n, 0x0e0 + 4 * i as u16, c.bplpt[i], 32));
@@ -1323,8 +1490,14 @@ impl Machine for Amiga {
             r("BLTBMOD", 0x062, u32::from(b.modulo[1]), 16),
             r("BLTCMOD", 0x060, u32::from(b.modulo[2]), 16),
             r("BLTDMOD", 0x066, u32::from(b.modulo[3]), 16),
+            r("BLTSIZV", 0x05c, u32::from(b.sizv), 15),
             ("BUSY", None, u32::from(b.busy), 1),
-            ("WIDTH", None, u32::from(b.job_size().map_or(0, |s| s.0)), 8),
+            (
+                "WIDTH",
+                None,
+                u32::from(b.job_size().map_or(0, |s| s.0)),
+                11,
+            ),
             (
                 "HEIGHT",
                 None,
@@ -1339,6 +1512,15 @@ impl Machine for Amiga {
             r("CLXCON", 0x098, u32::from(d.clxcon), 16),
             r("CLXDAT", 0x00e, u32::from(c.peek(0x00e)), 16),
         ];
+        if d.aga {
+            denise.push(r("BPLCON4", 0x10c, u32::from(d.bplcon4), 16));
+            denise.push(r("CLXCON2", 0x10e, u32::from(d.clxcon2), 16));
+        }
+        if d.ecs {
+            denise.push(r("BPLCON3", 0x106, u32::from(d.bplcon3), 16));
+            denise.push(r("DIWHIGH", 0x1e4, u32::from(d.diwhigh), 16));
+            denise.push(r("DENISEID", 0x07c, u32::from(c.peek(0x07c)), 16));
+        }
         const COLORS: [&str; 32] = [
             "COLOR00", "COLOR01", "COLOR02", "COLOR03", "COLOR04", "COLOR05", "COLOR06", "COLOR07",
             "COLOR08", "COLOR09", "COLOR10", "COLOR11", "COLOR12", "COLOR13", "COLOR14", "COLOR15",
@@ -1346,7 +1528,11 @@ impl Machine for Amiga {
             "COLOR24", "COLOR25", "COLOR26", "COLOR27", "COLOR28", "COLOR29", "COLOR30", "COLOR31",
         ];
         for (i, n) in COLORS.iter().enumerate() {
-            denise.push(r(n, 0x180 + 2 * i as u16, u32::from(d.colors[i]), 12));
+            if d.aga {
+                denise.push(r(n, 0x180 + 2 * i as u16, d.colors[i], 24));
+            } else {
+                denise.push(r(n, 0x180 + 2 * i as u16, u32::from(d.color12(i)), 12));
+            }
         }
         let mut paula = vec![
             r("INTENA", 0x09a, u32::from(p.intena), 16),
@@ -1499,8 +1685,9 @@ impl Machine for Amiga {
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         let b = &self.board;
-        // Version 5: the LED filter is a biquad (five states per side).
-        w.chunk(*b"A500", 5, |w| {
+        // Version 5: the LED filter is a biquad (five states per side);
+        // version 6: Gayle's id shift (A1200).
+        w.chunk(*b"A500", 6, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1521,6 +1708,10 @@ impl Machine for Amiga {
             w.u8(b.ipl);
             w.u8(b.ipl_before);
             w.u64(b.ipl_changed);
+            w.bool(b.mem.gayle.is_some());
+            if let Some(g) = &b.mem.gayle {
+                g.save(w);
+            }
         });
         self.cpu.save(&mut w);
         b.mem.save(&mut w);
@@ -1549,7 +1740,7 @@ impl Machine for Amiga {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"A500", 5)?;
+        let (version, mut c) = r.chunk(*b"A500", 6)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -1585,6 +1776,15 @@ impl Machine for Amiga {
             board.ipl = c.u8()? & 7;
             board.ipl_before = c.u8()? & 7;
             board.ipl_changed = c.u64()?;
+        }
+        if version >= 6 {
+            let has_gayle = c.bool()?;
+            if has_gayle != board.mem.gayle.is_some() {
+                return Err(StateError::Invalid("Gayle differs"));
+            }
+            if has_gayle {
+                board.mem.gayle = Some(memory::Gayle::load(&mut c)?);
+            }
         }
         board.samples.clear();
         let mut cpu = self.cpu.clone();

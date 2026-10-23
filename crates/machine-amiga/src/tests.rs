@@ -64,7 +64,7 @@ fn memory_map_and_mirrors() {
     );
     // Custom registers: a byte write reaches the whole word.
     b.write(0xdf_f180, Size::Byte, 0x0f);
-    assert_eq!(b.custom.denise.colors[0], 0x0f0f & 0xfff);
+    assert_eq!(b.custom.denise.color12(0), 0x0f0f & 0xfff);
     // CIA-B timer A low byte at $BFD400, CIA-A's at $BFE401.
     b.write(0xbf_d400, Size::Byte, 0x12);
     b.write(0xbf_e401, Size::Byte, 0x34);
@@ -105,9 +105,15 @@ fn chip_bus_accesses_wait_for_dma() {
 #[test]
 fn e_clock_waits_align_to_ten_clocks() {
     for at in (0..40u64).step_by(2) {
-        let end = at + 4 + u64::from(e_clock_waits(at));
+        let end = at + 4 + u64::from(e_clock_waits(at, 2, 4));
         assert_eq!(end % 10, 0);
         assert!((at + 10..=at + 20).contains(&end), "{at} → {end}");
+    }
+    // The A1200: the E clock keeps its 7 MHz tenth, twenty 14 MHz clocks.
+    for at in (0..80u64).step_by(3) {
+        let end = at + 3 + u64::from(e_clock_waits(at, 4, 3));
+        assert_eq!(end % 20, 0);
+        assert!((at + 20..=at + 40).contains(&end), "{at} → {end}");
     }
 }
 
@@ -536,6 +542,85 @@ fn models_fit_their_memory() {
     config.options.insert("fast".into(), "2m".into());
     config.model = Some("3000".into());
     assert!(Amiga::new(&config).is_err(), "unknown model");
+}
+
+#[test]
+fn the_500plus_has_the_ecs_chips_and_two_megabytes_of_chip_ram() {
+    let m = stub_with(Some("500plus"), &[]);
+    assert_eq!(m.model(), Model::A500Plus);
+    assert_eq!(m.board.custom.chipset, Chipset::ECS);
+    assert_eq!(m.board.mem.chip.len_bytes(), 0x10_0000);
+    assert!(m.board.mem.slow.is_empty());
+    assert_eq!(m.board.custom.peek(0x004) & 0x7f00, 0x2000, "8372A/8375 id");
+    assert_eq!(m.board.custom.peek(0x07c), 0xfffc, "8373");
+    let mut m = stub_with(Some("500plus"), &[("chip", "2m")]);
+    assert_eq!(m.board.mem.chip.len_bytes(), 0x20_0000);
+    assert_eq!(m.memory_spaces()[1].addr_bits, 21);
+    frames(&mut m, 2);
+    let b = &mut m.board;
+    b.write(0x1f_fffc, Size::Word, 0xbeef);
+    assert_eq!(b.read(0x1f_fffc, Size::Word, true), 0xbeef, "2 MB");
+    assert_eq!(b.read(0x0f_fffc, Size::Word, true), 0, "no mirror");
+    assert_eq!(b.custom.ptr_mask, 0x1f_fffe);
+    // An OCS A500 with the ECS Agnus only, and an OCS Denise.
+    let m = stub_with(None, &[("agnus", "ecs")]);
+    assert_eq!(
+        m.board.custom.chipset,
+        Chipset {
+            ecs_agnus: true,
+            ecs_denise: false,
+            aga: false,
+        }
+    );
+    assert_eq!(m.board.custom.peek(0x07c), 0xffff);
+    let m = stub_with(Some("2000"), &[("chipset", "ecs"), ("denise", "ocs")]);
+    assert!(m.board.custom.chipset.ecs_agnus && !m.board.custom.chipset.ecs_denise);
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("chip".into(), "2m".into());
+    assert!(Amiga::new(&config).is_err(), "2 MB needs the ECS Agnus");
+    config.options.insert("chipset".into(), "aaa".into());
+    assert!(Amiga::new(&config).is_err(), "unknown chipset");
+}
+
+#[test]
+fn the_1200_has_a_68020_the_aga_chips_and_gayle() {
+    let mut m = stub_with(Some("1200"), &[]);
+    assert_eq!(m.model(), Model::A1200);
+    assert_eq!(m.cpu.model, cpu_m68k::Model::Mc68020);
+    assert_eq!(m.board.custom.chipset, Chipset::AGA);
+    assert_eq!(m.board.mem.chip.len_bytes(), 0x20_0000);
+    assert!(m.board.mem.slow.is_empty());
+    assert_eq!(m.board.custom.peek(0x004) & 0x7f00, 0x2200, "Alice");
+    assert_eq!(m.board.custom.peek(0x07c), 0xfff8, "Lisa");
+    assert_eq!(m.board.clk, 4);
+    frames(&mut m, 3);
+    assert!(
+        peek_cpu(&m, 0x100, Size::Long) >= 2,
+        "the stub runs on the 68020"
+    );
+    // Gayle's id, bit by bit (D7), most significant bit first: $D0.
+    let b = &mut m.board;
+    b.write(0xde_1000, Size::Byte, 0);
+    let mut id = 0u8;
+    for _ in 0..8 {
+        id = id << 1 | (b.read(0xde_1000, Size::Byte, false) >> 7) as u8;
+    }
+    assert_eq!(id, 0xd0);
+    assert_eq!(b.read(0xda_8000, Size::Byte, false), 0, "no IDE drive");
+    // Another model has no Gayle: open bus.
+    let mut m = stub_with(None, &[]);
+    assert_eq!(m.board.read(0xde_1000, Size::Byte, false), 0);
+    assert!(m.board.mem.gayle.is_none());
+    // The AGA chip set on another board, and its option checks.
+    let m = stub_with(Some("2000"), &[("chipset", "aga"), ("chip", "2m")]);
+    assert_eq!(m.board.custom.chipset, Chipset::AGA);
+    assert!(m.cpu.model == cpu_m68k::Model::Mc68000);
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("chipset".into(), "aga".into());
+    config.options.insert("denise".into(), "ocs".into());
+    assert!(Amiga::new(&config).is_err(), "no single chips with AGA");
 }
 
 #[test]

@@ -310,6 +310,17 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             0x8_0000,
         ),
         optional(
+            "kick30",
+            &[
+                "kick30",
+                "kick-3-0",
+                "kickstart 3-0",
+                "kickstart-3-0",
+                "kick39106",
+            ],
+            0x8_0000,
+        ),
+        optional(
             "kick31",
             &[
                 "kick31",

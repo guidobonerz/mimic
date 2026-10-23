@@ -1,4 +1,4 @@
-//! Motorola 68000 (Amiga 500), later 68020 (A1200).
+//! Motorola 68000 (Amiga 500) and 68020 (A1200; [`Model`]).
 //!
 //! The complete 68000 instruction set with its exceptions (address error,
 //! illegal instruction, privilege violation, trace, TRAP/TRAPV/CHK, division
@@ -23,6 +23,32 @@
 //! is non-maskable). Interrupts are acknowledged with autovectors (the
 //! Amiga's VPA), vectors 25–31.
 //!
+//! **68020** ([`Model::Mc68020`]): the 68020's additions to the programming
+//! model and instruction set — the full-format extension words (base and
+//! outer displacements of 16/32 bits, scaled index, base/index suppress,
+//! memory indirect pre- and post-indexed), Bcc/BSR with 32-bit
+//! displacements, EXTB, LINK.L, RTD, MOVEC with SFC/DFC/CACR/VBR/CAAR/MSP/ISP,
+//! MOVES, MULU.L/MULS.L (32 and 64 bit), DIVU.L/DIVS.L/DIVUL/DIVSL, CHK.L,
+//! CHK2/CMP2, CAS/CAS2, TRAPcc, PACK/UNPK, the bit field instructions,
+//! BKPT (an illegal instruction without a breakpoint cycle), the M bit with
+//! a master and an interrupt stack pointer, the vector base register, and
+//! stack frames with a format/vector word (format 0 for most exceptions,
+//! format 2 with the instruction address for CHK, CHK2, TRAPcc/TRAPV,
+//! division by zero and trace; RTE handles formats 0, 1 and 2 and raises a
+//! format error for the others). Word and long accesses at odd addresses
+//! are legal and performed as the bus allows (byte cycles at odd addresses,
+//! one 32-bit cycle for an aligned long). CALLM/RTM and the coprocessor
+//! instructions take the F-line exception, like on the 68EC020 without a
+//! coprocessor. The caches are not modelled (CACR is a plain register).
+//!
+//! **68020 timing** is approximate: the bus cycle takes three clocks, the
+//! prefetch stays word by word and the internal clocks are the 68000's
+//! sequences, so an instruction costs about what the 68020 spends without
+//! cache hits; the A1200's 14 MHz clock then gives roughly the real
+//! machine's speed. No test suite with 68020 bus traces was available
+//! (Tom Harte's tests cover the 68000 only); the new instructions are
+//! checked by unit tests against the Programmer's Reference Manual.
+//!
 //! Sources: Motorola M68000 Family Programmer's Reference Manual
 //! (M68000PM/AD) and MC68000 User's Manual (M68000UM/AD), sections on
 //! exception processing and instruction execution times; Tom Harte's
@@ -37,6 +63,9 @@
 mod disasm;
 mod ea;
 mod exec;
+mod exec020;
+#[cfg(test)]
+mod tests020;
 
 use emu_core::{
     Bus, Cpu, CycleResult, Instr, InterruptKind, Register, RegisterSet, Savestate, Size,
@@ -46,7 +75,11 @@ use emu_core::{
 /// Status register bits.
 pub mod sr {
     pub const T: u16 = 0x8000;
+    /// 68020: trace on change of flow (T1 T0 = 01).
+    pub const T0: u16 = 0x4000;
     pub const S: u16 = 0x2000;
+    /// 68020: master/interrupt state.
+    pub const M: u16 = 0x1000;
     pub const IPL: u16 = 0x0700;
     pub const X: u16 = 0x10;
     pub const N: u16 = 0x08;
@@ -55,6 +88,16 @@ pub mod sr {
     pub const C: u16 = 0x01;
     /// Bits that exist on the 68000.
     pub const MASK: u16 = 0xa71f;
+    /// Bits that exist on the 68020.
+    pub const MASK_020: u16 = 0xf71f;
+}
+
+/// The processor fitted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Model {
+    #[default]
+    Mc68000,
+    Mc68020,
 }
 
 /// Function codes on FC0–2.
@@ -139,6 +182,8 @@ pub(crate) mod vector {
     pub const TRACE: u8 = 9;
     pub const LINE_A: u8 = 10;
     pub const LINE_F: u8 = 11;
+    /// 68020: RTE found a stack frame of an unknown format.
+    pub const FORMAT_ERROR: u8 = 14;
     pub const SPURIOUS: u8 = 24;
     pub const TRAP0: u8 = 32;
 }
@@ -158,12 +203,24 @@ pub enum Step {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct M68000 {
+    pub model: Model,
     pub d: [u32; 8],
     /// A0–A7; A7 is the stack pointer of the current mode.
     pub a: [u32; 8],
     /// The other mode's stack pointer (USP in supervisor mode, SSP in user
-    /// mode).
+    /// mode; on the 68020 the supervisor SP the M bit selects).
     other_sp: u32,
+    /// 68020: the supervisor stack pointer the M bit does not select (ISP
+    /// while M is set, MSP while it is clear).
+    alt_ssp: u32,
+    /// 68020 control registers.
+    pub vbr: u32,
+    pub sfc: u8,
+    pub dfc: u8,
+    pub cacr: u32,
+    pub caar: u32,
+    /// Address of the instruction being executed (68020 format 2 frames).
+    instr_pc: u32,
     sr: u16,
     /// The instruction being executed (IR), for exception frames; IRD
     /// may already hold the next one after an early prefetch.
@@ -194,10 +251,22 @@ impl Default for M68000 {
 
 impl M68000 {
     pub fn new() -> Self {
+        Self::with_model(Model::Mc68000)
+    }
+
+    pub fn with_model(model: Model) -> Self {
         Self {
+            model,
             d: [0; 8],
             a: [0; 8],
             other_sp: 0,
+            alt_ssp: 0,
+            vbr: 0,
+            sfc: 0,
+            dfc: 0,
+            cacr: 0,
+            caar: 0,
+            instr_pc: 0,
             sr: sr::S | sr::IPL,
             ir: 0,
             ird: 0,
@@ -217,13 +286,70 @@ impl M68000 {
         self.sr
     }
 
-    /// Set SR, switching stack pointers when S changes.
+    pub fn is_020(&self) -> bool {
+        self.model == Model::Mc68020
+    }
+
+    fn sr_mask(&self) -> u16 {
+        if self.is_020() {
+            sr::MASK_020
+        } else {
+            sr::MASK
+        }
+    }
+
+    /// Set SR, switching stack pointers when S (or, on the 68020, M)
+    /// changes.
     pub fn set_sr(&mut self, v: u16) {
-        let v = v & sr::MASK;
-        if (v ^ self.sr) & sr::S != 0 {
+        let v = v & self.sr_mask();
+        let old = self.sr;
+        if (v ^ old) & sr::M != 0 {
+            // The supervisor SP in use (A7 in supervisor mode, else the
+            // saved one) swaps with the one the other M state uses.
+            if old & sr::S != 0 {
+                std::mem::swap(&mut self.a[7], &mut self.alt_ssp);
+            } else {
+                std::mem::swap(&mut self.other_sp, &mut self.alt_ssp);
+            }
+        }
+        if (v ^ old) & sr::S != 0 {
             std::mem::swap(&mut self.a[7], &mut self.other_sp);
         }
         self.sr = v;
+    }
+
+    /// 68020: the interrupt stack pointer (the SSP while M is clear).
+    pub fn isp(&self) -> u32 {
+        if self.sr & sr::M == 0 {
+            self.ssp()
+        } else {
+            self.alt_ssp
+        }
+    }
+
+    pub fn set_isp(&mut self, v: u32) {
+        if self.sr & sr::M == 0 {
+            self.set_ssp(v);
+        } else {
+            self.alt_ssp = v;
+        }
+    }
+
+    /// 68020: the master stack pointer (the SSP while M is set).
+    pub fn msp(&self) -> u32 {
+        if self.sr & sr::M != 0 {
+            self.ssp()
+        } else {
+            self.alt_ssp
+        }
+    }
+
+    pub fn set_msp(&mut self, v: u32) {
+        if self.sr & sr::M != 0 {
+            self.set_ssp(v);
+        } else {
+            self.alt_ssp = v;
+        }
     }
 
     pub fn supervisor(&self) -> bool {
@@ -308,7 +434,9 @@ impl M68000 {
         self.halted = false;
         self.stopped = false;
         self.trace = false;
-        self.sr = (self.sr & !sr::T) | sr::S | sr::IPL;
+        self.vbr = 0;
+        self.cacr = 0;
+        self.set_sr((self.sr & !(sr::T | sr::T0 | sr::M)) | sr::S | sr::IPL);
         let r: Res = (|| {
             self.idle(bus, 16);
             let ssp = self.read_long(bus, fc::SUPERVISOR_PROGRAM, 0)?;
@@ -351,6 +479,7 @@ impl M68000 {
         self.trace = self.sr & sr::T != 0;
         let op = self.ird;
         self.ir = op;
+        self.instr_pc = self.pc();
         match exec::execute(self, bus, op) {
             Ok(()) => {
                 if self.trace && !self.halted {
@@ -393,6 +522,10 @@ impl M68000 {
         }
     }
 
+    pub(crate) fn data_fc_pub(&self) -> u8 {
+        self.data_fc()
+    }
+
     pub(crate) fn program_fc(&self) -> u8 {
         if self.supervisor() {
             fc::SUPERVISOR_PROGRAM
@@ -403,12 +536,13 @@ impl M68000 {
 
     fn cycle(&mut self, bus: &mut dyn TimedBus68, access: Access, fc: u8, addr: u32, size: Size) {
         let waits = bus.bus_cycle(access, fc, addr, size, self.t);
-        self.t += waits
-            + if access == Access::ReadModifyWrite {
-                10
-            } else {
-                4
-            };
+        let clocks = match (access, self.is_020()) {
+            (Access::ReadModifyWrite, false) => 10,
+            (Access::ReadModifyWrite, true) => 6,
+            (_, false) => 4,
+            (_, true) => 3,
+        };
+        self.t += waits + clocks;
     }
 
     pub(crate) fn read_at(
@@ -419,6 +553,12 @@ impl M68000 {
         size: Size,
     ) -> Res<u32> {
         if size != Size::Byte && addr & 1 != 0 {
+            if self.is_020() {
+                // Misaligned: the 68020 runs byte cycles.
+                let hi = self.read_at(bus, fc, addr, Size::Byte)?;
+                let lo = self.read_at(bus, fc, addr.wrapping_add(1), Size::Byte)?;
+                return Ok(hi << 8 | lo);
+            }
             // The frame records the full 32-bit address.
             return Err(Fault::AddressError {
                 addr,
@@ -440,6 +580,10 @@ impl M68000 {
         v: u32,
     ) -> Res {
         if size != Size::Byte && addr & 1 != 0 {
+            if self.is_020() {
+                self.write_at(bus, fc, addr, Size::Byte, v >> 8)?;
+                return self.write_at(bus, fc, addr.wrapping_add(1), Size::Byte, v & 0xff);
+            }
             return Err(Fault::AddressError {
                 addr,
                 write: true,
@@ -450,6 +594,42 @@ impl M68000 {
         self.cycle(bus, Access::Write, fc, addr, size);
         bus.write(addr, size, v);
         Ok(())
+    }
+
+    /// 68020: a long-word aligned long takes one 32-bit bus cycle.
+    pub(crate) fn long_cycle(&self, addr: u32) -> bool {
+        self.is_020() && addr & 3 == 0
+    }
+
+    /// Read a long with the 68020's 32-bit port where aligned.
+    pub(crate) fn read_long_at(&mut self, bus: &mut dyn TimedBus68, fc: u8, addr: u32) -> Res<u32> {
+        if self.long_cycle(addr) {
+            let addr = addr & 0xff_ffff;
+            self.cycle(bus, Access::Read, fc, addr, Size::Long);
+            return Ok(bus.read(addr, Size::Long));
+        }
+        let hi = self.read_at(bus, fc, addr, Size::Word)?;
+        let lo = self.read_at(bus, fc, addr.wrapping_add(2), Size::Word)?;
+        Ok(hi << 16 | lo)
+    }
+
+    /// Write a long with the 68020's 32-bit port where aligned (the
+    /// 68000's word order is the caller's business).
+    pub(crate) fn write_long_at(
+        &mut self,
+        bus: &mut dyn TimedBus68,
+        fc: u8,
+        addr: u32,
+        v: u32,
+    ) -> Res {
+        if self.long_cycle(addr) {
+            let addr = addr & 0xff_ffff;
+            self.cycle(bus, Access::Write, fc, addr, Size::Long);
+            bus.write(addr, Size::Long, v);
+            return Ok(());
+        }
+        self.write_at(bus, fc, addr, Size::Word, v >> 16)?;
+        self.write_at(bus, fc, addr.wrapping_add(2), Size::Word, v & 0xffff)
     }
 
     /// Data read of a byte or word.
@@ -465,9 +645,7 @@ impl M68000 {
 
     /// Long read: high word, then low word.
     pub(crate) fn read_long(&mut self, bus: &mut dyn TimedBus68, fc: u8, addr: u32) -> Res<u32> {
-        let hi = self.read_at(bus, fc, addr, Size::Word)?;
-        let lo = self.read_at(bus, fc, addr.wrapping_add(2), Size::Word)?;
-        Ok(hi << 16 | lo)
+        self.read_long_at(bus, fc, addr)
     }
 
     /// TAS's indivisible read-modify-write of a byte: returns the old value
@@ -598,7 +776,9 @@ impl M68000 {
     // ------------------------------------------------------------ exceptions
 
     /// Group 1/2 exception: supervisor mode, stack `pc` and the old SR in
-    /// the order `frame` gives, take the vector, prefetch.
+    /// the order `frame` gives, take the vector, prefetch. On the 68020 the
+    /// frame is format 0, or format 2 with the instruction's address for
+    /// CHK/CHK2, TRAPcc/TRAPV, division by zero and trace.
     pub(crate) fn exception(
         &mut self,
         bus: &mut dyn TimedBus68,
@@ -606,6 +786,15 @@ impl M68000 {
         pc: u32,
         frame: Frame,
     ) -> Res {
+        if self.is_020() {
+            let format2 = matches!(
+                vec,
+                vector::CHK | vector::TRAPV | vector::ZERO_DIVIDE | vector::TRACE
+            );
+            let old_sr = self.sr;
+            self.set_sr((self.sr | sr::S) & !(sr::T | sr::T0));
+            return self.push_frame_020(bus, vec, pc, old_sr, format2.then_some(self.instr_pc));
+        }
         let old_sr = self.sr;
         self.set_sr((self.sr | sr::S) & !sr::T);
         let sp = self.a[7];
@@ -623,9 +812,42 @@ impl M68000 {
         self.vector_jump(bus, vec)
     }
 
-    /// Read exception vector `vec` and start there.
+    /// 68020 exception frame on the active supervisor stack: SR, PC, the
+    /// format/vector word, and for format 2 the instruction address.
+    pub(crate) fn push_frame_020(
+        &mut self,
+        bus: &mut dyn TimedBus68,
+        vec: u8,
+        pc: u32,
+        old_sr: u16,
+        instr: Option<u32>,
+    ) -> Res {
+        let mut sp = self.a[7];
+        let format = if instr.is_some() { 0x2000 } else { 0 };
+        if let Some(addr) = instr {
+            sp = sp.wrapping_sub(4);
+            self.write_long_at(bus, fc::SUPERVISOR_DATA, sp, addr)?;
+        }
+        sp = sp.wrapping_sub(2);
+        self.write_at(
+            bus,
+            fc::SUPERVISOR_DATA,
+            sp,
+            Size::Word,
+            u32::from(format | u16::from(vec) << 2),
+        )?;
+        sp = sp.wrapping_sub(4);
+        self.write_long_at(bus, fc::SUPERVISOR_DATA, sp, pc)?;
+        sp = sp.wrapping_sub(2);
+        self.write_at(bus, fc::SUPERVISOR_DATA, sp, Size::Word, u32::from(old_sr))?;
+        self.a[7] = sp;
+        self.vector_jump(bus, vec)
+    }
+
+    /// Read exception vector `vec` (relative to VBR on the 68020) and start
+    /// there.
     fn vector_jump(&mut self, bus: &mut dyn TimedBus68, vec: u8) -> Res {
-        let addr = u32::from(vec) * 4;
+        let addr = self.vbr.wrapping_add(u32::from(vec) * 4);
         let pc = self.read_long(bus, fc::SUPERVISOR_DATA, addr)?;
         self.jump(bus, pc)?;
         self.idle(bus, 2);
@@ -633,6 +855,9 @@ impl M68000 {
     }
 
     fn interrupt(&mut self, bus: &mut dyn TimedBus68, level: u8) -> Res {
+        if self.is_020() {
+            return self.interrupt_020(bus, level);
+        }
         let old_sr = self.sr;
         self.set_sr((self.sr | sr::S) & !sr::T & !sr::IPL | (u16::from(level) << 8));
         self.idle(bus, 6);
@@ -653,6 +878,51 @@ impl M68000 {
         self.write(bus, sp.wrapping_sub(4), Size::Word, pc >> 16)?;
         self.a[7] = sp.wrapping_sub(6);
         self.vector_jump(bus, vector::SPURIOUS + level)
+    }
+
+    /// 68020 interrupt: a format 0 frame on the current supervisor stack;
+    /// with M set, the state switches to the interrupt stack and a format
+    /// 1 (throwaway) frame goes there too.
+    fn interrupt_020(&mut self, bus: &mut dyn TimedBus68, level: u8) -> Res {
+        let old_sr = self.sr;
+        let vec = vector::SPURIOUS + level;
+        self.set_sr((self.sr | sr::S) & !(sr::T | sr::T0) & !sr::IPL | (u16::from(level) << 8));
+        self.idle(bus, 6);
+        let pc = self.au.wrapping_sub(4);
+        self.cycle(
+            bus,
+            Access::IntAck,
+            fc::INT_ACK,
+            0xff_fff0 | u32::from(level) << 1,
+            Size::Byte,
+        );
+        let mut sp = self.a[7].wrapping_sub(8);
+        self.write_at(bus, fc::SUPERVISOR_DATA, sp, Size::Word, u32::from(old_sr))?;
+        self.write_long_at(bus, fc::SUPERVISOR_DATA, sp.wrapping_add(2), pc)?;
+        self.write_at(
+            bus,
+            fc::SUPERVISOR_DATA,
+            sp.wrapping_add(6),
+            Size::Word,
+            u32::from(vec) << 2,
+        )?;
+        self.a[7] = sp;
+        if self.sr & sr::M != 0 {
+            let sr_now = self.sr;
+            self.set_sr(sr_now & !sr::M);
+            sp = self.a[7].wrapping_sub(8);
+            self.write_at(bus, fc::SUPERVISOR_DATA, sp, Size::Word, u32::from(sr_now))?;
+            self.write_long_at(bus, fc::SUPERVISOR_DATA, sp.wrapping_add(2), pc)?;
+            self.write_at(
+                bus,
+                fc::SUPERVISOR_DATA,
+                sp.wrapping_add(6),
+                Size::Word,
+                0x1000 | u32::from(vec) << 2,
+            )?;
+            self.a[7] = sp;
+        }
+        self.vector_jump(bus, vec)
     }
 
     /// An address error during an instruction: the 7-word group 0 frame,
@@ -736,6 +1006,22 @@ impl M68000 {
             value: self.ssp(),
             bits: 32,
         });
+        if self.is_020() {
+            for (name, value) in [
+                ("MSP", self.msp()),
+                ("VBR", self.vbr),
+                ("CACR", self.cacr),
+                ("CAAR", self.caar),
+                ("SFC", u32::from(self.sfc)),
+                ("DFC", u32::from(self.dfc)),
+            ] {
+                v.push(Register {
+                    name,
+                    value,
+                    bits: 32,
+                });
+            }
+        }
         RegisterSet(v)
     }
 }
@@ -777,6 +1063,12 @@ impl Cpu for M68000 {
             "SR" => self.set_sr(v as u16),
             "USP" => self.set_usp(v),
             "SSP" => self.set_ssp(v),
+            "MSP" if self.is_020() => self.set_msp(v),
+            "VBR" if self.is_020() => self.vbr = v,
+            "CACR" if self.is_020() => self.cacr = v,
+            "CAAR" if self.is_020() => self.caar = v,
+            "SFC" if self.is_020() => self.sfc = (v & 7) as u8,
+            "DFC" if self.is_020() => self.dfc = (v & 7) as u8,
             _ => {
                 if let Some(i) = idx("D").filter(|&i| i < 8) {
                     self.d[i] = v;
@@ -788,7 +1080,7 @@ impl Cpu for M68000 {
     }
 
     fn disassemble(&self, bus: &dyn Bus, addr: u32) -> Instr {
-        disasm::disassemble(bus, addr)
+        disasm::disassemble(bus, addr, self.is_020())
     }
 }
 
@@ -803,7 +1095,8 @@ impl M68000 {
 }
 
 const TAG: [u8; 4] = *b"M68K";
-const VERSION: u16 = 1;
+/// Version 2: the 68020 registers.
+const VERSION: u16 = 2;
 
 impl Savestate for M68000 {
     fn save(&self, w: &mut StateWriter) {
@@ -820,17 +1113,23 @@ impl Savestate for M68000 {
             for b in [self.nmi_seen, self.stopped, self.halted] {
                 w.bool(b);
             }
+            for v in [self.alt_ssp, self.vbr, self.cacr, self.caar, self.instr_pc] {
+                w.u32(v);
+            }
+            w.u8(self.sfc);
+            w.u8(self.dfc);
         });
     }
 
+    /// The model is configuration and stays.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut n = self.clone();
         for v in n.d.iter_mut().chain(n.a.iter_mut()) {
             *v = c.u32()?;
         }
         n.other_sp = c.u32()?;
-        n.sr = c.u16()? & sr::MASK;
+        n.sr = c.u16()? & n.sr_mask();
         n.ird = c.u16()?;
         n.irc = c.u16()?;
         n.au = c.u32()?;
@@ -838,6 +1137,19 @@ impl Savestate for M68000 {
         n.nmi_seen = c.bool()?;
         n.stopped = c.bool()?;
         n.halted = c.bool()?;
+        if version >= 2 {
+            for v in [
+                &mut n.alt_ssp,
+                &mut n.vbr,
+                &mut n.cacr,
+                &mut n.caar,
+                &mut n.instr_pc,
+            ] {
+                *v = c.u32()?;
+            }
+            n.sfc = c.u8()? & 7;
+            n.dfc = c.u8()? & 7;
+        }
         *self = n;
         Ok(())
     }

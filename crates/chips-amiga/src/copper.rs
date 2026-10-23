@@ -77,6 +77,8 @@ pub struct Copper {
     pub state: State,
     /// COPCON CDANG: MOVEs to $40–$7F allowed.
     pub danger: bool,
+    /// ECS Agnus: with CDANG every register is reachable (configuration).
+    pub ecs: bool,
     /// Instruction addresses fetched since [`Copper::take_fetched`] while
     /// `watch` is set (debugger exec breakpoints); not state.
     pub watch: bool,
@@ -114,6 +116,7 @@ impl Copper {
             pc: 0,
             state: State::Fetch1,
             danger: false,
+            ecs: false,
             watch: false,
             fetched: Vec::new(),
             wake: 0,
@@ -179,7 +182,14 @@ impl Copper {
                 self.state = State::Fetch1;
                 if ir1 & 1 == 0 {
                     let reg = ir1 & 0x1fe;
-                    if reg < 0x40 || (reg < 0x80 && !self.danger) {
+                    let floor = if !self.danger {
+                        0x80
+                    } else if self.ecs {
+                        0
+                    } else {
+                        0x40
+                    };
+                    if reg < floor {
                         self.state = State::Stopped;
                         return None;
                     }
@@ -238,6 +248,7 @@ impl Copper {
             pc,
             state,
             danger: r.bool()?,
+            ecs: false,
             watch: false,
             fetched: Vec::new(),
             wake: if version >= 2 { r.u8()?.min(2) } else { 0 },

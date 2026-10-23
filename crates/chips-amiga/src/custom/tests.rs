@@ -1,7 +1,17 @@
 use super::*;
 
 fn setup() -> (Custom, ChipRam) {
-    (Custom::new(Standard::Pal, 0x7fffe), ChipRam::new(0x8_0000))
+    (
+        Custom::new(Standard::Pal, 0x7fffe, Chipset::OCS),
+        ChipRam::new(0x8_0000),
+    )
+}
+
+fn setup_ecs(standard: Standard) -> (Custom, ChipRam) {
+    (
+        Custom::new(standard, 0x1f_fffe, Chipset::ECS),
+        ChipRam::new(0x20_0000),
+    )
 }
 
 /// Run until the start of the next field.
@@ -272,7 +282,7 @@ fn savestate_round_trip() {
     let mut w = StateWriter::new();
     c.save(&mut w);
     let data = w.into_bytes();
-    let mut d = Custom::new(Standard::Pal, 0x7fffe);
+    let mut d = Custom::new(Standard::Pal, 0x7fffe, Chipset::OCS);
     d.load(&mut StateReader::new(&data)).unwrap();
     let mut chip2 = chip.clone();
     for _ in 0..100_000 {
@@ -284,6 +294,40 @@ fn savestate_round_trip() {
     assert!(d
         .load(&mut StateReader::new(&data[..data.len() - 1]))
         .is_err());
+}
+
+#[test]
+fn ecs_state_keeps_the_beam_registers_and_the_switched_standard() {
+    let (mut c, mut chip) = setup_ecs(Standard::Pal);
+    screen(&mut c, &mut chip);
+    c.write(reg::BEAMCON0, 0);
+    c.write(reg::DIWHIGH, 0x2100);
+    c.write(reg::BPLCON3, 0x0020);
+    c.write(reg::BLTSIZV, 9);
+    c.write(reg::HTOTAL, 0xe3);
+    for _ in 0..50_000 {
+        c.tick(&mut chip, false);
+    }
+    let mut w = StateWriter::new();
+    c.save(&mut w);
+    let data = w.into_bytes();
+    let mut d = Custom::new(Standard::Pal, 0x1f_fffe, Chipset::ECS);
+    d.load(&mut StateReader::new(&data)).unwrap();
+    assert_eq!(d.standard, Standard::Ntsc, "BEAMCON0 PAL off");
+    assert_eq!(d.frame().len(), (WIDTH * Standard::Ntsc.height()) as usize);
+    assert_eq!((d.beam_regs, d.diwhigh), (c.beam_regs, c.diwhigh));
+    assert_eq!(d.denise.bplcon3, 0x0020);
+    assert_eq!(d.blitter.sizv, 9);
+    assert_eq!(
+        (d.v, d.h, d.lof, d.lol, d.dmacon),
+        (c.v, c.h, c.lof, c.lol, c.dmacon)
+    );
+    assert_eq!(
+        (&d.denise, &d.blitter, &d.copper),
+        (&c.denise, &c.blitter, &c.copper)
+    );
+    d.reset();
+    assert_eq!(d.standard, Standard::Pal, "reset: back to the strap");
 }
 
 #[test]
@@ -434,4 +478,231 @@ fn hires_fetch_window_takes_40_words_with_ddfstop_d0_or_d4() {
         field(&mut c, &mut chip);
         assert_eq!(c.bplpt[0], 0x1_0000 + 80, "one line, DDFSTOP {stop:x}");
     }
+}
+
+#[test]
+fn ecs_ids_and_lol_in_vposr() {
+    let (c, _) = setup();
+    assert_eq!(c.peek(reg::VPOSR) & 0x7fff, 0, "OCS: no id");
+    assert_eq!(c.peek(reg::DENISEID), 0xffff);
+    let (c, _) = setup_ecs(Standard::Pal);
+    assert_eq!(c.peek(reg::VPOSR) & 0x7f80, 0x2000, "8372A PAL");
+    assert_eq!(c.peek(reg::DENISEID), 0xfffc, "8373");
+    assert_eq!(c.beamcon0(), beamcon0::PAL);
+    let (mut c, mut chip) = setup_ecs(Standard::Ntsc);
+    assert_eq!(c.peek(reg::VPOSR) & 0x7f80, 0x3000, "8372A NTSC");
+    assert_eq!(c.beamcon0(), 0);
+    for _ in 0..228 {
+        c.tick(&mut chip, false);
+    }
+    assert_eq!(c.peek(reg::VPOSR) & 0x80, 0x80, "LOL after the first line");
+}
+
+#[test]
+fn beamcon0_switches_the_beam_between_pal_and_ntsc() {
+    let (mut c, mut chip) = setup_ecs(Standard::Ntsc);
+    let lines = |c: &mut Custom, chip: &mut ChipRam| {
+        field(c, chip);
+        let mut n = 0;
+        loop {
+            let out = c.tick(chip, false);
+            n += u32::from(out.hsync);
+            if out.field_done {
+                return n;
+            }
+        }
+    };
+    assert_eq!(lines(&mut c, &mut chip), 263);
+    assert_eq!(c.frame().len(), (WIDTH * Standard::Ntsc.height()) as usize);
+    c.write(reg::BEAMCON0, beamcon0::PAL);
+    assert_eq!(lines(&mut c, &mut chip), 313);
+    assert_eq!(c.frame().len(), (WIDTH * Standard::Pal.height()) as usize);
+    assert_eq!(c.line_len(), 227);
+    // The programmable beam: HTOTAL + 1 clocks, VTOTAL + 1 lines.
+    c.write(reg::HTOTAL, 0x70);
+    c.write(reg::VTOTAL, 0x100);
+    c.write(reg::BEAMCON0, beamcon0::PAL | beamcon0::VARBEAMEN);
+    assert_eq!(c.line_len(), 0x71);
+    assert_eq!(lines(&mut c, &mut chip), 0x101);
+    // An OCS Agnus ignores all of it.
+    let (mut c, mut chip) = setup();
+    c.write(reg::BEAMCON0, 0);
+    assert_eq!(lines(&mut c, &mut chip), 313);
+}
+
+#[test]
+fn diwhigh_extends_the_vertical_window_until_diwstrt_is_written() {
+    let (mut c, mut chip) = setup_ecs(Standard::Pal);
+    screen(&mut c, &mut chip);
+    // Stop at line $12C = 300 instead of $2C | $100.
+    c.write(reg::DIWHIGH, 0x2100);
+    c.write(reg::DIWSTOP, 0x2cc1);
+    assert_eq!(c.diwhigh, 0x2100, "DIWSTOP restored the default");
+    // DIWSTOP $2C with V8 from DIWHIGH: the window stops at line $12C,
+    // 256 rows (the plane data has 256 rows, the pointer is reloaded).
+    let show = |c: &mut Custom, chip: &mut ChipRam| {
+        c.write(reg::BPL1PTH, 1);
+        c.write(reg::BPL1PTH + 2, 0);
+        field(c, chip);
+    };
+    show(&mut c, &mut chip);
+    let x = 0x102 - 4 * FIRST_CCK;
+    assert_eq!(pixel(&c, x, 0x2c - 26), WHITE);
+    assert_eq!(pixel(&c, x, 0x12b - 26), WHITE, "last row");
+    assert_eq!(pixel(&c, x, 0x12c - 26), BLUE, "stops at $12C");
+    // Stop V9 instead: the window runs to the end of the field.
+    c.write(reg::DIWHIGH, 0x2200);
+    show(&mut c, &mut chip);
+    assert_eq!(
+        pixel(&c, x, 0x12c - 26),
+        BLUE,
+        "row 256 of the data is empty"
+    );
+    assert!(c.bplpt[0] > 0x1_0000 + 256 * 40, "fetching past row 256");
+    // Start V8 = 1: nothing in the upper part of the field.
+    c.write(reg::DIWHIGH, 0x2201);
+    show(&mut c, &mut chip);
+    assert_eq!(pixel(&c, x, 0x2c - 26), BLUE, "start at $12C");
+}
+
+#[test]
+fn ecs_blitter_sizes_and_copper_reach_every_register() {
+    let (mut c, mut chip) = setup_ecs(Standard::Pal);
+    c.write(reg::BLTCON0, 0x01ff);
+    c.write(reg::BLTCON1, 0);
+    c.write(reg::BLTDPTL, 0x4000);
+    c.write(reg::BLTDMOD, 0);
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::BLTEN);
+    c.write(reg::BLTSIZV, 2);
+    c.write(reg::BLTSIZH, 100);
+    assert_eq!(c.blitter.job_size(), Some((100, 2)));
+    field(&mut c, &mut chip);
+    assert_eq!(chip.word(0x4000 + 2 * 199), 0xffff);
+    assert_eq!(chip.word(0x4000 + 2 * 200), 0);
+    // The Copper with CDANG writes BLTSIZV ($5C) and even DSKPTH ($20).
+    chip.set_word(0x1000, reg::BLTSIZV);
+    chip.set_word(0x1002, 5);
+    chip.set_word(0x1004, reg::DSKPTH);
+    chip.set_word(0x1006, 0x0007);
+    chip.set_word(0x1008, 0xffff);
+    chip.set_word(0x100a, 0xfffe);
+    c.write(reg::COPCON, 2);
+    c.write(reg::COP1LCH, 0);
+    c.write(reg::COP1LCL, 0x1000);
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::COPEN);
+    field(&mut c, &mut chip);
+    field(&mut c, &mut chip);
+    assert_eq!(c.blitter.sizv, 5);
+    assert_eq!(c.paula.disk.pt >> 16, 7);
+    // An OCS Agnus does not take BLTSIZV or let the Copper below $40.
+    let (mut c, mut chip) = setup();
+    c.write(reg::BLTSIZV, 5);
+    assert_eq!(c.blitter.sizv, 0);
+    chip.set_word(0x1000, reg::DSKPTH);
+    chip.set_word(0x1002, 0x0007);
+    c.write(reg::COPCON, 2);
+    c.write(reg::COP1LCL, 0x1000);
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::COPEN);
+    field(&mut c, &mut chip);
+    field(&mut c, &mut chip);
+    assert_eq!(c.paula.disk.pt, 0);
+}
+
+fn setup_aga() -> (Custom, ChipRam) {
+    (
+        Custom::new(Standard::Pal, 0x1f_fffe, Chipset::AGA),
+        ChipRam::new(0x20_0000),
+    )
+}
+
+#[test]
+fn aga_ids_and_eight_planes_with_wide_fetches() {
+    let (mut c, mut chip) = setup_aga();
+    assert_eq!(c.peek(reg::VPOSR) & 0x7f00, 0x2200, "Alice");
+    assert_eq!(c.peek(reg::DENISEID), 0xfff8, "Lisa");
+    // Eight planes, 64-bit fetches: plane n at $10000 + n·$1000, the first
+    // row's first 64 pixels set in planes 1 and 8 only; the colour of
+    // index $81 is a 24-bit value written through LOCT.
+    for p in 0..8u32 {
+        if p == 0 || p == 7 {
+            for i in 0..4 {
+                chip.set_word(0x1_0000 + p * 0x1000 + 2 * i, 0xffff);
+            }
+        }
+        c.write(reg::BPL1PTH + 4 * p as u16, 0x0001);
+        c.write(reg::BPL1PTH + 4 * p as u16 + 2, (p * 0x1000) as u16);
+    }
+    for (r, v) in [
+        (reg::BPLCON0, 0x0210),
+        (reg::DIWSTRT, 0x2c81),
+        (reg::DIWSTOP, 0x2cc1),
+        (reg::DDFSTRT, 0x38),
+        (reg::DDFSTOP, 0xd0),
+        (reg::FMODE, 0x0003),
+        (reg::BPLCON3, 0x0c00 | 0x8000),
+        (reg::COLOR00 + 2, 0x123),
+        (reg::BPLCON3, 0x0c00 | 0x8000 | 0x0200),
+        (reg::COLOR00 + 2, 0x456),
+        (reg::BPLCON3, 0x0c00),
+        (reg::DMACON, 0x8000 | dma::DMAEN | dma::BPLEN),
+    ] {
+        c.write(r, v);
+    }
+    field(&mut c, &mut chip);
+    let x = 2 * 0x81 - 4 * FIRST_CCK;
+    let y = 44 - 26;
+    assert_eq!(
+        pixel(&c, x, y),
+        Rgb8 {
+            r: 0x14,
+            g: 0x25,
+            b: 0x36
+        },
+        "colour $81"
+    );
+    assert_eq!(
+        pixel(&c, x + 127, y),
+        Rgb8 {
+            r: 0x14,
+            g: 0x25,
+            b: 0x36
+        },
+        "64 pixels wide"
+    );
+    assert_eq!(pixel(&c, x + 128, y), Rgb8::default());
+    // 5 units of 32 clocks from $38: 40 bytes per plane per line (320 px).
+    assert_eq!(c.bplpt[0], 0x1_0000 + 256 * 40);
+    assert_eq!(c.bplpt[7], 0x1_7000 + 256 * 40);
+    // An OCS Agnus ignores FMODE and the extra planes.
+    let (mut c, _) = setup();
+    c.write(reg::FMODE, 3);
+    c.write(reg::BPL7PTH + 2, 0x1234);
+    assert_eq!((c.fmode, c.bplpt[6]), (0, 0));
+}
+
+#[test]
+fn aga_sprite_dma_fetches_wide_words() {
+    let (mut c, mut chip) = setup_aga();
+    // Sprite 0 at $20000: control words (VSTART 60, HSTART $80; VSTOP 62)
+    // then 64-bit data lines, as 64-bit fetches: 8 bytes per word.
+    chip.set_word(0x2_0000, 0x3c40);
+    chip.set_word(0x2_0008, 0x3e00);
+    for i in 0..4 {
+        chip.set_word(0x2_0010 + 2 * i, 0x8000 >> (4 * i));
+        chip.set_word(0x2_0018 + 2 * i, 0);
+    }
+    c.write(reg::SPR0PTH, 0x0002);
+    c.write(reg::SPR0PTH + 2, 0x0000);
+    c.write(reg::FMODE, 0x000c);
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::SPREN);
+    // From the field start past line 60's sprite slots: 2 control fetches
+    // (line 25) and the data fetches of line 60, 8 bytes each.
+    for _ in 0..60 * 227 + 50 {
+        c.tick(&mut chip, false);
+    }
+    assert_eq!(c.sprpt[0], 0x2_0000 + 4 * 8);
+    assert_eq!(
+        c.denise.sprites[0].data, 0x8000_0800_0080_0008,
+        "64 bits of sprite data"
+    );
 }

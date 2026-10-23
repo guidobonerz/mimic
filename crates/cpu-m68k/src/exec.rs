@@ -7,9 +7,15 @@
 use emu_core::Size;
 
 use crate::ea::{mode, Ea, Sz};
+use crate::exec020;
 use crate::{sr, vector, Frame, Res, TimedBus68, M68000};
 
 pub(crate) fn execute(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
+    if cpu.is_020() {
+        if let Some(r) = exec020::execute(cpu, bus, op) {
+            return r;
+        }
+    }
     match op >> 12 {
         0x0 => line0(cpu, bus, op),
         0x1 => moves(cpu, bus, op, Sz::B),
@@ -34,17 +40,17 @@ pub(crate) fn execute(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Re
 
 /// Illegal instruction, privilege violation, line A/F: "nn ns ns nS", the
 /// instruction's own address on the stack.
-fn trap_now(cpu: &mut M68000, bus: &mut dyn TimedBus68, vec: u8) -> Res {
+pub(crate) fn trap_now(cpu: &mut M68000, bus: &mut dyn TimedBus68, vec: u8) -> Res {
     let pc = cpu.pc();
     cpu.idle(bus, 4);
     cpu.exception(bus, vec, pc, Frame::LowSrHigh)
 }
 
-fn illegal(cpu: &mut M68000, bus: &mut dyn TimedBus68) -> Res {
+pub(crate) fn illegal(cpu: &mut M68000, bus: &mut dyn TimedBus68) -> Res {
     trap_now(cpu, bus, vector::ILLEGAL)
 }
 
-fn privileged(cpu: &mut M68000, bus: &mut dyn TimedBus68) -> Res<bool> {
+pub(crate) fn privileged(cpu: &mut M68000, bus: &mut dyn TimedBus68) -> Res<bool> {
     if cpu.supervisor() {
         return Ok(true);
     }
@@ -53,38 +59,38 @@ fn privileged(cpu: &mut M68000, bus: &mut dyn TimedBus68) -> Res<bool> {
 }
 
 /// Data alterable memory modes (2–6, 7.0, 7.1).
-fn mem_alterable(m: u16, r: usize) -> bool {
+pub(crate) fn mem_alterable(m: u16, r: usize) -> bool {
     matches!(m, 2..=6) || (m == 7 && r <= 1)
 }
 
-fn data_alterable(m: u16, r: usize) -> bool {
+pub(crate) fn data_alterable(m: u16, r: usize) -> bool {
     m == 0 || mem_alterable(m, r)
 }
 
 /// Data modes (all but An).
-fn data_mode(m: u16, r: usize) -> bool {
+pub(crate) fn data_mode(m: u16, r: usize) -> bool {
     m != 1 && (m != 7 || r <= 4)
 }
 
-fn any_mode(m: u16, r: usize) -> bool {
+pub(crate) fn any_mode(m: u16, r: usize) -> bool {
     m != 7 || r <= 4
 }
 
 /// Control modes (JMP, JSR, LEA, PEA, MOVEM).
-fn control(m: u16, r: usize) -> bool {
+pub(crate) fn control(m: u16, r: usize) -> bool {
     m == 2 || m == 5 || m == 6 || (m == 7 && r <= 3)
 }
 
 impl M68000 {
     /// Source operand: address calculation and read.
-    fn src(&mut self, bus: &mut dyn TimedBus68, m: u16, r: usize, sz: Sz) -> Res<u32> {
+    pub(crate) fn src(&mut self, bus: &mut dyn TimedBus68, m: u16, r: usize, sz: Sz) -> Res<u32> {
         let ea = self.ea(bus, m, r, sz)?.expect("checked mode");
         self.read_ea(bus, ea, sz)
     }
 
     /// Result into a destination that was read before (read-modify-write):
     /// "np nw" (longs "np nw nW", low word first) or a register.
-    fn store_rmw(&mut self, bus: &mut dyn TimedBus68, ea: Ea, sz: Sz, v: u32) -> Res {
+    pub(crate) fn store_rmw(&mut self, bus: &mut dyn TimedBus68, ea: Ea, sz: Sz, v: u32) -> Res {
         match ea {
             Ea::D(r) => {
                 self.set_d(r, sz, v);
@@ -148,7 +154,7 @@ impl M68000 {
         r & sz.mask()
     }
 
-    fn cmp(&mut self, sz: Sz, s: u32, d: u32) {
+    pub(crate) fn cmp(&mut self, sz: Sz, s: u32, d: u32) {
         let r = d.wrapping_sub(s);
         self.sub_flags(sz, s, d, r, false, true);
     }
@@ -158,15 +164,20 @@ impl M68000 {
     }
 
     /// Push a long: "nS ns" (high word at the lower address first).
-    fn push_long(&mut self, bus: &mut dyn TimedBus68, v: u32) -> Res {
+    pub(crate) fn push_long(&mut self, bus: &mut dyn TimedBus68, v: u32) -> Res {
         let sp = self.a[7].wrapping_sub(4);
-        self.write(bus, sp, Size::Word, v >> 16)?;
-        self.write(bus, sp.wrapping_add(2), Size::Word, v & 0xffff)?;
+        if self.long_cycle(sp) {
+            let fc = self.data_fc_pub();
+            self.write_long_at(bus, fc, sp, v)?;
+        } else {
+            self.write(bus, sp, Size::Word, v >> 16)?;
+            self.write(bus, sp.wrapping_add(2), Size::Word, v & 0xffff)?;
+        }
         self.a[7] = sp;
         Ok(())
     }
 
-    fn pop_long(&mut self, bus: &mut dyn TimedBus68) -> Res<u32> {
+    pub(crate) fn pop_long(&mut self, bus: &mut dyn TimedBus68) -> Res<u32> {
         let sp = self.a[7];
         let v = self.read_mem(bus, sp, Sz::L)?;
         self.a[7] = sp.wrapping_add(4);
@@ -240,7 +251,9 @@ fn immediate(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, kind: u16) -> 
     let Some(sz) = Sz::from_bits(op >> 6) else {
         return illegal(cpu, bus);
     };
-    if !data_alterable(m, r) && !(kind == 6 && data_mode(m, r) && !(m == 7 && r == 4)) {
+    let cmpi_ok =
+        kind == 6 && data_mode(m, r) && !(m == 7 && r == 4) && (cpu.is_020() || r <= 1 || m != 7);
+    if !data_alterable(m, r) && !cmpi_ok {
         return illegal(cpu, bus);
     }
     let imm = match sz {
@@ -640,9 +653,10 @@ fn control_ea(cpu: &mut M68000, bus: &mut dyn TimedBus68, m: u16, r: usize) -> R
         }
         (6, _) => {
             cpu.idle(bus, 2);
-            let ext = cpu.ext(bus)?;
+            let base = cpu.a[r];
+            let a = cpu.indexed(bus, base)?;
             cpu.idle(bus, 2);
-            cpu.index(cpu.a[r], ext)
+            a
         }
         (7, 0) => cpu.ext(bus)? as i16 as i32 as u32,
         (7, 1) => cpu.ext_long(bus)?,
@@ -653,9 +667,9 @@ fn control_ea(cpu: &mut M68000, bus: &mut dyn TimedBus68, m: u16, r: usize) -> R
         _ => {
             cpu.idle(bus, 2);
             let base = cpu.ext_pc();
-            let ext = cpu.ext(bus)?;
+            let a = cpu.indexed(bus, base)?;
             cpu.idle(bus, 2);
-            cpu.index(base, ext)
+            a
         }
     })
 }
@@ -674,11 +688,17 @@ fn lea(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
 /// "np nn n" + trap.
 fn chk(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
     let (m, r) = mode(op);
-    if !data_mode(m, r) {
+    let long = op & 0x80 == 0;
+    if !data_mode(m, r) || (long && !cpu.is_020()) {
         return illegal(cpu, bus);
     }
-    let bound = cpu.src(bus, m, r, Sz::W)? as i16;
-    let dn = cpu.d[usize::from((op >> 9) & 7)] as i16;
+    let (bound, dn) = if long {
+        let bound = cpu.src(bus, m, r, Sz::L)? as i32;
+        (bound, cpu.d[usize::from((op >> 9) & 7)] as i32)
+    } else {
+        let bound = cpu.src(bus, m, r, Sz::W)? as i16 as i32;
+        (bound, cpu.d[usize::from((op >> 9) & 7)] as i16 as i32)
+    };
     cpu.prefetch(bus)?;
     cpu.set_flag(sr::Z, dn == 0);
     cpu.set_flag(sr::V, false);
@@ -702,7 +722,14 @@ fn chk(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
 fn tst(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
     let (m, r) = mode(op);
     let sz = Sz::from_bits(op >> 6).expect("matched");
-    if !data_alterable(m, r) {
+    // The 68020 tests An (word and long), PC-relative and immediate
+    // operands too.
+    let ok = if cpu.is_020() {
+        any_mode(m, r) && !(m == 1 && sz == Sz::B)
+    } else {
+        data_alterable(m, r)
+    };
+    if !ok {
         return illegal(cpu, bus);
     }
     let v = cpu.src(bus, m, r, sz)?;
@@ -813,8 +840,8 @@ fn control_ea_movem(cpu: &mut M68000, bus: &mut dyn TimedBus68, m: u16, r: usize
         }
         (6, _) => {
             cpu.idle(bus, 2);
-            let ext = cpu.ext(bus)?;
-            cpu.index(cpu.a[r], ext)
+            let base = cpu.a[r];
+            cpu.indexed(bus, base)?
         }
         (7, 0) => cpu.ext(bus)? as i16 as i32 as u32,
         (7, 1) => cpu.ext_long(bus)?,
@@ -825,8 +852,7 @@ fn control_ea_movem(cpu: &mut M68000, bus: &mut dyn TimedBus68, m: u16, r: usize
         _ => {
             cpu.idle(bus, 2);
             let base = cpu.ext_pc();
-            let ext = cpu.ext(bus)?;
-            cpu.index(base, ext)
+            cpu.indexed(bus, base)?
         }
     })
 }
@@ -906,6 +932,9 @@ fn misc4e(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
             if !privileged(cpu, bus)? {
                 return Ok(());
             }
+            if cpu.is_020() {
+                return exec020::rte(cpu, bus);
+            }
             let (new_sr, pc) = pop_sr_pc(cpu, bus)?;
             cpu.set_sr(new_sr);
             cpu.jump(bus, pc)?;
@@ -938,7 +967,7 @@ fn misc4e(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
 }
 
 /// RTE/RTR's stack reads: PC high word, the status word, PC low word.
-fn pop_sr_pc(cpu: &mut M68000, bus: &mut dyn TimedBus68) -> Res<(u16, u32)> {
+pub(crate) fn pop_sr_pc(cpu: &mut M68000, bus: &mut dyn TimedBus68) -> Res<(u16, u32)> {
     let sp = cpu.a[7];
     let hi = cpu.read(bus, sp.wrapping_add(2), Size::Word)?;
     let status = cpu.read(bus, sp, Size::Word)? as u16;
@@ -957,6 +986,18 @@ fn jsr_jmp(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, jsr: bool) -> Re
     let (m, r) = mode(op);
     if !control(m, r) {
         return illegal(cpu, bus);
+    }
+    if (m == 6 || (m == 7 && r == 3)) && cpu.full_format_next() {
+        // 68020 full format: the extension words are taken one by one;
+        // the return address is the word then in IRC.
+        let base = if m == 6 { cpu.a[r] } else { cpu.ext_pc() };
+        let target = cpu.indexed(bus, base)?;
+        let ret = cpu.ext_pc();
+        cpu.jump(bus, target)?;
+        if jsr {
+            cpu.push_long(bus, ret)?;
+        }
+        return cpu.prefetch(bus);
     }
     // Return address: the instruction after the extension words.
     let ret = cpu.pc().wrapping_add(match (m, r) {
@@ -1070,7 +1111,7 @@ fn line5(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
 
 /// DBcc Dn,d16: cc true "n n np np"; branch "n np np"; counter expired
 /// "n np np np" (the branch target is read before the counter is known).
-fn dbcc(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, cc: u16) -> Res {
+pub(crate) fn dbcc(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, cc: u16) -> Res {
     let r = usize::from(op & 7);
     let disp = cpu.irc() as i16 as i32 as u32;
     let target = cpu.ext_pc().wrapping_add(disp);
@@ -1101,6 +1142,25 @@ fn dbcc(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, cc: u16) -> Res {
 fn branch(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
     let cc = (op >> 8) & 15;
     let base = cpu.ext_pc();
+    if op as u8 == 0xff && cpu.is_020() {
+        // 32-bit displacement: both words are taken from the stream.
+        let disp = cpu.ext_long(bus)?;
+        let target = base.wrapping_add(disp);
+        let ret = cpu.ext_pc();
+        if cc == 1 {
+            cpu.idle(bus, 2);
+            cpu.push_long(bus, ret)?;
+            cpu.jump(bus, target)?;
+            return cpu.prefetch(bus);
+        }
+        if cpu.condition(cc) {
+            cpu.idle(bus, 2);
+            cpu.jump(bus, target)?;
+            return cpu.prefetch(bus);
+        }
+        cpu.idle(bus, 4);
+        return cpu.prefetch(bus);
+    }
     let (disp, word) = match op as u8 {
         0 => (cpu.irc() as i16 as i32 as u32, true),
         d => (d as i8 as i32 as u32, false),

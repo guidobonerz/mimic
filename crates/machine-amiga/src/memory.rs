@@ -50,6 +50,9 @@ pub enum Region {
     Fast,
     Custom,
     Cia,
+    /// A1200: Gayle's IDE and status registers ($DA0000–$DAFFFF) and its
+    /// id register ($DE1000).
+    Gayle,
     Rom,
     /// The A1000 bootstrap ROM.
     Boot,
@@ -63,6 +66,56 @@ impl Region {
     /// Accesses that go over the chip bus and wait for a free DMA slot.
     pub fn chip_bus(self) -> bool {
         matches!(self, Region::Chip | Region::Slow | Region::Custom)
+    }
+}
+
+/// The A1200's Gayle (IDE interface, PCMCIA, system control). Without an
+/// IDE drive its registers read 0; the id register at $DE1000 delivers the
+/// chip's id ($D0 on the A1200) bit by bit in D7, most significant bit
+/// first, a read per bit; a write restarts the sequence. Kickstart 3.x
+/// reads it to tell an A1200 from an A500/A2000 and then probes the IDE
+/// port (`docs/sources.md`: Linux kernel gayle driver, amiga-dev wiki).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Gayle {
+    /// Bits of the id delivered so far.
+    id_bits: u8,
+}
+
+/// Gayle's id on the A1200.
+pub const GAYLE_ID_A1200: u8 = 0xd0;
+
+impl Gayle {
+    /// A byte read from Gayle's space.
+    pub fn read(&mut self, addr: u32) -> u8 {
+        if addr & 0xff_f000 == 0xde_1000 {
+            let bit = (GAYLE_ID_A1200 << (self.id_bits & 7)) & 0x80;
+            self.id_bits = self.id_bits.wrapping_add(1).min(8);
+            return bit;
+        }
+        0
+    }
+
+    pub fn peek(&self, addr: u32) -> u8 {
+        if addr & 0xff_f000 == 0xde_1000 {
+            return (GAYLE_ID_A1200 << (self.id_bits & 7)) & 0x80;
+        }
+        0
+    }
+
+    pub fn write(&mut self, addr: u32, _v: u8) {
+        if addr & 0xff_f000 == 0xde_1000 {
+            self.id_bits = 0;
+        }
+    }
+
+    pub fn save(&self, w: &mut StateWriter) {
+        w.u8(self.id_bits);
+    }
+
+    pub fn load(r: &mut StateReader<'_>) -> Result<Self, StateError> {
+        Ok(Self {
+            id_bits: r.u8()?.min(8),
+        })
     }
 }
 
@@ -189,6 +242,8 @@ pub struct Memory {
     /// OVL: the ROM overlays address 0.
     pub overlay: bool,
     pub fast: Option<Autoconfig>,
+    /// A1200.
+    pub gayle: Option<Gayle>,
     pub a1000: Option<Wcs>,
 }
 
@@ -219,8 +274,15 @@ impl Memory {
             rom: words,
             overlay: true,
             fast: None,
+            gayle: None,
             a1000: None,
         }
+    }
+
+    /// Fit the A1200's Gayle.
+    pub fn with_gayle(mut self) -> Self {
+        self.gayle = Some(Gayle::default());
+        self
     }
 
     /// Fit a fast RAM board.
@@ -284,6 +346,7 @@ impl Memory {
                     Region::Custom
                 }
             }
+            0xda_0000..=0xda_ffff | 0xde_0000..=0xde_ffff if self.gayle.is_some() => Region::Gayle,
             0xdf_f000..=0xdf_ffff => Region::Custom,
             AUTOCONFIG..=0xe8_ffff => match &self.fast {
                 Some(f) if f.unconfigured() => Region::Autoconfig,

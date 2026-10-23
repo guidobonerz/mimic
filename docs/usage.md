@@ -92,7 +92,7 @@ Größe** erkannt.
 | `c128/` | C128 | KERNAL, BASIC, Zeichensatz, optional Funktions-ROM |
 | `atari/` (`atari8/`, `atari800xl/`) | Atari 400/800/XL/XE | XL-OS (`atarixl.rom`, 16 KB), BASIC (`ataribas.rom`, 8 KB), für 400/800 das OS-A/OS-B (`atariosb.rom`, 10 KB) |
 | `cpc/` (`amstrad/`) | Amstrad CPC | `os464`/`basic1-0`, `os664`/`basic664`, `os6128`/`basic1-1` (je 16 KB) oder 32-KB-Kombidateien `cpc464`/`cpc664`/`cpc6128`; `amsdos`, optional `parados` |
-| `amiga/` | Amiga 500/1000/2000 | Kickstart als 256 KB oder 512 KB, Name z. B. `Kickstart 1.3.rom`, `kick13.rom`, `kick34005.rom`; je Version eine Datei (1.2, 1.3, 2.0, 3.1), Auswahl mit `--option kickstart=`; optional das A1000-Bootstrap-ROM (8 KB, `a1000boot.rom`) für `--option wcs=disk` |
+| `amiga/` | Amiga 500/1000/2000/500+/1200 | Kickstart als 256 KB oder 512 KB, Name z. B. `Kickstart 1.3.rom`, `kick13.rom`, `kick34005.rom`; je Version eine Datei (1.2, 1.3, 2.0, 3.0, 3.1), Auswahl mit `--option kickstart=`; für den A1200 passt das 3.1-Image 40.063 (A500/600/2000) oder ein A1200-Image (3.0 39.106, 3.1 40.068), nicht das 3.0 des A4000 (39.106 mit CRC 9E6AC152: sucht 32-Bit-RAM bei $08000000); optional das A1000-Bootstrap-ROM (8 KB, `a1000boot.rom`) für `--option wcs=disk` |
 | `zx81/` (`sinclair/`) | Sinclair ZX81 | `zx81.rom` (8 KB; `zx81.edition3.rom` wird bevorzugt) |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
@@ -119,7 +119,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `atari8` | Atari 400/800/800XL/65XE/130XE | `800xl` (Standard), `65xe`, `130xe`, `800`, `400`, jeweils auch mit `-ntsc` (z. B. `130xe-ntsc`) |
 | `atari2600` | Atari 2600 (VCS) | `ntsc` (Standard), `pal` |
 | `cpc` | Amstrad CPC | `6128` (Standard), `664`, `464` |
-| `amiga` | Commodore Amiga 500/1000/2000 (OCS) | `500` (Standard), `500-ntsc`, `1000`, `1000-ntsc`, `2000`, `2000-ntsc` |
+| `amiga` | Commodore Amiga 500/1000/2000 (OCS), 500+ (ECS), 1200 (AGA) | `500` (Standard), `500-ntsc`, `1000`, `1000-ntsc`, `2000`, `2000-ntsc`, `500plus` (ECS-Chipsatz, 1 MB Chip-RAM, Kickstart 2.0), `500plus-ntsc`, `1200` (68EC020 mit 14 MHz, AGA, 2 MB Chip-RAM, Gayle ohne IDE, Kickstart 3.1), `1200-ntsc` |
 | `zx81` | Sinclair ZX81 / Timex Sinclair 1000 | `zx81` (Standard, PAL), `ts1000` (NTSC, 60 Hz) |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
 
@@ -136,7 +136,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`) |
 | ZX81 | `ram=16k\|1k\|2k` (Standard 16k), `traps=on\|off` (LOAD/SAVE der .P-Datei im Bandschacht über ROM-Traps) |
 | CPC | `crtc=0\|1\|2` (Standard 464: 0, sonst 1), `dos=amsdos\|parados\|none`, `joy1=joystick\|amx\|none`, `joy2=joystick\|none` |
-| Amiga | `kickstart=1.3\|1.2\|2.0\|3.1` (Standard 1.3), `chip=256k\|512k\|1m` (Chip-RAM; Standard A500 512k, A1000 256k, A2000 1m), `slow=512k\|0` (Trapdoor-Erweiterung, Standard A500 512 KB, sonst 0), `fast=0\|512k\|1m\|2m\|4m\|8m` (Zorro-II-Fast-RAM per Autoconfig, Standard 0), `drives=1..4` (DF0:–DF3:, Standard 1), `drivetype=dd\|hd` (HD-Laufwerke für 1,76-MB-ADFs), `port0=mouse\|joystick\|none` (Standard Maus), `port1=joystick\|mouse\|none` (Standard Joystick), `serial=none\|loopback` (TXD mit RXD verbunden), `wcs=rom\|disk` (A1000: Kickstart vorgeladen oder per Bootstrap-ROM von der Kickstart-Diskette laden) |
+| Amiga | `kickstart=1.3\|1.2\|2.0\|3.0\|3.1` (Standard 1.3, A500+ 2.0, A1200 3.1), `chip=256k\|512k\|1m\|2m` (Chip-RAM; Standard A500 512k, A1000 256k, A2000 und A500+ 1m; 2m braucht den ECS-Agnus), `chipset=ocs\|ecs\|aga` (Standard je Modell; `agnus=ocs\|ecs` und `denise=ocs\|ecs` wählen die Chips einzeln, z. B. A500 Rev 6A mit ECS-Agnus und OCS-Denise: `agnus=ecs`), `slow=512k\|0` (Trapdoor-Erweiterung, Standard A500 512 KB, sonst 0), `fast=0\|512k\|1m\|2m\|4m\|8m` (Zorro-II-Fast-RAM per Autoconfig, Standard 0), `drives=1..4` (DF0:–DF3:, Standard 1), `drivetype=dd\|hd` (HD-Laufwerke für 1,76-MB-ADFs), `port0=mouse\|joystick\|none` (Standard Maus), `port1=joystick\|mouse\|none` (Standard Joystick), `serial=none\|loopback` (TXD mit RXD verbunden), `wcs=rom\|disk` (A1000: Kickstart vorgeladen oder per Bootstrap-ROM von der Kickstart-Diskette laden) |
 
 `drive8=virtual` bedient Laufwerk 8 auf Protokollebene (schnell, nur
 KERNAL-LOAD/SAVE), die anderen Werte emulieren das echte Laufwerk mit eigener
