@@ -383,9 +383,14 @@ impl Denise {
                 (None, [0; 8])
             };
             // Sprites show inside the window once the line's bitplane data
-            // has started (BPL1DAT); a line without planes shows them from
-            // the window start (vAmigaTS diwclip/clip1h and sprbpu photos).
-            let sprite = sprite.filter(|_| inside && (self.armed || planes == 0));
+            // has started (BPL1DAT); a line without any plane data shows none,
+            // whether BPLCON0 has no planes or bitplane DMA is off (vAmigaTS
+            // diwclip/clip1h and sprbpu1 photographs, OCS and ECS alike: the
+            // sprites stop in the BPU = 0 gaps between sprbpu1's boxes; WinUAE
+            // with `tools/amiga_sprtest.py`). Interference hides its sprite
+            // boxes behind its raster bars by switching to BPU = 0 four lines
+            // before it stops sprite DMA.
+            let sprite = sprite.filter(|_| inside && self.armed);
             if inside && self.armed {
                 if vals != [0; 8] {
                     self.clxdat |= self.collisions(index, &vals);
@@ -735,7 +740,7 @@ mod tests {
         d.colors[21] = 0x0f0;
         d.diwstrt = 0x2c81;
         d.diwstop = 0x2cc1;
-        // No planes on this line: sprites show from the window start.
+        // No planes in BPLCON0: no sprite shows.
         d.bplcon0 = 0x0200;
         // Sprite 0 at low-resolution pixel $A0, sprite 2 one pixel later.
         d.write_sprite(0, 0, 0x2c50);
@@ -747,6 +752,14 @@ mod tests {
         d.write_sprite(2, 3, 0x0000);
         d.write_sprite(2, 2, 0xc000);
         d.start_line();
+        let px = line(&mut d, 0x4f, 0x53);
+        assert_eq!(px, vec![0; px.len()]);
+        // One plane with empty data: sprites show after BPL1DAT.
+        d.bplcon0 = 0x1200;
+        d.write_sprite(0, 2, 0x8000);
+        d.write_sprite(2, 2, 0xc000);
+        d.start_line();
+        d.write_bpldat(0, 0, 0x40);
         let px = line(&mut d, 0x4f, 0x53);
         // Hires pixel 2·$A1 = $142 (one pixel right of HSTART) is index
         // $142 − 4·$4F = 6.

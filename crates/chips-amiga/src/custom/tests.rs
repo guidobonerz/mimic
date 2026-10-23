@@ -296,16 +296,22 @@ fn sprite_dma_fetches_control_and_data_words() {
     {
         chip.set_word(0x3000 + 2 * i as u32, *w);
     }
+    // One (empty) plane: sprites show only on lines with plane data.
     for (r, v) in [
         (reg::DIWSTRT, 0x2c81),
         (reg::DIWSTOP, 0x2cc1),
+        (reg::DDFSTRT, 0x38),
+        (reg::DDFSTOP, 0xd0),
+        (reg::BPLCON0, 0x1200),
+        (reg::BPL1PTH, 0),
+        (reg::BPL1PTH + 2, 0x4000),
         (reg::SPR0PTH, 0),
         (reg::SPR0PTH + 2, 0x3000),
         (reg::COLOR00, 0x000),
         (reg::COLOR00 + 34, 0xf00),
         (reg::COLOR00 + 36, 0x0f0),
         (reg::COLOR00 + 38, 0x00f),
-        (reg::DMACON, 0x8000 | dma::DMAEN | dma::SPREN),
+        (reg::DMACON, 0x8000 | dma::DMAEN | dma::BPLEN | dma::SPREN),
     ] {
         c.write(r, v);
     }
