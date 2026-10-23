@@ -563,11 +563,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpu-65816"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cpu-m68k"
 version = "0.1.0"
 dependencies = [
  "emu-core",
  "flate2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cpu-spc700"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
  "serde",
  "serde_json",
 ]
@@ -833,6 +851,7 @@ dependencies = [
  "machine-nes",
  "machine-pet",
  "machine-sim6502",
+ "machine-snes",
  "machine-ted",
  "machine-vic20",
  "machine-zx81",
@@ -1597,6 +1616,18 @@ name = "machine-sim6502"
 version = "0.1.0"
 dependencies = [
  "cpu-6502",
+ "emu-core",
+]
+
+[[package]]
+name = "machine-snes"
+version = "0.1.0"
+dependencies = [
+ "chips-nintendo",
+ "cpu-65816",
+ "cpu-spc700",
+ "devices-cartridge",
+ "devices-input",
  "emu-core",
 ]
 

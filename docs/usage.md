@@ -94,6 +94,7 @@ Größe** erkannt.
 | `cpc/` (`amstrad/`) | Amstrad CPC | `os464`/`basic1-0`, `os664`/`basic664`, `os6128`/`basic1-1` (je 16 KB) oder 32-KB-Kombidateien `cpc464`/`cpc664`/`cpc6128`; `amsdos`, optional `parados` |
 | `amiga/` | Amiga 500/1000/2000/500+/1200 | Kickstart als 256 KB oder 512 KB, Name z. B. `Kickstart 1.3.rom`, `kick13.rom`, `kick34005.rom`; je Version eine Datei (1.2, 1.3, 2.0, 3.0, 3.1), Auswahl mit `--option kickstart=`; für den A1200 passt das 3.1-Image 40.063 (A500/600/2000) oder ein A1200-Image (3.0 39.106, 3.1 40.068), nicht das 3.0 des A4000 (39.106 mit CRC 9E6AC152: sucht 32-Bit-RAM bei $08000000); optional das A1000-Bootstrap-ROM (8 KB, `a1000boot.rom`) für `--option wcs=disk` |
 | `zx81/` (`sinclair/`) | Sinclair ZX81 | `zx81.rom` (8 KB; `zx81.edition3.rom` wird bevorzugt) |
+| `snes/` (`sfc/`) | SNES | optional die 64 Byte IPL-ROM des Sound-Prozessors, `spc700.rom`; ohne sie lädt ein eigener Bootlader mit demselben Protokoll |
 | `coleco/` (`colecovision/`) | ColecoVision | das BIOS, `coleco.rom` (8 KB); ohne BIOS läuft mit `--option roms=stub` ein eigenes Mini-BIOS, das Module mit dem Header $55AA/$AA55 direkt startet (Spiele, die BIOS-Routinen aufrufen, brauchen das echte BIOS) |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
@@ -124,6 +125,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `zx81` | Sinclair ZX81 / Timex Sinclair 1000 | `zx81` (Standard, PAL), `ts1000` (NTSC, 60 Hz) |
 | `coleco` | ColecoVision | `ntsc` (Standard, TMS9918A), `pal` (TMS9929A) |
 | `nes` | Nintendo Entertainment System / Famicom | `ntsc` (Standard, 2C02), `pal` (2C07) |
+| `snes` | Super Nintendo / Super Famicom | `ntsc` (Standard), `pal` |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
 
 Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
@@ -136,6 +138,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | C16/Plus/4 | `ram=16k\|64k`, `drive8=…`, `port1=joystick\|none`, `autostart=on` |
 | C128 | `display=40\|80`, `vdc_ram=16k\|64k`, `sid=…`, `drive8=1571\|1541\|1581\|virtual\|none`, `port2=…`, `autostart=on` |
 | Atari 8-Bit | `port1`/`port2=joystick\|paddles\|none` (400/800 auch `port3`/`port4`), `basic=on\|off` (XL/XE: OPTION beim Start; 400/800: BASIC-Modul im linken Schacht), `ram=8k\|16k\|32k\|48k` (nur 400/800; Standard 16k bzw. 48k), `drives=0..4`, `drive=1050\|810\|xf551` |
+| SNES | `port1`/`port2=pad\|mouse\|superscope\|none` (Super Scope nur in Port 2; zielt mit der Maus, linke Taste = Abzug, rechte = Cursor), `multitap=on` (Multiplayer 5 in Port 2: Ports 2–5 mit Pads), `roms=stub` (eigener Sound-Bootlader statt der IPL-ROM) |
 | NES | `port1`/`port2=controller\|zapper\|arkanoid\|none` (Standard `controller`; `zapper` = Lichtpistole, zielt mit der Maus, linke Taste = Abzug; `arkanoid` = Arkanoid-Controller, die Maus dreht den Knopf), `fourscore=on` (Four Score: Ports 3 und 4 mit Controllern, Ports 1 und 2 müssen Controller sein) |
 | ColecoVision | `port1`/`port2=controller\|superaction\|driving\|roller\|none` (Standard `controller`: Joystick, zwei Feuerknöpfe, Keypad; `superaction` = Super Action Controller mit vier Knöpfen und Speed Roller; `driving` = Expansion Module #2 mit Lenkrad und Gaspedal; `roller` = Roller Controller (Trackball, belegt mit seinem zweiten Kabel auch Port 2)), `roms=stub` |
 | Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`) |
@@ -157,6 +160,7 @@ cargo run --release -p emu-desktop -- --machine vic20 --tape spiel.tap
 cargo run --release -p emu-desktop -- --machine atari8 --disk spiel.atr
 cargo run --release -p emu-desktop -- --machine atari8 --model 130xe --disk spiel.atr
 cargo run --release -p emu-desktop -- --machine atari8 --model 800 --option port3=joystick --cart spiel.car
+cargo run --release -p emu-desktop -- --machine snes --cart spiel.sfc
 cargo run --release -p emu-desktop -- --machine nes --cart spiel.nes
 cargo run --release -p emu-desktop -- --machine nes --model pal --cart spiel.nes --option port2=zapper
 cargo run --release -p emu-desktop -- --machine coleco --rom-dir roms --cart spiel.col
@@ -191,6 +195,9 @@ Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
   F4/F5 Difficulty links/rechts A/B (jeweils umschalten). Keypads
   (`port1=keypad`, `port2`): links `1 2 3 / Q W E / A S D / Z X C`, rechts
   `8 9 0 / I O P / K L ; / , . /` (US-Positionen).
+- SNES: Steuerkreuz auf den Cursortasten, `Z` = B (auch Leertaste), `X` = A,
+  `A` = Y, `S` = X, `Q` = L, `W` = R, rechte Umschalttaste = Select, Enter =
+  Start; am Gamepad Süd = B, Ost = A, West = Y, Nord = X, Schultertasten = L/R.
 - NES: Steuerkreuz von Controller 1 auf den Cursortasten, Leertaste und `X` =
   A, `Z` = B, rechte Umschalttaste = Select, Enter = Start; am Gamepad
   Süd = A, Ost = B, Select und Start.
@@ -252,7 +259,7 @@ F11 REWIND.
 Port 2, bei VIC-20, C16/Plus/4, Atari und CPC Port 1). Welche Tasten den
 Joystick spielen, stellt der Schalter **JOY KEYS** in der Konsolen-Leiste um
 (oder `--joykeys`): **CURSOR** = Cursortasten, Leertaste = Feuer (Standard
-beim Atari 2600, bei der ColecoVision und beim NES, die keine Tastatur haben), **NUMPAD** = Ziffernblock 8/2/4/6,
+beim Atari 2600, bei der ColecoVision, beim NES und beim SNES, die keine Tastatur haben), **NUMPAD** = Ziffernblock 8/2/4/6,
 Feuer 0 oder rechte Strg (Standard bei den Computern), **OFF** = nur Gamepad
 (Standard beim CPC, dessen Ziffernblock die Funktionstasten sind). Bei CURSOR
 spielen die Cursortasten und die Leertaste den Joystick statt zu tippen.
@@ -330,7 +337,7 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 | --- | --- | --- |
 | Diskette (mehrfach: weitere Laufwerke, Rest per Strg+D) | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga: DD 880 KB, HD 1,76 MB mit `--option drivetype=hd`; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF), extended ADF (`UAE-1ADF`/`UAE--ADF` mit Rohspuren, die bitgenau erhalten und zurückgeschrieben werden), DMS (DISK-Masher-Archiv, wird beim Einlegen entpackt, nur lesen); ein **Ordner** als virtuelle Diskette | `--disk` |
 | Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81: der Programmspeicher ab $4009, geladen und gesichert über ROM-Traps mit `LOAD ""`/`SAVE "NAME"`); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
-| Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt), `.col`/`.rom`/`.bin` bis 32 KB oder MegaCart 64 KB–1 MB (ColecoVision), iNES/NES 2.0 `.nes` mit Mapper 0–4 (NROM, MMC1, UxROM, CNROM, MMC3) | `--cart` |
+| Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt), `.col`/`.rom`/`.bin` bis 32 KB oder MegaCart 64 KB–1 MB (ColecoVision), iNES/NES 2.0 `.nes` mit Mapper 0–4 (NROM, MMC1, UxROM, CNROM, MMC3), SNES `.sfc`/`.smc` (LoROM, HiROM, ExHiROM, mit oder ohne Kopierer-Header; noch ohne Koprozessoren) | `--cart` |
 | Programm | PRG, T64, XEX | `--prg` |
 
 Images werden standardmäßig über einen **Copy-on-Write-Overlay** geöffnet: das

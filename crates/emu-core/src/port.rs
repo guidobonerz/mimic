@@ -25,6 +25,9 @@ pub enum PortKind {
     /// NES controller port: OUT (strobe) and CLK from the console, data
     /// lines D0, D3, D4 back (standard controller, Zapper, Arkanoid).
     NesControl,
+    /// SNES controller port: latch, CLK and IOBit from the console, data
+    /// lines D0/D1 back (joypad, mouse, Super Scope).
+    SnesControl,
     CbmUserPort,
     Iec,
     Sio,

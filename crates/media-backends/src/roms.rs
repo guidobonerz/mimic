@@ -363,9 +363,17 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ],
         0x2000,
     )];
+    // SNES: the sound CPU's 64-byte boot ROM (optional: an own loader
+    // stands in).
+    const SNES: &[RomSpec] = &[optional(
+        "spc700",
+        &["spc700", "ipl", "snes-ipl", "spc700-ipl", "apu"],
+        64,
+    )];
     match machine {
         "zx81" => ZX81,
         "coleco" => COLECO,
+        "snes" => SNES,
         "amiga" => AMIGA,
         "atari8" => ATARI800XL,
         "cpc" => CPC,
@@ -393,6 +401,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "amiga" => &["amiga"],
         "zx81" => &["zx81", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
+        "snes" => &["snes", "sfc", "superfamicom"],
         _ => &[],
     }
 }

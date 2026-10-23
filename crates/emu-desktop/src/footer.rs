@@ -129,6 +129,7 @@ impl Tracker {
                             | PortKind::CpcJoy
                             | PortKind::ColecoControl
                             | PortKind::NesControl
+                            | PortKind::SnesControl
                     )
                     && !self.analog.contains_key(&p.id.0)
             })

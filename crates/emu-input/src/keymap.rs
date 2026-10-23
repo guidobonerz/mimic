@@ -665,6 +665,26 @@ pub static NES: Keymap = Keymap {
     entries: NES_POSITIONAL,
 };
 
+/// SNES: controller 1's buttons (machine keys 0-7 = B A Select Start Y X
+/// L R, see `machine-snes::keys`): Z = B, X = A, A = Y, S = X, Q = L,
+/// W = R, right Shift = Select, Enter = Start; the cross is the joystick
+/// (cursor keys, Space also B).
+const SNES_POSITIONAL: &[(&str, &[u16])] = &[
+    ("KeyZ", &[0]),
+    ("KeyX", &[1]),
+    ("ShiftRight", &[2]),
+    ("Enter", &[3]),
+    ("KeyA", &[4]),
+    ("KeyS", &[5]),
+    ("KeyQ", &[6]),
+    ("KeyW", &[7]),
+];
+
+pub static SNES: Keymap = Keymap {
+    machine: "snes",
+    entries: SNES_POSITIONAL,
+};
+
 /// Amstrad CPC keys: `line * 8 + bit` of the keyboard matrix (see
 /// `machine-cpc::keyboard`).
 const fn cpc(line: u16, bit: u16) -> u16 {
@@ -949,6 +969,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "atari2600" => Some(&ATARI2600),
         "coleco" => Some(&COLECO),
         "nes" => Some(&NES),
+        "snes" => Some(&SNES),
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
         "zx81" => Some(&ZX81),

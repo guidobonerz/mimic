@@ -19,6 +19,7 @@ pub mod expansion;
 pub mod flash;
 pub mod nes;
 pub mod slot;
+pub mod snes;
 pub mod ted;
 pub mod vic20;
 

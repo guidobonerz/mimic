@@ -1,5 +1,5 @@
 //! Emulated input peripherals: joysticks, paddles, mice, light pens, keypads,
-//! the ColecoVision controllers, the NES controllers.
+//! the ColecoVision controllers, the NES and SNES controllers.
 
 #![forbid(unsafe_code)]
 
@@ -12,6 +12,7 @@ pub mod keypad;
 pub mod mouse1351;
 pub mod nes;
 pub mod paddles;
+pub mod snes;
 
 pub use amiga_mouse::AmigaMouse;
 pub use amx_mouse::AmxMouse;
@@ -22,6 +23,7 @@ pub use keypad::Keypad;
 pub use mouse1351::Mouse1351;
 pub use nes::{NesController, NesKind};
 pub use paddles::Paddles;
+pub use snes::{SnesController, SnesKind};
 
 use emu_core::port::{PortDevice, PortKind};
 use emu_core::registry::ConfigError;

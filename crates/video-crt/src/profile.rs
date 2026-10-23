@@ -189,7 +189,9 @@ impl Profile {
             "pet" => "pet-green",
             "atari8" | "atari2600" | "zx81" => "tv",
             "cpc" => "ctm644",
-            "amiga" => "1084s-rgb",
+            // The SNES has an RGB output (a composite TV shows colour
+            // fringes on its hard edges: `--crt tv`).
+            "amiga" | "snes" => "1084s-rgb",
             _ => "raw",
         };
         Self::preset(name).unwrap_or_default()

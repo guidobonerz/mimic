@@ -23,4 +23,5 @@ machine-cpc.workspace = true
 machine-zx81.workspace = true
 machine-coleco.workspace = true
 machine-nes.workspace = true
+machine-snes.workspace = true
 machine-sim6502.workspace = true

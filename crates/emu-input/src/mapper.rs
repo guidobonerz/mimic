@@ -22,7 +22,9 @@ struct JoyState {
     pad_axes: Dirs,
     pad_fire: bool,
     /// Further gamepad buttons as event button bits: East bit 1 (a second
-    /// fire button; the NES's B), Select bit 2, Start bit 3.
+    /// fire button; the NES's B, the SNES's A), Select bit 2, Start bit 3,
+    /// West bit 4, North bit 5, left/right shoulder bits 6/7 (the SNES's
+    /// Y, X, L, R).
     pad_extra: u8,
     /// Last state sent, to emit only changes.
     sent: (Dirs, u8),
@@ -196,11 +198,21 @@ impl Mapper {
                             Button::DPadLeft => set(&mut joy.pad_buttons, Dirs::LEFT, *down),
                             Button::DPadRight => set(&mut joy.pad_buttons, Dirs::RIGHT, *down),
                             b if fire.contains(b) => joy.pad_fire = *down,
-                            Button::East | Button::Select | Button::Start => {
+                            Button::East
+                            | Button::Select
+                            | Button::Start
+                            | Button::West
+                            | Button::North
+                            | Button::LeftShoulder
+                            | Button::RightShoulder => {
                                 let bit = match button {
                                     Button::East => 2,
                                     Button::Select => 4,
-                                    _ => 8,
+                                    Button::Start => 8,
+                                    Button::West => 0x10,
+                                    Button::North => 0x20,
+                                    Button::LeftShoulder => 0x40,
+                                    _ => 0x80,
                                 };
                                 if *down {
                                     joy.pad_extra |= bit;

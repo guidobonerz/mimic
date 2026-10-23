@@ -1,0 +1,17 @@
+[package]
+name = "machine-snes"
+description = "Super Nintendo Entertainment System / Super Famicom (NTSC and PAL)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-65816.workspace = true
+cpu-spc700.workspace = true
+chips-nintendo.workspace = true
+devices-input.workspace = true
+devices-cartridge.workspace = true

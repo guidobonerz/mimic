@@ -32,7 +32,8 @@ usage: mimic-headless [options]
                         in the machine's tape format first
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
-                        raw 8/16 KB ROM; ColecoVision ROM; NES iNES file
+                        raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
+                        SNES .sfc/.smc
   --autostart           load and run the disk after boot (C64)
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
   --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR)

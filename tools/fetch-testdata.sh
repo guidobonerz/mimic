@@ -258,6 +258,26 @@ elif [ ! -s "$DEST/cpc-acid/COMMIT" ] || [ "$(cat "$DEST/cpc-acid/COMMIT")" != "
   echo "$CPCMISC_COMMIT" > "$DEST/cpc-acid/COMMIT"
 fi
 
+# Tom Harte SingleStepTests 65816 (MIT), ~3 GB, and SPC700 (MIT) — Phase 12b.
+W65816_COMMIT=307c63f5673c8c6b861c52f71ddb89212a227480
+echo "Tom Harte 65816 tests -> $DEST/65816/v1 (512 files)"
+mkdir -p "$DEST/65816/v1"
+for i in $(seq 0 255); do
+  for m in e n; do
+    name="$(printf '%02x.%s.json' "$i" "$m")"
+    fetch "https://raw.githubusercontent.com/SingleStepTests/65816/$W65816_COMMIT/v1/$name" "$DEST/65816/v1/$name"
+  done
+done
+echo "$W65816_COMMIT" > "$DEST/65816/COMMIT"
+SPC700_COMMIT=67d15f492b2740964abd4efd1229e0ec9c342228
+echo "Tom Harte SPC700 tests -> $DEST/spc700/v1 (256 files)"
+mkdir -p "$DEST/spc700/v1"
+for i in $(seq 0 255); do
+  name="$(printf '%02x.json' "$i")"
+  fetch "https://raw.githubusercontent.com/SingleStepTests/spc700/$SPC700_COMMIT/v1/$name" "$DEST/spc700/v1/$name"
+done
+echo "$SPC700_COMMIT" > "$DEST/spc700/COMMIT"
+
 # NES test ROMs (blargg's suites, nestest …), Phase 12; no licence given:
 # run only, never committed.
 NESROMS_COMMIT=95d8f621ae55cee0d09b91519a8989ae0e64753b

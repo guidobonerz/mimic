@@ -17,6 +17,7 @@ fn joystick_port(kind: PortKind) -> bool {
             | PortKind::CpcJoy
             | PortKind::ColecoControl
             | PortKind::NesControl
+            | PortKind::SnesControl
     )
 }
 
@@ -29,6 +30,7 @@ pub fn device_names(kind: PortKind) -> Vec<&'static str> {
         PortKind::AmigaGameport => vec!["mouse", "joystick"],
         PortKind::ColecoControl => vec!["controller", "superaction", "driving", "roller"],
         PortKind::NesControl => vec!["controller", "zapper", "arkanoid"],
+        PortKind::SnesControl => vec!["pad", "mouse", "superscope"],
         k if joystick_port(k) => vec!["joystick"],
         _ => Vec::new(),
     }
@@ -58,6 +60,16 @@ pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> 
             _ => return None,
         };
         return Some(Box::new(NesController::new(k)));
+    }
+    if kind == PortKind::SnesControl {
+        use devices_input::{SnesController, SnesKind};
+        let k = match name {
+            "pad" | "controller" | "joystick" => SnesKind::Pad,
+            "mouse" => SnesKind::Mouse,
+            "superscope" => SnesKind::SuperScope,
+            _ => return None,
+        };
+        return Some(Box::new(SnesController::new(k)));
     }
     match name {
         "joystick" if joystick_port(kind) => Some(Box::new(devices_input::Joystick::new(kind))),
@@ -101,6 +113,7 @@ pub fn registry() -> Registry {
     r.register(machine_zx81::entry());
     r.register(machine_coleco::entry());
     r.register(machine_nes::entry());
+    r.register(machine_snes::entry());
     r
 }
 

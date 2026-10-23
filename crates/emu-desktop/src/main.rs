@@ -83,7 +83,8 @@ usage: mimic-desktop [options]
                         recorder (a PRG is recorded in the machine's tape format)
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
-                        raw 8/16 KB ROM; ColecoVision ROM; NES iNES file
+                        raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
+                        SNES .sfc/.smc
   --autostart           load and run the disk after boot
   --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
@@ -306,13 +307,21 @@ fn insert_into(m: &mut dyn Machine, slot: SlotId, path: &str) -> Result<(), Stri
 fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
     let specs = media_backends::roms::specs(&args.machine);
     if !specs.is_empty() && !args.config.options.contains_key("roms") {
-        let dir = args
-            .rom_dir
-            .clone()
-            .or_else(media_backends::roms::env_dir)
-            .ok_or("set EMU_ROM_DIR or --rom-dir to the folder with the machine's ROMs")?;
-        args.config.roms =
-            media_backends::roms::load(&dir, &args.machine).map_err(|e| e.to_string())?;
+        let dir = args.rom_dir.clone().or_else(media_backends::roms::env_dir);
+        match dir {
+            Some(dir) => {
+                args.config.roms =
+                    media_backends::roms::load(&dir, &args.machine).map_err(|e| e.to_string())?;
+            }
+            // Machines whose ROMs are all optional (the SNES's sound boot
+            // ROM) run without a ROM folder.
+            None if specs.iter().all(|s| s.optional) => {}
+            None => {
+                return Err(
+                    "set EMU_ROM_DIR or --rom-dir to the folder with the machine's ROMs".into(),
+                )
+            }
+        }
     }
     let mut m = emu_machines::registry()
         .create(&args.machine, &args.config)
@@ -1006,6 +1015,7 @@ fn run() -> Result<(), String> {
                     | PortKind::AmigaGameport
                     | PortKind::ColecoControl
                     | PortKind::NesControl
+                    | PortKind::SnesControl
             )
         })
         .count()
