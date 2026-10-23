@@ -61,6 +61,13 @@ for i in $(seq 0 255); do
 done
 echo "$HARTE_COMMIT" > "$DEST/65x02/COMMIT"
 
+echo "Tom Harte NES 2A03 tests -> $DEST/65x02/nes6502/v1 (256 files)"
+mkdir -p "$DEST/65x02/nes6502/v1"
+for i in $(seq 0 255); do
+  name="$(printf '%02x.json' "$i")"
+  fetch "https://raw.githubusercontent.com/SingleStepTests/65x02/$HARTE_COMMIT/nes6502/v1/$name" "$DEST/65x02/nes6502/v1/$name"
+done
+
 # Tom Harte SingleStepTests Z80 (MIT), ~1.4 GB: 1604 instruction files of
 # 1000 tests each, named by their opcode bytes ("ed b0.json", "dd cb __ 46.json").
 Z80_COMMIT=ebe1875d48f374bcfd4b505d8eb8ee751568b5f7
@@ -249,6 +256,21 @@ elif [ ! -s "$DEST/cpc-acid/COMMIT" ] || [ "$(cat "$DEST/cpc-acid/COMMIT")" != "
   cp "$src/readme.txt" "$DEST/cpc-acid/README.txt"
   rm -rf "$work"
   echo "$CPCMISC_COMMIT" > "$DEST/cpc-acid/COMMIT"
+fi
+
+# NES test ROMs (blargg's suites, nestest …), Phase 12; no licence given:
+# run only, never committed.
+NESROMS_COMMIT=95d8f621ae55cee0d09b91519a8989ae0e64753b
+NESROMS_SHA256=78aab1d5e5d1fb717fd4200c0525ec08a32e4c7e4094590cb6ace95a8ae81d7f
+if [ ! -e "$DEST/nes-test-roms/COMMIT" ]; then
+  echo "NES test ROMs -> $DEST/nes-test-roms"
+  mkdir -p "$DEST/nes-test-roms"
+  fetch "https://codeload.github.com/christopherpow/nes-test-roms/tar.gz/$NESROMS_COMMIT" "$DEST/nes-test-roms.tar.gz"
+  [ "$(sha256 "$DEST/nes-test-roms.tar.gz")" = "$NESROMS_SHA256" ] || {
+    echo "error: nes-test-roms archive checksum mismatch" >&2; exit 1; }
+  tar -xzf "$DEST/nes-test-roms.tar.gz" -C "$DEST/nes-test-roms" --strip-components=1
+  rm "$DEST/nes-test-roms.tar.gz"
+  echo "$NESROMS_COMMIT" > "$DEST/nes-test-roms/COMMIT"
 fi
 
 echo "done. export EMU_TESTDATA_DIR=$DEST"

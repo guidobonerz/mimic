@@ -73,6 +73,9 @@ pub(crate) struct Core {
     pub poll: bool,
     /// Set by a cycle that must not update `poll` (branch quirk).
     pub no_poll: bool,
+    /// The last cycle polled the interrupt inputs (for late sampling, see
+    /// `Cpu6502::sample_interrupts`).
+    pub polled: bool,
     pub jammed: bool,
     /// A hardware interrupt sequence just completed (for IRQ/NMI
     /// breakpoints); the machine takes it right after the tick, so it is
@@ -82,10 +85,21 @@ pub(crate) struct Core {
     /// Magic constants of the unstable ANE ($8B) and LXA ($AB) opcodes.
     pub ane_magic: u8,
     pub lxa_magic: u8,
+    /// The D flag switches ADC/SBC/ARR to BCD (false on the 2A03, whose
+    /// decimal adjust is cut from the die; D is still stored and pushed).
+    pub decimal: bool,
+    /// The vector is chosen as PCL is pushed and an NMI arriving as P is
+    /// pushed is lost (true; Acid800), or, for machines sampling the
+    /// inputs late in the cycle (`Cpu6502::sample_interrupts`, the 2A03),
+    /// the vector is chosen as P is pushed and a later NMI waits for the
+    /// first handler instruction (false; blargg's cpu_interrupts_v2: NMI
+    /// hijacks BRK for 5 clocks, then follows the handler's first
+    /// instruction).
+    pub lose_late_nmi: bool,
 }
 
 impl Core {
-    pub(crate) fn new(ane_magic: u8, lxa_magic: u8) -> Self {
+    pub(crate) fn new(ane_magic: u8, lxa_magic: u8, decimal: bool, lose_late_nmi: bool) -> Self {
         Self {
             a: 0,
             x: 0,
@@ -108,10 +122,13 @@ impl Core {
             reset_pending: false,
             poll: false,
             no_poll: false,
+            polled: false,
             jammed: false,
             entered: None,
             ane_magic,
             lxa_magic,
+            decimal,
+            lose_late_nmi,
         }
     }
 
@@ -136,6 +153,7 @@ impl Core {
             self.exec(bus)
         };
         let skip_poll = std::mem::take(&mut self.no_poll);
+        self.polled = false;
 
         if done {
             self.t = 0;
@@ -150,6 +168,7 @@ impl Core {
         // before the next interrupt (Lorenz nmi).
         if !skip_poll && self.op != 0x00 {
             self.poll = self.nmi_pending || (self.irq_line && self.p & I == 0);
+            self.polled = true;
         }
         if self.jammed {
             CycleResult::Jammed
@@ -242,6 +261,18 @@ impl Core {
     // ---- special sequences ---------------------------------------------
 
     /// BRK, IRQ, NMI and reset share one 7-cycle sequence.
+    /// The vector of a BRK/interrupt sequence: a pending NMI takes over.
+    fn choose_vector(&mut self) {
+        self.vector = if self.seq == Seq::Reset {
+            0xfffc
+        } else if self.nmi_pending {
+            self.nmi_pending = false;
+            0xfffa
+        } else {
+            0xfffe
+        };
+    }
+
     fn brk(&mut self, bus: &mut dyn Bus) -> bool {
         match self.t {
             1 => {
@@ -260,14 +291,9 @@ impl Core {
                 // An NMI that is pending here hijacks BRK and IRQ. One that
                 // arrives later waits for the first handler instruction
                 // (Lorenz "nmi").
-                self.vector = if self.seq == Seq::Reset {
-                    0xfffc
-                } else if self.nmi_pending {
-                    self.nmi_pending = false;
-                    0xfffa
-                } else {
-                    0xfffe
-                };
+                if self.lose_late_nmi {
+                    self.choose_vector();
+                }
                 false
             }
             4 => {
@@ -280,7 +306,9 @@ impl Core {
                 // An NMI arriving in this cycle is lost: too late to hijack,
                 // and the latch is cleared as the vector is chosen (Acid800
                 // `antic_blockednmi`).
-                if self.seq != Seq::Reset {
+                if !self.lose_late_nmi {
+                    self.choose_vector();
+                } else if self.seq != Seq::Reset {
                     self.nmi_pending = false;
                 }
                 false
@@ -917,7 +945,7 @@ impl Core {
     fn adc(&mut self, v: u8) {
         let (a, m, c) = (u16::from(self.a), u16::from(v), u16::from(self.p & C));
         let bin = a + m + c;
-        if self.p & D == 0 {
+        if self.p & D == 0 || !self.decimal {
             self.set_flag(C, bin > 0xff);
             self.set_flag(V, !(a ^ m) & (a ^ bin) & 0x80 != 0);
             self.a = bin as u8;
@@ -949,7 +977,7 @@ impl Core {
         self.set_flag(C, bin < 0x100);
         self.set_flag(V, (self.a ^ v) & (self.a ^ r8) & 0x80 != 0);
         self.set_nz(r8);
-        if self.p & D == 0 {
+        if self.p & D == 0 || !self.decimal {
             self.a = r8;
             return;
         }
@@ -971,7 +999,7 @@ impl Core {
         let t = self.a & v;
         let carry_in = self.p & C != 0;
         let mut r = (t >> 1) | if carry_in { 0x80 } else { 0 };
-        if self.p & D == 0 {
+        if self.p & D == 0 || !self.decimal {
             self.a = r;
             self.set_nz(r);
             self.set_flag(C, r & 0x40 != 0);

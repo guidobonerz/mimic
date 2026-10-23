@@ -82,7 +82,10 @@ fn cpu_jam_exits_with_code_2() {
 
 #[test]
 fn unknown_machine_fails() {
-    let out = bin().args(["--machine", "no-such-machine"]).output().unwrap();
+    let out = bin()
+        .args(["--machine", "no-such-machine"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("unknown machine"));
 }

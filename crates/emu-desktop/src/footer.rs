@@ -128,6 +128,7 @@ impl Tracker {
                             | PortKind::AtariJoy
                             | PortKind::CpcJoy
                             | PortKind::ColecoControl
+                            | PortKind::NesControl
                     )
                     && !self.analog.contains_key(&p.id.0)
             })

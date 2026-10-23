@@ -1,4 +1,5 @@
-//! 6502 family: 6502, 6507, 6510, 8502, 7501/8501, 6502C (SALLY) via variant flags.
+//! 6502 family: 6502, 6507, 6510, 8502, 7501/8501, 6502C (SALLY) and the
+//! NES 2A03/2A07 via variant flags.
 //!
 //! The core is cycle-stepped: every [`Cpu::tick`] performs exactly one bus
 //! access, including dummy reads and writes. Only NMOS 6502 behaviour is
@@ -37,6 +38,11 @@ pub enum Variant {
     /// A13–A15 and never raises an interrupt (MOS MCS6500 data sheet,
     /// "MCS6507").
     Mos6507,
+    /// Ricoh 2A03 (NES NTSC) / 2A07 (PAL): the NMOS core without decimal
+    /// mode; D is stored and pushed but ADC/SBC stay binary (NESdev wiki,
+    /// "CPU"; Tom Harte's `nes6502` tests). APU, OAM DMA and the joypad
+    /// strobe on the same die are emulated by the machine.
+    Rp2A03,
 }
 
 impl Variant {
@@ -46,7 +52,7 @@ impl Variant {
             Variant::Mos6510 => Some(0x3f),
             Variant::Mos8502 => Some(0x7f),
             Variant::Mos7501 => Some(0xdf),
-            Variant::Nmos6502 | Variant::Sally | Variant::Mos6507 => None,
+            Variant::Nmos6502 | Variant::Sally | Variant::Mos6507 | Variant::Rp2A03 => None,
         }
     }
 }
@@ -72,7 +78,8 @@ impl Default for Config {
 }
 
 const STATE_TAG: [u8; 4] = *b"6502";
-const STATE_VERSION: u16 = 1;
+/// Version 2 added `polled` (version 1 loads with it clear).
+const STATE_VERSION: u16 = 2;
 
 /// A 6502-family CPU.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,6 +92,9 @@ pub struct Cpu6502 {
     halt: bool,
     /// `rdy && !halt`: the fast path of `tick` tests one flag.
     free: bool,
+    /// The last tick with RDY low or HALT high did not run (see
+    /// [`Cpu6502::halted`]). Only written on that slow path.
+    halted: bool,
 }
 
 impl Cpu6502 {
@@ -92,11 +102,17 @@ impl Cpu6502 {
     /// [`Cpu6502::reset`] to run the reset sequence.
     pub fn new(config: Config) -> Self {
         Self {
-            core: Core::new(config.ane_magic, config.lxa_magic),
+            core: Core::new(
+                config.ane_magic,
+                config.lxa_magic,
+                config.variant != Variant::Rp2A03,
+                config.variant != Variant::Rp2A03,
+            ),
             variant: config.variant,
             rdy: true,
             halt: false,
             free: true,
+            halted: false,
         }
     }
 
@@ -143,6 +159,29 @@ impl Cpu6502 {
     pub fn set_halt(&mut self, halted: bool) {
         self.halt = halted && self.variant == Variant::Sally;
         self.free = self.rdy && !self.halt;
+    }
+
+    /// Interrupt inputs as they are at the end of the cycle just run, for
+    /// machines whose chips change them during the cycle after the CPU's
+    /// bus access (the NES: a PPUSTATUS read in the cycle the vertical
+    /// blank flag rises cancels the NMI). Like [`Cpu6502::set_nmi`] and
+    /// [`Cpu6502::set_irq`], but the levels also count for the interrupt
+    /// poll of that cycle, as if they had been set before it.
+    pub fn sample_interrupts(&mut self, nmi: bool, irq: bool) {
+        self.set_nmi(nmi);
+        self.set_irq(irq);
+        let c = &mut self.core;
+        if c.polled {
+            c.poll = c.nmi_pending || (c.irq_line && c.p & I == 0);
+        }
+    }
+
+    /// Whether the last tick, made with RDY low (or HALT high), stopped the
+    /// CPU: true when it would have read (the cycle repeats), false when
+    /// it wrote and so went ahead. Meaningless after a tick with RDY high.
+    /// The NES's DMA unit takes the bus only in a cycle the CPU gave up.
+    pub fn halted(&self) -> bool {
+        self.halted
     }
 
     /// SO input: a falling edge sets the V flag (used by the 1541).
@@ -213,6 +252,7 @@ impl Cpu for Cpu6502 {
             return self.core.cycle(bus);
         }
         if self.halt {
+            self.halted = true;
             return CycleResult::Busy;
         }
         // RDY low: the CPU repeats a read cycle, so roll the state back
@@ -221,14 +261,17 @@ impl Cpu for Cpu6502 {
         let mut probe = WriteProbe { bus, wrote: false };
         let result = self.core.cycle(&mut probe);
         if probe.wrote || self.core.jammed {
+            self.halted = false;
             result
         } else {
+            self.halted = true;
             // Interrupt recognition keeps running while the cycle repeats:
             // an NMI that arrives during the stall is taken after the
             // stalled instruction even when that was its last cycle
             // (Acid800 `antic_dlitiming`, DLI during WSYNC).
             let poll = saved.t != 0 && saved.op != 0x00 && !saved.no_poll;
             self.core = saved;
+            self.core.polled = poll;
             if poll {
                 let c = &mut self.core;
                 c.poll |= c.nmi_pending || (c.irq_line && c.p & I == 0);
@@ -307,6 +350,7 @@ impl Savestate for Cpu6502 {
                 c.poll,
                 c.jammed,
                 self.rdy,
+                c.polled,
             ] {
                 w.bool(v);
             }
@@ -316,7 +360,7 @@ impl Savestate for Cpu6502 {
     /// Restores registers and mid-instruction state. Configuration (variant,
     /// magic constants) belongs to the machine and is not part of the state.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut s) = r.chunk(STATE_TAG, STATE_VERSION)?;
+        let (version, mut s) = r.chunk(STATE_TAG, STATE_VERSION)?;
         let mut c = self.core;
         c.a = s.u8()?;
         c.x = s.u8()?;
@@ -340,6 +384,7 @@ impl Savestate for Cpu6502 {
         c.poll = s.bool()?;
         c.jammed = s.bool()?;
         let rdy = s.bool()?;
+        c.polled = version >= 2 && s.bool()?;
         if c.t > 8 && !c.jammed {
             return Err(StateError::Invalid("6502 cycle counter"));
         }
@@ -573,7 +618,10 @@ mod tests {
         cpu.tick(&mut bus);
         cpu.set_rdy(false);
         cpu.tick(&mut bus); // the write cycle proceeds
+        assert!(!cpu.halted());
         assert_eq!(bus.mem[0x2000], 0x42);
+        cpu.tick(&mut bus); // the next opcode fetch stops
+        assert!(cpu.halted());
         assert!(cpu.at_instruction_boundary());
     }
 
@@ -674,6 +722,44 @@ mod tests {
         }
         assert_eq!(cpu.regs().get("A"), Some(0x91));
         assert_eq!(cpu.regs().get("P").unwrap() & 1, 0);
+    }
+
+    #[test]
+    fn late_sampled_nmi_counts_for_the_cycle_just_run() {
+        // NOP takes 2 cycles; the poll at the end of its first decides.
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0xea, 0xea, 0xea]);
+        bus.load(0xfffa, &[0x00, 0xa0]);
+        cpu.tick(&mut bus); // opcode fetch
+        cpu.sample_interrupts(true, false);
+        cpu.tick(&mut bus); // last cycle of the NOP
+        step(&mut cpu, &mut bus);
+        assert_eq!(cpu.pc(), 0xa000, "taken right after the first NOP");
+        // Set the same way with set_nmi, it waits one more instruction.
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0xea, 0xea, 0xea]);
+        bus.load(0xfffa, &[0x00, 0xa0]);
+        cpu.tick(&mut bus);
+        cpu.set_nmi(true);
+        cpu.tick(&mut bus);
+        step(&mut cpu, &mut bus);
+        assert_eq!(cpu.pc(), 0x0402);
+    }
+
+    #[test]
+    fn rp2a03_has_no_decimal_mode() {
+        // SED; CLC; LDA #$58; ADC #$46 -> $9E binary, D still set
+        let program = [0xf8, 0x18, 0xa9, 0x58, 0x69, 0x46];
+        let mut bus = FlatBus::new(16);
+        bus.load(0x0400, &program);
+        let mut cpu = Cpu6502::new(Config {
+            variant: Variant::Rp2A03,
+            ..Config::default()
+        });
+        cpu.set_reg("PC", 0x0400);
+        for _ in 0..4 {
+            step(&mut cpu, &mut bus);
+        }
+        assert_eq!(cpu.regs().get("A"), Some(0x9e));
+        assert_ne!(cpu.regs().get("P").unwrap() & 0x08, 0, "D kept");
     }
 
     /// Savestate at every cycle of a program, restore into a fresh CPU and

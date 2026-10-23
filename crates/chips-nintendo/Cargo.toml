@@ -1,0 +1,12 @@
+[package]
+name = "chips-nintendo"
+description = "Nintendo NES/Famicom chips: PPU 2C02/2C07 and the 2A03/2A07 APU"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

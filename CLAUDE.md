@@ -33,7 +33,7 @@ A cycle-accurate, multi-machine emulator for classic home computers — the whol
 ```
 crates/
   emu-core/        Traits (Cpu, Bus, Machine), scheduler, savestates, DebugHooks, FrameRef
-  cpu-6502/        6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY) via variant flags
+  cpu-6502/        6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 2A03 (NES) via variant flags
   cpu-z80/         Z80 (C128, CPC)
   cpu-m68k/        68000 and 68020 (A1200)
   chips-cbm/       VIC, VIC-II(e), TED, VDC 8563, SID, CIA, VIA, PIA, MMU 8722
@@ -41,6 +41,7 @@ crates/
   chips-atari/     ANTIC, GTIA, POKEY, PIA
   chips-amstrad/   CRTC 6845, Gate Array, AY-3-8912, 8255 PPI, FDC 765
   chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision)
+  chips-nintendo/  PPU 2C02/2C07 with its palette, APU of the 2A03/2A07 (NES)
   drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU)
   drives-other/    Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, datasettes
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX), light pens, keypads
@@ -50,7 +51,7 @@ crates/
   emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
-  machine-amiga/  machine-atari8/  machine-cpc/  machine-coleco/
+  machine-amiga/  machine-atari8/  machine-cpc/  machine-coleco/  machine-nes/
   machine-sim6502/ Reference/test machine: 6502 + 64 KB RAM + minimal raster chip (not real hardware)
   emu-machines/    Fills the machine registry; the only crate that links every machine-*
   emu-debug/       Debug server: native protocol + adapter (VICE binary monitor)
@@ -119,6 +120,7 @@ Multi-CPU machines (C64 + 1541, C128 8502 + Z80, Amiga Copper/Blitter) expose ea
 | Atari 2600 | colour clock 3.546894 MHz, CPU ÷3 (NTSC 3.579545) | No frame buffer: the CPU races the beam; WSYNC halts it via RDY; fields follow VSYNC; bank switching by cartridge hotspots |
 | Atari 400/800/800XL/65XE/130XE | CPU 1.773447 MHz | ANTIC DMA steals cycles; display lists; DLIs; XL/XE bank ROMs by PORTB, the 130XE banks 64 KB extended RAM for CPU and ANTIC separately; 400/800: OS-B, four joystick ports, RESET key is an NMI |
 | CPC 464/664/6128 | Z80 4 MHz | Wait states align memory access to 1 µs; CRTC register tricks; 464 tape only, 664/6128 FDC, 6128 128 KB banking |
+| NES / Famicom | 2A03 1.789773 MHz (PAL 2A07 1.662607), PPU 3 (PAL 3.2) dots a CPU cycle | 2A03 = 6502 without decimal mode; PPU dots of a cycle run 2 before / 1 after the CPU's bus access, /NMI and /IRQ sampled late in the cycle (`Cpu6502::sample_interrupts`); OAM and DMC DMA stop the CPU on read cycles (get/put alignment); mappers watch PPU A12 (MMC3); no frame buffer in VRAM: the PPU renders per dot |
 | ColecoVision | Z80A 3.58 MHz (PAL 3.55) | TMS9918A/9929A: 342 pixel clocks per line = 228 T-states; VDP /INT drives /NMI (no further NMI until the status is read); 1 KB RAM mirrored over $6000–$7FFF; controller segments (joystick/keypad) selected by port writes; spinner steps raise /INT |
 | ZX81 / TS1000 | Z80 3.25 MHz | No frame buffer: the CPU executes the display file and the ULA turns the fetches into pixels (NOP substitution, I register, R bit 6 as /INT, NMI generator, /WAIT while halted); 207 T-states per line; LOAD/SAVE by ROM traps on .P files |
 
@@ -355,7 +357,7 @@ EMU_ROM_DIR=~/roms cargo test --workspace -- --include-ignored
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 bash tools/fetch-testdata.sh                 # Harte, Dormann, Lorenz test data into testdata/ (~850 MB)
-EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-6502 --release -- --ignored   # every 10th Harte test
+EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-6502 --release -- --ignored   # every 10th Harte test (6502 and the NES 2A03's nes6502 set)
 EMU_HARTE_FULL=1 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-6502 --release -- --ignored
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-z80 --release --test harte -- --ignored   # every 10th Z80 test (EMU_HARTE_ONLY=ed: only "ed …" files)
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-m68k --release --test harte -- --ignored --nocapture   # every 10th 68000 test (EMU_HARTE_FULL=1 all, EMU_HARTE_ONLY=MOVE,DIVU file prefixes)
@@ -390,6 +392,8 @@ cargo run -p emu-headless -- --machine zx81 --rom-dir roms --frames 200 --snapsh
 EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test zx81_boot -- --ignored --nocapture   # Phase 10 gate (ZX81): boots, PRINT, a .P file saved and loaded through the traps
 cargo run -p emu-headless -- --machine coleco --rom-dir roms --cart game.col --frames 300 --snapshot cv.png   # ROMs in roms/coleco/ (coleco.rom, 8 KB); --model pal; --option port1/port2=controller|superaction|driving|roller|none, roms=stub (own mini BIOS that starts $55AA/$AA55 cartridges)
 EMU_ROM_DIR=$PWD/roms EMU_COLECO_CARTS=/path/to/carts cargo test -p emu-tests --release --test coleco_boot -- --ignored --nocapture   # Phase 11 gate: BIOS screen NTSC/PAL, every cartridge in the folder runs (pictures in target/tmp)
+cargo run -p emu-headless -- --machine nes --cart game.nes --frames 300 --snapshot nes.png   # no system ROM; --model pal; --option port1/port2=controller|zapper|arkanoid|none, fourscore=on (ports 3 and 4)
+EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test nes_testroms -- --ignored --nocapture   # Phase 12: nestest, blargg's CPU/PPU/APU/DMA/MMC3 suites from nes-test-roms (EMU_NES_FILTER=text; ~5 min)
 cargo run -p emu-headless -- --machine cpc --rom-dir roms --frames 150 --snapshot cpc.png   # ROMs in roms/cpc/; --model 6128|664|464, --option crtc=0|1|2, dos=amsdos|parados|none
 cargo run --release -p emu-desktop -- --machine cpc --option joy1=amx   # AMX mouse (click to capture); joy2=joystick daisy-chains a second stick; --crt gt65 green monitor
 cargo run --release -p emu-desktop -- --machine cpc --disk game.dsk   # CPC 664/6128: DSK/EDSK in drive A (RUN"DISC or CAT)
@@ -409,7 +413,7 @@ cargo run --release -p emu-desktop -- --machine c64 --cart game.crt   # cartridg
 
 - CPU cores: Tom Harte SingleStepTests (6502, Z80, 68000), Klaus Dormann 6502 functional test, ZEXALL (Z80), WinUAE `cputester` data (68000).
 - C64 / Commodore 8-bit: Lorenz test suite, VICE test programs.
-- Atari: Acid800, Altirra test programs. CPC: CRTC/Z80 timing test programs. Amiga: vAmigaTS.
+- Atari: Acid800, Altirra test programs. CPC: CRTC/Z80 timing test programs. Amiga: vAmigaTS. NES: nestest and blargg's suites (nes-test-roms collection).
 - Regression: headless run → N frames → compare against reference images in `tests/reference/` (exact match; update only with an explanation in the commit).
 - Test-suite data and ROMs are fetched by `tools/fetch-testdata.sh`, never committed if license forbids.
 - A new chip or machine feature is not done without tests and savestate round-trip coverage.
@@ -435,7 +439,8 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 8 (o
 | 9 | Atari 8-bit models as configuration of `machine-atari8`: 400/800 (OS-A/B, four joystick ports, no PORTB banking, RESET as NMI), 65XE, 130XE (128 KB, PORTB banking with separate CPU/ANTIC access) | 2 wk | all boot their OS; Acid800 on the 130XE as on the 800XL; a 130XE bank-switching test program |
 | 10 | Z80 home computers: Sinclair ZX81 (`machine-zx81`: CPU-generated display, ULA line counting, 1/16 KB RAM, tape via ear/mic, .P files) and Tandy TRS-80 Model I/III (`machine-trs80`: text screen with block graphics, keyboard matrix, cassette, Expansion Interface with FDC 1771/1793 and DMK/JV1/JV3 images) | 4 wk | both boot to BASIC with real ROMs; a ZX81 .P program and a TRS-80 disk load |
 | 11 | ColecoVision (`machine-coleco`; begun 2026-10-23): Z80, TMS9918A (`chips-ti`, 16 KB VRAM, sprites, all modes), SN76489, keypad controllers with joystick, cartridge ROMs; console panel POWER/RESET | 4 wk | BIOS boots; user-supplied cartridges run; TMS9918A mode and sprite tests against reference pictures |
-| 12 | Nintendo NES/Famicom (`machine-nes`): 2A03 as a cpu-6502 variant (no decimal mode, APU on chip), PPU 2C02/2C07 with VRAM/OAM (`chips-nintendo`), mappers NROM, MMC1, UxROM, CNROM, MMC3 (`devices-cartridge::nes`, iNES/NES 2.0), controllers; console panel POWER/RESET | 8 wk | nestest and blargg's CPU/PPU/APU test ROMs green; user-supplied games run |
+| 12 | Nintendo NES/Famicom (`machine-nes`; begun 2026-10-23): 2A03 as a cpu-6502 variant (no decimal mode, APU on chip), PPU 2C02/2C07 with VRAM/OAM (`chips-nintendo`), mappers NROM, MMC1, UxROM, CNROM, MMC3 (`devices-cartridge::nes`, iNES/NES 2.0), controllers; console panel POWER/RESET | 8 wk | nestest and blargg's CPU/PPU/APU test ROMs green; user-supplied games run |
+| 12b | Super Nintendo / Super Famicom (`machine-snes`, added 2026-10-23 on the user's request, after the NES): new `cpu-65816` (WDC 65C816, 8/16-bit modes, emulation mode) as the 5A22 with its DMA/HDMA, multiplier/divider and auto-joypad read; PPU1/PPU2 (S-PPU: modes 0–7, Mode 7 rotation/scaling, sprites, windows, colour math, mosaic, hi-res and interlace; `chips-nintendo`); S-SMP sound CPU (new `cpu-spc700`) with the S-DSP (8 voices, BRR samples, echo) and the IPL ROM; cartridges LoROM/HiROM/ExHiROM with SRAM (`devices-cartridge::snes`, SFC/SMC with or without copier header), coprocessors later (DSP-1 first, then Super FX, SA-1); controllers, mouse; NTSC/PAL; console panel POWER/RESET | 16 wk | 65C816 and SPC700 instruction tests (Tom Harte) green; user-supplied LoROM/HiROM games run with sound; Mode 7 and colour-math pictures checked against known test ROMs |
 | 13 | Mattel Intellivision (`machine-intv`): new `cpu-cp1610` (16-bit), STIC (MOBs, GRAM/GROM), AY-3-8914 PSG, hand controllers; Executive ROM and GROM user-supplied | 6 wk | Executive ROM title screen; user-supplied cartridges run; CP1610 instruction tests |
 | 14 | Vectrex (`machine-vectrex`): new `cpu-6809`, VIA 6522 (reuse `chips-cbm`), AY-3-8912 (reuse `chips-amstrad`), vector display with a vector frame type next to `FrameRef` (beam segments with intensity; phosphor decay in `video-crt`; debugger/preview carry the segments and a rasterised picture — core trait extension, ask first), cartridges, controllers | 6 wk | built-in Mine Storm plays; 6809 instruction tests green |
 | 15 | Sinclair ZX Spectrum 48K and 128K (`machine-spectrum`, added 2026-10-22 on the user's request): Z80 at 3.5 MHz with the ULA's memory contention (`chips-sinclair`), 48K and 128K/+2 paging with AY sound, border and attribute display with the floating bus, TAP/TZX tape, SNA/Z80 snapshots, Kempston and Sinclair joysticks; ROMs user-supplied | 6 wk | 48K and 128K boot to BASIC with real ROMs; a TAP game loads; contention and border timing checked against known test programs |
@@ -481,6 +486,7 @@ Added 2026-10-21. On 2026-10-22 the user scheduled the remaining machines as Pha
 - **Mattel Intellivision** (Phase 13): new CPU core `cpu-cp1610` (GI CP1610, 16-bit), STIC video (MOBs, GRAM/GROM), PSG AY-3-8914; Executive ROM and GROM user-supplied.
 - **Sinclair ZX81** (Phase 10): reuses `cpu-z80`; the CPU itself generates the display (NMI/HALT-driven, ULA counts lines), 1 KB/16 KB RAM, tape via ear/mic; ROM user-supplied.
 - **Nintendo NES (Famicom)** (Phase 12): new CPU variant 2A03 (6502 without decimal mode, APU on chip), PPU 2C02/2C07 with its own VRAM and OAM, cartridge mappers (NROM, MMC1, UxROM, CNROM, MMC3 …), controllers; console panel: POWER, RESET.
+- **Super Nintendo (SNES/Super Famicom)** (Phase 12b, added 2026-10-23): three processors — the 5A22 (65C816 core with DMA/HDMA), the S-SMP (SPC700) with the S-DSP and its own 64 KB audio RAM — and two PPUs sharing `chips-nintendo` with the NES; cartridge coprocessors (DSP-n, Super FX, SA-1, S-DD1, Cx4) as `devices-cartridge::snes` types, only DSP-1 planned in the phase; ROMs (games) user-supplied, the SPC700 IPL ROM is 64 bytes inside the chip (user-supplied too).
 - **ColecoVision** (Phase 11): reuses `cpu-z80`; TMS9918A video (16 KB VRAM, sprites), SN76489 sound, keypad controllers with joystick; BIOS user-supplied; console panel: POWER, RESET.
 - **Vectrex** (Phase 14): 6809 CPU (new `cpu-6809`), VIA 6522 (reuse from `chips-cbm`), AY-3-8912 (reuse from `chips-amstrad`), and a vector display: needs a vector frame type next to `FrameRef` (beam lines with intensity, phosphor decay in `video-crt`) — the debugger/preview contract then carries vectors or a rasterized picture; overlays; console panel: POWER, RESET.
 - **Tandy TRS-80 Model I/III** (Phase 10): reuses `cpu-z80`; memory-mapped text screen with block graphics, keyboard matrix in the address space, cassette, Expansion Interface / FDC 1771/1793 floppies (DMK/JV1/JV3 images); ROMs user-supplied.
@@ -488,6 +494,10 @@ Added 2026-10-21. On 2026-10-22 the user scheduled the remaining machines as Pha
 ### Phase 11 status (ColecoVision, begun 2026-10-23)
 
 User choices: build with an own stub BIOS first (the user adds the BIOS to `roms/coleco/` later), NTSC and PAL, carts up to 32 KB plus MegaCart, all four controller kinds (standard, Super Action, Driving Module, Roller Controller). Done: `chips-ti` (TMS9918A/TMS9929A: all four modes, sprites with the four-per-line limit, 5S and coincidence, status/IRQ, read-ahead buffer; SN76489: tones, noise with the 15-bit register, attenuation), `devices-input::coleco` (`PortKind::ColecoControl`; segments, keypad codes, quadrature axes played out one step per 1/400 s), `devices-cartridge::coleco` (plain, MegaCart), `machine-coleco` (memory/I/O map, VDP → NMI, spinner → INT, panel POWER/RESET, keypads on the host keyboard, debugger with a VRAM space, savestates), stub BIOS, `tests/tests/coleco_boot.rs`. Open: the gate with the real BIOS and user cartridges (no BIOS at hand yet); TMS9918A reference pictures from test programs; unverified details (keypad code table, the spinner interrupt wiring and which bits carry the phases, the Driving Module's pedal line, the MegaCart scheme, the PAL CPU clock); VRAM access timing (the minimum time between CPU accesses is not enforced); the 4/16K bit; the VDP draws a line from the registers as they are at its start.
+
+### Phase 12 status (NES, begun 2026-10-23)
+
+User choices: NTSC and PAL, the mappers of the phase (NROM, MMC1, UxROM, CNROM, MMC3), the standard controller, Zapper, Four Score and Arkanoid controller, the Famicom Disk System later; test ROMs from the nes-test-roms collection (fetched, never committed). Done: `cpu-6502` `Variant::Rp2A03` (no decimal mode; Harte `nes6502` green; late interrupt sampling and the vector chosen as P is pushed, so an NMI in BRK's last cycles follows the handler's first instruction), `chips-nintendo` (PPU with dot-level background pipeline, sprite evaluation timed for the overflow flag, A12 one dot ahead of pattern reads, odd-frame skip decided at dot 338, I/O latch decay, the power-up palette blargg measured; palette computed from the composite signal levels; APU with frame counter, all five channels, load/reload DMC fetches, non-linear mixer), `devices-cartridge::nes` (iNES/NES 2.0, trainer, four-screen, mappers 0–4, MMC3A as submapper 4), `devices-input::nes` (`PortKind::NesControl`; controller, Zapper with the light decided by the console from the picture, Arkanoid), `machine-nes` (DMA unit, Four Score, panel POWER/RESET, debugger spaces cpu/ppu/oam and chips ppu/apu/mapper, savestates), `tests/tests/nes_testroms.rs`: 116 ROMs pass (nestest; instr_test-v5, instr_misc, instr_timing, cpu_interrupts_v2, cpu_dummy_writes, cpu_exec_space, cpu_reset, ppu_vbl_nmi, vbl_nmi_timing, ppu_open_bus, ppu_read_buffer, oam_read, oam_stress, sprite_hit, sprite_overflow, blargg_ppu_tests, apu_test, apu_reset, blargg_apu_2005 1–9, sprdma_and_dmc_dma, mmc3_test_2 1–5, branch_timing). Known failures: `6-MMC3_alt` (tests the MMC3A, which its iNES 1.0 header cannot select), blargg_apu_2005 `10.len_halt_timing` and `11.len_reload_timing` (a halt or reload write in the cycle of the length clock; apu_test's versions pass). Open: user-supplied games (none at hand yet); battery-backed PRG RAM is not written back to a file; screen-only test ROMs (dmc_dma_during_read4, cpu_dummy_reads, read_joy3, blargg_nes_cpu_test5, cpu_timing_test6) not judged; the Zapper's light model (bright point up to 20 lines above the beam) is this project's approximation; the LXA constant $FF follows blargg's instr_test, while Harte's nes6502 data uses $EE.
 
 ### Deferred from Phase 7
 

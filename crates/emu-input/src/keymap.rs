@@ -650,6 +650,21 @@ pub static COLECO: Keymap = Keymap {
     entries: COLECO_POSITIONAL,
 };
 
+/// NES: controller 1's buttons (machine keys 0-3, see `machine-nes::keys`):
+/// X = A, Z = B, right Shift = Select, Enter = Start; the cross is the
+/// joystick (cursor keys, Space also A).
+const NES_POSITIONAL: &[(&str, &[u16])] = &[
+    ("KeyX", &[0]),
+    ("KeyZ", &[1]),
+    ("ShiftRight", &[2]),
+    ("Enter", &[3]),
+];
+
+pub static NES: Keymap = Keymap {
+    machine: "nes",
+    entries: NES_POSITIONAL,
+};
+
 /// Amstrad CPC keys: `line * 8 + bit` of the keyboard matrix (see
 /// `machine-cpc::keyboard`).
 const fn cpc(line: u16, bit: u16) -> u16 {
@@ -933,6 +948,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "atari8" => Some(&ATARI),
         "atari2600" => Some(&ATARI2600),
         "coleco" => Some(&COLECO),
+        "nes" => Some(&NES),
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
         "zx81" => Some(&ZX81),

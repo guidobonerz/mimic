@@ -16,6 +16,7 @@ fn joystick_port(kind: PortKind) -> bool {
             | PortKind::AtariJoy
             | PortKind::CpcJoy
             | PortKind::ColecoControl
+            | PortKind::NesControl
     )
 }
 
@@ -27,6 +28,7 @@ pub fn device_names(kind: PortKind) -> Vec<&'static str> {
         PortKind::CpcJoy => vec!["joystick", "amx"],
         PortKind::AmigaGameport => vec!["mouse", "joystick"],
         PortKind::ColecoControl => vec!["controller", "superaction", "driving", "roller"],
+        PortKind::NesControl => vec!["controller", "zapper", "arkanoid"],
         k if joystick_port(k) => vec!["joystick"],
         _ => Vec::new(),
     }
@@ -46,6 +48,16 @@ pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> 
         };
         // About 400 steps a second at the ColecoVision's 3.58 MHz.
         return Some(Box::new(ColecoController::new(k, 8949)));
+    }
+    if kind == PortKind::NesControl {
+        use devices_input::{NesController, NesKind};
+        let k = match name {
+            "controller" | "joystick" => NesKind::Standard,
+            "zapper" => NesKind::Zapper,
+            "arkanoid" => NesKind::Arkanoid,
+            _ => return None,
+        };
+        return Some(Box::new(NesController::new(k)));
     }
     match name {
         "joystick" if joystick_port(kind) => Some(Box::new(devices_input::Joystick::new(kind))),
@@ -88,6 +100,7 @@ pub fn registry() -> Registry {
     r.register(machine_amiga::entry());
     r.register(machine_zx81::entry());
     r.register(machine_coleco::entry());
+    r.register(machine_nes::entry());
     r
 }
 
@@ -118,6 +131,10 @@ mod tests {
         assert_eq!(pad.kind(), PortKind::ColecoControl);
         assert!(create_device("joystick", PortKind::ColecoControl).is_some());
         assert!(create_device("paddles", PortKind::ColecoControl).is_none());
+        let zapper = create_device("zapper", PortKind::NesControl).unwrap();
+        assert_eq!(zapper.kind(), PortKind::NesControl);
+        assert!(create_device("joystick", PortKind::NesControl).is_some());
+        assert!(create_device("zapper", PortKind::CbmControl).is_none());
     }
 
     #[test]

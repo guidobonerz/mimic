@@ -21,6 +21,9 @@ struct JoyState {
     pad_buttons: Dirs,
     pad_axes: Dirs,
     pad_fire: bool,
+    /// Further gamepad buttons as event button bits: East bit 1 (a second
+    /// fire button; the NES's B), Select bit 2, Start bit 3.
+    pad_extra: u8,
     /// Last state sent, to emit only changes.
     sent: (Dirs, u8),
 }
@@ -28,7 +31,10 @@ struct JoyState {
 impl JoyState {
     fn current(&self) -> (Dirs, u8) {
         let dirs = self.key_dirs | self.pad_buttons | self.pad_axes;
-        (dirs, u8::from(self.key_fire || self.pad_fire))
+        (
+            dirs,
+            u8::from(self.key_fire || self.pad_fire) | self.pad_extra,
+        )
     }
 }
 
@@ -190,6 +196,18 @@ impl Mapper {
                             Button::DPadLeft => set(&mut joy.pad_buttons, Dirs::LEFT, *down),
                             Button::DPadRight => set(&mut joy.pad_buttons, Dirs::RIGHT, *down),
                             b if fire.contains(b) => joy.pad_fire = *down,
+                            Button::East | Button::Select | Button::Start => {
+                                let bit = match button {
+                                    Button::East => 2,
+                                    Button::Select => 4,
+                                    _ => 8,
+                                };
+                                if *down {
+                                    joy.pad_extra |= bit;
+                                } else {
+                                    joy.pad_extra &= !bit;
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -547,6 +565,39 @@ mod tests {
         assert!(
             keys_of(&ev).is_empty(),
             "joystick keys never reach the keyboard"
+        );
+    }
+
+    #[test]
+    fn gamepad_east_select_start_are_button_bits() {
+        let mut m = Mapper::new(Profile::default_for("nes"));
+        let press = |m: &mut Mapper, button, down| {
+            m.handle(
+                &HostEvent::Button {
+                    pad: 0,
+                    button,
+                    down,
+                },
+                Cycle(0),
+            )
+        };
+        press(&mut m, Button::South, true);
+        press(&mut m, Button::East, true);
+        let ev = press(&mut m, Button::Start, true);
+        assert_eq!(
+            ev[0].event,
+            InputEvent::Digital {
+                dirs: Dirs::NONE,
+                buttons: 1 | 2 | 8
+            }
+        );
+        let ev = press(&mut m, Button::East, false);
+        assert_eq!(
+            ev[0].event,
+            InputEvent::Digital {
+                dirs: Dirs::NONE,
+                buttons: 1 | 8
+            }
         );
     }
 

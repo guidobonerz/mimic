@@ -357,6 +357,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "chips-nintendo"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "chips-sinclair"
 version = "0.1.0"
 dependencies = [
@@ -823,6 +830,7 @@ dependencies = [
  "machine-c64",
  "machine-coleco",
  "machine-cpc",
+ "machine-nes",
  "machine-pet",
  "machine-sim6502",
  "machine-ted",
@@ -1558,6 +1566,17 @@ dependencies = [
  "drives-other",
  "emu-core",
  "media",
+]
+
+[[package]]
+name = "machine-nes"
+version = "0.1.0"
+dependencies = [
+ "chips-nintendo",
+ "cpu-6502",
+ "devices-cartridge",
+ "devices-input",
+ "emu-core",
 ]
 
 [[package]]

@@ -22,6 +22,9 @@ pub enum PortKind {
     /// selected by the console, a quadrature input (spinner, wheel,
     /// trackball).
     ColecoControl,
+    /// NES controller port: OUT (strobe) and CLK from the console, data
+    /// lines D0, D3, D4 back (standard controller, Zapper, Arkanoid).
+    NesControl,
     CbmUserPort,
     Iec,
     Sio,

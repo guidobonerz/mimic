@@ -1,6 +1,6 @@
-//! Tom Harte's SingleStepTests (`65x02/6502/v1`, MIT): per opcode 10 000
-//! random initial states with the expected final state and the exact
-//! cycle-by-cycle bus trace.
+//! Tom Harte's SingleStepTests (`65x02/6502/v1` and, for the NES 2A03,
+//! `65x02/nes6502/v1`, MIT): per opcode 10 000 random initial states with
+//! the expected final state and the exact cycle-by-cycle bus trace.
 //!
 //! Data: `tools/fetch-testdata.sh`, then set `EMU_TESTDATA_DIR`.
 //! By default every 10th test per opcode runs; `EMU_HARTE_FULL=1` runs all.
@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use cpu_6502::Cpu6502;
+use cpu_6502::{Config, Cpu6502, Variant};
 use emu_core::{Bus, Cpu, CycleResult, Size};
 use serde::Deserialize;
 
@@ -59,14 +59,14 @@ impl Bus for RecordingBus {
     }
 }
 
-fn data_dir() -> PathBuf {
+fn data_dir(set: &str) -> PathBuf {
     let dir = std::env::var_os("EMU_TESTDATA_DIR")
         .expect("EMU_TESTDATA_DIR not set; run tools/fetch-testdata.sh first");
-    PathBuf::from(dir).join("65x02").join("6502").join("v1")
+    PathBuf::from(dir).join("65x02").join(set).join("v1")
 }
 
 /// Run one test; returns a description of the first mismatch.
-fn run(test: &Test) -> Result<(), String> {
+fn run(test: &Test, variant: Variant) -> Result<(), String> {
     let mut bus = RecordingBus {
         mem: vec![0; 0x10000],
         log: Vec::new(),
@@ -74,7 +74,10 @@ fn run(test: &Test) -> Result<(), String> {
     for &(addr, v) in &test.initial.ram {
         bus.mem[usize::from(addr)] = v;
     }
-    let mut cpu = Cpu6502::default();
+    let mut cpu = Cpu6502::new(Config {
+        variant,
+        ..Config::default()
+    });
     let i = &test.initial;
     for (name, v) in [
         ("PC", u32::from(i.pc)),
@@ -150,7 +153,17 @@ fn run(test: &Test) -> Result<(), String> {
 #[test]
 #[ignore = "needs EMU_TESTDATA_DIR (tools/fetch-testdata.sh)"]
 fn harte_6502_all_opcodes() {
-    let dir = data_dir();
+    all_opcodes("6502", Variant::Nmos6502);
+}
+
+#[test]
+#[ignore = "needs EMU_TESTDATA_DIR (tools/fetch-testdata.sh)"]
+fn harte_nes6502_all_opcodes() {
+    all_opcodes("nes6502", Variant::Rp2A03);
+}
+
+fn all_opcodes(set: &str, variant: Variant) {
+    let dir = data_dir(set);
     let stride = if std::env::var_os("EMU_HARTE_FULL").is_some() {
         1
     } else {
@@ -168,7 +181,7 @@ fn harte_6502_all_opcodes() {
         let mut failed_here = 0;
         for test in tests.iter().step_by(stride) {
             total += 1;
-            if let Err(why) = run(test) {
+            if let Err(why) = run(test, variant) {
                 failed_here += 1;
                 // Report only the first failure per opcode to keep output readable.
                 if failed_here == 1 {

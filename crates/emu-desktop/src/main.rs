@@ -83,7 +83,7 @@ usage: mimic-desktop [options]
                         recorder (a PRG is recorded in the machine's tape format)
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
-                        raw 8/16 KB ROM
+                        raw 8/16 KB ROM; ColecoVision ROM; NES iNES file
   --autostart           load and run the disk after boot
   --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
@@ -1005,6 +1005,7 @@ fn run() -> Result<(), String> {
                     | PortKind::CpcJoy
                     | PortKind::AmigaGameport
                     | PortKind::ColecoControl
+                    | PortKind::NesControl
             )
         })
         .count()
