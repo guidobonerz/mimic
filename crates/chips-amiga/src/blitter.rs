@@ -162,6 +162,11 @@ impl Blitter {
         });
     }
 
+    /// The running blit's size in words and rows (debugger views).
+    pub fn job_size(&self) -> Option<(u16, u16)> {
+        self.job.map(|j| (j.width, j.height))
+    }
+
     /// Every colour clock: the start delay runs down.
     pub fn tick(&mut self) {
         if let Some(job) = &mut self.job {

@@ -21,12 +21,17 @@
 //! free. With even slots only it would lose a clock per 4n+2-cycle
 //! instruction (10 % there). Without BLTPRI (BLITHOG) the Blitter leaves
 //! a slot to the CPU once the CPU has been "unsatisfied for three
-//! consecutive memory cycles" (HRM): every colour clock counts from the
-//! one the CPU asserts its bus request in ([`Custom::cpu_request`], the
-//! first half of its bus cycle; it can take data only from the next one
-//! on), odd ones included; a colour clock without a request starts over.
-//! A busy Blitter thus leaves the CPU every fourth slot, halving its
-//! speed on a bus-bound stretch of code.
+//! consecutive memory cycles" (HRM): colour clocks in which the CPU waits
+//! for its data slot and the Blitter, the bitplane DMA or a Copper fetch
+//! has the bus count; the CPU's request half-cycle ([`Custom::cpu_request`])
+//! and the fixed channels' slots do not count and do not end the wait; a colour clock without a request starts over. Without
+//! bitplanes a busy Blitter thus leaves the CPU every fourth of its bus
+//! cycles' data slots (1 : 5 colour clocks). Measured with
+//! `tools/amiga_bustest2.py` on a cycle-exact WinUAE A500 (2026-10-23,
+//! `docs/sources.md`): blit time and the CPU's loop count with BLTPRI off
+//! and on, with 5 lowres planes and a per-line Copper list, and for a
+//! D-only clear. Sanity's "Interference" depends on it: its textured cube
+//! fits its frame work into one field only with this share.
 //!
 //! **Bitplane fetch.** Inside the vertical display window and between
 //! DDFSTRT and DDFSTOP, eight-slot groups fetch the planes in the order
@@ -369,7 +374,10 @@ impl Custom {
         // The CPU takes any free slot (measured, see the module doc).
         let cpu_turn = cpu_wants;
         let cpu_unsatisfied = cpu_wants || std::mem::take(&mut self.cpu_pending);
-        match self.slot(h) {
+        let mut blitter_took = false;
+        let mut copper_took = false;
+        let slot_kind = self.slot(h);
+        match slot_kind {
             Slot::Fixed => {}
             Slot::Disk => {
                 let ints = self.paula.disk.dma(chip, self.ptr_mask);
@@ -409,6 +417,7 @@ impl Custom {
                     // The Copper's wake-up after a WAIT holds the bus.
                     self.copper.busy_wake -= 1;
                 } else if h & 1 == 0 && self.copper.wants_slot() && self.dma_on(dma::COPEN) {
+                    copper_took = true;
                     if let Some((r, val)) = self.copper.cycle(chip, v, h, self.blitter.busy) {
                         self.write(r, val);
                     }
@@ -421,18 +430,27 @@ impl Custom {
                         out.cpu_slot = cpu_turn;
                     } else if cpu_turn && self.dmacon & dma::BLTPRI == 0 && self.cpu_starved >= 3 {
                         out.cpu_slot = true;
-                    } else if self.blitter.cycle(chip) {
-                        self.paula.request(int::BLIT);
+                    } else {
+                        blitter_took = true;
+                        if self.blitter.cycle(chip) {
+                            self.paula.request(int::BLIT);
+                        }
                     }
                 } else if cpu_turn {
                     out.cpu_slot = true;
                 }
             }
         }
-        self.cpu_starved = if cpu_unsatisfied && !out.cpu_slot {
+        // BLITHOG off: colour clocks the Blitter, the bitplanes or a Copper
+        // fetch take from a CPU waiting for its data slot count; the request
+        // half-cycle and fixed slots neither count nor end the wait.
+        self.cpu_starved = if out.cpu_slot || !cpu_unsatisfied {
+            0
+        } else if cpu_wants && (blitter_took || copper_took || matches!(slot_kind, Slot::Plane(_)))
+        {
             self.cpu_starved.saturating_add(1)
         } else {
-            0
+            self.cpu_starved
         };
         if self.fetched && h == self.fetch_window().1 {
             self.fetched = false;
@@ -485,7 +503,11 @@ impl Custom {
 
     /// Sprite DMA at the start of line `v`: control words on the first
     /// sprite line (end of vertical blank), data from VSTART, new control
-    /// words at VSTOP.
+    /// words at VSTOP. The VSTOP comparison wins over VSTART: a sprite
+    /// whose VSTART equals its VSTOP (the usual way to park a sprite, e.g.
+    /// $2900/$2900 in Sanity's "Interference") fetches new control words
+    /// on that line and shows no data; before this rule it fetched data
+    /// for the rest of the field, 16 slots a line the CPU never got.
     fn sprite_lines(&mut self, v: u16) {
         if v == 0 {
             self.spr_dma = [SprDma::Off; 8];
@@ -497,8 +519,8 @@ impl Custom {
         for (n, st) in self.spr_dma.iter_mut().enumerate() {
             let s = &self.denise.sprites[n];
             match *st {
+                SprDma::Wait | SprDma::Data if v == s.vstop() => *st = SprDma::Control,
                 SprDma::Wait if v == s.vstart() => *st = SprDma::Data,
-                SprDma::Data if v == s.vstop() => *st = SprDma::Control,
                 _ => {}
             }
         }

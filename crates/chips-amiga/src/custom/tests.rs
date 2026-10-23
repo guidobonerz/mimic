@@ -211,7 +211,7 @@ fn cpu_bus_cycle(c: &mut Custom, chip: &mut ChipRam) -> u32 {
 }
 
 #[test]
-fn a_waiting_cpu_gets_every_fourth_cycle_of_a_nasty_blit() {
+fn a_waiting_cpu_gets_every_fifth_colour_clock_of_a_busy_blitter() {
     let (mut c, mut chip) = setup();
     c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::BLTEN);
     // A, B, C and D: no idle cycles, the blit lasts a whole field.
@@ -222,19 +222,20 @@ fn a_waiting_cpu_gets_every_fourth_cycle_of_a_nasty_blit() {
     for _ in 0..8 {
         c.tick(&mut chip, false);
     }
-    // Request in an odd slot: unsatisfied there and in the next two, the
-    // fourth (even) is released to the CPU.
+    // The request half-cycle does not count; three Blitter cycles in which
+    // the CPU waits for its data slot do, the next goes to the CPU
+    // (measured: tools/amiga_bustest2.py on WinUAE).
     while c.h & 1 == 0 {
         c.tick(&mut chip, false);
     }
-    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 4);
+    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 5);
     // Back-to-back bus cycles keep that rhythm.
-    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 4);
-    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 4);
+    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 5);
+    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 5);
     // An internal CPU cycle in between: the count starts over.
     c.tick(&mut chip, false);
     c.tick(&mut chip, false);
-    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 4);
+    assert_eq!(cpu_bus_cycle(&mut c, &mut chip), 5);
     assert!(c.blitter.busy);
 }
 
@@ -320,6 +321,35 @@ fn sprite_dma_fetches_control_and_data_words() {
     assert_eq!(pixel(&c, x + 2, y + 1), red);
     assert_eq!(pixel(&c, x, y + 2), black, "VSTOP");
     assert_eq!(pixel(&c, x, y - 1), black);
+}
+
+#[test]
+fn a_sprite_with_vstart_equal_to_vstop_fetches_control_words_and_no_data() {
+    // Sanity's "Interference" parks its eight sprites with $2900/$2900 and
+    // the Copper list right behind: on hardware the sprite stays off; a
+    // sprite that read data instead would take 2 slots every line.
+    let (mut c, mut chip) = setup();
+    for (i, w) in [0x2900u16, 0x2900, 0x0000, 0x0000, 0xffff, 0xffff]
+        .iter()
+        .enumerate()
+    {
+        chip.set_word(0x3000 + 2 * i as u32, *w);
+    }
+    for (r, v) in [
+        (reg::DIWSTRT, 0x2c81),
+        (reg::DIWSTOP, 0x2cc1),
+        (reg::SPR0PTH, 0),
+        (reg::SPR0PTH + 2, 0x3000),
+        (reg::DMACON, 0x8000 | dma::DMAEN | dma::SPREN),
+    ] {
+        c.write(r, v);
+    }
+    field(&mut c, &mut chip);
+    // Control words at the first sprite line, new ones at line $29 (the
+    // VSTOP compare wins over VSTART), nothing after: the pointer stops
+    // behind the second pair.
+    assert_eq!(c.sprpt[0], 0x3008);
+    assert_eq!(c.spr_dma[0], SprDma::Wait);
 }
 
 /// Six lowres planes at $10000 + plane · $2800, first word of line $2C

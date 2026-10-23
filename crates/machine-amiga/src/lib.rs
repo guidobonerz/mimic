@@ -1324,6 +1324,13 @@ impl Machine for Amiga {
             r("BLTCMOD", 0x060, u32::from(b.modulo[2]), 16),
             r("BLTDMOD", 0x066, u32::from(b.modulo[3]), 16),
             ("BUSY", None, u32::from(b.busy), 1),
+            ("WIDTH", None, u32::from(b.job_size().map_or(0, |s| s.0)), 8),
+            (
+                "HEIGHT",
+                None,
+                u32::from(b.job_size().map_or(0, |s| s.1)),
+                16,
+            ),
         ];
         let mut denise = vec![
             r("BPLCON0", 0x100, u32::from(d.bplcon0), 16),
