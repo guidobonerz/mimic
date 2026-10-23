@@ -1,0 +1,12 @@
+[package]
+name = "chips-ti"
+description = "Texas Instruments TMS9918A/TMS9929A video display processor and SN76489 sound generator"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

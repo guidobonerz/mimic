@@ -40,6 +40,7 @@ crates/
   chips-amiga/     Agnus (DMA, Copper, Blitter), Denise, Paula, Gary, CIA
   chips-atari/     ANTIC, GTIA, POKEY, PIA
   chips-amstrad/   CRTC 6845, Gate Array, AY-3-8912, 8255 PPI, FDC 765
+  chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision)
   drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU)
   drives-other/    Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, datasettes
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX), light pens, keypads
@@ -49,7 +50,7 @@ crates/
   emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
-  machine-amiga/  machine-atari8/  machine-cpc/
+  machine-amiga/  machine-atari8/  machine-cpc/  machine-coleco/
   machine-sim6502/ Reference/test machine: 6502 + 64 KB RAM + minimal raster chip (not real hardware)
   emu-machines/    Fills the machine registry; the only crate that links every machine-*
   emu-debug/       Debug server: native protocol + adapter (VICE binary monitor)
@@ -118,6 +119,7 @@ Multi-CPU machines (C64 + 1541, C128 8502 + Z80, Amiga Copper/Blitter) expose ea
 | Atari 2600 | colour clock 3.546894 MHz, CPU ÷3 (NTSC 3.579545) | No frame buffer: the CPU races the beam; WSYNC halts it via RDY; fields follow VSYNC; bank switching by cartridge hotspots |
 | Atari 400/800/800XL/65XE/130XE | CPU 1.773447 MHz | ANTIC DMA steals cycles; display lists; DLIs; XL/XE bank ROMs by PORTB, the 130XE banks 64 KB extended RAM for CPU and ANTIC separately; 400/800: OS-B, four joystick ports, RESET key is an NMI |
 | CPC 464/664/6128 | Z80 4 MHz | Wait states align memory access to 1 µs; CRTC register tricks; 464 tape only, 664/6128 FDC, 6128 128 KB banking |
+| ColecoVision | Z80A 3.58 MHz (PAL 3.55) | TMS9918A/9929A: 342 pixel clocks per line = 228 T-states; VDP /INT drives /NMI (no further NMI until the status is read); 1 KB RAM mirrored over $6000–$7FFF; controller segments (joystick/keypad) selected by port writes; spinner steps raise /INT |
 | ZX81 / TS1000 | Z80 3.25 MHz | No frame buffer: the CPU executes the display file and the ULA turns the fetches into pixels (NOP substitution, I register, R bit 6 as /INT, NMI generator, /WAIT while halted); 207 T-states per line; LOAD/SAVE by ROM traps on .P files |
 
 Model variants (PAL/NTSC, Kernal revisions, RAM sizes) are **configuration**, not separate machine crates.
@@ -386,6 +388,8 @@ python tools/amiga_bustest4.py bustest4.adf [tests/data/amiga_bustest4.bin]   # 
 cargo run --release -p emu-desktop -- --machine amiga --disk demo-a.adf --disk demo-b.adf   # disks fill DF0:, DF1: … (--option drives=N), extra ones swap into DF0: with Ctrl+D (or drop an image on the window); ADF/HD ADF/extended ADF/DMS; stereo Paula audio; mouse in port 0 (click to capture), joystick port 1, Amiga keys on the Windows keys, HELP on Insert, Ctrl+Win+Win resets; --deinterlace weave|bob (Ctrl+I)
 cargo run -p emu-headless -- --machine zx81 --rom-dir roms --frames 200 --snapshot zx81.png   # ROMs in roms/zx81/; --model ts1000; --option ram=1k|2k|16k, traps=off, roms=stub; --tape program.p
 EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test zx81_boot -- --ignored --nocapture   # Phase 10 gate (ZX81): boots, PRINT, a .P file saved and loaded through the traps
+cargo run -p emu-headless -- --machine coleco --rom-dir roms --cart game.col --frames 300 --snapshot cv.png   # ROMs in roms/coleco/ (coleco.rom, 8 KB); --model pal; --option port1/port2=controller|superaction|driving|roller|none, roms=stub (own mini BIOS that starts $55AA/$AA55 cartridges)
+EMU_ROM_DIR=$PWD/roms EMU_COLECO_CARTS=/path/to/carts cargo test -p emu-tests --release --test coleco_boot -- --ignored --nocapture   # Phase 11 gate: BIOS screen NTSC/PAL, every cartridge in the folder runs (pictures in target/tmp)
 cargo run -p emu-headless -- --machine cpc --rom-dir roms --frames 150 --snapshot cpc.png   # ROMs in roms/cpc/; --model 6128|664|464, --option crtc=0|1|2, dos=amsdos|parados|none
 cargo run --release -p emu-desktop -- --machine cpc --option joy1=amx   # AMX mouse (click to capture); joy2=joystick daisy-chains a second stick; --crt gt65 green monitor
 cargo run --release -p emu-desktop -- --machine cpc --disk game.dsk   # CPC 664/6128: DSK/EDSK in drive A (RUN"DISC or CAT)
@@ -430,7 +434,7 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 8 (o
 | 8 | Expansion: graphics data views (sprites/chars/bitmaps), overlays, rewind, partial frames, A1200 (AGA; begun 2026-10-23), web frontend | 10 wk | Release 1.0 |
 | 9 | Atari 8-bit models as configuration of `machine-atari8`: 400/800 (OS-A/B, four joystick ports, no PORTB banking, RESET as NMI), 65XE, 130XE (128 KB, PORTB banking with separate CPU/ANTIC access) | 2 wk | all boot their OS; Acid800 on the 130XE as on the 800XL; a 130XE bank-switching test program |
 | 10 | Z80 home computers: Sinclair ZX81 (`machine-zx81`: CPU-generated display, ULA line counting, 1/16 KB RAM, tape via ear/mic, .P files) and Tandy TRS-80 Model I/III (`machine-trs80`: text screen with block graphics, keyboard matrix, cassette, Expansion Interface with FDC 1771/1793 and DMK/JV1/JV3 images) | 4 wk | both boot to BASIC with real ROMs; a ZX81 .P program and a TRS-80 disk load |
-| 11 | ColecoVision (`machine-coleco`): Z80, TMS9918A (`chips-ti`, 16 KB VRAM, sprites, all modes), SN76489, keypad controllers with joystick, cartridge ROMs; console panel POWER/RESET | 4 wk | BIOS boots; user-supplied cartridges run; TMS9918A mode and sprite tests against reference pictures |
+| 11 | ColecoVision (`machine-coleco`; begun 2026-10-23): Z80, TMS9918A (`chips-ti`, 16 KB VRAM, sprites, all modes), SN76489, keypad controllers with joystick, cartridge ROMs; console panel POWER/RESET | 4 wk | BIOS boots; user-supplied cartridges run; TMS9918A mode and sprite tests against reference pictures |
 | 12 | Nintendo NES/Famicom (`machine-nes`): 2A03 as a cpu-6502 variant (no decimal mode, APU on chip), PPU 2C02/2C07 with VRAM/OAM (`chips-nintendo`), mappers NROM, MMC1, UxROM, CNROM, MMC3 (`devices-cartridge::nes`, iNES/NES 2.0), controllers; console panel POWER/RESET | 8 wk | nestest and blargg's CPU/PPU/APU test ROMs green; user-supplied games run |
 | 13 | Mattel Intellivision (`machine-intv`): new `cpu-cp1610` (16-bit), STIC (MOBs, GRAM/GROM), AY-3-8914 PSG, hand controllers; Executive ROM and GROM user-supplied | 6 wk | Executive ROM title screen; user-supplied cartridges run; CP1610 instruction tests |
 | 14 | Vectrex (`machine-vectrex`): new `cpu-6809`, VIA 6522 (reuse `chips-cbm`), AY-3-8912 (reuse `chips-amstrad`), vector display with a vector frame type next to `FrameRef` (beam segments with intensity; phosphor decay in `video-crt`; debugger/preview carry the segments and a rasterised picture — core trait extension, ask first), cartridges, controllers | 6 wk | built-in Mine Storm plays; 6809 instruction tests green |
@@ -480,6 +484,10 @@ Added 2026-10-21. On 2026-10-22 the user scheduled the remaining machines as Pha
 - **ColecoVision** (Phase 11): reuses `cpu-z80`; TMS9918A video (16 KB VRAM, sprites), SN76489 sound, keypad controllers with joystick; BIOS user-supplied; console panel: POWER, RESET.
 - **Vectrex** (Phase 14): 6809 CPU (new `cpu-6809`), VIA 6522 (reuse from `chips-cbm`), AY-3-8912 (reuse from `chips-amstrad`), and a vector display: needs a vector frame type next to `FrameRef` (beam lines with intensity, phosphor decay in `video-crt`) — the debugger/preview contract then carries vectors or a rasterized picture; overlays; console panel: POWER, RESET.
 - **Tandy TRS-80 Model I/III** (Phase 10): reuses `cpu-z80`; memory-mapped text screen with block graphics, keyboard matrix in the address space, cassette, Expansion Interface / FDC 1771/1793 floppies (DMK/JV1/JV3 images); ROMs user-supplied.
+
+### Phase 11 status (ColecoVision, begun 2026-10-23)
+
+User choices: build with an own stub BIOS first (the user adds the BIOS to `roms/coleco/` later), NTSC and PAL, carts up to 32 KB plus MegaCart, all four controller kinds (standard, Super Action, Driving Module, Roller Controller). Done: `chips-ti` (TMS9918A/TMS9929A: all four modes, sprites with the four-per-line limit, 5S and coincidence, status/IRQ, read-ahead buffer; SN76489: tones, noise with the 15-bit register, attenuation), `devices-input::coleco` (`PortKind::ColecoControl`; segments, keypad codes, quadrature axes played out one step per 1/400 s), `devices-cartridge::coleco` (plain, MegaCart), `machine-coleco` (memory/I/O map, VDP → NMI, spinner → INT, panel POWER/RESET, keypads on the host keyboard, debugger with a VRAM space, savestates), stub BIOS, `tests/tests/coleco_boot.rs`. Open: the gate with the real BIOS and user cartridges (no BIOS at hand yet); TMS9918A reference pictures from test programs; unverified details (keypad code table, the spinner interrupt wiring and which bits carry the phases, the Driving Module's pedal line, the MegaCart scheme, the PAL CPU clock); VRAM access timing (the minimum time between CPU accesses is not enforced); the 4/16K bit; the VDP draws a line from the registers as they are at its start.
 
 ### Deferred from Phase 7
 

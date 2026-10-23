@@ -1,9 +1,11 @@
-//! Emulated input peripherals: joysticks, paddles, mice, light pens, keypads.
+//! Emulated input peripherals: joysticks, paddles, mice, light pens, keypads,
+//! the ColecoVision controllers.
 
 #![forbid(unsafe_code)]
 
 pub mod amiga_mouse;
 pub mod amx_mouse;
+pub mod coleco;
 pub mod driving;
 pub mod joystick;
 pub mod keypad;
@@ -12,6 +14,7 @@ pub mod paddles;
 
 pub use amiga_mouse::AmigaMouse;
 pub use amx_mouse::AmxMouse;
+pub use coleco::{ColecoController, ColecoKind};
 pub use driving::Driving;
 pub use joystick::Joystick;
 pub use keypad::Keypad;

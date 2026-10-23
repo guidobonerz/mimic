@@ -21,6 +21,7 @@ chips-amiga = { path = "crates/chips-amiga" }
 chips-atari = { path = "crates/chips-atari" }
 chips-amstrad = { path = "crates/chips-amstrad" }
 chips-sinclair = { path = "crates/chips-sinclair" }
+chips-ti = { path = "crates/chips-ti" }
 drives-cbm = { path = "crates/drives-cbm" }
 drives-other = { path = "crates/drives-other" }
 devices-input = { path = "crates/devices-input" }
@@ -39,6 +40,7 @@ machine-atari8 = { path = "crates/machine-atari8" }
 machine-atari2600 = { path = "crates/machine-atari2600" }
 machine-cpc = { path = "crates/machine-cpc" }
 machine-zx81 = { path = "crates/machine-zx81" }
+machine-coleco = { path = "crates/machine-coleco" }
 machine-sim6502 = { path = "crates/machine-sim6502" }
 emu-machines = { path = "crates/emu-machines" }
 emu-debug = { path = "crates/emu-debug" }

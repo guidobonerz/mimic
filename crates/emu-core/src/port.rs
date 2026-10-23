@@ -18,6 +18,10 @@ pub enum PortKind {
     AtariJoy,
     /// 9-pin, two joysticks via daisy-chain, AMX mouse.
     CpcJoy,
+    /// ColecoVision controller port: 9-pin, joystick and keypad segments
+    /// selected by the console, a quadrature input (spinner, wheel,
+    /// trackball).
+    ColecoControl,
     CbmUserPort,
     Iec,
     Sio,

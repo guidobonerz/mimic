@@ -1004,6 +1004,7 @@ fn run() -> Result<(), String> {
                     | PortKind::AtariJoy
                     | PortKind::CpcJoy
                     | PortKind::AmigaGameport
+                    | PortKind::ColecoControl
             )
         })
         .count()

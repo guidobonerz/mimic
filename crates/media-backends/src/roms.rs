@@ -351,8 +351,21 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ],
         0x2000,
     )];
+    // ColecoVision: the 8 KB BIOS.
+    const COLECO: &[RomSpec] = &[rom(
+        "coleco",
+        &[
+            "coleco",
+            "colecovision",
+            "colecobios",
+            "coleco-bios",
+            "bios-coleco",
+        ],
+        0x2000,
+    )];
     match machine {
         "zx81" => ZX81,
+        "coleco" => COLECO,
         "amiga" => AMIGA,
         "atari8" => ATARI800XL,
         "cpc" => CPC,
@@ -379,6 +392,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "cpc" => &["cpc", "amstrad"],
         "amiga" => &["amiga"],
         "zx81" => &["zx81", "sinclair"],
+        "coleco" => &["coleco", "colecovision"],
         _ => &[],
     }
 }

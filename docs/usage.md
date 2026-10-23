@@ -94,6 +94,7 @@ Größe** erkannt.
 | `cpc/` (`amstrad/`) | Amstrad CPC | `os464`/`basic1-0`, `os664`/`basic664`, `os6128`/`basic1-1` (je 16 KB) oder 32-KB-Kombidateien `cpc464`/`cpc664`/`cpc6128`; `amsdos`, optional `parados` |
 | `amiga/` | Amiga 500/1000/2000/500+/1200 | Kickstart als 256 KB oder 512 KB, Name z. B. `Kickstart 1.3.rom`, `kick13.rom`, `kick34005.rom`; je Version eine Datei (1.2, 1.3, 2.0, 3.0, 3.1), Auswahl mit `--option kickstart=`; für den A1200 passt das 3.1-Image 40.063 (A500/600/2000) oder ein A1200-Image (3.0 39.106, 3.1 40.068), nicht das 3.0 des A4000 (39.106 mit CRC 9E6AC152: sucht 32-Bit-RAM bei $08000000); optional das A1000-Bootstrap-ROM (8 KB, `a1000boot.rom`) für `--option wcs=disk` |
 | `zx81/` (`sinclair/`) | Sinclair ZX81 | `zx81.rom` (8 KB; `zx81.edition3.rom` wird bevorzugt) |
+| `coleco/` (`colecovision/`) | ColecoVision | das BIOS, `coleco.rom` (8 KB); ohne BIOS läuft mit `--option roms=stub` ein eigenes Mini-BIOS, das Module mit dem Header $55AA/$AA55 direkt startet (Spiele, die BIOS-Routinen aufrufen, brauchen das echte BIOS) |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
 Der Atari 2600 hat kein System-ROM: das Programm kommt vom Modul (`--cart`).
@@ -121,6 +122,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `cpc` | Amstrad CPC | `6128` (Standard), `664`, `464` |
 | `amiga` | Commodore Amiga 500/1000/2000 (OCS), 500+ (ECS), 1200 (AGA) | `500` (Standard), `500-ntsc`, `1000`, `1000-ntsc`, `2000`, `2000-ntsc`, `500plus` (ECS-Chipsatz, 1 MB Chip-RAM, Kickstart 2.0), `500plus-ntsc`, `1200` (68EC020 mit 14 MHz, AGA, 2 MB Chip-RAM, Gayle ohne IDE, Kickstart 3.1), `1200-ntsc` |
 | `zx81` | Sinclair ZX81 / Timex Sinclair 1000 | `zx81` (Standard, PAL), `ts1000` (NTSC, 60 Hz) |
+| `coleco` | ColecoVision | `ntsc` (Standard, TMS9918A), `pal` (TMS9929A) |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
 
 Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
@@ -133,6 +135,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | C16/Plus/4 | `ram=16k\|64k`, `drive8=…`, `port1=joystick\|none`, `autostart=on` |
 | C128 | `display=40\|80`, `vdc_ram=16k\|64k`, `sid=…`, `drive8=1571\|1541\|1581\|virtual\|none`, `port2=…`, `autostart=on` |
 | Atari 8-Bit | `port1`/`port2=joystick\|paddles\|none` (400/800 auch `port3`/`port4`), `basic=on\|off` (XL/XE: OPTION beim Start; 400/800: BASIC-Modul im linken Schacht), `ram=8k\|16k\|32k\|48k` (nur 400/800; Standard 16k bzw. 48k), `drives=0..4`, `drive=1050\|810\|xf551` |
+| ColecoVision | `port1`/`port2=controller\|superaction\|driving\|roller\|none` (Standard `controller`: Joystick, zwei Feuerknöpfe, Keypad; `superaction` = Super Action Controller mit vier Knöpfen und Speed Roller; `driving` = Expansion Module #2 mit Lenkrad und Gaspedal; `roller` = Roller Controller (Trackball, belegt mit seinem zweiten Kabel auch Port 2)), `roms=stub` |
 | Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`) |
 | ZX81 | `ram=16k\|1k\|2k` (Standard 16k), `traps=on\|off` (LOAD/SAVE der .P-Datei im Bandschacht über ROM-Traps) |
 | CPC | `crtc=0\|1\|2` (Standard 464: 0, sonst 1), `dos=amsdos\|parados\|none`, `joy1=joystick\|amx\|none`, `joy2=joystick\|none` |
@@ -152,6 +155,8 @@ cargo run --release -p emu-desktop -- --machine vic20 --tape spiel.tap
 cargo run --release -p emu-desktop -- --machine atari8 --disk spiel.atr
 cargo run --release -p emu-desktop -- --machine atari8 --model 130xe --disk spiel.atr
 cargo run --release -p emu-desktop -- --machine atari8 --model 800 --option port3=joystick --cart spiel.car
+cargo run --release -p emu-desktop -- --machine coleco --rom-dir roms --cart spiel.col
+cargo run --release -p emu-desktop -- --machine coleco --model pal --rom-dir roms --cart spiel.rom --option port1=roller
 cargo run --release -p emu-desktop -- --machine atari2600 --cart spiel.a26
 cargo run --release -p emu-desktop -- --machine atari2600 --model pal --cart spiel.bin --option port1=paddles
 cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
@@ -182,6 +187,11 @@ Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
   F4/F5 Difficulty links/rechts A/B (jeweils umschalten). Keypads
   (`port1=keypad`, `port2`): links `1 2 3 / Q W E / A S D / Z X C`, rechts
   `8 9 0 / I O P / K L ; / , . /` (US-Positionen).
+- ColecoVision: Keypad von Controller 1 auf der Ziffernreihe (`1`–`9`, `0`,
+  `-` = `*`, `=` = `#`, `[` `]` = lila und blauer Knopf des Super Action
+  Controllers, `X` = rechter Feuerknopf), Keypad von Controller 2 auf dem
+  Ziffernblock (`*` und `/` = `*` und `#`, `+` = rechter Feuerknopf);
+  Joystick 1 auf den Cursortasten, Leertaste = linker Feuerknopf.
 - CPC: `- ^` auf `- =`, `@ [` auf `[ ]`, `: ;` auf `; '`, `]` auf `\`,
   Rücktaste = DEL, Entf = CLR, linke Alt = COPY, Ziffernblock und F1–F10 =
   Funktionstasten f0–f9 und f., Ziffernblock-Enter = ENTER.
@@ -235,7 +245,7 @@ F11 REWIND.
 Port 2, bei VIC-20, C16/Plus/4, Atari und CPC Port 1). Welche Tasten den
 Joystick spielen, stellt der Schalter **JOY KEYS** in der Konsolen-Leiste um
 (oder `--joykeys`): **CURSOR** = Cursortasten, Leertaste = Feuer (Standard
-beim Atari 2600, der keine Tastatur hat), **NUMPAD** = Ziffernblock 8/2/4/6,
+beim Atari 2600 und bei der ColecoVision, die keine Tastatur haben), **NUMPAD** = Ziffernblock 8/2/4/6,
 Feuer 0 oder rechte Strg (Standard bei den Computern), **OFF** = nur Gamepad
 (Standard beim CPC, dessen Ziffernblock die Funktionstasten sind). Bei CURSOR
 spielen die Cursortasten und die Leertaste den Joystick statt zu tippen.
@@ -244,6 +254,10 @@ spielen die Cursortasten und die Leertaste den Joystick statt zu tippen.
 Atari 2600 auch `driving`, jeweils auch `port2`) bzw. beim CPC
 `--option joy1=amx` fängt ein Klick ins Fenster die Maus ein; die mittlere
 Maustaste gibt sie frei. Beim 2600 dreht die Maus Paddle 0 bzw. das Lenkrad.
+Bei der ColecoVision (`port1=superaction`, `driving`, `roller`) dreht die
+Maus den Speed Roller (senkrecht), das Lenkrad (waagrecht, linke Taste =
+Gas) bzw. den Trackball (beide Achsen, Tasten = Feuerknöpfe); beim
+Driving Module lenken auch die Joystick-Richtungen, oben ist Gas.
 Beim Amiga steckt die Maus von Haus aus in Port 0 (Klick ins Fenster fängt
 sie ein, mittlere Taste gibt sie frei), der Joystick in Port 1.
 
@@ -309,7 +323,7 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 | --- | --- | --- |
 | Diskette (mehrfach: weitere Laufwerke, Rest per Strg+D) | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga: DD 880 KB, HD 1,76 MB mit `--option drivetype=hd`; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF), extended ADF (`UAE-1ADF`/`UAE--ADF` mit Rohspuren, die bitgenau erhalten und zurückgeschrieben werden), DMS (DISK-Masher-Archiv, wird beim Einlegen entpackt, nur lesen); ein **Ordner** als virtuelle Diskette | `--disk` |
 | Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81: der Programmspeicher ab $4009, geladen und gesichert über ROM-Traps mit `LOAD ""`/`SAVE "NAME"`); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
-| Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt) | `--cart` |
+| Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt), `.col`/`.rom`/`.bin` bis 32 KB oder MegaCart 64 KB–1 MB (ColecoVision) | `--cart` |
 | Programm | PRG, T64, XEX | `--prg` |
 
 Images werden standardmäßig über einen **Copy-on-Write-Overlay** geöffnet: das

@@ -11,7 +11,11 @@ use emu_core::registry::Registry;
 fn joystick_port(kind: PortKind) -> bool {
     matches!(
         kind,
-        PortKind::CbmControl | PortKind::AmigaGameport | PortKind::AtariJoy | PortKind::CpcJoy
+        PortKind::CbmControl
+            | PortKind::AmigaGameport
+            | PortKind::AtariJoy
+            | PortKind::CpcJoy
+            | PortKind::ColecoControl
     )
 }
 
@@ -22,6 +26,7 @@ pub fn device_names(kind: PortKind) -> Vec<&'static str> {
         PortKind::AtariJoy => vec!["joystick", "paddles", "keypad", "driving"],
         PortKind::CpcJoy => vec!["joystick", "amx"],
         PortKind::AmigaGameport => vec!["mouse", "joystick"],
+        PortKind::ColecoControl => vec!["controller", "superaction", "driving", "roller"],
         k if joystick_port(k) => vec!["joystick"],
         _ => Vec::new(),
     }
@@ -30,6 +35,18 @@ pub fn device_names(kind: PortKind) -> Vec<&'static str> {
 /// A new port device by name for a port of `kind`; `None` if it does not
 /// exist or does not fit.
 pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> {
+    if kind == PortKind::ColecoControl {
+        use devices_input::{ColecoController, ColecoKind};
+        let k = match name {
+            "controller" | "joystick" => ColecoKind::Standard,
+            "superaction" => ColecoKind::SuperAction,
+            "driving" => ColecoKind::Driving,
+            "roller" => ColecoKind::Roller,
+            _ => return None,
+        };
+        // About 400 steps a second at the ColecoVision's 3.58 MHz.
+        return Some(Box::new(ColecoController::new(k, 8949)));
+    }
     match name {
         "joystick" if joystick_port(kind) => Some(Box::new(devices_input::Joystick::new(kind))),
         "paddles" if matches!(kind, PortKind::CbmControl | PortKind::AtariJoy) => {
@@ -70,6 +87,7 @@ pub fn registry() -> Registry {
     r.register(machine_cpc::entry());
     r.register(machine_amiga::entry());
     r.register(machine_zx81::entry());
+    r.register(machine_coleco::entry());
     r
 }
 
@@ -96,6 +114,10 @@ mod tests {
         assert_eq!(j.kind(), PortKind::AtariJoy);
         assert!(create_device("joystick", PortKind::Iec).is_none());
         assert!(create_device("lightgun", PortKind::CbmControl).is_none());
+        let pad = create_device("roller", PortKind::ColecoControl).unwrap();
+        assert_eq!(pad.kind(), PortKind::ColecoControl);
+        assert!(create_device("joystick", PortKind::ColecoControl).is_some());
+        assert!(create_device("paddles", PortKind::ColecoControl).is_none());
     }
 
     #[test]

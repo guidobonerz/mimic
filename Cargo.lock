@@ -364,6 +364,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "chips-ti"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "ciborium"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -814,6 +821,7 @@ dependencies = [
  "machine-atari8",
  "machine-c128",
  "machine-c64",
+ "machine-coleco",
  "machine-cpc",
  "machine-pet",
  "machine-sim6502",
@@ -1527,6 +1535,17 @@ dependencies = [
  "drives-other",
  "emu-core",
  "media",
+]
+
+[[package]]
+name = "machine-coleco"
+version = "0.1.0"
+dependencies = [
+ "chips-ti",
+ "cpu-z80",
+ "devices-cartridge",
+ "devices-input",
+ "emu-core",
 ]
 
 [[package]]

@@ -127,6 +127,7 @@ impl Tracker {
                             | PortKind::AmigaGameport
                             | PortKind::AtariJoy
                             | PortKind::CpcJoy
+                            | PortKind::ColecoControl
                     )
                     && !self.analog.contains_key(&p.id.0)
             })

@@ -608,6 +608,48 @@ pub static ATARI2600: Keymap = Keymap {
     entries: ATARI2600_POSITIONAL,
 };
 
+/// ColecoVision: the two controllers' keypads (machine keys 16–30 and
+/// 32–46, see `machine-coleco::keys`): port 1 on the digit row (1–9, 0,
+/// the minus key for *, the equals key for #, the brackets for the Super
+/// Action purple and blue buttons, X for the right fire button), port 2 on
+/// the numeric keypad (its multiply and divide keys for * and #, its plus
+/// key for the right fire button).
+const COLECO_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Digit1", &[16]),
+    ("Digit2", &[17]),
+    ("Digit3", &[18]),
+    ("Digit4", &[19]),
+    ("Digit5", &[20]),
+    ("Digit6", &[21]),
+    ("Digit7", &[22]),
+    ("Digit8", &[23]),
+    ("Digit9", &[24]),
+    ("Minus", &[25]),
+    ("Digit0", &[26]),
+    ("Equal", &[27]),
+    ("BracketLeft", &[28]),
+    ("BracketRight", &[29]),
+    ("KeyX", &[30]),
+    ("Numpad1", &[32]),
+    ("Numpad2", &[33]),
+    ("Numpad3", &[34]),
+    ("Numpad4", &[35]),
+    ("Numpad5", &[36]),
+    ("Numpad6", &[37]),
+    ("Numpad7", &[38]),
+    ("Numpad8", &[39]),
+    ("Numpad9", &[40]),
+    ("NumpadMultiply", &[41]),
+    ("Numpad0", &[42]),
+    ("NumpadDivide", &[43]),
+    ("NumpadAdd", &[46]),
+];
+
+pub static COLECO: Keymap = Keymap {
+    machine: "coleco",
+    entries: COLECO_POSITIONAL,
+};
+
 /// Amstrad CPC keys: `line * 8 + bit` of the keyboard matrix (see
 /// `machine-cpc::keyboard`).
 const fn cpc(line: u16, bit: u16) -> u16 {
@@ -890,6 +932,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "plus4" | "c16" => Some(&TED),
         "atari8" => Some(&ATARI),
         "atari2600" => Some(&ATARI2600),
+        "coleco" => Some(&COLECO),
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
         "zx81" => Some(&ZX81),
