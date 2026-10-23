@@ -23,6 +23,7 @@ pub mod registry;
 pub mod savestate;
 pub mod scheduler;
 pub mod testing;
+pub mod vector;
 
 pub use audio::{AudioFormat, Decimator, SAMPLE_RATE};
 pub use beam::{BeamPos, TraceConfig, TraceEntry, TraceEvent, TraceRange};
@@ -39,3 +40,4 @@ pub use machine::{
 };
 pub use savestate::{Savestate, StateError, StateReader, StateWriter};
 pub use scheduler::{ClockDivider, Event, EventId, Scheduler};
+pub use vector::{Segment, VectorFrame};

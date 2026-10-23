@@ -28,6 +28,9 @@ pub enum PortKind {
     /// SNES controller port: latch, CLK and IOBit from the console, data
     /// lines D0/D1 back (joypad, mouse, Super Scope).
     SnesControl,
+    /// Vectrex controller port: four buttons and two potentiometers (the
+    /// analog stick), read by the console's DAC and comparator.
+    VectrexControl,
     CbmUserPort,
     Iec,
     Sio,

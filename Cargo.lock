@@ -572,6 +572,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpu-6809"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "cpu-m68k"
 version = "0.1.0"
 dependencies = [
@@ -853,6 +860,7 @@ dependencies = [
  "machine-sim6502",
  "machine-snes",
  "machine-ted",
+ "machine-vectrex",
  "machine-vic20",
  "machine-zx81",
 ]
@@ -1643,6 +1651,18 @@ dependencies = [
  "drives-other",
  "emu-core",
  "media",
+]
+
+[[package]]
+name = "machine-vectrex"
+version = "0.1.0"
+dependencies = [
+ "chips-amstrad",
+ "chips-cbm",
+ "cpu-6809",
+ "devices-cartridge",
+ "devices-input",
+ "emu-core",
 ]
 
 [[package]]

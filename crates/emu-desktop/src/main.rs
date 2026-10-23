@@ -1016,6 +1016,7 @@ fn run() -> Result<(), String> {
                     | PortKind::ColecoControl
                     | PortKind::NesControl
                     | PortKind::SnesControl
+                    | PortKind::VectrexControl
             )
         })
         .count()

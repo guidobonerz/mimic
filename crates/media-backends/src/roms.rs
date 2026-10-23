@@ -370,8 +370,26 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         &["spc700", "ipl", "snes-ipl", "spc700-ipl", "apu"],
         64,
     )];
+    // Vectrex: the 8 KB system ROM (executive and Mine Storm); a 4 KB
+    // image of the executive alone is accepted too.
+    const VECTREX: &[RomSpec] = &[
+        optional(
+            "vectrex",
+            &[
+                "vectrex",
+                "system",
+                "bios",
+                "exec",
+                "mine-storm",
+                "minestorm",
+            ],
+            0x2000,
+        ),
+        optional("vectrex", &["vectrex", "system", "bios", "exec"], 0x1000),
+    ];
     match machine {
         "zx81" => ZX81,
+        "vectrex" => VECTREX,
         "coleco" => COLECO,
         "snes" => SNES,
         "amiga" => AMIGA,
@@ -402,6 +420,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "zx81" => &["zx81", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
         "snes" => &["snes", "sfc", "superfamicom"],
+        "vectrex" => &["vectrex"],
         _ => &[],
     }
 }

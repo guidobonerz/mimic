@@ -144,6 +144,13 @@ pub trait Machine: Send {
         (id == ScreenId::MAIN).then(|| self.framebuffer())
     }
 
+    /// The last complete frame of a vector display (beam segments with
+    /// intensity); [`Machine::framebuffer`] shows the same rasterised.
+    /// `None` for raster machines (the default).
+    fn vectors(&self) -> Option<crate::vector::VectorFrame<'_>> {
+        None
+    }
+
     /// Append the audio samples produced since the last call to `out`.
     /// Machines without sound append nothing.
     fn audio(&mut self, out: &mut Vec<i16>) -> AudioFormat;

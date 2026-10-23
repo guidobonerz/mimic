@@ -128,7 +128,7 @@ impl JoyKeys {
     /// function keys), the numeric keypad elsewhere.
     pub fn default_for(machine: &str) -> Self {
         match machine {
-            "atari2600" | "coleco" | "nes" | "snes" => JoyKeys::Cursor,
+            "atari2600" | "coleco" | "nes" | "snes" | "vectrex" => JoyKeys::Cursor,
             "cpc" => JoyKeys::Off,
             _ => JoyKeys::Numpad,
         }
@@ -187,7 +187,7 @@ impl Profile {
         let port = match machine {
             "c64" | "c128" => Some(1),
             "vic20" | "c16" | "plus4" | "atari8" | "atari2600" | "cpc" | "coleco" | "nes"
-            | "snes" => Some(0),
+            | "snes" | "vectrex" => Some(0),
             // The Amiga's joystick port is game port 1 (port 0 is the mouse's).
             "amiga" => Some(1),
             _ => None,

@@ -21,6 +21,7 @@ pub mod nes;
 pub mod slot;
 pub mod snes;
 pub mod ted;
+pub mod vectrex;
 pub mod vic20;
 
 pub use expansion::{CartLines, ExpansionCart};

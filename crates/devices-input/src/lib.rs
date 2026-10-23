@@ -13,6 +13,7 @@ pub mod mouse1351;
 pub mod nes;
 pub mod paddles;
 pub mod snes;
+pub mod vectrex;
 
 pub use amiga_mouse::AmigaMouse;
 pub use amx_mouse::AmxMouse;
@@ -24,6 +25,7 @@ pub use mouse1351::Mouse1351;
 pub use nes::{NesController, NesKind};
 pub use paddles::Paddles;
 pub use snes::{SnesController, SnesKind};
+pub use vectrex::{VectrexController, VectrexKind};
 
 use emu_core::port::{PortDevice, PortKind};
 use emu_core::registry::ConfigError;

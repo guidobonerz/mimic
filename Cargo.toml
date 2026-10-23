@@ -16,6 +16,7 @@ emu-core = { path = "crates/emu-core" }
 cpu-6502 = { path = "crates/cpu-6502" }
 cpu-65816 = { path = "crates/cpu-65816" }
 cpu-spc700 = { path = "crates/cpu-spc700" }
+cpu-6809 = { path = "crates/cpu-6809" }
 cpu-z80 = { path = "crates/cpu-z80" }
 cpu-m68k = { path = "crates/cpu-m68k" }
 chips-cbm = { path = "crates/chips-cbm" }
@@ -46,6 +47,7 @@ machine-zx81 = { path = "crates/machine-zx81" }
 machine-coleco = { path = "crates/machine-coleco" }
 machine-nes = { path = "crates/machine-nes" }
 machine-snes = { path = "crates/machine-snes" }
+machine-vectrex = { path = "crates/machine-vectrex" }
 machine-sim6502 = { path = "crates/machine-sim6502" }
 emu-machines = { path = "crates/emu-machines" }
 emu-debug = { path = "crates/emu-debug" }

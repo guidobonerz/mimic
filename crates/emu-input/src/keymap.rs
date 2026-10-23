@@ -685,6 +685,21 @@ pub static SNES: Keymap = Keymap {
     entries: SNES_POSITIONAL,
 };
 
+/// Vectrex: controller 1's buttons 1–4 (machine keys 16–19, see
+/// `machine-vectrex::keys`) on Z X C V, a row like on the controller; the
+/// stick is the joystick (cursor keys, Space also button 1).
+const VECTREX_POSITIONAL: &[(&str, &[u16])] = &[
+    ("KeyZ", &[16]),
+    ("KeyX", &[17]),
+    ("KeyC", &[18]),
+    ("KeyV", &[19]),
+];
+
+pub static VECTREX: Keymap = Keymap {
+    machine: "vectrex",
+    entries: VECTREX_POSITIONAL,
+};
+
 /// Amstrad CPC keys: `line * 8 + bit` of the keyboard matrix (see
 /// `machine-cpc::keyboard`).
 const fn cpc(line: u16, bit: u16) -> u16 {
@@ -970,6 +985,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "coleco" => Some(&COLECO),
         "nes" => Some(&NES),
         "snes" => Some(&SNES),
+        "vectrex" => Some(&VECTREX),
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
         "zx81" => Some(&ZX81),

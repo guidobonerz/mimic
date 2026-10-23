@@ -21,10 +21,14 @@
 //! flag and, in free-run mode, reloads the latch (one cycle at the latch
 //! value), so it interrupts every N + 2 cycles. T2 counts down once and
 //! interrupts once per write of its high byte. Source: MOS 6522 data sheet;
-//! Rockwell R6522 data sheet (timing diagrams). Of the shift register modes
-//! only mode 4 (free-running output at the T2 rate, the PET's sound) shifts;
-//! it shifts every T2 low latch + 1 cycles and drives CB2 with the bit
-//! shifted out. The other modes store the value.
+//! Rockwell R6522 data sheet (timing diagrams). The shift register shifts
+//! out (bit 7 first, rotating it into bit 0) in modes 4 (free-running at
+//! the T2 rate, the PET's sound: one bit every T2 low latch + 1 cycles), 5
+//! (the same rate, eight bits) and 6 (eight bits at half the φ2 rate, the
+//! Vectrex's beam blanking); CB2 carries the bit shifted out and stays at
+//! the last one. After eight bits modes 5 and 6 stop and set the SR flag;
+//! reading or writing the register restarts them. The shift-in modes and
+//! mode 7 (external clock) store the value only.
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -67,9 +71,11 @@ pub struct Via {
     /// Input latches (ACR bits 0/1) captured on the CA1/CB1 edge.
     ira_latch: u8,
     irb_latch: u8,
-    /// Shift register mode 4: cycles to the next shift, CB2 output.
+    /// Shift register: cycles to the next shift, CB2 output.
     sr_count: u8,
     sr_cb2: bool,
+    /// Bits left to shift in modes 5 and 6.
+    sr_bits: u8,
 }
 
 impl Via {
@@ -114,9 +120,9 @@ impl Via {
     }
 
     /// CB2 output level in manual output mode, or the shift register
-    /// output in shift mode 4.
+    /// output in the shift-out modes 4–6.
     pub fn cb2_out(&self) -> bool {
-        if self.acr & 0x1c == 0x10 {
+        if matches!(self.acr & 0x1c, 0x10 | 0x14 | 0x18) {
             self.sr_cb2
         } else {
             self.pcr & 0xe0 != 0xc0
@@ -172,12 +178,20 @@ impl Via {
             }
         }
 
-        // Shift register mode 4: free-running output at the T2 rate.
-        if self.acr & 0x1c == 0x10 {
+        // Shift register: output at the T2 rate (4 free-running, 5 eight
+        // bits) or at half the φ2 rate (6, eight bits).
+        let mode = (self.acr >> 2) & 7;
+        if (4..=6).contains(&mode) && (mode == 4 || self.sr_bits > 0) {
             if self.sr_count == 0 {
-                self.sr_count = self.t2_latch_lo;
+                self.sr_count = if mode == 6 { 1 } else { self.t2_latch_lo };
                 self.sr = self.sr.rotate_left(1);
                 self.sr_cb2 = self.sr & 1 != 0;
+                if mode != 4 {
+                    self.sr_bits -= 1;
+                    if self.sr_bits == 0 {
+                        self.ifr |= ifr::SR;
+                    }
+                }
             } else {
                 self.sr_count -= 1;
             }
@@ -203,6 +217,7 @@ impl Via {
             0x1 => self.ifr &= !(ifr::CA1 | ifr::CA2),
             0x4 => self.ifr &= !ifr::T1,
             0x8 => self.ifr &= !ifr::T2,
+            0xa => self.restart_shift(),
             _ => {}
         }
         v
@@ -219,12 +234,14 @@ impl Via {
                 };
                 (self.port_b_out() & self.ddrb) | (pins & !self.ddrb)
             }
+            // Port A reads the pins; output pins carry ORA.
             0x1 | 0xf => {
-                if self.acr & 0x01 != 0 {
+                let pins = if self.acr & 0x01 != 0 {
                     self.ira_latch
                 } else {
                     pa_pins
-                }
+                };
+                (self.ora & self.ddra) | (pins & !self.ddra)
             }
             0x2 => self.ddrb,
             0x3 => self.ddra,
@@ -242,6 +259,15 @@ impl Via {
                 (self.ifr & 0x7f) | any
             }
             _ => self.ier | 0x80,
+        }
+    }
+
+    /// A shift register access clears its flag and starts eight more bits.
+    fn restart_shift(&mut self) {
+        self.ifr &= !ifr::SR;
+        self.sr_bits = 8;
+        if (self.acr >> 2) & 7 == 6 {
+            self.sr_count = 0;
         }
     }
 
@@ -282,7 +308,7 @@ impl Via {
             }
             0xa => {
                 self.sr = v;
-                self.ifr &= !ifr::SR;
+                self.restart_shift();
             }
             0xb => self.acr = v,
             0xc => self.pcr = v,
@@ -300,7 +326,7 @@ impl Via {
 }
 
 const TAG: [u8; 4] = *b"6522";
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 
 impl Savestate for Via {
     fn save(&self, w: &mut StateWriter) {
@@ -338,6 +364,7 @@ impl Savestate for Via {
             }
             w.u8(self.sr_count);
             w.bool(self.sr_cb2);
+            w.u8(self.sr_bits);
         });
     }
 
@@ -377,6 +404,9 @@ impl Savestate for Via {
         if version >= 2 {
             v.sr_count = c.u8()?;
             v.sr_cb2 = c.bool()?;
+        }
+        if version >= 3 {
+            v.sr_bits = c.u8()?.min(8);
         }
         *self = v;
         Ok(())
@@ -468,6 +498,27 @@ mod tests {
         assert!(!v.ca2_out());
         v.write(0xc, 0x0e);
         assert!(v.ca2_out());
+    }
+
+    #[test]
+    fn shift_register_mode_6_shifts_eight_bits_at_half_clock() {
+        let mut v = Via::new();
+        v.write(0xb, 0x18);
+        v.write(0xa, 0xa5); // 1010 0101
+        let mut levels = Vec::new();
+        for _ in 0..20 {
+            v.tick();
+            levels.push(v.cb2_out());
+        }
+        let bits: Vec<bool> = levels.iter().step_by(2).take(8).copied().collect();
+        assert_eq!(bits, [true, false, true, false, false, true, false, true]);
+        assert_eq!(v.ifr & ifr::SR, ifr::SR);
+        assert!(levels[16..].iter().all(|&l| l), "stays at the last bit");
+        assert_eq!(v.sr, 0xa5, "rotated back");
+        v.write(0xa, 0x00);
+        v.tick();
+        assert!(!v.cb2_out());
+        assert_eq!(v.ifr & ifr::SR, 0);
     }
 
     #[test]

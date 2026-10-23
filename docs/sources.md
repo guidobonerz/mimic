@@ -169,6 +169,16 @@ own section.
 | ROM entry points for the tape traps (NEXT-PROG $0347, HEADER $02FF, SLOW/FAST $0207), system variables D_FILE $400C, E_LINE $4014, the program area from VERSN $4009, character codes | Ian Logan and Frank O'Hara, *The Complete ZX81 ROM Disassembly* (Melbourne House, 1983); the user's `zx81.edition3.sym` label file | `machine-zx81/src/lib.rs`, `tests/tests/zx81_boot.rs` |
 | .P file layout: the bytes from $4009 up to E_LINE as the ROM saves them | Logan/O'Hara (SAVE routine); common ZX81 emulator documentation of the ".P" format | `machine-zx81/src/lib.rs` (`PTape`) |
 
+### Vectrex
+
+| Topic | Document | Used in |
+| --- | --- | --- |
+| Motorola 6809: registers, condition codes, instruction descriptions, the cycle tables of all three opcode pages and the indexed postbyte, interrupt sequences (NMI arming by S, FIRQ, CWAI, SYNC) | Motorola, "MC6809 8-Bit Microprocessor" data sheet; Motorola, "MC6809-MC6809E Microprocessor Programming Manual" (M6809PM/AD). The undocumented aliases ($01 NEG, $05 LSR, $0B DEC, $4E/$5E CLR, $x2 NEG/COM by carry, $14/$15/$CD halting) are common knowledge in the 6809 community; not checked against a chip | `cpu-6809` |
+| Vectrex memory map, VIA wiring (port A DAC, port B: S/H strobe, multiplexer select, BC1/BDIR, comparator, cartridge line, /RAMP from T1), CA1 button 4 / light pen, CA2 /ZERO, CB2 /BLANK from the shift register, the multiplexer channels (Y, zero reference, intensity, sound; controller pots), the AY's port A as the buttons, the 6522 shift-register modes | roadsidethoughts.com, "Vectrex Programmer Notes": "Hardware Description", "Memory Map", "6522 Interface Adapter", "Programmable Sound Generator" (read 2026-10-24) | `machine-vectrex`, `chips-cbm/src/via.rs`, `devices-input/src/vectrex.rs` |
+| 6522 shift-out under φ2 (mode 6): one bit per two φ2 cycles, eight bits, then the SR flag | MOS 6522 and Rockwell R6522 data sheets (shift-register timing diagrams) | `chips-cbm/src/via.rs` |
+| 64 KB Vectrex cartridges: PB6 selects the 32 KB bank, high (pulled up after reset) the upper half | search summary of homebrew cartridge descriptions (2026-10-24); behaviour only, no code used | `devices-cartridge/src/vectrex.rs` |
+| Executive routines as observed while debugging: `Print_Str` ($F495) moves the beam back with `NEG` on port A (which needs port A reads to return ORA on output pins), the cold-start title loop runs until the frame counter $C825 reaches 2 | disassembly of the user's system ROM with this project's disassembler (not copied) | `machine-vectrex` |
+
 ### Video, colour and host conventions
 
 | Topic | Document | Used in |
@@ -233,5 +243,6 @@ the Python standard library only.
 Not in the repository (golden rule 6): Commodore KERNAL/BASIC/character
 ROMs (C64, VIC-20, PET, C16/Plus/4, C128), drive DOS ROMs (1541, 1571,
 1581), Atari XL OS and BASIC, Amstrad CPC ROMs, Amiga Kickstart (1.2, 1.3,
-2.0, 3.1; 256 or 512 KB images), the A1000 bootstrap ROM. Users put them
+2.0, 3.1; 256 or 512 KB images), the A1000 bootstrap ROM, the Vectrex
+system ROM (8 KB, or the 4 KB executive alone). Users put them
 into `roms/<machine>/` and `roms/drives/`.
