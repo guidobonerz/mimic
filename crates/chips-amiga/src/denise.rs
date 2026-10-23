@@ -46,11 +46,14 @@
 //! follow the odd planes alone, as documented).
 //!
 //! **Coordinates.** Positions are low-resolution pixels as DIWSTRT counts
-//! them: colour clock `h` covers pixels `2h` and `2h + 1`; data fetched in
-//! slot `h` loads at pixel `2h + 3` (so DDFSTRT $38 lines up with DIWSTRT
-//! $81). Denise's line runs from colour clock [`LINE_START`] to the same
-//! clock of the next Agnus line, so the right border can pass the end of the
-//! Agnus line.
+//! them: Denise colour clock `h` covers pixels `2h` and `2h + 1`; data
+//! fetched in slot `h` loads at pixel `2h + 3` (so DDFSTRT $38 lines up
+//! with DIWSTRT $81); a sprite starts one pixel right of its HSTART.
+//! Denise's clock runs two colour clocks behind Agnus' horizontal position
+//! (`custom.rs`, `DENISE_LAG`), so a register write shows from pixel
+//! `2h − 4` of the Agnus clock `h` it happens in. Denise's line runs from
+//! colour clock [`LINE_START`] to the same clock of the next Agnus line, so
+//! the right border can pass the end of the Agnus line.
 
 use emu_core::frame::Rgb8;
 use emu_core::{StateError, StateReader, StateWriter};
@@ -223,7 +226,11 @@ impl Denise {
         let lx = x / 2;
         let mut vals = [0u8; 8];
         for (n, s) in self.sprites.iter_mut().enumerate() {
-            if x.is_multiple_of(2) && s.armed && lx == s.hstart() {
+            // A sprite's first pixel is one low-resolution pixel right of
+            // HSTART (WinUAE screenshot of Interference's tunnel frame,
+            // `docs/sources.md`: HSTART $84 shows one pixel inside a window
+            // starting at 148, HSTART $1AE one pixel inside one ending at 432).
+            if x.is_multiple_of(2) && s.armed && lx == s.hstart() + 1 {
                 s.a = s.data;
                 s.b = s.datb;
                 s.count = 32;
@@ -741,9 +748,10 @@ mod tests {
         d.write_sprite(2, 2, 0xc000);
         d.start_line();
         let px = line(&mut d, 0x4f, 0x53);
-        // Hires pixel 2·$A0 = $140 is index $140 − 4·$4F = 4.
+        // Hires pixel 2·$A1 = $142 (one pixel right of HSTART) is index
+        // $142 − 4·$4F = 6.
         assert_eq!(
-            &px[3..11],
+            &px[5..13],
             &[0, 0xf00, 0xf00, 0x0f0, 0x0f0, 0x0f0, 0x0f0, 0]
         );
         // A playfield in front of pair 1 (PF2P = 1) hides sprite 2 only.
@@ -752,6 +760,6 @@ mod tests {
         d.start_line();
         d.write_bpldat(0, 0xffff, 0x4c);
         let px = line(&mut d, 0x4f, 0x53);
-        assert_eq!(&px[4..9], &[0xf00, 0xf00, 0x00f, 0x00f, 0x00f]);
+        assert_eq!(&px[6..11], &[0xf00, 0xf00, 0x00f, 0x00f, 0x00f]);
     }
 }

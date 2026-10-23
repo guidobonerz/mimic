@@ -311,7 +311,8 @@ fn sprite_dma_fetches_control_and_data_words() {
     }
     // One field: software (the Copper) reloads SPR0PT for the next.
     field(&mut c, &mut chip);
-    let (x, y) = (2 * 0xa0 - 4 * FIRST_CCK, 0x2c - 26);
+    // The sprite's first pixel is one low-resolution pixel right of HSTART.
+    let (x, y) = (2 * 0xa1 - 4 * FIRST_CCK, 0x2c - 26);
     let red = Rgb8 { r: 255, g: 0, b: 0 };
     let blue = Rgb8 { r: 0, g: 0, b: 255 };
     let black = Rgb8::default();

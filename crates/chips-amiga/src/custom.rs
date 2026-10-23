@@ -94,6 +94,9 @@ impl Standard {
 pub const WIDTH: u32 = 720;
 /// Colour clock of the first picture column.
 pub const FIRST_CCK: u32 = 0x38;
+/// Colour clocks Denise's pixel counter runs behind Agnus' horizontal
+/// position (see [`Custom::denise_h`]).
+const DENISE_LAG: u16 = 2;
 /// Colour clocks per PAL line.
 pub const PAL_LINE: u16 = 227;
 /// Colour clocks from the vertical strobe to the VERTB request.
@@ -327,12 +330,26 @@ impl Custom {
     }
 
     /// Denise line colour clock of Agnus clock `h`.
+    /// Denise's colour clock for Agnus' horizontal position `h`, in Denise
+    /// line numbering (clocks before [`denise::LINE_START`] still belong to
+    /// the previous line). Denise runs [`DENISE_LAG`] colour clocks behind
+    /// Agnus: a register write in Agnus clock `h` shows from pixel 2h − 4
+    /// (WinUAE screenshot of Interference's tunnel frame, `docs/sources.md`:
+    /// the Copper's COLOR00 at $48 starts exactly at the window's pixel 148),
+    /// while a word fetched in slot `h` still appears at pixel 2h + 3 (plus
+    /// scroll and shifter), the DDFSTRT $38 / DIWSTRT $81 relation.
     fn denise_h(&self, h: u16) -> u32 {
-        if h >= denise::LINE_START {
-            u32::from(h)
+        let hd = (h + self.line_len() - DENISE_LAG) % self.line_len();
+        if hd >= denise::LINE_START {
+            u32::from(hd)
         } else {
-            u32::from(h) + u32::from(PAL_LINE)
+            u32::from(hd) + u32::from(PAL_LINE)
         }
+    }
+
+    /// Denise's clock of the fetch slot `h`, for the load time of its data.
+    fn denise_slot(&self, h: u16) -> u32 {
+        self.denise_h(h) + u32::from(DENISE_LAG)
     }
 
     /// Run one colour clock. `cpu_wants`: the CPU waits for a chip bus
@@ -358,7 +375,7 @@ impl Custom {
             self.fetched = false;
             self.sprite_lines(v);
         }
-        if h == denise::LINE_START {
+        if h == denise::LINE_START + DENISE_LAG {
             self.denise.start_line();
         }
         if v == 0 && h == VERTB_DELAY {
@@ -408,7 +425,7 @@ impl Custom {
                     // not shifted by it.
                     self.add_modulo(p);
                 }
-                let dh = self.denise_h(h);
+                let dh = self.denise_slot(h);
                 self.denise.write_bpldat(p, w, dh);
                 self.fetched = true;
             }
@@ -551,7 +568,7 @@ impl Custom {
         let dh = self.denise_h(h);
         let mut px = [0u16; 4];
         self.denise.output(dh, &mut px);
-        let row = if h >= denise::LINE_START {
+        let row = if h >= denise::LINE_START + DENISE_LAG {
             i32::from(v)
         } else {
             i32::from(v) - 1
@@ -685,7 +702,7 @@ impl Custom {
             reg::BPL1MOD => self.bpl1mod = v & 0xfffe,
             reg::BPL2MOD => self.bpl2mod = v & 0xfffe,
             reg::BPL1DAT..=reg::BPL6DAT => {
-                let dh = self.denise_h(self.h);
+                let dh = self.denise_slot(self.h);
                 self.denise
                     .write_bpldat(usize::from((r - reg::BPL1DAT) / 2), v, dh);
             }
