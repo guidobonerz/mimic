@@ -233,12 +233,20 @@ impl Mapper {
                     Axis::LeftY => stick.1 = *value,
                 }
                 let (x, y) = *stick;
+                let mut analog_ports = Vec::new();
                 for (map, joy) in self.profile.joystick.iter().zip(&mut self.joys) {
                     if let JoystickSource::Gamepad {
-                        pad: p, deadzone, ..
+                        pad: p,
+                        deadzone,
+                        analog,
+                        ..
                     } = &map.source
                     {
                         if p != pad {
+                            continue;
+                        }
+                        if *analog {
+                            analog_ports.push(map.port);
                             continue;
                         }
                         let mut d = Dirs::NONE;
@@ -251,6 +259,18 @@ impl Mapper {
                     }
                 }
                 self.flush_joysticks(now, &mut out);
+                // Analog sticks: X right = 65535, Y up = 65535 (the host's
+                // y grows downwards).
+                let pos = |v: f32| ((v.clamp(-1.0, 1.0) + 1.0) * 32767.5) as u16;
+                for port in analog_ports {
+                    for (axis, value) in [(0, pos(x)), (1, pos(-y))] {
+                        out.push(TimedInput {
+                            at: now,
+                            target: InputTarget::Port(PortId(port)),
+                            event: InputEvent::Analog { axis, value },
+                        });
+                    }
+                }
                 self.paddle_axes(*pad, now, &mut out);
             }
             HostEvent::Mouse { dx, dy, buttons } => {
@@ -651,6 +671,61 @@ mod tests {
             Cycle(0),
         );
         assert!(ev.is_empty());
+    }
+
+    #[test]
+    fn analog_stick_for_the_vectrex() {
+        let mut m = Mapper::new(Profile::default_for("vectrex"));
+        let out = m.handle(
+            &HostEvent::Axis {
+                pad: 0,
+                axis: Axis::LeftY,
+                value: -1.0,
+            },
+            Cycle(5),
+        );
+        // Up on the host stick is up on the Vectrex's; no directions.
+        assert!(out.iter().any(|e| e.event
+            == InputEvent::Analog {
+                axis: 1,
+                value: 65535
+            }));
+        assert!(out.iter().any(|e| e.event
+            == InputEvent::Analog {
+                axis: 0,
+                value: 32767
+            }));
+        assert!(!out
+            .iter()
+            .any(|e| matches!(e.event, InputEvent::Digital { .. })));
+        // The D-pad and the four buttons (A B X Y) stay digital.
+        let ev = m.handle(
+            &HostEvent::Button {
+                pad: 0,
+                button: Button::DPadLeft,
+                down: true,
+            },
+            Cycle(6),
+        );
+        assert!(matches!(
+            ev[0].event,
+            InputEvent::Digital {
+                dirs: Dirs::LEFT,
+                ..
+            }
+        ));
+        let ev = m.handle(
+            &HostEvent::Button {
+                pad: 0,
+                button: Button::North,
+                down: true,
+            },
+            Cycle(7),
+        );
+        assert!(matches!(
+            ev[0].event,
+            InputEvent::Digital { buttons: 0x20, .. }
+        ));
     }
 
     #[test]

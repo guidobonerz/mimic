@@ -91,7 +91,8 @@ usage: mimic-desktop [options]
   --crt PROFILE         monitor: raw, 1702, 1084s, 1084s-rgb, tv, pal-tv, ntsc-tv,
                         pet-white, pet-green, ctm644, gt65 or a .toml file
                         (default: the machine's own monitor)
-  --scale N             initial window size in rows per line (default 2)
+  --scale N             initial window size in rows per line (default 2;
+                        less if the window would not fit the screen)
   --deinterlace MODE    interlaced pictures (Amiga LACE): weave (default, both
                         fields interleaved) or bob (the current field's lines
                         doubled, no combing); Ctrl+I switches at run time
@@ -588,6 +589,14 @@ impl App {
                         value: -v,
                     })
                 }
+                gilrs::EventType::Connected => {
+                    eprintln!("gamepad {pad} connected: {}", g.gamepad(ev.id).name());
+                    None
+                }
+                gilrs::EventType::Disconnected => {
+                    eprintln!("gamepad {pad} disconnected");
+                    None
+                }
                 _ => None,
             };
             if let Some(h) = host {
@@ -602,25 +611,47 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        // Size from the machine's first frame through the monitor profile.
-        let size = self
+        // Size from the machine's first frame through the monitor profile,
+        // at the largest scale up to `--scale` that fits the screen (90 % of
+        // its height); a picture too tall even at scale 1 (the Vectrex's)
+        // gets a proportionally smaller window.
+        let screen_h = event_loop
+            .primary_monitor()
+            .map(|m| m.size().to_logical::<f64>(m.scale_factor()).height * 0.9);
+        let first = self
             .shared
             .frames
             .lock()
             .ok()
-            .and_then(|q| {
-                q.front().map(|f| {
-                    let r = emu_core::FrameRef {
-                        width: f.width,
-                        height: f.height,
-                        pixels: emu_core::frame::PixelData::Rgb(&[]),
-                        luma_chroma: None,
-                        signal: f.signal,
-                    };
-                    video_crt::cpu::output_size(&r, &self.profile, self.scale)
-                })
-            })
-            .unwrap_or((768, 576));
+            .and_then(|q| q.front().map(|f| (f.width, f.height, f.signal)));
+        let size = match first {
+            Some((width, height, signal)) => {
+                let r = emu_core::FrameRef {
+                    width,
+                    height,
+                    pixels: emu_core::frame::PixelData::Rgb(&[]),
+                    luma_chroma: None,
+                    signal,
+                };
+                if let Some(max_h) = screen_h {
+                    while self.scale > 1 && f64::from(height * self.scale) > max_h {
+                        self.scale -= 1;
+                    }
+                }
+                let (w, h) = video_crt::cpu::output_size(&r, &self.profile, self.scale);
+                match screen_h {
+                    Some(max_h) if f64::from(h) > max_h => {
+                        let k = max_h / f64::from(h);
+                        (
+                            (f64::from(w) * k).round() as u32,
+                            (f64::from(h) * k).round() as u32,
+                        )
+                    }
+                    _ => (w, h),
+                }
+            }
+            None => (768, 576),
+        };
         let attrs = Window::default_attributes()
             .with_title(&self.title)
             .with_window_icon(window_icon())
@@ -1120,7 +1151,11 @@ fn run() -> Result<(), String> {
         scale: args.scale,
         shared: shared.clone(),
         input: tx,
-        gilrs: gilrs::Gilrs::new().ok(),
+        gilrs: gilrs::Gilrs::new().ok().inspect(|g| {
+            for (id, pad) in g.gamepads() {
+                eprintln!("gamepad {}: {}", usize::from(id), pad.name());
+            }
+        }),
         window: None,
         gfx: None,
         error: None,

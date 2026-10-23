@@ -26,7 +26,8 @@
 //! **Controllers.** The comparator on PB5 is high while the DAC is above
 //! the potentiometer the multiplexer's second half selects (PB2–1: 00
 //! controller 1 X, 01 controller 1 Y, 10 controller 2 X, 11 controller 2
-//! Y); the executive finds the stick by successive approximation. The
+//! Y; the potentiometers give the lower voltage for right and up); the executive
+//! finds the stick by successive approximation. The
 //! buttons reach the AY's I/O port A (bits 0–3 controller 1, 4–7
 //! controller 2, low = pressed); button 4 of controller 2 is also CA1,
 //! where the light pen reports the beam.
@@ -40,8 +41,20 @@
 //! gives the segments of the last one and [`Machine::framebuffer`] the
 //! same rasterised ([`render`]).
 //!
+//! **3D Imager** (`port2=imager`, `devices_input::Imager`). The machine
+//! reports pin 2 to it (high while the sound chip's port A is an input,
+//! or as an output with bit 5 set: the motor runs) and colours every
+//! segment by the filter in front of the screen while it is drawn. The
+//! disc is taken as six equal sectors from the index on: right eye blue,
+//! green, red, then left eye blue, green, red (the order a published
+//! Imager demo draws in; real discs differ — 3-D Mine Storm's has a large
+//! green sector). Segments behind the other eye's filters are left out:
+//! option `eye` = "left" (default), "right" or "both".
+//!
 //! Options: `port1`, `port2` = "controller" (default) or "none"; port 2
-//! also "lightpen". `roms` = "stub" runs a built-in test ROM ([`stub`]).
+//! also "lightpen" or "imager"; `eye` (see above); `lines` = "fine"
+//! (default: thin lines with bright ends) or "soft" (even, brighter lines;
+//! see [`render`]). `roms` = "stub" runs a built-in test ROM ([`stub`]).
 //!
 //! Media slot "cartridge": a ROM image up to 32 KB, or 64 KB with PB6
 //! bank switching (`devices_cartridge::vectrex`). Inserting or removing
@@ -68,7 +81,7 @@ use cpu_6809::{M6809Bus, M6809};
 use devices_cartridge::vectrex::VectrexCart;
 use devices_cartridge::CartSlot;
 use devices_input::vectrex::{pin, CENTRE, NO_AIM};
-use devices_input::{VectrexController, VectrexKind};
+use devices_input::{Imager, VectrexController, VectrexKind};
 use emu_core::audio::Decimator;
 use emu_core::frame::VideoStandard;
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo};
@@ -93,7 +106,7 @@ pub const CPU_HZ: u32 = 1_500_000;
 /// Cycles per frame of the vector output (50 Hz).
 pub const FRAME_CYCLES: u64 = 30_000;
 /// Integrator units per raster pixel.
-pub const UNIT: i32 = 83;
+pub const UNIT: i32 = 41;
 /// Half the visible area in integrator units (the tube is 4:5).
 pub const HALF_W: i32 = render::WIDTH as i32 * UNIT / 2;
 pub const HALF_H: i32 = render::HEIGHT as i32 * UNIT / 2;
@@ -105,6 +118,31 @@ pub const PHOSPHOR: Rgb8 = Rgb8 {
     g: 240,
     b: 255,
 };
+
+/// The 3D Imager's filters as the eye sees the phosphor through them.
+pub const FILTER_RED: Rgb8 = Rgb8 {
+    r: 255,
+    g: 60,
+    b: 50,
+};
+pub const FILTER_GREEN: Rgb8 = Rgb8 {
+    r: 60,
+    g: 255,
+    b: 90,
+};
+pub const FILTER_BLUE: Rgb8 = Rgb8 {
+    r: 90,
+    g: 110,
+    b: 255,
+};
+
+/// Which eye of the 3D Imager the picture shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Eye {
+    Left,
+    Right,
+    Both,
+}
 
 /// Machine keys: each controller's buttons 1–4, then up, down, left,
 /// right.
@@ -130,10 +168,11 @@ fn port_option(
     let kind = match config.options.get(key).map(String::as_str) {
         None | Some("controller") | Some("joystick") => VectrexKind::Controller,
         Some("lightpen") if pen => VectrexKind::LightPen,
+        Some("imager") if pen => return Ok(Some(Box::new(Imager::new(u64::from(CPU_HZ))))),
         Some("none") => return Ok(None),
         Some(other) => {
             let choices = if pen {
-                "controller, lightpen or none"
+                "controller, lightpen, imager or none"
             } else {
                 "controller or none"
             };
@@ -153,6 +192,7 @@ struct Open {
     vx: i32,
     vy: i32,
     z: u8,
+    color: Rgb8,
     cycles: u32,
 }
 
@@ -188,14 +228,17 @@ impl Analog {
                     x1: x1 + HALF_W,
                     y1: HALF_H - y1,
                     intensity: o.z,
+                    color: o.color,
                     cycles: o.cycles,
                 });
             }
         }
     }
 
-    /// One cycle with the DAC at `dac`, port B at `pb`, /ZERO and /BLANK.
-    fn step(&mut self, dac: i8, pb: u8, zero: bool, blank: bool) {
+    /// One cycle with the DAC at `dac`, port B at `pb`, /ZERO and /BLANK;
+    /// `color` is what the viewer sees of the phosphor (`None`: hidden by
+    /// the 3D Imager's disc).
+    fn step(&mut self, dac: i8, pb: u8, zero: bool, blank: bool, color: Option<Rgb8>) {
         if pb & 1 == 0 {
             match (pb >> 1) & 3 {
                 0 => self.ysh = dac,
@@ -219,19 +262,21 @@ impl Analog {
         };
         self.lit = !blank && self.z > 0;
         let z = (self.z.max(0) as u8) << 1;
+        let seen = color.filter(|_| self.lit);
         match self.open {
-            Some(ref mut o) if self.lit && o.vx == vx && o.vy == vy && o.z == z => {
+            Some(ref mut o) if seen == Some(o.color) && o.vx == vx && o.vy == vy && o.z == z => {
                 o.cycles += 1;
             }
             _ => {
                 self.close();
-                if self.lit {
+                if let Some(color) = seen {
                     self.open = Some(Open {
                         x0: self.x,
                         y0: self.y,
                         vx,
                         vy,
                         z,
+                        color,
                         cycles: 1,
                     });
                 }
@@ -282,13 +327,17 @@ struct Board {
     frame_done: bool,
     /// Port 2's button 4 / light pen line as CA1 saw it last.
     ca1: bool,
+    /// Pin 2 of port 2 as last reported to the device (the Imager's motor).
+    pin2: bool,
+    eye: Eye,
+    /// How the raster picture draws the beam (option `lines`).
+    style: render::Style,
     audio: Decimator,
     dc: [i32; 2],
     samples: Vec<i16>,
     /// The rasterised last frame and scratch space for drawing it.
-    pixels: Vec<u8>,
-    energy: Vec<f32>,
-    palette: Vec<Rgb8>,
+    pixels: Vec<Rgb8>,
+    energy: Vec<[f32; 3]>,
 }
 
 /// The potentiometer value (−128…127) of a stick axis.
@@ -337,12 +386,16 @@ impl Board {
     }
 
     /// The comparator (PB5): DAC above the selected potentiometer.
+    ///
+    /// The potentiometers give the lower voltage for right and up (checked
+    /// with Scramble: both axes were reversed the other way, user report
+    /// 2026-10-24).
     fn comparator(&self, ports: &[Option<Box<dyn PortDevice>>; 2]) -> bool {
         let pb = self.via.port_b_out();
         let sel = usize::from((pb >> 1) & 3);
         let l = lines(ports, sel >> 1, Cycle(self.cycle));
         let dac = i32::from(self.via.port_a_out() as i8);
-        dac > pot(l.analog[sel & 1])
+        dac > -1 - pot(l.analog[sel & 1])
     }
 
     /// Port pins as the VIA reads them.
@@ -358,8 +411,31 @@ impl Board {
         (pa, 0xdf | cmp)
     }
 
+    /// What the viewer sees of the phosphor now: through the 3D Imager's
+    /// filter in front of the screen, `None` while it covers the eye not
+    /// shown.
+    fn filter(&self, ports: &[Option<Box<dyn PortDevice>>; 2]) -> Option<Rgb8> {
+        let l = lines(ports, 1, Cycle(self.cycle));
+        if l.pulled_low & pin::IMAGER == 0 {
+            return Some(PHOSPHOR);
+        }
+        let (right, color) = match (u32::from(l.analog[0]) * 6) >> 16 {
+            0 => (true, FILTER_BLUE),
+            1 => (true, FILTER_GREEN),
+            2 => (true, FILTER_RED),
+            3 => (false, FILTER_BLUE),
+            4 => (false, FILTER_GREEN),
+            _ => (false, FILTER_RED),
+        };
+        match self.eye {
+            Eye::Both => Some(color),
+            Eye::Left => (!right).then_some(color),
+            Eye::Right => right.then_some(color),
+        }
+    }
+
     /// One cycle (1.5 MHz) of everything but the CPU.
-    fn tick(&mut self, ports: &[Option<Box<dyn PortDevice>>; 2]) {
+    fn tick(&mut self, ports: &mut [Option<Box<dyn PortDevice>>; 2]) {
         self.via.tick();
         let pa = self.via.port_a_out();
         let pb = self.via.port_b_out();
@@ -379,16 +455,35 @@ impl Board {
             c.pb6 = pb & 0x40 != 0;
         }
         let _ = buttons;
+        // Pin 2 of port 2: an input floats high, an output follows bit 5.
+        let pin2 = self.ay.regs[7] & 0x40 == 0 || self.ay.regs[14] & 0x20 != 0;
+        if pin2 != self.pin2 || self.cycle.is_multiple_of(64) {
+            self.pin2 = pin2;
+            if let Some(d) = &mut ports[1] {
+                let lines = PortLines {
+                    pulled_low: if pin2 { pin::PIN2_HIGH } else { 0 },
+                    analog: [0; 2],
+                };
+                d.write_lines(lines, Cycle(self.cycle));
+            }
+        }
         let zero = !self.via.ca2_out();
         let blank = !self.via.cb2_out();
-        self.analog.step(pa as i8, pb, zero, blank);
+        let color = self.filter(ports);
+        self.analog.step(pa as i8, pb, zero, blank, color);
         self.sound();
         self.cycle += 1;
         if self.cycle - self.frame_start >= FRAME_CYCLES {
             self.frame_start = self.cycle;
             self.frames += 1;
             self.analog.end_frame();
-            render::draw(&self.analog.done, UNIT, &mut self.energy, &mut self.pixels);
+            render::draw(
+                &self.analog.done,
+                UNIT,
+                self.style,
+                &mut self.energy,
+                &mut self.pixels,
+            );
             self.frame_done = true;
         }
     }
@@ -424,7 +519,7 @@ impl Board {
 /// The 6809's bus for one instruction.
 struct VxBus<'a> {
     b: &'a mut Board,
-    ports: &'a [Option<Box<dyn PortDevice>>; 2],
+    ports: &'a mut [Option<Box<dyn PortDevice>>; 2],
     dbg: Option<&'a mut DebugHooks>,
 }
 
@@ -542,6 +637,25 @@ impl Vectrex {
             port_option(config, "port1", false)?,
             port_option(config, "port2", true)?,
         ];
+        let style = match config.options.get("lines").map(String::as_str) {
+            None | Some("fine") => render::Style::Fine,
+            Some("soft") => render::Style::Soft,
+            Some(other) => {
+                return Err(ConfigError::Invalid(format!(
+                    "lines option '{other}' (fine or soft)"
+                )))
+            }
+        };
+        let eye = match config.options.get("eye").map(String::as_str) {
+            None | Some("left") => Eye::Left,
+            Some("right") => Eye::Right,
+            Some("both") => Eye::Both,
+            Some(other) => {
+                return Err(ConfigError::Invalid(format!(
+                    "eye option '{other}' (left, right or both)"
+                )))
+            }
+        };
         let n = (render::WIDTH * render::HEIGHT) as usize;
         let mut m = Self {
             cpu: M6809::new(),
@@ -558,13 +672,15 @@ impl Vectrex {
                 frames: 0,
                 frame_done: false,
                 ca1: true,
+                pin2: false,
+                eye,
+                style,
                 audio: Decimator::new(CPU_HZ, emu_core::SAMPLE_RATE)
                     .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
                 dc: [0; 2],
                 samples: Vec::new(),
-                pixels: vec![0; n],
-                energy: vec![0.0; n],
-                palette: render::palette(PHOSPHOR),
+                pixels: vec![Rgb8::default(); n],
+                energy: vec![[0.0; 3]; n],
             },
             ports,
             cart: devices_cartridge::vectrex::slot(),
@@ -605,7 +721,7 @@ impl Vectrex {
         {
             let mut bus = VxBus {
                 b: &mut self.board,
-                ports: &self.ports,
+                ports: &mut self.ports,
                 dbg: dbg.as_deref_mut(),
             };
             self.cpu.step(&mut bus);
@@ -739,10 +855,7 @@ impl Machine for Vectrex {
         FrameRef {
             width: render::WIDTH,
             height: render::HEIGHT,
-            pixels: PixelData::Indexed {
-                pixels: &self.board.pixels,
-                palette: &self.board.palette,
-            },
+            pixels: PixelData::Rgb(&self.board.pixels),
             luma_chroma: None,
             signal: self.signal(),
         }
@@ -919,6 +1032,7 @@ impl Machine for Vectrex {
             }
             w.bool(b.frame_done);
             w.bool(b.ca1);
+            w.bool(b.pin2);
             b.audio.save(w);
             w.u32(b.dc[0] as u32);
             w.u32(b.dc[1] as u32);
@@ -936,6 +1050,9 @@ impl Machine for Vectrex {
                         w.u32(v as u32);
                     }
                     w.u8(o.z);
+                    for v in [o.color.r, o.color.g, o.color.b] {
+                        w.u8(v);
+                    }
                     w.u32(o.cycles);
                 }
                 None => w.bool(false),
@@ -947,6 +1064,9 @@ impl Machine for Vectrex {
                         w.u32(v as u32);
                     }
                     w.u8(s.intensity);
+                    for v in [s.color.r, s.color.g, s.color.b] {
+                        w.u8(v);
+                    }
                     w.u32(s.cycles);
                 }
             }
@@ -991,6 +1111,7 @@ impl Machine for Vectrex {
         }
         b.frame_done = c.bool()?;
         b.ca1 = c.bool()?;
+        b.pin2 = c.bool()?;
         b.audio.load(&mut c)?;
         b.dc = [c.u32()? as i32, c.u32()? as i32];
         if c.bool()? != b.cart.is_some() {
@@ -1011,6 +1132,11 @@ impl Machine for Vectrex {
                 vx: c.u32()? as i32,
                 vy: c.u32()? as i32,
                 z: c.u8()?,
+                color: Rgb8 {
+                    r: c.u8()?,
+                    g: c.u8()?,
+                    b: c.u8()?,
+                },
                 cycles: c.u32()?,
             })
         } else {
@@ -1029,6 +1155,11 @@ impl Machine for Vectrex {
                     x1: c.u32()? as i32,
                     y1: c.u32()? as i32,
                     intensity: c.u8()?,
+                    color: Rgb8 {
+                        r: c.u8()?,
+                        g: c.u8()?,
+                        b: c.u8()?,
+                    },
                     cycles: c.u32()?,
                 });
             }
@@ -1063,7 +1194,7 @@ impl Machine for Vectrex {
                 d.load_state(st)?;
             }
         }
-        render::draw(&b.analog.done, UNIT, &mut b.energy, &mut b.pixels);
+        render::draw(&b.analog.done, UNIT, b.style, &mut b.energy, &mut b.pixels);
         self.cpu = cpu;
         self.board = b;
         self.input = input;

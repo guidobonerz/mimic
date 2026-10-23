@@ -38,7 +38,7 @@ A cycle-accurate multi-machine emulator in Rust. Every machine gets the same rem
 | ColecoVision | `machine-coleco` | NTSC, PAL | 231 of 235 cartridges show a picture; MegaCart; four controller kinds | 90 % |
 | NES / Famicom | `machine-nes` | NTSC, PAL, Four Score | 116 of 119 test ROMs; mappers 0–4 | 90 % |
 | SNES | `machine-snes` | NTSC, PAL | games run with sound; DSP-1 missing, no SNES test ROMs, mid-line register changes | 70 % |
-| Vectrex | `machine-vectrex` | – | executive and Scramble run; light pen modelled; 3D Imager, overlays and phosphor persistence open; Mine Storm not checked (8 KB ROM needed) | 50 % |
+| Vectrex | `machine-vectrex` | – | executive and Scramble run; light pen and 3D Imager modelled; overlays and phosphor persistence open; Mine Storm and 3-D Mine Storm need the 8 KB system ROM | 55 % |
 | Test machine (6502 + RAM + raster chip) | `machine-sim6502` | – | reference for debugger tests | 100 % |
 | Tandy TRS-80 Model I/III | – | Phase 10 | – | 0 % |
 | Mattel Intellivision | – | Phase 13 | – | 0 % |
@@ -112,8 +112,9 @@ A cycle-accurate multi-machine emulator in Rust. Every machine gets the same rem
 | NES controller, Zapper, Arkanoid | NES | 90 % |
 | SNES pad, mouse, Super Scope, multitap | SNES | 85 % |
 | Vectrex controller (analog stick), light pen | Vectrex | 70 % |
-| Vectrex 3D Imager | Vectrex | 0 % |
+| Vectrex 3D Imager (motor, index pulse, colour wheel) | Vectrex | 40 % (not yet checked with a game) |
 | C64/Atari light pens | – | 0 % |
+| Host gamepads (`gilrs`: Xbox 360 and other XInput/HID pads; D-pad, left stick digital or analog, A/B/X/Y, shoulders, Back/Start) | all joystick ports | 85 % (only the first pad mapped by default; no mapping UI) |
 
 ### Cartridges
 

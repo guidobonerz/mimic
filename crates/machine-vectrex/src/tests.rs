@@ -95,8 +95,8 @@ fn comparator_finds_the_stick() {
         },
     );
     frames(&mut m, 1);
-    assert!(!cmp(&m, 0x7e, 0), "stick right: pot 127");
-    assert!(cmp(&m, 0x81, 1), "stick down: pot -128");
+    assert!(cmp(&m, 0x81, 0), "stick right: the X pot reads -128");
+    assert!(!cmp(&m, 0x7e, 1), "stick down: the Y pot reads +127");
     assert!(cmp(&m, 0x10, 2), "controller 2 centred");
 }
 
@@ -126,17 +126,17 @@ fn buttons_reach_the_ay_port_and_ca1() {
     b.via.write(0xc, 0x00);
     b.via.set_ca1(true, 0xff);
     b.ca1 = true;
-    b.tick(&m.ports);
+    b.tick(&mut m.ports);
     assert_ne!(b.via.ifr & chips_cbm::via::ifr::CA1, 0, "button 4 on CA1");
     assert!(!b.ca1);
     // Latch AY register 14 (BDIR + BC1), then read it (BC1).
     b.via.write(3, 0xff);
     b.via.write(1, 14);
     b.via.write(0, 0x99);
-    b.tick(&m.ports);
+    b.tick(&mut m.ports);
     b.via.write(0, 0x89);
     b.via.write(3, 0x00);
-    b.tick(&m.ports);
+    b.tick(&mut m.ports);
     let (pa, _) = b.via_pins(&m.ports);
     assert_eq!(pa, !0x82, "controller 1 button 2, controller 2 button 4");
 }
@@ -178,7 +178,7 @@ fn savestate_round_trip() {
     let a: Vec<Segment> = m.vectors().unwrap().segments.to_vec();
     let pa = m.framebuffer().pixels;
     let pa = match pa {
-        PixelData::Indexed { pixels, .. } => pixels.to_vec(),
+        PixelData::Rgb(pixels) => pixels.to_vec(),
         _ => unreachable!(),
     };
     let mut n = stub_with(&[]);
@@ -186,7 +186,7 @@ fn savestate_round_trip() {
     frames(&mut n, 2);
     assert_eq!(n.vectors().unwrap().segments, a.as_slice());
     match n.framebuffer().pixels {
-        PixelData::Indexed { pixels, .. } => assert_eq!(pixels, pa.as_slice()),
+        PixelData::Rgb(pixels) => assert_eq!(pixels, pa.as_slice()),
         _ => unreachable!(),
     }
     assert!(n.load_state(&s[..s.len() / 2]).is_err());
@@ -259,4 +259,49 @@ fn disassembly_and_debug_peek() {
         Some(0x1234)
     );
     assert_eq!(m.peek_cpu(0xcc80), 0x12, "RAM repeats");
+}
+
+#[test]
+fn imager_spins_signals_ca1_and_colours_by_eye() {
+    // Port A of the sound chip stays an input: pin 2 floats high, the
+    // motor runs; the index pulse's rising edge sets the CA1 flag.
+    let mut m = stub_with(&[("port2", "imager"), ("eye", "both")]);
+    frames(&mut m, 100);
+    let mut b = m.board.clone();
+    b.via.write(0xc, 0x01); // CA1 on the rising edge
+    b.via.write(0xd, 0x7f);
+    let mut ports = std::mem::take(&mut m.ports);
+    for _ in 0..60_000 {
+        b.tick(&mut ports);
+    }
+    assert_ne!(b.via.ifr & chips_cbm::via::ifr::CA1, 0, "index pulse");
+    m.ports = ports;
+    // Both eyes: the figure in the filters' colours.
+    let colours: Vec<Rgb8> = m
+        .vectors()
+        .unwrap()
+        .segments
+        .iter()
+        .map(|s| s.color)
+        .collect();
+    assert!(!colours.is_empty());
+    assert!(colours
+        .iter()
+        .all(|c| [FILTER_RED, FILTER_GREEN, FILTER_BLUE].contains(c)));
+    // One eye: about half the beam time is hidden.
+    let mut left = stub_with(&[("port2", "imager")]);
+    frames(&mut left, 100);
+    let time =
+        |m: &Vectrex| -> u32 { m.vectors().unwrap().segments.iter().map(|s| s.cycles).sum() };
+    let (one, both) = (time(&left), time(&m));
+    assert!(one < both * 3 / 4, "{one} of {both}");
+    assert!(Vectrex::new(&MachineConfig {
+        options: [
+            ("roms".into(), "stub".into()),
+            ("eye".into(), "middle".into())
+        ]
+        .into(),
+        ..MachineConfig::default()
+    })
+    .is_err());
 }

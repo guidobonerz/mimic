@@ -19,6 +19,10 @@ pub struct Segment {
     pub y1: i32,
     /// Beam intensity 0–255 (0 = off; such segments are not delivered).
     pub intensity: u8,
+    /// The colour the viewer sees at full intensity: the phosphor's, or
+    /// as seen through a filter in front of the screen (the Vectrex 3D
+    /// Imager's colour wheel).
+    pub color: Rgb8,
     /// How long the beam took, in machine cycles: with the length this
     /// gives the energy per distance, i.e. how bright the trace glows.
     pub cycles: u32,
@@ -31,7 +35,8 @@ pub struct VectorFrame<'a> {
     pub width: u32,
     pub height: u32,
     pub segments: &'a [Segment],
-    /// Colour of the phosphor at full intensity.
+    /// Colour of the phosphor at full intensity (segments carry the colour
+    /// actually seen in [`Segment::color`]).
     pub phosphor: Rgb8,
     /// Machine cycles per second, to turn `Segment::cycles` into time.
     pub cycle_hz: u32,

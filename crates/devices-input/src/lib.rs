@@ -25,7 +25,7 @@ pub use mouse1351::Mouse1351;
 pub use nes::{NesController, NesKind};
 pub use paddles::Paddles;
 pub use snes::{SnesController, SnesKind};
-pub use vectrex::{VectrexController, VectrexKind};
+pub use vectrex::{Imager, VectrexController, VectrexKind};
 
 use emu_core::port::{PortDevice, PortKind};
 use emu_core::registry::ConfigError;

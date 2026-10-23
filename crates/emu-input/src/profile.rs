@@ -57,6 +57,13 @@ pub enum JoystickSource {
         fire: Vec<Button>,
         #[serde(default = "default_deadzone")]
         deadzone: f32,
+        /// The left stick also goes out as an analog position
+        /// (`InputEvent::Analog`: axis 0 X from 0 left to 65535 right,
+        /// axis 1 Y from 0 down to 65535 up) and no longer as directions;
+        /// the D-pad stays digital. For analog sticks such as the
+        /// Vectrex's.
+        #[serde(default)]
+        analog: bool,
     },
 }
 
@@ -203,6 +210,8 @@ impl Profile {
                     pad: 0,
                     fire: default_fire(),
                     deadzone: default_deadzone(),
+                    // The Vectrex's controller has an analog stick.
+                    analog: machine == "vectrex",
                 },
             });
         }
@@ -254,7 +263,8 @@ mod tests {
             JoystickSource::Gamepad {
                 pad: 1,
                 fire: vec![Button::South],
-                deadzone: 0.5
+                deadzone: 0.5,
+                analog: false
             }
         );
     }
