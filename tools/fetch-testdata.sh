@@ -68,6 +68,15 @@ for i in $(seq 0 255); do
   fetch "https://raw.githubusercontent.com/SingleStepTests/65x02/$HARTE_COMMIT/nes6502/v1/$name" "$DEST/65x02/nes6502/v1/$name"
 done
 
+# The CMOS 65C02 without the Rockwell bit instructions (the NCR/GTE 65C02
+# of the enhanced Apple IIe behaves the same): `synertek65c02`.
+echo "Tom Harte 65C02 tests -> $DEST/65x02/synertek65c02/v1 (256 files)"
+mkdir -p "$DEST/65x02/synertek65c02/v1"
+for i in $(seq 0 255); do
+  name="$(printf '%02x.json' "$i")"
+  fetch "https://raw.githubusercontent.com/SingleStepTests/65x02/$HARTE_COMMIT/synertek65c02/v1/$name" "$DEST/65x02/synertek65c02/v1/$name"
+done
+
 # Tom Harte SingleStepTests Z80 (MIT), ~1.4 GB: 1604 instruction files of
 # 1000 tests each, named by their opcode bytes ("ed b0.json", "dd cb __ 46.json").
 Z80_COMMIT=ebe1875d48f374bcfd4b505d8eb8ee751568b5f7

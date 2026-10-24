@@ -187,7 +187,7 @@ impl Profile {
         let name = match machine {
             "c64" | "c128" | "vic20" | "c16" | "plus4" => "1702",
             "pet" => "pet-green",
-            "atari8" | "atari2600" | "zx81" => "tv",
+            "atari8" | "atari2600" | "zx81" | "apple2" => "tv",
             "cpc" => "ctm644",
             // The SNES has an RGB output (a composite TV shows colour
             // fringes on its hard edges: `--crt tv`).

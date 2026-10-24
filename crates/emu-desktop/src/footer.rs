@@ -131,6 +131,7 @@ impl Tracker {
                             | PortKind::NesControl
                             | PortKind::SnesControl
                             | PortKind::VectrexControl
+                            | PortKind::AppleGame
                     )
                     && !self.analog.contains_key(&p.id.0)
             })

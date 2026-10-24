@@ -1,7 +1,11 @@
-//! NMOS 6502 opcode matrix including the undocumented opcodes.
+//! NMOS 6502 opcode matrix including the undocumented opcodes, and the
+//! CMOS 65C02's.
 //!
-//! Source: MOS MCS6500 hardware manual, "6502 instruction set" tables and
-//! the "NMOS 6510 Unintended Opcodes" document (Groepaz).
+//! Sources: MOS MCS6500 hardware manual, "6502 instruction set" tables and
+//! the "NMOS 6510 Unintended Opcodes" document (Groepaz); for the 65C02 the
+//! Rockwell R65C00 family and WDC W65C02S data sheets (opcode matrix; the
+//! NCR/GTE/Synertek parts lack the Rockwell bit instructions) and Tom
+//! Harte's `synertek65c02` tests for the undefined opcodes' lengths.
 
 /// Operation, named after the common mnemonic (undocumented opcodes use the
 /// names from "NMOS 6510 Unintended Opcodes").
@@ -85,6 +89,22 @@ pub(crate) enum Op {
     Slo,
     Sre,
     Tas,
+    // 65C02
+    Bra,
+    Phx,
+    Phy,
+    Plx,
+    Ply,
+    Stz,
+    Trb,
+    Tsb,
+    /// Undefined 65C02 opcode: one byte, one cycle.
+    Nop1,
+    /// Undefined 65C02 opcodes $5C, $DC, $FC and $1F … $FF: three bytes,
+    /// four cycles (the last byte is read again).
+    NopAbs,
+    /// Undefined 65C02 opcodes $0F … $EF: three bytes, three cycles.
+    NopAbs3,
 }
 
 /// Bus access pattern of an operation.
@@ -108,12 +128,16 @@ impl Op {
         match self {
             Adc | And | Bit | Cmp | Cpx | Cpy | Eor | Lda | Ldx | Ldy | Nop | Ora | Sbc | Alr
             | Anc | Ane | Arr | Las | Lax | Lxa | Sbx => Kind::Read,
-            Sta | Stx | Sty | Sax | Sha | Shx | Shy | Tas => Kind::Write,
-            Asl | Dec | Inc | Lsr | Rol | Ror | Dcp | Isc | Rla | Rra | Slo | Sre => Kind::Rmw,
+            Sta | Stx | Sty | Sax | Sha | Shx | Shy | Tas | Stz => Kind::Write,
+            Asl | Dec | Inc | Lsr | Rol | Ror | Dcp | Isc | Rla | Rra | Slo | Sre | Trb | Tsb => {
+                Kind::Rmw
+            }
             Clc | Cld | Cli | Clv | Dex | Dey | Inx | Iny | Sec | Sed | Sei | Tax | Tay | Tsx
             | Txa | Txs | Tya => Kind::Implied,
             Bcc | Bcs | Beq | Bmi | Bne | Bpl | Bvc | Bvs | Brk | Jmp | Jsr | Pha | Php | Pla
-            | Plp | Rti | Rts | Jam => Kind::Special,
+            | Plp | Rti | Rts | Jam | Bra | Phx | Phy | Plx | Ply | Nop1 | NopAbs | NopAbs3 => {
+                Kind::Special
+            }
         }
     }
 }
@@ -133,6 +157,10 @@ pub(crate) enum Mode {
     IndX,
     IndY,
     Rel,
+    /// 65C02 `(zp)`.
+    Zpi,
+    /// 65C02 `JMP (abs,X)`.
+    AbsXInd,
 }
 
 impl Mode {
@@ -140,7 +168,7 @@ impl Mode {
     pub(crate) const fn bytes(self) -> u16 {
         match self {
             Mode::Imp => 1,
-            Mode::Abs | Mode::AbsX | Mode::AbsY | Mode::Ind => 3,
+            Mode::Abs | Mode::AbsX | Mode::AbsY | Mode::Ind | Mode::AbsXInd => 3,
             _ => 2,
         }
     }
@@ -201,6 +229,71 @@ pub(crate) const TABLE: [(Op, Mode); 256] = [
     (Sed, Imp), (Sbc, AbsY), (Nop, Imp), (Isc, AbsY), (Nop, AbsX), (Sbc, AbsX), (Inc, AbsX), (Isc, AbsX),
 ];
 
+/// The CMOS 65C02 (without the Rockwell bit instructions): the NMOS
+/// matrix with the new instructions and addressing modes, every other
+/// undefined opcode a NOP.
+pub(crate) const CMOS_TABLE: [(Op, Mode); 256] = cmos_table();
+
+const fn cmos_table() -> [(Op, Mode); 256] {
+    let mut t = TABLE;
+    let mut i = 0;
+    while i < 256 {
+        let (op, mode) = TABLE[i];
+        let lo = i & 0x0f;
+        let odd_row = i & 0x10 != 0;
+        t[i] = if lo == 0x03 || lo == 0x0b {
+            (Nop1, Imp)
+        } else if lo == 0x07 {
+            (Nop, if odd_row { ZpX } else { Zp })
+        } else if lo == 0x0f {
+            (if odd_row { NopAbs } else { NopAbs3 }, Abs)
+        } else if lo == 0x02 && matches!(op, Jam | Nop) {
+            if odd_row {
+                // ORA AND EOR ADC STA LDA CMP SBC (zp): the (zp),Y column's ops.
+                (TABLE[i - 1].0, Zpi)
+            } else {
+                (Nop, Imm)
+            }
+        } else {
+            match op {
+                Slo | Rla | Sre | Rra | Sax | Lax | Dcp | Isc | Anc | Alr | Arr | Ane | Lxa
+                | Sbx | Las | Tas | Sha | Shx | Shy => (Nop1, Imp),
+                _ => (op, mode),
+            }
+        };
+        i += 1;
+    }
+    t[0x04] = (Tsb, Zp);
+    t[0x0c] = (Tsb, Abs);
+    t[0x14] = (Trb, Zp);
+    t[0x1c] = (Trb, Abs);
+    t[0x1a] = (Inc, Imp);
+    t[0x3a] = (Dec, Imp);
+    t[0x34] = (Bit, ZpX);
+    t[0x3c] = (Bit, AbsX);
+    t[0x89] = (Bit, Imm);
+    t[0x5a] = (Phy, Imp);
+    t[0x7a] = (Ply, Imp);
+    t[0xda] = (Phx, Imp);
+    t[0xfa] = (Plx, Imp);
+    t[0x64] = (Stz, Zp);
+    t[0x74] = (Stz, ZpX);
+    t[0x9c] = (Stz, Abs);
+    t[0x9e] = (Stz, AbsX);
+    t[0x7c] = (Jmp, AbsXInd);
+    t[0x80] = (Bra, Rel);
+    t[0x5c] = (NopAbs, Abs);
+    t[0xdc] = (NopAbs, Abs);
+    t[0xfc] = (NopAbs, Abs);
+    t[0xcb] = (Nop, Imp);
+    t[0xdb] = (Nop, ZpX);
+    t[0x44] = (Nop, Zp);
+    t[0x54] = (Nop, ZpX);
+    t[0xd4] = (Nop, ZpX);
+    t[0xf4] = (Nop, ZpX);
+    t
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +316,19 @@ mod tests {
         assert_eq!(TABLE[0x9e], (Shx, AbsY));
         assert_eq!(TABLE[0xeb], (Sbc, Imm));
         assert_eq!(TABLE[0x0a], (Asl, Imp));
+    }
+
+    #[test]
+    fn cmos_spot_checks() {
+        assert_eq!(CMOS_TABLE[0xb2], (Lda, Zpi));
+        assert_eq!(CMOS_TABLE[0x92], (Sta, Zpi));
+        assert_eq!(CMOS_TABLE[0x02], (Nop, Imm));
+        assert_eq!(CMOS_TABLE[0xa2], (Ldx, Imm));
+        assert_eq!(CMOS_TABLE[0xeb], (Nop1, Imp));
+        assert_eq!(CMOS_TABLE[0x9e], (Stz, AbsX));
+        assert_eq!(CMOS_TABLE[0xa9], (Lda, Imm));
+        assert_eq!(CMOS_TABLE[0x1a], (Inc, Imp));
+        assert!(CMOS_TABLE.iter().all(|e| e.0 != Jam));
     }
 
     #[test]

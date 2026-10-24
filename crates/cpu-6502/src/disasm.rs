@@ -2,15 +2,19 @@
 
 use emu_core::{Bus, Flow, Instr, Size};
 
-use crate::table::{Kind, Mode, Op, TABLE};
+use crate::table::{Kind, Mode, Op, CMOS_TABLE, TABLE};
 
 fn peek(bus: &dyn Bus, addr: u16) -> u8 {
     bus.peek(u32::from(addr), Size::Byte) as u8
 }
 
-pub(crate) fn disassemble(bus: &dyn Bus, addr: u16) -> Instr {
+pub(crate) fn disassemble(bus: &dyn Bus, addr: u16, cmos: bool) -> Instr {
     let opcode = peek(bus, addr);
-    let (op, mode) = TABLE[usize::from(opcode)];
+    let (op, mode) = if cmos {
+        CMOS_TABLE[usize::from(opcode)]
+    } else {
+        TABLE[usize::from(opcode)]
+    };
     let bytes: Vec<u8> = (0..mode.bytes())
         .map(|i| peek(bus, addr.wrapping_add(i)))
         .collect();
@@ -34,12 +38,18 @@ pub(crate) fn disassemble(bus: &dyn Bus, addr: u16) -> Instr {
         Mode::Ind => (format!("(${word:04X})"), None),
         Mode::IndX => (format!("(${b1:02X},X)"), None),
         Mode::IndY => (format!("(${b1:02X}),Y"), None),
+        Mode::Zpi => (format!("(${b1:02X})"), None),
+        Mode::AbsXInd => (format!("(${word:04X},X)"), None),
         Mode::Rel => {
             let dest = next.wrapping_add(b1 as i8 as u16);
             (format!("${dest:04X}"), Some(u32::from(dest)))
         }
     };
 
+    let mnemonic = match op {
+        Op::Nop1 | Op::NopAbs | Op::NopAbs3 => "NOP".to_owned(),
+        _ => format!("{op:?}").to_ascii_uppercase(),
+    };
     let flow = match op {
         Op::Jsr => Flow::Call,
         Op::Rts | Op::Rti => Flow::Return,
@@ -53,7 +63,7 @@ pub(crate) fn disassemble(bus: &dyn Bus, addr: u16) -> Instr {
     Instr {
         addr: u32::from(addr),
         bytes,
-        mnemonic: format!("{op:?}").to_ascii_uppercase(),
+        mnemonic,
         operand,
         target,
         flow,
@@ -68,7 +78,18 @@ mod tests {
     fn dis(program: &[u8]) -> Instr {
         let mut bus = FlatBus::new(16);
         bus.load(0x1000, program);
-        disassemble(&bus, 0x1000)
+        disassemble(&bus, 0x1000, false)
+    }
+
+    #[test]
+    fn cmos_opcodes() {
+        let mut bus = FlatBus::new(16);
+        bus.load(0x1000, &[0xb2, 0x10, 0x7c, 0x00, 0x20, 0x1a, 0x80, 0xfe]);
+        let d = |a| disassemble(&bus, a, true).to_string();
+        assert_eq!(d(0x1000), "LDA ($10)");
+        assert_eq!(d(0x1002), "JMP ($2000,X)");
+        assert_eq!(d(0x1005), "INC A");
+        assert_eq!(d(0x1006), "BRA $1006");
     }
 
     #[test]

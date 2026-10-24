@@ -31,6 +31,9 @@ pub enum PortKind {
     /// Vectrex controller port: four buttons and two potentiometers (the
     /// analog stick), read by the console's DAC and comparator.
     VectrexControl,
+    /// Apple II game I/O: four paddle inputs (two used by a joystick or a
+    /// pair of paddles), push buttons, annunciators.
+    AppleGame,
     CbmUserPort,
     Iec,
     Sio,

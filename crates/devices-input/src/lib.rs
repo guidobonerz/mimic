@@ -1,10 +1,12 @@
 //! Emulated input peripherals: joysticks, paddles, mice, light pens, keypads,
-//! the ColecoVision controllers, the NES and SNES controllers.
+//! the ColecoVision controllers, the NES and SNES controllers, the Apple II
+//! joystick and paddles.
 
 #![forbid(unsafe_code)]
 
 pub mod amiga_mouse;
 pub mod amx_mouse;
+pub mod apple;
 pub mod coleco;
 pub mod driving;
 pub mod joystick;
@@ -17,6 +19,7 @@ pub mod vectrex;
 
 pub use amiga_mouse::AmigaMouse;
 pub use amx_mouse::AmxMouse;
+pub use apple::{AppleJoystick, AppleKind};
 pub use coleco::{ColecoController, ColecoKind};
 pub use driving::Driving;
 pub use joystick::Joystick;

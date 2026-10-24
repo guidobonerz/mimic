@@ -1,13 +1,17 @@
-//! Cycle-stepped NMOS 6502 microcode.
+//! Cycle-stepped NMOS 6502 and CMOS 65C02 microcode.
 //!
 //! Every call to [`Core::cycle`] performs exactly one bus access, including
 //! the dummy reads and writes of the real chip. Cycle sequences follow the
 //! MCS6500 hardware manual (appendix A) and "64doc" by John West and Marko
 //! Mäkelä; interrupt polling follows the NESdev wiki "CPU interrupts" page.
+//! The 65C02's differences (fixed JMP (abs), dummy reads instead of dummy
+//! writes, the decimal-mode cycle, D cleared on interrupts) follow the WDC
+//! W65C02S data sheet ("Table 5-7, Operation, Operational Codes and Cycle
+//! Timing") and Tom Harte's `synertek65c02` bus traces.
 
 use emu_core::{Bus, CycleResult, InterruptKind, Size};
 
-use crate::table::{Kind, Mode, Op, TABLE};
+use crate::table::{Kind, Mode, Op, CMOS_TABLE, TABLE};
 
 pub(crate) const C: u8 = 0x01;
 pub(crate) const Z: u8 = 0x02;
@@ -96,10 +100,20 @@ pub(crate) struct Core {
     /// hijacks BRK for 5 clocks, then follows the handler's first
     /// instruction).
     pub lose_late_nmi: bool,
+    /// CMOS 65C02 opcode matrix and timing.
+    pub cmos: bool,
+    /// The opcode matrix ([`TABLE`] or [`CMOS_TABLE`]).
+    table: &'static [(Op, Mode); 256],
 }
 
 impl Core {
-    pub(crate) fn new(ane_magic: u8, lxa_magic: u8, decimal: bool, lose_late_nmi: bool) -> Self {
+    pub(crate) fn new(
+        ane_magic: u8,
+        lxa_magic: u8,
+        decimal: bool,
+        lose_late_nmi: bool,
+        cmos: bool,
+    ) -> Self {
         Self {
             a: 0,
             x: 0,
@@ -129,7 +143,15 @@ impl Core {
             lxa_magic,
             decimal,
             lose_late_nmi,
+            cmos,
+            table: if cmos { &CMOS_TABLE } else { &TABLE },
         }
+    }
+
+    /// Operation and addressing mode of the current opcode.
+    #[inline]
+    pub(crate) fn entry(&self) -> (Op, Mode) {
+        self.table[usize::from(self.op)]
     }
 
     /// Execute one cycle.
@@ -156,6 +178,10 @@ impl Core {
         self.polled = false;
 
         if done {
+            if self.t == 0 {
+                // A one-cycle 65C02 NOP: its only cycle is also its last.
+                self.poll = self.nmi_pending || (self.irq_line && self.p & I == 0);
+            }
             self.t = 0;
             return CycleResult::InstrDone {
                 next_pc: u32::from(self.pc),
@@ -193,24 +219,38 @@ impl Core {
         } else {
             self.op = self.fetch_pc(bus);
             self.seq = Seq::Brk;
+            if self.cmos && self.entry().0 == Op::Nop1 {
+                return true;
+            }
         }
         false
     }
 
     fn exec(&mut self, bus: &mut dyn Bus) -> bool {
-        let (op, mode) = TABLE[usize::from(self.op)];
+        let (op, mode) = self.entry();
         match op {
             Op::Brk => self.brk(bus),
             Op::Rti => self.rti(bus),
             Op::Rts => self.rts(bus),
             Op::Jsr => self.jsr(bus),
+            Op::Jmp if mode == Mode::Ind && self.cmos => self.jmp_ind_cmos(bus, false),
+            Op::Jmp if mode == Mode::AbsXInd => self.jmp_ind_cmos(bus, true),
             Op::Jmp if mode == Mode::Ind => self.jmp_ind(bus),
             Op::Jmp => self.jmp_abs(bus),
-            Op::Pha | Op::Php => self.push_op(bus, op),
-            Op::Pla | Op::Plp => self.pull_op(bus, op),
-            Op::Bpl | Op::Bmi | Op::Bvc | Op::Bvs | Op::Bcc | Op::Bcs | Op::Bne | Op::Beq => {
-                self.branch(bus, op)
-            }
+            Op::Pha | Op::Php | Op::Phx | Op::Phy => self.push_op(bus, op),
+            Op::Pla | Op::Plp | Op::Plx | Op::Ply => self.pull_op(bus, op),
+            Op::Bpl
+            | Op::Bmi
+            | Op::Bvc
+            | Op::Bvs
+            | Op::Bcc
+            | Op::Bcs
+            | Op::Bne
+            | Op::Beq
+            | Op::Bra => self.branch(bus, op),
+            Op::NopAbs | Op::NopAbs3 => self.nop_abs(bus, op),
+            // Handled in the fetch cycle.
+            Op::Nop1 => true,
             Op::Jam => {
                 read(bus, self.pc);
                 self.jammed = true;
@@ -316,6 +356,9 @@ impl Core {
             5 => {
                 self.data = read(bus, self.vector);
                 self.p |= I;
+                if self.cmos {
+                    self.p &= !D;
+                }
                 false
             }
             _ => {
@@ -453,15 +496,77 @@ impl Core {
         }
     }
 
+    /// JMP (abs) and JMP (abs,X) of the 65C02: the pointer's high byte
+    /// comes from the next address with carry; one more cycle reads it
+    /// again (abs) or reads the operand's low byte again before the
+    /// pointer (abs,X).
+    fn jmp_ind_cmos(&mut self, bus: &mut dyn Bus, indexed: bool) -> bool {
+        match (self.t, indexed) {
+            (1, _) => {
+                self.ea = u16::from(self.fetch_pc(bus));
+                false
+            }
+            (2, _) => {
+                self.ea |= u16::from(self.fetch_pc(bus)) << 8;
+                if indexed {
+                    self.ea = self.ea.wrapping_add(u16::from(self.x));
+                }
+                false
+            }
+            (3, true) => {
+                read(bus, self.pc.wrapping_sub(2));
+                false
+            }
+            (3, false) | (4, true) => {
+                self.data = read(bus, self.ea);
+                false
+            }
+            (4, false) => {
+                // First the next address without carry, as the NMOS reads it.
+                read(bus, (self.ea & 0xff00) | (self.ea.wrapping_add(1) & 0x00ff));
+                false
+            }
+            (_, true) => {
+                let hi = read(bus, self.ea.wrapping_add(1));
+                self.pc = u16::from_le_bytes([self.data, hi]);
+                true
+            }
+            _ => {
+                let hi = read(bus, self.ea.wrapping_add(1));
+                self.pc = u16::from_le_bytes([self.data, hi]);
+                true
+            }
+        }
+    }
+
+    /// The 65C02's undefined three-byte NOPs.
+    fn nop_abs(&mut self, bus: &mut dyn Bus, op: Op) -> bool {
+        match self.t {
+            1 => {
+                self.fetch_pc(bus);
+                false
+            }
+            2 => {
+                self.fetch_pc(bus);
+                op == Op::NopAbs3
+            }
+            _ => {
+                read(bus, self.pc.wrapping_sub(1));
+                true
+            }
+        }
+    }
+
     fn push_op(&mut self, bus: &mut dyn Bus, op: Op) -> bool {
         if self.t == 1 {
             read(bus, self.pc);
             false
         } else {
-            let v = if op == Op::Pha {
-                self.a
-            } else {
-                self.p | B | U
+            let v = match op {
+                Op::Pha => self.a,
+                Op::Phx => self.x,
+                Op::Phy => self.y,
+                _ => self.p | B | U,
             };
             self.push(bus, v);
             true
@@ -481,11 +586,20 @@ impl Core {
             }
             _ => {
                 let v = read(bus, self.stack());
-                if op == Op::Pla {
-                    self.a = v;
-                    self.set_nz(v);
-                } else {
-                    self.p = v & !(B | U);
+                match op {
+                    Op::Pla => {
+                        self.a = v;
+                        self.set_nz(v);
+                    }
+                    Op::Plx => {
+                        self.x = v;
+                        self.set_nz(v);
+                    }
+                    Op::Ply => {
+                        self.y = v;
+                        self.set_nz(v);
+                    }
+                    _ => self.p = v & !(B | U),
                 }
                 true
             }
@@ -502,6 +616,7 @@ impl Core {
             Op::Bcs => self.p & C != 0,
             Op::Bne => self.p & Z == 0,
             Op::Beq => self.p & Z != 0,
+            Op::Bra => true,
             _ => false,
         }
     }
@@ -553,9 +668,18 @@ impl Core {
                 self.implied(op);
                 true
             }
-            Mode::Imm => {
+            Mode::Imm if t == 1 => {
                 let v = self.fetch_pc(bus);
+                if self.decimal_cycle(op) {
+                    self.data = v;
+                    return false;
+                }
                 self.read_op(op, v);
+                true
+            }
+            Mode::Imm => {
+                self.decimal_dummy(bus, true);
+                self.read_op(op, self.data);
                 true
             }
             Mode::Zp => {
@@ -600,7 +724,10 @@ impl Core {
                     false
                 }
                 3 => self.fixup(bus, op, kind),
-                _ => self.operand(bus, op, kind, t - 4),
+                _ => {
+                    let skipped = u8::from(self.fast_rmw(op, mode) || self.read_no_fixup(kind));
+                    self.operand(bus, op, kind, t - 4 + skipped)
+                }
             },
             Mode::IndX => match t {
                 1 => {
@@ -639,10 +766,29 @@ impl Core {
                     false
                 }
                 4 => self.fixup(bus, op, kind),
-                _ => self.operand(bus, op, kind, t - 5),
+                _ => {
+                    let skipped = u8::from(self.read_no_fixup(kind));
+                    self.operand(bus, op, kind, t - 5 + skipped)
+                }
             },
-            // Ind and Rel only occur with special operations.
-            Mode::Ind | Mode::Rel => true,
+            Mode::Zpi => match t {
+                1 => {
+                    self.ptr = self.fetch_pc(bus);
+                    false
+                }
+                2 => {
+                    self.ea = u16::from(read(bus, u16::from(self.ptr)));
+                    false
+                }
+                3 => {
+                    let hi = read(bus, u16::from(self.ptr.wrapping_add(1)));
+                    self.ea |= u16::from(hi) << 8;
+                    false
+                }
+                _ => self.operand(bus, op, kind, t - 4),
+            },
+            // Ind, AbsXInd and Rel only occur with special operations.
+            Mode::Ind | Mode::AbsXInd | Mode::Rel => true,
         }
     }
 
@@ -657,16 +803,66 @@ impl Core {
         if kind == Kind::Read && !self.crossed {
             return self.operand(bus, op, kind, 0);
         }
-        read(bus, (self.base & 0xff00) | (self.ea & 0x00ff));
+        let (_, mode) = self.entry();
+        if self.fast_rmw(op, mode) {
+            return self.operand(bus, op, kind, 0);
+        }
+        if self.cmos {
+            // The 65C02 reads the last operand byte again instead of the
+            // address without carry.
+            read(bus, self.pc.wrapping_sub(1));
+        } else {
+            read(bus, (self.base & 0xff00) | (self.ea & 0x00ff));
+        }
         false
+    }
+
+    /// A read whose fix-up cycle was its operand read (no page crossing);
+    /// only a 65C02 decimal-mode ADC/SBC gets past it.
+    fn read_no_fixup(&self, kind: Kind) -> bool {
+        kind == Kind::Read && !self.crossed
+    }
+
+    /// 65C02 shifts at abs,X without a page crossing skip the fix-up cycle.
+    fn fast_rmw(&self, op: Op, mode: Mode) -> bool {
+        self.cmos
+            && mode == Mode::AbsX
+            && !self.crossed
+            && matches!(op, Op::Asl | Op::Lsr | Op::Rol | Op::Ror)
+    }
+
+    /// The 65C02 spends a cycle more on ADC and SBC in decimal mode.
+    fn decimal_cycle(&self, op: Op) -> bool {
+        self.cmos && self.p & D != 0 && matches!(op, Op::Adc | Op::Sbc)
+    }
+
+    /// That cycle's bus access: the operand again, or for an immediate
+    /// operand a fixed zero-page address ($56 for ADC, $00 for SBC; Tom
+    /// Harte's `synertek65c02` traces).
+    fn decimal_dummy(&mut self, bus: &mut dyn Bus, immediate: bool) {
+        let addr = match (immediate, self.entry().0) {
+            (false, _) => self.ea,
+            (true, Op::Adc) => 0x56,
+            (true, _) => 0x00,
+        };
+        read(bus, addr);
     }
 
     /// Operand cycles at the effective address; `k` counts from 0.
     fn operand(&mut self, bus: &mut dyn Bus, op: Op, kind: Kind, k: u8) -> bool {
         match (kind, k) {
-            (Kind::Read, _) => {
+            (Kind::Read, 0) => {
                 let v = read(bus, self.ea);
+                if self.decimal_cycle(op) {
+                    self.data = v;
+                    return false;
+                }
                 self.read_op(op, v);
+                true
+            }
+            (Kind::Read, _) => {
+                self.decimal_dummy(bus, false);
+                self.read_op(op, self.data);
                 true
             }
             (Kind::Write, _) => {
@@ -678,8 +874,13 @@ impl Core {
                 false
             }
             (Kind::Rmw, 1) => {
-                // Dummy write of the unmodified value.
-                write(bus, self.ea, self.data);
+                // Dummy write of the unmodified value (a second read on the
+                // 65C02).
+                if self.cmos {
+                    read(bus, self.ea);
+                } else {
+                    write(bus, self.ea, self.data);
+                }
                 self.data = self.rmw_op(op, self.data);
                 false
             }
@@ -738,8 +939,10 @@ impl Core {
             Op::Clv => self.p &= !V,
             Op::Cld => self.p &= !D,
             Op::Sed => self.p |= D,
-            // Accumulator forms of the shifts.
-            Op::Asl | Op::Lsr | Op::Rol | Op::Ror => self.a = self.rmw_op(op, self.a),
+            // Accumulator forms of the shifts (and the 65C02's INC A, DEC A).
+            Op::Asl | Op::Lsr | Op::Rol | Op::Ror | Op::Inc | Op::Dec => {
+                self.a = self.rmw_op(op, self.a)
+            }
             _ => {}
         }
     }
@@ -780,6 +983,8 @@ impl Core {
             Op::Cmp => self.compare(self.a, v),
             Op::Cpx => self.compare(self.x, v),
             Op::Cpy => self.compare(self.y, v),
+            // BIT # (65C02) sets Z only.
+            Op::Bit if self.entry().1 == Mode::Imm => self.set_flag(Z, self.a & v == 0),
             Op::Bit => {
                 self.set_flag(Z, self.a & v == 0);
                 self.set_flag(N, v & 0x80 != 0);
@@ -829,6 +1034,7 @@ impl Core {
             Op::Stx => self.x,
             Op::Sty => self.y,
             Op::Sax => self.a & self.x,
+            Op::Stz => 0,
             Op::Sha => return self.store_unstable(bus, self.a & self.x),
             Op::Shx => return self.store_unstable(bus, self.x),
             Op::Shy => return self.store_unstable(bus, self.y),
@@ -902,6 +1108,14 @@ impl Core {
                 self.sbc(r);
                 r
             }
+            Op::Tsb => {
+                self.set_flag(Z, self.a & v == 0);
+                v | self.a
+            }
+            Op::Trb => {
+                self.set_flag(Z, self.a & v == 0);
+                v & !self.a
+            }
             _ => v,
         }
     }
@@ -965,6 +1179,10 @@ impl Core {
         }
         self.set_flag(C, r >= 0x100);
         self.a = r as u8;
+        if self.cmos {
+            // The 65C02's N and Z follow the decimal result.
+            self.set_nz(self.a);
+        }
     }
 
     /// SBC including NMOS decimal mode; flags always follow the binary result.
@@ -982,6 +1200,21 @@ impl Core {
             return;
         }
         let (a, m, b) = (i16::from(self.a), i16::from(v), i16::from(borrow as u8));
+        if self.cmos {
+            // Bruce Clark, "Decimal Mode", appendix A, 65C02 SBC (steps
+            // 3a-3e): the high adjustment first, then the low one.
+            let lo = (a & 0x0f) - (m & 0x0f) - b;
+            let mut r = a - m - b;
+            if r < 0 {
+                r -= 0x60;
+            }
+            if lo < 0 {
+                r -= 0x06;
+            }
+            self.a = r as u8;
+            self.set_nz(self.a);
+            return;
+        }
         let mut lo = (a & 0x0f) - (m & 0x0f) - b;
         if lo < 0 {
             lo = ((lo - 0x06) & 0x0f) - 0x10;

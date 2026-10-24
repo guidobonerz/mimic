@@ -261,6 +261,30 @@ fn swap_disk(m: &mut dyn Machine, path: &str) -> String {
     }
 }
 
+/// Put a dropped cartridge image into the machine's cartridge slot.
+fn insert_cart(m: &mut dyn Machine, path: &str) -> String {
+    let name = file_name(path);
+    let Some(info) = m
+        .media_slots()
+        .into_iter()
+        .find(|s| s.kind == emu_core::media::MediaKind::Cartridge)
+    else {
+        return format!("{name}: no cartridge slot");
+    };
+    let media = match media_backends::image::open_cart(std::path::Path::new(path)) {
+        Ok(m) => m,
+        Err(e) => return format!("{name}: {e}"),
+    };
+    let Some(slot) = m.media_slot(info.id) else {
+        return format!("{name}: no cartridge slot");
+    };
+    let _ = slot.eject();
+    match slot.insert(media) {
+        Ok(()) => format!("{} {name}", info.name),
+        Err(e) => format!("{name}: {e}"),
+    }
+}
+
 /// Frames the first drive stays empty between taking a disk out and putting
 /// the next one in (about 2 s, as by hand). Software that polls the drive
 /// now and then (Desert Dream checks DF0: about once a second) only sees a
@@ -430,6 +454,16 @@ pub fn spawn(
                 .lock()
                 .map(|mut d| std::mem::take(&mut *d))
                 .unwrap_or_default();
+            // Cartridges go straight into the cartridge slot (the machine
+            // powers up again with them), anything else into the drive.
+            let (carts, dropped): (Vec<String>, Vec<String>) = dropped.into_iter().partition(|p| {
+                media_backends::image::kind_for(std::path::Path::new(p))
+                    == Some(emu_core::media::MediaKind::Cartridge)
+            });
+            if let Some(path) = carts.last() {
+                let msg = insert_cart(session.machine_mut(), path);
+                *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+            }
             if let Some(path) = dropped.into_iter().last() {
                 if let Ok(mut list) = shared.disk_swap.lock() {
                     disk_at = match list.iter().position(|p| *p == path) {

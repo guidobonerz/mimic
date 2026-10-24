@@ -2,6 +2,8 @@ MIMIC:Imitates Machines, Inspects Code
 
 A cycle-accurate multi-machine emulator in Rust. Every machine gets the same remote debugger and a live preview stream (see `CLAUDE.md` for architecture and commands, `docs/` for usage).
 
+The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/user_guide.py`, needs `reportlab`).
+
 ## Status
 
 **Completeness** estimates how much of the planned scope of a component works and is covered by tests. 100 % means the full scope is done and checked against hardware test suites. Below that, the notes name what is missing or unverified. The figures are estimates, made from the test results and open items recorded in `CLAUDE.md` (as of 2026-10-24); they are not measurements.
@@ -10,7 +12,7 @@ A cycle-accurate multi-machine emulator in Rust. Every machine gets the same rem
 
 | CPU | Crate | Used in | Verification | Completeness |
 | --- | --- | --- | --- | --- |
-| MOS 6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 6507, Ricoh 2A03/2A07 | `cpu-6502` | PET, VIC-20, C64, C128, C16/Plus/4, 1541/1571/1581, Atari 8-bit, Atari 2600, NES | Tom Harte (6502, nes6502), Klaus Dormann, Lorenz 264/264 | 95 % (65C02 for the Apple IIe still to come) |
+| MOS 6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 6507, Ricoh 2A03/2A07, CMOS 65C02 | `cpu-6502` | PET, VIC-20, C64, C128, C16/Plus/4, 1541/1571/1581, Atari 8-bit, Atari 2600, NES, Apple II | Tom Harte (6502, nes6502, synertek65c02), Klaus Dormann, Lorenz 264/264 | 97 % (no Rockwell/WDC bit instructions, WAI/STP) |
 | Zilog Z80 | `cpu-z80` | C128, CPC, ZX81, ColecoVision | Tom Harte, ZEXDOC, ZEXALL | 97 % |
 | Motorola 68000 | `cpu-m68k` | Amiga 500/1000/2000/500+ | Tom Harte (all but three contradictory cases) | 97 % |
 | Motorola 68020 / 68EC020 | `cpu-m68k` | Amiga 1200 | unit tests only; timing approximate, no cache | 60 % |
@@ -43,7 +45,7 @@ A cycle-accurate multi-machine emulator in Rust. Every machine gets the same rem
 | Tandy TRS-80 Model I/III | – | Phase 10 | – | 0 % |
 | Mattel Intellivision | – | Phase 13 | – | 0 % |
 | Sinclair ZX Spectrum 48K/128K | – | Phase 15 | – | 0 % |
-| Apple II / II+ / IIe | – | Phase 16 | – | 0 % |
+| Apple II / II+ / IIe | `machine-apple2` | II, II+, IIe, enhanced IIe | all four boot with real ROMs; Zork I boots from DSK; a disk built by the tests boots through the Disk II PROMs; cassette save/load through the monitor; colours checked through the composite stage; DOS 3.3/ProDOS disks, Mockingboard software and WOZ copy protections not yet tried | 70 % |
 | Apple Macintosh 128K–SE | – | Phase 17 | – | 0 % |
 
 ### Chips
@@ -70,7 +72,7 @@ A cycle-accurate multi-machine emulator in Rust. Every machine gets the same rem
 | RIOT 6532 | `chips-atari` | Atari 2600 | 95 % |
 | CRTC 6845 (types 0–2) | `chips-amstrad` | CPC | 85 % |
 | Gate Array | `chips-amstrad` | CPC | 90 % |
-| AY-3-8912 | `chips-amstrad` | CPC, Vectrex | 90 % |
+| AY-3-8912 | `chips-amstrad` | CPC, Vectrex, Apple II Mockingboard | 90 % |
 | 8255 PPI | `chips-amstrad` | CPC | 85 % |
 | µPD765 FDC | `chips-amstrad` | CPC 664/6128 | 80 % |
 | TMS9918A/TMS9929A VDP | `chips-ti` | ColecoVision | 80 % (VRAM access timing, reference pictures open) |
@@ -94,7 +96,8 @@ A cycle-accurate multi-machine emulator in Rust. Every machine gets the same rem
 | Amiga floppy DF0–DF3 (MFM, DD/HD, write-back) | `drives-other` | 90 % |
 | Atari SIO drives 810/1050/XF551, cassette | `drives-other` | 85 % |
 | CPC disc drives and tape | `drives-other` | 85 % |
-| Image formats: PRG, D64/D71/D81, T64, TAP, CRT, ADF/extended ADF, DMS, ATR, XEX, CAS, CAR, DSK/EDSK, CDT/TZX, DMK | `media` | 90 % |
+| Apple Disk II (P6 sequencer or functional model, quarter tracks, write-back), cassette (WAV) | `drives-other` | 80 % |
+| Image formats: PRG, D64/D71/D81, T64, TAP, CRT, ADF/extended ADF, DMS, ATR, XEX, CAS, CAR, DSK/EDSK, CDT/TZX, DMK, Apple DSK/DO/PO/NIB, WOZ 1/2, WAV | `media` | 90 % |
 | Backends: image file, copy-on-write overlay, host directory | `media-backends` | 90 % |
 | Real-hardware backends (OpenCBM, flux readers) | – | 0 % |
 
@@ -102,7 +105,7 @@ A cycle-accurate multi-machine emulator in Rust. Every machine gets the same rem
 
 | Device | Ports | Completeness |
 | --- | --- | --- |
-| Digital joystick | CBM, Atari, CPC, Amiga, Coleco, NES, SNES | 100 % |
+| Digital joystick | CBM, Atari, CPC, Amiga, Coleco, NES, SNES, Apple II | 100 % |
 | Paddles | CBM, Atari | 90 % |
 | 1351 mouse | CBM | 90 % |
 | Amiga mouse (quadrature) | Amiga | 95 % |
@@ -113,6 +116,7 @@ A cycle-accurate multi-machine emulator in Rust. Every machine gets the same rem
 | SNES pad, mouse, Super Scope, multitap | SNES | 85 % |
 | Vectrex controller (analog stick), light pen | Vectrex | 70 % |
 | Vectrex 3D Imager (motor, index pulse, colour wheel) | Vectrex | 40 % (not yet checked with a game) |
+| Apple II joystick (analog) and paddles | Apple II | 80 % |
 | C64/Atari light pens | – | 0 % |
 | Host gamepads (`gilrs`: Xbox 360 and other XInput/HID pads; D-pad, left stick digital or analog, A/B/X/Y, shoulders, Back/Start) | all joystick ports | 85 % (only the first pad mapped by default; no mapping UI) |
 

@@ -1,11 +1,13 @@
-//! Amiga floppy (MFM), Atari SIO drives, CPC FDC drives, datasettes.
+//! Amiga floppy (MFM), Atari SIO drives, CPC FDC drives, Apple Disk II, datasettes.
 
 #![forbid(unsafe_code)]
 
 pub mod amiga_drive;
+pub mod apple_tape;
 pub mod cpc_drive;
 pub mod cpc_tape;
 pub mod datasette;
+pub mod disk2;
 pub mod recorder;
 pub mod sio;
 

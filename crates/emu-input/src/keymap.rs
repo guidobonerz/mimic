@@ -972,6 +972,85 @@ pub static ZX81: Keymap = Keymap {
     entries: ZX81_POSITIONAL,
 };
 
+/// Apple II: machine keys are what a key sends unshifted on the IIe's US
+/// keyboard (see `machine-apple2::keyboard`), so the PC's keys map by
+/// their legends. Backspace is ← (the Apple's backspace), Delete is
+/// DELETE, the Alt keys are Open Apple and Solid Apple, F5 is RESET
+/// (with Ctrl on the IIe).
+const APPLE2_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Backquote", &[0x60]),
+    ("Digit1", &[0x31]),
+    ("Digit2", &[0x32]),
+    ("Digit3", &[0x33]),
+    ("Digit4", &[0x34]),
+    ("Digit5", &[0x35]),
+    ("Digit6", &[0x36]),
+    ("Digit7", &[0x37]),
+    ("Digit8", &[0x38]),
+    ("Digit9", &[0x39]),
+    ("Digit0", &[0x30]),
+    ("Minus", &[0x2d]),
+    ("Equal", &[0x3d]),
+    ("Backspace", &[0x08]),
+    ("Tab", &[0x09]),
+    ("KeyQ", &[0x71]),
+    ("KeyW", &[0x77]),
+    ("KeyE", &[0x65]),
+    ("KeyR", &[0x72]),
+    ("KeyT", &[0x74]),
+    ("KeyY", &[0x79]),
+    ("KeyU", &[0x75]),
+    ("KeyI", &[0x69]),
+    ("KeyO", &[0x6f]),
+    ("KeyP", &[0x70]),
+    ("BracketLeft", &[0x5b]),
+    ("BracketRight", &[0x5d]),
+    ("Backslash", &[0x5c]),
+    ("CapsLock", &[0x102]),
+    ("KeyA", &[0x61]),
+    ("KeyS", &[0x73]),
+    ("KeyD", &[0x64]),
+    ("KeyF", &[0x66]),
+    ("KeyG", &[0x67]),
+    ("KeyH", &[0x68]),
+    ("KeyJ", &[0x6a]),
+    ("KeyK", &[0x6b]),
+    ("KeyL", &[0x6c]),
+    ("Semicolon", &[0x3b]),
+    ("Quote", &[0x27]),
+    ("Enter", &[0x0d]),
+    ("NumpadEnter", &[0x0d]),
+    ("ShiftLeft", &[0x100]),
+    ("ShiftRight", &[0x100]),
+    ("KeyZ", &[0x7a]),
+    ("KeyX", &[0x78]),
+    ("KeyC", &[0x63]),
+    ("KeyV", &[0x76]),
+    ("KeyB", &[0x62]),
+    ("KeyN", &[0x6e]),
+    ("KeyM", &[0x6d]),
+    ("Comma", &[0x2c]),
+    ("Period", &[0x2e]),
+    ("Slash", &[0x2f]),
+    ("ControlLeft", &[0x101]),
+    ("ControlRight", &[0x101]),
+    ("AltLeft", &[0x104]),
+    ("AltRight", &[0x105]),
+    ("Space", &[0x20]),
+    ("Escape", &[0x1b]),
+    ("Delete", &[0x7f]),
+    ("ArrowLeft", &[0x08]),
+    ("ArrowRight", &[0x15]),
+    ("ArrowUp", &[0x0b]),
+    ("ArrowDown", &[0x0a]),
+    ("F5", &[0x103]),
+];
+
+pub static APPLE2: Keymap = Keymap {
+    machine: "apple2",
+    entries: APPLE2_POSITIONAL,
+};
+
 /// The positional keymap for a machine id.
 pub fn positional(machine: &str) -> Option<&'static Keymap> {
     match machine {
@@ -989,6 +1068,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
         "zx81" => Some(&ZX81),
+        "apple2" => Some(&APPLE2),
         _ => None,
     }
 }

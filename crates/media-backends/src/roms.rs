@@ -387,7 +387,47 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ),
         optional("vectrex", &["vectrex", "system", "bios", "exec"], 0x1000),
     ];
+    // Apple II family: every ROM optional, the model picks its set and
+    // reports what is missing. Apple part numbers, as dumps are usually
+    // named (341-0011 also as "341011d0.bin", 342-0304 as
+    // "342_0304_CD.bin").
+    const APPLE2: &[RomSpec] = &[
+        optional("apple2-e0", &["341-0001", "3410001"], 0x800),
+        optional("apple2-e8", &["341-0002", "3410002"], 0x800),
+        optional("apple2-f0", &["341-0003", "3410003"], 0x800),
+        optional("apple2-f8", &["341-0004", "3410004"], 0x800),
+        optional(
+            "apple2plus",
+            &["apple2plus", "apple2-plus", "apple-ii-plus"],
+            0x3000,
+        ),
+        optional("apple2plus-d0", &["341-0011", "3410011", "341011"], 0x800),
+        optional("apple2plus-d8", &["341-0012", "3410012", "341012"], 0x800),
+        optional("apple2plus-e0", &["341-0013", "3410013", "341013"], 0x800),
+        optional("apple2plus-e8", &["341-0014", "3410014", "341014"], 0x800),
+        optional("apple2plus-f0", &["341-0015", "3410015", "341015f0"], 0x800),
+        optional("apple2plus-f8", &["341-0020", "3410020", "341020"], 0x800),
+        optional("apple2e-cd", &["342-0135", "3420135"], 0x2000),
+        optional("apple2e-ef", &["342-0134", "3420134"], 0x2000),
+        optional("apple2ee-cd", &["342-0304", "3420304"], 0x2000),
+        optional("apple2ee-ef", &["342-0303", "3420303"], 0x2000),
+        optional("apple2-video", &["341-0036", "3410036"], 0x800),
+        optional(
+            "apple2e-video",
+            &["342-0133", "3420133", "unenhanced-video-rom"],
+            0x1000,
+        ),
+        optional(
+            "apple2ee-video",
+            &["342-0265", "3420265", "enhanced-video-rom"],
+            0x1000,
+        ),
+        optional("disk2", &["341-0027", "3410027"], 0x100),
+        // The P6 is 341-0028; some dumps are named 342-0028.
+        optional("disk2-p6", &["341-0028", "3410028", "3420028"], 0x100),
+    ];
     match machine {
+        "apple2" => APPLE2,
         "zx81" => ZX81,
         "vectrex" => VECTREX,
         "coleco" => COLECO,
@@ -421,6 +461,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "coleco" => &["coleco", "colecovision"],
         "snes" => &["snes", "sfc", "superfamicom"],
         "vectrex" => &["vectrex"],
+        "apple2" => &["apple2", "apple", "appleii"],
         _ => &[],
     }
 }

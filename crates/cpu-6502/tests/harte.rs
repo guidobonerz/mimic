@@ -1,5 +1,5 @@
 //! Tom Harte's SingleStepTests (`65x02/6502/v1` and, for the NES 2A03,
-//! `65x02/nes6502/v1`, MIT): per opcode 10 000 random initial states with
+//! `65x02/nes6502/v1`, and for the 65C02 `65x02/synertek65c02/v1`, MIT): per opcode 10 000 random initial states with
 //! the expected final state and the exact cycle-by-cycle bus trace.
 //!
 //! Data: `tools/fetch-testdata.sh`, then set `EMU_TESTDATA_DIR`.
@@ -160,6 +160,12 @@ fn harte_6502_all_opcodes() {
 #[ignore = "needs EMU_TESTDATA_DIR (tools/fetch-testdata.sh)"]
 fn harte_nes6502_all_opcodes() {
     all_opcodes("nes6502", Variant::Rp2A03);
+}
+
+#[test]
+#[ignore = "needs EMU_TESTDATA_DIR (tools/fetch-testdata.sh)"]
+fn harte_65c02_all_opcodes() {
+    all_opcodes("synertek65c02", Variant::Cmos65C02);
 }
 
 fn all_opcodes(set: &str, variant: Variant) {

@@ -43,6 +43,11 @@ pub enum Variant {
     /// "CPU"; Tom Harte's `nes6502` tests). APU, OAM DMA and the joypad
     /// strobe on the same die are emulated by the machine.
     Rp2A03,
+    /// CMOS 65C02 as in the enhanced Apple IIe (NCR/GTE; no Rockwell bit
+    /// instructions, no WAI/STP): new instructions and addressing modes,
+    /// every undefined opcode a NOP, fixed JMP (abs), valid N/Z in
+    /// decimal mode at the cost of a cycle, D cleared on interrupts.
+    Cmos65C02,
 }
 
 impl Variant {
@@ -52,7 +57,11 @@ impl Variant {
             Variant::Mos6510 => Some(0x3f),
             Variant::Mos8502 => Some(0x7f),
             Variant::Mos7501 => Some(0xdf),
-            Variant::Nmos6502 | Variant::Sally | Variant::Mos6507 | Variant::Rp2A03 => None,
+            Variant::Nmos6502
+            | Variant::Sally
+            | Variant::Mos6507
+            | Variant::Rp2A03
+            | Variant::Cmos65C02 => None,
         }
     }
 }
@@ -107,6 +116,7 @@ impl Cpu6502 {
                 config.lxa_magic,
                 config.variant != Variant::Rp2A03,
                 config.variant != Variant::Rp2A03,
+                config.variant == Variant::Cmos65C02,
             ),
             variant: config.variant,
             rdy: true,
@@ -309,7 +319,7 @@ impl Cpu for Cpu6502 {
     }
 
     fn disassemble(&self, bus: &dyn Bus, addr: u32) -> Instr {
-        disasm::disassemble(bus, addr as u16)
+        disasm::disassemble(bus, addr as u16, self.core.cmos)
     }
 }
 

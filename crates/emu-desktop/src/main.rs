@@ -76,15 +76,17 @@ usage: mimic-desktop [options]
   --machine ID          machine id (default: c64)
   --model NAME          model variant (C64: pal, ntsc)
   --prg FILE            program (PRG/T64, Atari XEX) to load and run
-  --disk FILE           disk image for drive 8 (Atari: ATR for D1:, Amiga: DF0:);
+  --disk FILE           disk image for drive 8 (Atari: ATR for D1:, Amiga: DF0:,
+                        Apple II: DSK/DO/PO/NIB/WOZ for slot 6 drive 1);
                         repeat for the next drives, extra disks are swapped
                         into the first drive with Ctrl+D
   --tape FILE           TAP image for the datasette, CAS for the Atari program
-                        recorder (a PRG is recorded in the machine's tape format)
+                        recorder, WAV for the Apple II cassette (a PRG is
+                        recorded in the machine's tape format)
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
                         raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
-                        SNES .sfc/.smc
+                        SNES .sfc/.smc; Vectrex .vec/.bin
   --autostart           load and run the disk after boot
   --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
@@ -1048,6 +1050,7 @@ fn run() -> Result<(), String> {
                     | PortKind::NesControl
                     | PortKind::SnesControl
                     | PortKind::VectrexControl
+                    | PortKind::AppleGame
             )
         })
         .count()

@@ -25,15 +25,17 @@ usage: mimic-headless [options]
   --prg FILE            program (PRG/T64, Atari XEX) into the machine's program slot,
                         or as its \"program\" ROM role (sim6502)
   --disk FILE           disk image into the first disk drive (drive 8, Atari D1: ATR;
-                        Amiga ADF, HD ADF, extended ADF or DMS); repeat for the
+                        Amiga ADF, HD ADF, extended ADF or DMS; Apple II DSK/DO/PO,
+                        NIB or WOZ in slot 6); repeat for the
                         next drives (Amiga DF1: with --option drives=2)
   --tape FILE           TAP image into the datasette, CAS into the Atari
-                        program recorder (PLAY pressed); a PRG is recorded
+                        program recorder, WAV into the Apple II cassette
+                        (PLAY pressed); a PRG is recorded
                         in the machine's tape format first
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
                         raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
-                        SNES .sfc/.smc
+                        SNES .sfc/.smc; Vectrex .vec/.bin
   --autostart           load and run the disk after boot (C64)
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
   --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR)

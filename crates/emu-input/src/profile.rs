@@ -194,7 +194,7 @@ impl Profile {
         let port = match machine {
             "c64" | "c128" => Some(1),
             "vic20" | "c16" | "plus4" | "atari8" | "atari2600" | "cpc" | "coleco" | "nes"
-            | "snes" | "vectrex" => Some(0),
+            | "snes" | "vectrex" | "apple2" => Some(0),
             // The Amiga's joystick port is game port 1 (port 0 is the mouse's).
             "amiga" => Some(1),
             _ => None,
@@ -210,8 +210,8 @@ impl Profile {
                     pad: 0,
                     fire: default_fire(),
                     deadzone: default_deadzone(),
-                    // The Vectrex's controller has an analog stick.
-                    analog: machine == "vectrex",
+                    // The Vectrex's and the Apple II's sticks are analog.
+                    analog: matches!(machine, "vectrex" | "apple2"),
                 },
             });
         }

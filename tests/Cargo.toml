@@ -20,6 +20,7 @@ machine-atari8.workspace = true
 machine-cpc.workspace = true
 machine-zx81.workspace = true
 machine-amiga.workspace = true
+machine-apple2.workspace = true
 
 [dev-dependencies]
 emu-debug.workspace = true

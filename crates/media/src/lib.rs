@@ -1,10 +1,12 @@
-//! Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM; extended ADF, DMS), ATR, XEX, CAS, DSK, CDT, DMK/JV1/JV3.
+//! Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM; extended ADF, DMS), ATR, XEX, CAS, DSK, CDT, DMK/JV1/JV3,
+//! Apple II DSK/DO/PO (→GCR 6-and-2) and WOZ, WAV recordings.
 //!
 //! Pure parsing and encoding: no files, no host access (golden rule 10).
 //! Bytes come from a `MediaBackend`.
 
 #![forbid(unsafe_code)]
 
+pub mod a2disk;
 pub mod adf;
 pub mod adfx;
 pub mod atr;
@@ -21,6 +23,7 @@ pub mod mfm;
 pub mod prg;
 pub mod t64;
 pub mod tap;
+pub mod wav;
 pub mod xex;
 
 pub use d64::{Format, D64};

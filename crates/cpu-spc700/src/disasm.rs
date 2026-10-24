@@ -261,6 +261,9 @@ const OPS: [&str; 256] = [
     "MOV t,d",
     "MOV Y,d+X",
     "INC Y",
+    // NOTE: wrong text. $FD is `MOV Y,A` ($DD is `MOV A,Y`); found while
+    // porting this table to the raw assembler. Display only, execution is
+    // unaffected.
     "MOV A,Y",
     "DBNZ Y,r",
     "STOP", //
