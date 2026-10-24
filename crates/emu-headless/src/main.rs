@@ -20,6 +20,11 @@ use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer, Rem
 const USAGE: &str = "\
 usage: mimic-headless [options]
 
+  --profile NAME        start profile from profiles.yaml (./ or the user's
+                        config folder; --profiles FILE for another file);
+                        flags given here override it
+  --list-profiles       list the profiles and exit
+  --save-profile NAME   store this command line's setup as a profile
   --machine ID          machine id (default: sim6502); see --list
   --model NAME          model variant
   --prg FILE            program (PRG/T64, Atari XEX) into the machine's program slot,
@@ -530,7 +535,24 @@ fn wav(samples: &[i16], format: emu_core::AudioFormat) -> Vec<u8> {
 }
 
 fn main() -> ExitCode {
-    let args = match parse_args(std::env::args().skip(1)) {
+    // Start profiles (profiles.yaml) become flags in front of the others.
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let mut notes = Vec::new();
+    let argv = match emu_profile::prepare(&raw, emu_profile::Frontend::Headless, &mut notes) {
+        Ok(emu_profile::Prepared::Run(a, _)) => a,
+        Ok(emu_profile::Prepared::Done(text)) => {
+            print!("{text}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    for n in notes {
+        eprintln!("{n}");
+    }
+    let args = match parse_args(argv) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("error: {e}\n\n{USAGE}");

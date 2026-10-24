@@ -447,14 +447,38 @@ bullets(
     "joystick and the gamepad to another port.",
 )
 
+h2("Start profiles")
+p("""A **start profile** stores a whole machine setup under a name: the
+machine and model, its options (memory, drives, slots, port devices), the
+ROMs, the disks and other media, the monitor, window and joystick settings
+and the debugger and preview servers. All profiles live in one YAML file,
+`profiles.yaml`, looked for in the working folder and then in the user's
+configuration folder (`%APPDATA%\\mimic` on Windows, `~/.config/mimic`
+elsewhere); `--profiles FILE` names another. Its `settings` part holds
+what applies to every profile: the ROM folder (`roms`), where snapshots go
+(`snapshots`) and the folder relative disk paths count from (`media`).
+`docs/profiles.example.yaml` shows every key.""")
+table(["Command", "Effect"], [
+    ["`mimic-desktop --profile mac-se-755`", "start a profile; flags given as well override it "
+     "(`--profile c64 --model ntsc`)"],
+    ["`mimic-desktop`", "no machine and no profile given: the window lists the profiles, "
+     "a click starts one"],
+    ["`mimic-desktop --list-profiles`", "list the profiles"],
+    ["`... --save-profile NAME`", "store the setup of this command line (with a profile, "
+     "its values too) as a profile; a new name is added at the end of the file, "
+     "replacing an existing one rewrites the file"],
+], [0.42, 0.58])
+p("""`mimic-headless` takes the same profile flags (without the window
+settings); the browser frontend reads a profile file the page loads.""")
+
 h2("The status footer")
 p("""Ctrl+Space shows a status line below the picture. On the left is a
 **speed control**: click a step or drag the knob for 10 %, 25 %, 50 %,
 100 %, 150 %, 200 %, 400 % or 800 % of real time (sound is muted away from
 100 %). Next to it the **snapshot** button saves the picture as a PNG file
-named after the machine (`mac-001.png`, `mac-002.png` …) in the folder the
-emulator was started from; the footer shows the file name for a few
-seconds. It then shows the emulated time since power-on (m:ss.t) with the
+named after the machine (`mac-001.png`, `mac-002.png` …) in the `snapshots`
+folder of the profile file's settings, else in the folder the emulator was
+started from; the footer shows the file name for a few seconds. It then shows the emulated time since power-on (m:ss.t) with the
 frame number, the mouse position in picture pixels, the joystick directions
 and the drives' activity and errors.""")
 

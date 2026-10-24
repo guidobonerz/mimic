@@ -15,7 +15,7 @@ import tomllib
 # Crate-name pattern -> internal crates it may depend on (patterns allowed).
 # First matching rule wins; a workspace crate with no rule is an error.
 FRONTEND_DEPS = ["emu-core", "emu-machines", "emu-debug", "emu-preview", "video-crt",
-                 "emu-input", "media-backends"]
+                 "emu-input", "media-backends", "emu-profile"]
 RULES = [
     ("emu-core", []),
     ("cpu-*", ["emu-core"]),
@@ -25,6 +25,7 @@ RULES = [
     ("devices-cartridge", ["emu-core", "media"]),
     ("video-crt", ["emu-core"]),
     ("emu-input", ["emu-core"]),
+    ("emu-profile", []),                           # start profiles: frontends only
     ("media-backends", ["emu-core", "media"]),  # host folders as D64 images
     ("drives-*", ["emu-core", "cpu-*", "chips-*", "media"]),
     ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media"]),

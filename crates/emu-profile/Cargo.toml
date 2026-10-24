@@ -1,0 +1,13 @@
+[package]
+name = "emu-profile"
+description = "Start profiles for the frontends (YAML)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_yaml_ng.workspace = true

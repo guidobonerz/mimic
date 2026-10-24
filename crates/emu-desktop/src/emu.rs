@@ -112,6 +112,8 @@ pub struct Shared {
     /// (named after [`Shared::snapshot_name`] in the working folder).
     pub snapshot: AtomicBool,
     pub snapshot_name: Mutex<String>,
+    /// Where snapshots go (`settings.snapshots`; none: the working folder).
+    pub snapshot_dir: Mutex<Option<std::path::PathBuf>>,
     /// The last snapshot's message for the footer and when it was saved.
     pub snapshot_done: Mutex<Option<(String, Instant)>>,
 }
@@ -182,6 +184,7 @@ impl Shared {
             speed: AtomicU8::new(crate::footer::NORMAL_SPEED as u8),
             snapshot: AtomicBool::new(false),
             snapshot_name: Mutex::new(String::from("mimic")),
+            snapshot_dir: Mutex::new(None),
             snapshot_done: Mutex::new(None),
         }
     }
@@ -679,8 +682,9 @@ pub fn spawn(
 }
 
 /// Save the shown screen (the raw picture, as the debugger and preview
-/// see it) as `<name>-NNN.png` with the first unused number in the working
-/// folder; returns the footer's message.
+/// see it) as `<name>-NNN.png` with the first unused number in the
+/// snapshot folder (`settings.snapshots` of the profile file, else the
+/// working folder); returns the footer's message.
 fn save_snapshot(shared: &Shared, machine: &dyn Machine, screen: ScreenId) -> String {
     let frame = machine
         .screen(screen)
@@ -691,8 +695,19 @@ fn save_snapshot(shared: &Shared, machine: &dyn Machine, screen: ScreenId) -> St
         .lock()
         .map(|n| n.clone())
         .unwrap_or_else(|_| "mimic".into());
+    let dir = shared
+        .snapshot_dir
+        .lock()
+        .ok()
+        .and_then(|d| d.clone())
+        .unwrap_or_default();
+    if !dir.as_os_str().is_empty() {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return format!("snapshot failed: {}: {e}", dir.display());
+        }
+    }
     let Some(path) = (1..10_000)
-        .map(|n| std::path::PathBuf::from(format!("{prefix}-{n:03}.png")))
+        .map(|n| dir.join(format!("{prefix}-{n:03}.png")))
         .find(|p| !p.exists())
     else {
         return "snapshot: no free file name".into();

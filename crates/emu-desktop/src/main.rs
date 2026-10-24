@@ -15,6 +15,7 @@ mod footer;
 mod gfx;
 mod host;
 mod panel;
+mod picker;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -73,6 +74,12 @@ fn window_icon() -> Option<Icon> {
 const USAGE: &str = "\
 usage: mimic-desktop [options]
 
+  --profile NAME        start profile from profiles.yaml (./ or the user's
+                        config folder; --profiles FILE for another file);
+                        flags given here override it. Without --machine and
+                        --profile the window lists the profiles to choose
+  --list-profiles       list the profiles and exit
+  --save-profile NAME   store this command line's setup as a profile
   --machine ID          machine id (default: c64)
   --model NAME          model variant (C64: pal, ntsc)
   --prg FILE            program (PRG/T64, Atari XEX) to load and run
@@ -90,7 +97,10 @@ usage: mimic-desktop [options]
                         raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
                         SNES .sfc/.smc; Vectrex .vec/.bin
   --autostart           load and run the disk after boot
-  --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
+  --rom-dir DIR         ROM folder (default: settings.roms of profiles.yaml,
+                        then $EMU_ROM_DIR)
+  --rom ROLE=FILE       a single ROM image for a role (repeatable)
+  --speed PERCENT       start at 10, 25, 50, 100, 150, 200, 400 or 800 % speed
   --option KEY=VALUE    machine option (repeatable)
   --crt PROFILE         monitor: raw, 1702, 1084s, 1084s-rgb, tv, pal-tv, ntsc-tv,
                         pet-white, pet-green, ctm644, gt65, mac or a .toml file
@@ -145,8 +155,8 @@ fires), NUMPAD or OFF; JOY PORT (machines with several joystick ports)
 moves the joysticks to another port.
 Ctrl+Space shows or hides the status footer: a speed slider (click a step
 or drag the knob: 10 % to 800 % of real time; sound is muted off
-100 %), a snapshot button (saves the picture as <machine>-NNN.png in the
-working folder), emulated time since power-on (m:ss.t) and frame count, mouse
+100 %), a snapshot button (saves the picture as <machine>-NNN.png in
+settings.snapshots of profiles.yaml, else the working folder), emulated time since power-on (m:ss.t) and frame count, mouse
 pointer position in frame pixels, joystick directions and drive
 activity/errors.
 With --option port1=mouse1351 (or paddles, driving, also port2) a click into the
@@ -175,13 +185,17 @@ struct Args {
     panel: bool,
     joykeys: Option<JoyKeys>,
     joyport: Option<u8>,
+    /// Single ROM files by role (`--rom`).
+    rom: Vec<(String, String)>,
+    /// Start speed in percent.
+    speed: Option<u32>,
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
 const DEFAULT_VICE_ADDR: &str = "127.0.0.1:6502";
 const DEFAULT_PREVIEW_ADDR: &str = "127.0.0.1:6580";
 
-fn parse_args() -> Result<Option<Args>, String> {
+fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
     let mut a = Args {
         machine: "c64".into(),
         config: MachineConfig::default(),
@@ -201,8 +215,10 @@ fn parse_args() -> Result<Option<Args>, String> {
         panel: true,
         joykeys: None,
         joyport: None,
+        rom: Vec::new(),
+        speed: None,
     };
-    let mut it = std::env::args().skip(1).peekable();
+    let mut it = argv.into_iter().peekable();
     while let Some(flag) = it.next() {
         let mut value = |n: &str| it.next().ok_or_else(|| format!("{n} needs a value"));
         match flag.as_str() {
@@ -234,6 +250,18 @@ fn parse_args() -> Result<Option<Args>, String> {
                 a.config.options.insert("autostart".into(), "on".into());
             }
             "--rom-dir" => a.rom_dir = Some(value("--rom-dir")?.into()),
+            "--rom" => {
+                let kv = value("--rom")?;
+                let (k, v) = kv
+                    .split_once('=')
+                    .ok_or_else(|| format!("--rom expects ROLE=FILE, got '{kv}'"))?;
+                a.rom.push((k.into(), v.into()));
+            }
+            "--speed" => {
+                let v = value("--speed")?;
+                let pct: u32 = v.parse().map_err(|_| format!("--speed {v}: percent"))?;
+                a.speed = Some(pct);
+            }
             "--option" => {
                 let kv = value("--option")?;
                 let (k, v) = kv
@@ -312,6 +340,15 @@ fn insert_into(m: &mut dyn Machine, slot: SlotId, path: &str) -> Result<(), Stri
 
 fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
     let specs = media_backends::roms::specs(&args.machine);
+    let explicit: Vec<(String, Vec<u8>)> = args
+        .rom
+        .iter()
+        .map(|(role, path)| {
+            std::fs::read(path)
+                .map(|d| (role.clone(), d))
+                .map_err(|e| format!("--rom {role}={path}: {e}"))
+        })
+        .collect::<Result<_, _>>()?;
     if !specs.is_empty() && !args.config.options.contains_key("roms") {
         let dir = args.rom_dir.clone().or_else(media_backends::roms::env_dir);
         match dir {
@@ -321,7 +358,8 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             }
             // Machines whose ROMs are all optional (the SNES's sound boot
             // ROM) run without a ROM folder.
-            None if specs.iter().all(|s| s.optional) => {}
+            // Single ROM files (--rom) without a folder: just those.
+            None if specs.iter().all(|s| s.optional) || !explicit.is_empty() => {}
             None => {
                 return Err(
                     "set EMU_ROM_DIR or --rom-dir to the folder with the machine's ROMs".into(),
@@ -329,6 +367,7 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             }
         }
     }
+    args.config.roms.extend(explicit);
     let mut m = emu_machines::registry()
         .create(&args.machine, &args.config)
         .map_err(|e| e.to_string())?;
@@ -480,9 +519,187 @@ struct App {
     footer_top: f64,
     /// The slider's knob is being dragged.
     speed_drag: bool,
+    /// The started machine's thread and servers (none while the picker
+    /// shows).
+    running: Option<Running>,
+    /// The profile picker, while no machine runs yet.
+    picker: Option<picker::Picker>,
+    /// The command line, for starting a picked profile.
+    raw_args: Vec<String>,
+}
+
+/// What must be shut down when the window closes.
+struct Running {
+    emu: std::thread::JoinHandle<()>,
+    server: Option<DebugServer>,
+    preview: Option<PreviewServer>,
+}
+
+/// A started machine: what the window needs.
+struct Started {
+    title: String,
+    profile: Profile,
+    scale: u32,
+    shared: Arc<Shared>,
+    input: Sender<HostEvent>,
+    wants_mouse: bool,
+    footer: bool,
+    panel: bool,
+    running: Running,
 }
 
 impl App {
+    /// The window size for the first frame waiting (through the monitor
+    /// profile, at the largest scale up to `--scale` that fits the screen).
+    fn window_size(&mut self, event_loop: &ActiveEventLoop) -> (u32, u32) {
+        // Size from the machine's first frame through the monitor profile,
+        // at the largest scale up to `--scale` that fits the screen (90 % of
+        // its height); a picture too tall even at scale 1 (the Vectrex's)
+        // gets a proportionally smaller window.
+        let screen_h = event_loop
+            .primary_monitor()
+            .map(|m| m.size().to_logical::<f64>(m.scale_factor()).height * 0.9);
+        let first = self
+            .shared
+            .frames
+            .lock()
+            .ok()
+            .and_then(|q| q.front().map(|f| (f.width, f.height, f.signal)));
+        let size = match first {
+            Some((width, height, signal)) => {
+                let r = emu_core::FrameRef {
+                    width,
+                    height,
+                    pixels: emu_core::frame::PixelData::Rgb(&[]),
+                    luma_chroma: None,
+                    signal,
+                };
+                if let Some(max_h) = screen_h {
+                    while self.scale > 1 && f64::from(height * self.scale) > max_h {
+                        self.scale -= 1;
+                    }
+                }
+                let (w, h) = video_crt::cpu::output_size(&r, &self.profile, self.scale);
+                match screen_h {
+                    Some(max_h) if f64::from(h) > max_h => {
+                        let k = max_h / f64::from(h);
+                        (
+                            (f64::from(w) * k).round() as u32,
+                            (f64::from(h) * k).round() as u32,
+                        )
+                    }
+                    _ => (w, h),
+                }
+            }
+            None => (768, 576),
+        };
+        size
+    }
+
+    /// Lock emulation to the display when its refresh matches the
+    /// machine's frame rate.
+    fn lock_display(&mut self, window: &Window) {
+        // Lock emulation to the display when its refresh matches the
+        // machine's frame rate within 1 % (the audio rate control absorbs
+        // the difference); otherwise run on the wall clock.
+        let machine_hz = self.shared.frames.lock().ok().and_then(|q| {
+            q.front().map(|f| {
+                let s = f.signal;
+                f64::from(s.pixel_clock_hz)
+                    / (f64::from(s.lines_per_field) * f64::from(s.total_pixels)).max(1.0)
+            })
+        });
+        let display_hz = window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz())
+            .map(|mhz| f64::from(mhz) / 1000.0);
+        if let (Some(machine), Some(display)) = (machine_hz, display_hz) {
+            let locked = (display / machine - 1.0).abs() < 0.01;
+            if locked {
+                self.nominal_period_ns = (1e9 / display) as u64;
+                self.period_ns = self.nominal_period_ns as f64;
+                self.shared
+                    .display_period_ns
+                    .store(self.nominal_period_ns, Ordering::Relaxed);
+            }
+            eprintln!(
+                "display {display:.2} Hz, machine {machine:.2} Hz: {}",
+                if locked {
+                    "emulating at the display rate (smooth)"
+                } else {
+                    "wall clock (rates differ: motion is uneven unless the display runs at the machine's rate)"
+                }
+            );
+        }
+    }
+
+    /// Start the machine of a picked profile in this window.
+    fn pick(&mut self, index: usize, event_loop: &ActiveEventLoop) {
+        let Some(name) = self
+            .picker
+            .as_ref()
+            .and_then(|p| p.entries.get(index))
+            .map(|(n, _)| n.clone())
+        else {
+            return;
+        };
+        let mut argv = self.raw_args.clone();
+        argv.extend(["--profile".to_string(), name.clone()]);
+        let started = start_from(&argv);
+        match started {
+            Ok(Some(st)) => self.attach(st, event_loop),
+            Ok(None) => {}
+            Err(e) => {
+                if let Some(p) = &mut self.picker {
+                    p.error = Some(format!("{name}: {e}"));
+                }
+                self.show_picker();
+            }
+        }
+    }
+
+    /// Take over a started machine: its frames, input and window size.
+    fn attach(&mut self, st: Started, event_loop: &ActiveEventLoop) {
+        self.title = st.title;
+        self.profile = st.profile;
+        self.scale = st.scale;
+        self.shared = st.shared;
+        self.input = st.input;
+        self.wants_mouse = st.wants_mouse;
+        self.footer_on = st.footer;
+        self.panel_on = st.panel;
+        self.running = Some(st.running);
+        self.picker = None;
+        let size = self.window_size(event_loop);
+        if let Some(w) = self.window.clone() {
+            let _ = w.request_inner_size(winit::dpi::LogicalSize::new(size.0, size.1));
+            match Gfx::new(w.clone(), self.profile.clone()) {
+                Ok(g) => self.gfx = Some(g),
+                Err(e) => {
+                    self.error = Some(e);
+                    event_loop.exit();
+                    return;
+                }
+            }
+            self.lock_display(&w);
+        }
+    }
+
+    /// Put the picker's picture up.
+    fn show_picker(&self) {
+        if let (Some(p), Ok(mut q)) = (&self.picker, self.shared.frames.lock()) {
+            q.clear();
+            q.push_back(p.frame());
+        }
+    }
+
+    /// The picker row under the pointer.
+    fn picker_row(&self) -> Option<usize> {
+        let (x, y) = self.cursor?;
+        let (_, fy) = self.gfx.as_ref()?.frame_pos(x, y)?;
+        self.picker.as_ref()?.row_at(fy)
+    }
+
     /// The panel control under the pointer, if the panel is shown.
     fn over_panel(&self) -> Option<panel::Hit> {
         let (x, y) = self.cursor?;
@@ -644,47 +861,7 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
-        // Size from the machine's first frame through the monitor profile,
-        // at the largest scale up to `--scale` that fits the screen (90 % of
-        // its height); a picture too tall even at scale 1 (the Vectrex's)
-        // gets a proportionally smaller window.
-        let screen_h = event_loop
-            .primary_monitor()
-            .map(|m| m.size().to_logical::<f64>(m.scale_factor()).height * 0.9);
-        let first = self
-            .shared
-            .frames
-            .lock()
-            .ok()
-            .and_then(|q| q.front().map(|f| (f.width, f.height, f.signal)));
-        let size = match first {
-            Some((width, height, signal)) => {
-                let r = emu_core::FrameRef {
-                    width,
-                    height,
-                    pixels: emu_core::frame::PixelData::Rgb(&[]),
-                    luma_chroma: None,
-                    signal,
-                };
-                if let Some(max_h) = screen_h {
-                    while self.scale > 1 && f64::from(height * self.scale) > max_h {
-                        self.scale -= 1;
-                    }
-                }
-                let (w, h) = video_crt::cpu::output_size(&r, &self.profile, self.scale);
-                match screen_h {
-                    Some(max_h) if f64::from(h) > max_h => {
-                        let k = max_h / f64::from(h);
-                        (
-                            (f64::from(w) * k).round() as u32,
-                            (f64::from(h) * k).round() as u32,
-                        )
-                    }
-                    _ => (w, h),
-                }
-            }
-            None => (768, 576),
-        };
+        let size = self.window_size(event_loop);
         let attrs = Window::default_attributes()
             .with_title(&self.title)
             .with_window_icon(window_icon())
@@ -705,37 +882,8 @@ impl ApplicationHandler for App {
                 return;
             }
         }
-        // Lock emulation to the display when its refresh matches the
-        // machine's frame rate within 1 % (the audio rate control absorbs
-        // the difference); otherwise run on the wall clock.
-        let machine_hz = self.shared.frames.lock().ok().and_then(|q| {
-            q.front().map(|f| {
-                let s = f.signal;
-                f64::from(s.pixel_clock_hz)
-                    / (f64::from(s.lines_per_field) * f64::from(s.total_pixels)).max(1.0)
-            })
-        });
-        let display_hz = window
-            .current_monitor()
-            .and_then(|m| m.refresh_rate_millihertz())
-            .map(|mhz| f64::from(mhz) / 1000.0);
-        if let (Some(machine), Some(display)) = (machine_hz, display_hz) {
-            let locked = (display / machine - 1.0).abs() < 0.01;
-            if locked {
-                self.nominal_period_ns = (1e9 / display) as u64;
-                self.period_ns = self.nominal_period_ns as f64;
-                self.shared
-                    .display_period_ns
-                    .store(self.nominal_period_ns, Ordering::Relaxed);
-            }
-            eprintln!(
-                "display {display:.2} Hz, machine {machine:.2} Hz: {}",
-                if locked {
-                    "emulating at the display rate (smooth)"
-                } else {
-                    "wall clock (rates differ: motion is uneven unless the display runs at the machine's rate)"
-                }
-            );
+        if self.picker.is_none() {
+            self.lock_display(&window);
         }
         self.window = Some(window);
     }
@@ -754,6 +902,27 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // The profile picker: hover highlights, a click starts.
+            WindowEvent::CursorMoved { position, .. } if self.picker.is_some() => {
+                self.cursor = Some((position.x, position.y));
+                let row = self.picker_row();
+                if let Some(p) = &mut self.picker {
+                    if p.hover != row {
+                        p.hover = row;
+                        self.show_picker();
+                    }
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if self.picker.is_some() => {
+                if let Some(i) = self.picker_row() {
+                    self.pick(i, event_loop);
+                }
+            }
+            WindowEvent::KeyboardInput { .. } if self.picker.is_some() => {}
             // The footer's snapshot button: save the picture on a click.
             WindowEvent::MouseInput {
                 state,
@@ -944,6 +1113,9 @@ impl ApplicationHandler for App {
                 // refresh ahead), so normally exactly one frame waits here. A
                 // backlog beyond two frames (window hidden, slow GPU) is
                 // skipped, not replayed.
+                if self.picker.is_some() {
+                    self.show_picker();
+                }
                 let shared = &self.shared;
                 let frame = self.shared.frames.lock().ok().and_then(|mut q| {
                     while q.len() > 2 {
@@ -1050,11 +1222,9 @@ impl ApplicationHandler for App {
     }
 }
 
-fn run() -> Result<(), String> {
-    let Some(mut args) = parse_args()? else {
-        println!("{USAGE}");
-        return Ok(());
-    };
+/// Build and start the machine of `args`: the emulation thread, sound and
+/// the servers asked for.
+fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, String> {
     let machine = build_machine(&mut args)?;
     let profile = match &args.crt {
         Some(name) => load_profile(name)?,
@@ -1192,14 +1362,140 @@ fn run() -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 
-    let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
-    let mut app = App {
+    if let Ok(mut d) = shared.snapshot_dir.lock() {
+        *d = settings.snapshots.as_ref().map(PathBuf::from);
+    }
+    if let Some(pct) = args.speed {
+        // The slider step nearest to the percentage.
+        let step = footer::SPEEDS
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, &s)| s.abs_diff(pct))
+            .map_or(footer::NORMAL_SPEED, |(i, _)| i);
+        shared.speed.store(step as u8, Ordering::Relaxed);
+    }
+    Ok(Started {
         title: format!("mimic — {}", args.machine),
-        shown_title: String::new(),
         profile,
         scale: args.scale,
-        shared: shared.clone(),
+        shared,
         input: tx,
+        wants_mouse,
+        footer: args.footer,
+        panel: args.panel,
+        running: Running {
+            emu,
+            server,
+            preview,
+        },
+    })
+}
+
+/// Profiles, then the command line, then the machine: `None` when there is
+/// nothing to run (`--list-profiles`, `--help`).
+fn start_from(raw: &[String]) -> Result<Option<Started>, String> {
+    let mut notes = Vec::new();
+    let (argv, settings) =
+        match emu_profile::prepare(raw, emu_profile::Frontend::Desktop, &mut notes)? {
+            emu_profile::Prepared::Run(a, s) => (a, s),
+            emu_profile::Prepared::Done(text) => {
+                print!("{text}");
+                return Ok(None);
+            }
+        };
+    for n in notes {
+        eprintln!("{n}");
+    }
+    let Some(args) = parse_args(argv)? else {
+        println!("{USAGE}");
+        return Ok(None);
+    };
+    start(args, &settings).map(Some)
+}
+
+/// The picker's list when the command line names no machine and no
+/// profile and a profile file has profiles.
+fn picker_for(raw: &[String]) -> Option<picker::Picker> {
+    if raw.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "--machine" | "--profile" | "--list-profiles" | "--save-profile" | "--help" | "-h"
+        )
+    }) {
+        return None;
+    }
+    let explicit = raw
+        .iter()
+        .position(|a| a == "--profiles")
+        .and_then(|i| raw.get(i + 1))
+        .map(PathBuf::from);
+    let path = emu_profile::find_file(explicit.as_deref())?;
+    let file = emu_profile::ProfileFile::load(&path).ok()?;
+    if file.profiles.is_empty() {
+        return None;
+    }
+    Some(picker::Picker {
+        entries: file
+            .profiles
+            .iter()
+            .map(|(n, p)| {
+                let what = p.description.clone().unwrap_or_else(|| {
+                    format!(
+                        "{} {}",
+                        p.machine.as_deref().unwrap_or("?"),
+                        p.model.as_deref().unwrap_or("")
+                    )
+                });
+                (n.clone(), what)
+            })
+            .collect(),
+        file: path.display().to_string(),
+        hover: None,
+        error: None,
+    })
+}
+
+fn run() -> Result<(), String> {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let picker = picker_for(&raw);
+    let (st, picker) = match picker {
+        Some(p) => {
+            // A window without a machine: the list of profiles.
+            let (tx, _) = mpsc::channel();
+            let shared = Arc::new(Shared::new());
+            let st = Started {
+                title: "mimic — choose a profile".into(),
+                profile: Profile::preset("raw").unwrap_or_default(),
+                scale: 1,
+                shared,
+                input: tx,
+                wants_mouse: false,
+                footer: false,
+                panel: false,
+                running: Running {
+                    emu: std::thread::spawn(|| {}),
+                    server: None,
+                    preview: None,
+                },
+            };
+            if let Ok(mut q) = st.shared.frames.lock() {
+                q.push_back(p.frame());
+            }
+            (st, Some(p))
+        }
+        None => match start_from(&raw)? {
+            Some(st) => (st, None),
+            None => return Ok(()),
+        },
+    };
+    let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
+    let mut app = App {
+        title: st.title,
+        shown_title: String::new(),
+        profile: st.profile,
+        scale: st.scale,
+        shared: st.shared,
+        input: st.input,
         gilrs: gilrs::Gilrs::new().ok().inspect(|g| {
             for (id, pad) in g.gamepads() {
                 eprintln!("gamepad {}: {}", usize::from(id), pad.name());
@@ -1211,16 +1507,16 @@ fn run() -> Result<(), String> {
         nominal_period_ns: 0,
         period_ns: 0.0,
         shift: false,
-        wants_mouse,
+        wants_mouse: st.wants_mouse,
         mouse_captured: false,
         mouse_buttons: 0,
         ctrl: false,
         swallow_space: false,
-        footer_on: args.footer,
+        footer_on: st.footer,
         swallow_p: false,
         swallow_i: false,
         swallow_d: false,
-        panel_on: args.panel,
+        panel_on: st.panel,
         panel_hits: Vec::new(),
         panel_top: 0.0,
         panel_row: 1.0,
@@ -1232,15 +1528,20 @@ fn run() -> Result<(), String> {
         snapshot_button: None,
         footer_top: 0.0,
         speed_drag: false,
+        running: Some(st.running),
+        picker,
+        raw_args: raw,
     };
     let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
-    shared.quit.store(true, Ordering::Relaxed);
-    let _ = emu.join();
-    if let Some(s) = server {
-        s.shutdown();
-    }
-    if let Some(p) = preview {
-        p.shutdown();
+    app.shared.quit.store(true, Ordering::Relaxed);
+    if let Some(r) = app.running.take() {
+        let _ = r.emu.join();
+        if let Some(s) = r.server {
+            s.shutdown();
+        }
+        if let Some(p) = r.preview {
+            p.shutdown();
+        }
     }
     result?;
     app.error.map_or(Ok(()), Err)

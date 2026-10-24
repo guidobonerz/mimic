@@ -51,6 +51,7 @@ crates/
   media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV
   media-backends/  Where media bytes come from: image file, copy-on-write overlay, host directory, real hardware
   emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
+  emu-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
   machine-amiga/  machine-atari8/  machine-cpc/  machine-coleco/  machine-nes/  machine-snes/
@@ -374,6 +375,7 @@ EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --r
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test acid800 -- --ignored --nocapture   # Acid800 on the 800XL (EMU_ACID_MODEL=800xl-ntsc|130xe, EMU_ACID_FILTER=antic)
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test cpc_acid -- --ignored --nocapture   # Arnold Acid tests on the CPC 6128 (~10 min; EMU_CPC_FILTER=ppi, EMU_CPC_CRTC=0, EMU_CPC_FRAMES=n, EMU_CPC_TAIL=n, EMU_CPC_BREAK=hex)
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
+cargo run --release -p emu-desktop -- --profile mac-se-755   # start profile from ./profiles.yaml or %APPDATA%\mimic\profiles.yaml (example: docs/profiles.example.yaml); without --machine/--profile the window lists the profiles; --list-profiles, --save-profile NAME, --profiles FILE; also mimic-headless
 cargo bench -p cpu-6502                      # before/after when touching hot paths
 cargo build -p emu-web --target wasm32-unknown-unknown
 cargo run -p emu-headless -- --machine c64 --prg demo.prg --frames 300 --snapshot out.png
@@ -507,6 +509,7 @@ Added 2026-10-21. On 2026-10-22 the user scheduled the remaining machines as Pha
 - **Vectrex** (Phase 14): 6809 CPU (new `cpu-6809`), VIA 6522 (reuse from `chips-cbm`), AY-3-8912 (reuse from `chips-amstrad`), and a vector display: needs a vector frame type next to `FrameRef` (beam lines with intensity, phosphor decay in `video-crt`) — the debugger/preview contract then carries vectors or a rasterized picture; overlays; console panel: POWER, RESET.
 - **Atari ST series** (added 2026-10-24 on the user's request, no phase yet): 520ST/1040ST, STF/STFM, Mega ST, STE (and Mega STE later) as models of one machine; 68000 (reuse `cpu-m68k`), GLUE/MMU/Shifter video (low/medium/high resolution, STE hardware scrolling and 4096-colour palette), MFP 68901, YM2149 (reuse `chips-amstrad` AY), STE DMA sound, ACIA 6850 with the IKBD (HD6301 keyboard/mouse/joystick controller), WD1772 FDC with ST/MSA/STX images, ACSI hard disks, MIDI; TOS ROMs user-supplied (EmuTOS as a free optional download).
 - **Acorn Archimedes** (added 2026-10-24 on the user's request, no phase yet): A305/A310/A440 (and A3000/A5000 later); new `cpu-arm` (ARM2, later ARM3 with cache), MEMC (memory controller, logical-to-physical page mapping), VIDC (video and 8-channel sound), IOC (timers, interrupts, keyboard serial link), the keyboard's own controller with mouse, WD1772 FDC with ADF (ADFS) images, podules later; RISC OS / Arthur ROMs user-supplied.
+- **Device mapper tool** (added 2026-10-25 on the user's request, no phase yet): a tool (window/UI) to map host keyboard keys, gamepads/joysticks, mouse and other host input to each machine's keys, ports and devices, stored as `emu-input` mapping profiles (per machine, per game), and linked from the start profiles (`emu-profile`).
 - **Tandy TRS-80 Model I/III** (Phase 10): reuses `cpu-z80`; memory-mapped text screen with block graphics, keyboard matrix in the address space, cassette, Expansion Interface / FDC 1771/1793 floppies (DMK/JV1/JV3 images); ROMs user-supplied.
 
 ### Phase 11 status (ColecoVision, begun 2026-10-23)

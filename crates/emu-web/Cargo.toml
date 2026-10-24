@@ -14,3 +14,4 @@ emu-machines.workspace = true
 emu-preview.workspace = true
 video-crt.workspace = true
 emu-input.workspace = true
+emu-profile.workspace = true

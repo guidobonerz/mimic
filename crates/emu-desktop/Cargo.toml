@@ -19,6 +19,7 @@ emu-debug.workspace = true
 emu-preview.workspace = true
 video-crt.workspace = true
 emu-input.workspace = true
+emu-profile.workspace = true
 media-backends.workspace = true
 cpal.workspace = true
 gilrs.workspace = true

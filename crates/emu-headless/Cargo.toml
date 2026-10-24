@@ -20,3 +20,4 @@ emu-preview.workspace = true
 video-crt.workspace = true
 media-backends.workspace = true
 emu-input.workspace = true
+emu-profile.workspace = true

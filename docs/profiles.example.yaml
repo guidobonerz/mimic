@@ -1,0 +1,59 @@
+# Example start profiles for mimic (copy to ./profiles.yaml or to
+# %APPDATA%\mimic\profiles.yaml, ~/.config/mimic/profiles.yaml elsewhere).
+#
+#   mimic-desktop --profile NAME            start a profile (flags given too override it)
+#   mimic-desktop                           no machine given: pick a profile in the window
+#   mimic-desktop --list-profiles           list them
+#   mimic-desktop ... --save-profile NAME   store this command line's setup as a profile
+#
+# Relative paths count from this file's folder (media paths from settings.media).
+
+settings:
+  roms: roms                 # ROM folder when a profile names none (then $EMU_ROM_DIR)
+  snapshots: snapshots       # where the desktop's snapshot button saves
+  media: disks               # base folder for relative media paths
+
+profiles:
+  mac-se-755:
+    description: Mac SE 4 MB with System 7.5.5 on a SCSI disk
+    machine: mac
+    model: se
+    options:                 # machine options (see the user guide per machine)
+      ram: 4m
+    media:
+      disks: [system755.hda]   # floppies and hard disks: each goes to the next drive that takes it
+    display:
+      crt: mac               # monitor profile
+      scale: 2
+      footer: true           # status footer (speed, snapshot button)
+      panel: false           # console panel
+
+  c64-game:
+    description: C64 NTSC with a 1351 mouse and a disk that starts itself
+    machine: c64
+    model: ntsc
+    roms: c64roms            # this profile's own ROM folder
+    options:
+      port1: mouse1351
+    media:
+      disks: [game.d64]
+      autostart: true
+    input:
+      joykeys: cursor        # cursor keys + Space play the joystick
+      joyport: 2
+      speed: 100             # percent of real time
+
+  amiga-dev:
+    description: Amiga 500 with 1 MB chip RAM and the debugger
+    machine: amiga
+    rom:                     # single ROM files by role instead of a folder
+      kick13: roms/amiga/kick13.rom
+    options:
+      chip: 1m
+      drives: 2
+    media:
+      disks: [workbench.adf, extras.adf]
+    debug:
+      server: true           # debug protocol on 127.0.0.1:6510
+      preview: "127.0.0.1:6580"
+      vice: false
