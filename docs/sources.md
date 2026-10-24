@@ -198,6 +198,22 @@ own section.
 | 65C02 instructions, addressing modes, cycle table, decimal mode; the undefined opcodes' lengths and bus cycles, decimal-mode dummy reads | WDC W65C02S data sheet, table 5-7; Rockwell R65C02 data sheet; Bruce Clark, "Decimal Mode" appendix A (65C02 SBC); Tom Harte, SingleStepTests `65x02/synertek65c02` (MIT) | `cpu-6502` (`Variant::Cmos65C02`) |
 | WAV files (RIFF chunks, `fmt `, `data`, PCM sample layouts) | Microsoft/IBM, *Multimedia Programming Interface and Data Specifications 1.0* (1991), "WAVE Form" | `media/src/wav.rs` |
 
+### Macintosh
+
+| What | Source | Used in |
+| --- | --- | --- |
+| Memory map (RAM, ROM, overlay, SCC $9FFFF8/$BFFFF9, IWM $DFE1FF, VIA $EFE1FE, SCSI $580000 with DACK at A9), VIA port bits, interrupt levels, screen and sound buffer addresses, mouse wiring, 5380 register addresses | Linux/m68k "Mac Plus hardware" notes (https://linux-mac68k.sourceforge.net/devel/plushw.php.html); Apple, *Inside Macintosh* III, "The Macintosh Hardware" (1985); Wikipedia, "Macintosh 128K/512K technical details" | `machine-mac` |
+| Video timing (704 × 370 at 15.6672 MHz), video taking every other RAM slot (SE: one in four) | Wikipedia, "Macintosh 128K/512K technical details"; Big Mess o' Wires, Mac Plus/SE memory timing (bigmessowires.com/?p=391, citing MacTech) | `machine-mac/src/video.rs` |
+| Real-time clock protocol (command bytes, seconds, 20/256-byte parameter RAM, write protect) | *Inside Macintosh* III, "The Real-Time Clock"; Linux/m68k notes | `machine-mac/src/rtc.rs` |
+| M0110/M0110A keyboard: commands (Inquiry $10, Instant $14, Model $16, Test $36), Null/ACK/NAK, transition bytes, $79 keypad prefix, $71 shift, raw codes, bit timing | *Inside Macintosh* III, "The Keyboard and Keypad"; tmk, "Apple M0110 Keyboard Protocol" (github.com/tmk/tmk_keyboard/wiki); the two disagree on the command codes, Inside Macintosh's are used | `machine-mac/src/keyboard.rs` |
+| ADB transceiver states (ST0/ST1, /INT), command byte, register 0/3 layouts, default addresses | Linux/m68k `via-macii` notes; Wikipedia, "Apple Desktop Bus"; mcosre.sourceforge.net/docs/adb_intro.html | `machine-mac/src/adb.rs` |
+| Z8530 SCC registers, status-modified vector, external/status latches | Zilog, *Z8530 SCC Technical Manual* | `machine-mac/src/scc.rs` |
+| NCR 5380 registers, SCSI-1 phases and commands | NCR 5380 data sheet; ANSI X3.131-1986 | `machine-mac/src/scsi.rs` |
+| IWM state bits and registers, latch mode, Sony drive sense lines and commands, tachometer (60 pulses a turn), zone speeds | Thomas W., "Emulating the Macintosh floppy drive" (https://thomasw.dev/post/mac-floppy-emu/); CiderPress II "Nibble notes" | `drives-other/src/iwm.rs` |
+| 3.5" GCR sector layout (address field, format byte, data field of 699 + 4 bytes, gaps, 2:1 interleave), the data checksum's byte order | CiderPress II, "Nibble notes" and "DiskCopy notes" (ciderpress2.com/formatdoc); Clock Signal (MIT, git.applefritter.com/6502/CLK, commit 5a9f3cf, decoder) | `media/src/macdisk.rs` |
+| The 400K drive's speed control: the 128K ROM's speed table, its tachometer measurement and the shift register it steps to make the pulse-width byte | the user's 128K ROM, read by disassembly while it ran (2026-10-24); no code taken from it | `machine-mac` (`PWM_WIDTH`), `drives-other/src/iwm.rs` |
+| Boot blocks ('LK', bbEntry, bbVersion $44xx for the Plus/SE ROMs to run the code), MFS master directory block | the user's Plus ROM (disassembly of its boot routine); *Inside Macintosh* II, "The File Manager" | `tests/tests/mac.rs` |
+
 ### Video, colour and host conventions
 
 | Topic | Document | Used in |
@@ -263,5 +279,6 @@ Not in the repository (golden rule 6): Commodore KERNAL/BASIC/character
 ROMs (C64, VIC-20, PET, C16/Plus/4, C128), drive DOS ROMs (1541, 1571,
 1581), Atari XL OS and BASIC, Amstrad CPC ROMs, Amiga Kickstart (1.2, 1.3,
 2.0, 3.1; 256 or 512 KB images), the A1000 bootstrap ROM, the Vectrex
-system ROM (8 KB, or the 4 KB executive alone). Users put them
+system ROM (8 KB, or the 4 KB executive alone), the Apple II ROMs, the
+Macintosh ROMs (128K, 512K, Plus, SE). Users put them
 into `roms/<machine>/` and `roms/drives/`.

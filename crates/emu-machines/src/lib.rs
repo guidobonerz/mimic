@@ -35,6 +35,7 @@ pub fn device_names(kind: PortKind) -> Vec<&'static str> {
         PortKind::SnesControl => vec!["pad", "mouse", "superscope"],
         PortKind::VectrexControl => vec!["controller", "lightpen"],
         PortKind::AppleGame => vec!["joystick", "paddles"],
+        PortKind::MacMouse => vec!["mouse"],
         k if joystick_port(k) => vec!["joystick"],
         _ => Vec::new(),
     }
@@ -111,6 +112,10 @@ pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> 
         "mouse" if kind == PortKind::AmigaGameport => {
             Some(Box::new(devices_input::AmigaMouse::new(1000)))
         }
+        // The Mac samples its mouse once a line (45 µs at 7.83 MHz).
+        "mouse" if kind == PortKind::MacMouse => {
+            Some(Box::new(devices_input::AmigaMouse::mac(1000)))
+        }
         // One step of motion per millisecond of the CPC's 4 MHz clock.
         "amx" if kind == PortKind::CpcJoy => Some(Box::new(devices_input::AmxMouse::new(4000))),
         _ => None,
@@ -138,6 +143,7 @@ pub fn registry() -> Registry {
     r.register(machine_snes::entry());
     r.register(machine_vectrex::entry());
     r.register(machine_apple2::entry());
+    r.register(machine_mac::entry());
     r
 }
 

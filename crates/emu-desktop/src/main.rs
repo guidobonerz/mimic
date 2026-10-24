@@ -77,8 +77,10 @@ usage: mimic-desktop [options]
   --model NAME          model variant (C64: pal, ntsc)
   --prg FILE            program (PRG/T64, Atari XEX) to load and run
   --disk FILE           disk image for drive 8 (Atari: ATR for D1:, Amiga: DF0:,
-                        Apple II: DSK/DO/PO/NIB/WOZ for slot 6 drive 1);
-                        repeat for the next drives, extra disks are swapped
+                        Apple II: DSK/DO/PO/NIB/WOZ for slot 6 drive 1; Mac:
+                        400K/800K DSK or DiskCopy 4.2, hard disk images to
+                        SCSI); repeat for the next drives (a drive refusing
+                        an image passes it on), extra disks are swapped
                         into the first drive with Ctrl+D
   --tape FILE           TAP image for the datasette, CAS for the Atari program
                         recorder, WAV for the Apple II cassette (a PRG is
@@ -91,7 +93,7 @@ usage: mimic-desktop [options]
   --rom-dir DIR         ROM folder (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
   --crt PROFILE         monitor: raw, 1702, 1084s, 1084s-rgb, tv, pal-tv, ntsc-tv,
-                        pet-white, pet-green, ctm644, gt65 or a .toml file
+                        pet-white, pet-green, ctm644, gt65, mac or a .toml file
                         (default: the machine's own monitor)
   --scale N             initial window size in rows per line (default 2;
                         less if the window would not fit the screen)
@@ -143,7 +145,8 @@ fires), NUMPAD or OFF; JOY PORT (machines with several joystick ports)
 moves the joysticks to another port.
 Ctrl+Space shows or hides the status footer: a speed slider (click a step
 or drag the knob: 10 % to 800 % of real time; sound is muted off
-100 %), emulated time since power-on (m:ss.t) and frame count, mouse
+100 %), a snapshot button (saves the picture as <machine>-NNN.png in the
+working folder), emulated time since power-on (m:ss.t) and frame count, mouse
 pointer position in frame pixels, joystick directions and drive
 activity/errors.
 With --option port1=mouse1351 (or paddles, driving, also port2) a click into the
@@ -347,8 +350,26 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
                 args.machine
             ));
         }
-        for (path, &slot) in args.disk.iter().zip(&drives) {
-            insert_into(m.as_mut(), slot, path)?;
+        // A drive that refuses an image's format (a Mac floppy drive and a
+        // hard disk image) passes it on to the next free one.
+        let mut free = drives.clone();
+        for path in args.disk.iter().take(drives.len()) {
+            let mut first_err = None;
+            let pos = free
+                .iter()
+                .position(|&slot| match insert_into(m.as_mut(), slot, path) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        first_err.get_or_insert(e);
+                        false
+                    }
+                });
+            match pos {
+                Some(i) => {
+                    free.remove(i);
+                }
+                None => return Err(first_err.unwrap_or_else(|| format!("{path}: no free drive"))),
+            }
         }
         args.disk_swap = std::iter::once(args.disk[0].clone())
             .chain(args.disk.iter().skip(drives.len()).cloned())
@@ -454,6 +475,8 @@ struct App {
     /// The footer's speed slider and the footer's top (window pixels),
     /// while the footer is shown.
     speed_slider: Option<footer::Slider>,
+    /// The footer's snapshot button, while the footer is shown.
+    snapshot_button: Option<footer::Button>,
     footer_top: f64,
     /// The slider's knob is being dragged.
     speed_drag: bool,
@@ -476,6 +499,14 @@ impl App {
     fn over_speed(&self) -> bool {
         match (self.cursor, self.speed_slider) {
             (Some((x, y)), Some(s)) => self.footer_on && y >= self.footer_top && s.contains(x),
+            _ => false,
+        }
+    }
+
+    /// Is the pointer over the footer's snapshot button?
+    fn over_snapshot(&self) -> bool {
+        match (self.cursor, self.snapshot_button) {
+            (Some((x, y)), Some(b)) => self.footer_on && y >= self.footer_top && b.contains(x),
             _ => false,
         }
     }
@@ -723,6 +754,16 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // The footer's snapshot button: save the picture on a click.
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } if !self.mouse_captured && !self.speed_drag && self.over_snapshot() => {
+                if state == ElementState::Pressed {
+                    self.shared.snapshot.store(true, Ordering::Relaxed);
+                }
+            }
             // The footer's speed slider: click a step or drag the knob.
             WindowEvent::MouseInput {
                 state,
@@ -961,13 +1002,15 @@ impl ApplicationHandler for App {
                             .map(|f| f.clone())
                             .unwrap_or_default();
                         let speed = usize::from(self.shared.speed.load(Ordering::Relaxed));
-                        let (rgba, slider) =
+                        let (rgba, slider, button) =
                             footer::render(&footer::segments(&info, mouse), speed, width, size);
                         strip.extend_from_slice(&rgba);
                         rows += row;
                         self.speed_slider = Some(slider);
+                        self.snapshot_button = Some(button);
                     } else {
                         self.speed_slider = None;
+                        self.snapshot_button = None;
                         self.speed_drag = false;
                     }
                     if rows == 0 {
@@ -1071,6 +1114,9 @@ fn run() -> Result<(), String> {
         .unwrap_or(0) as u8;
 
     let shared = Arc::new(Shared::new());
+    if let Ok(mut n) = shared.snapshot_name.lock() {
+        *n = args.machine.clone();
+    }
     if let Ok(mut fields) = shared.fields.lock() {
         fields.mode = args.deinterlace;
     }
@@ -1183,6 +1229,7 @@ fn run() -> Result<(), String> {
         cursor: None,
         mouse_sum: (0, 0),
         speed_slider: None,
+        snapshot_button: None,
         footer_top: 0.0,
         speed_drag: false,
     };

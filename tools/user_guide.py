@@ -278,6 +278,7 @@ table(["Machine id", "Machine", "Models (--model)"], [
     ["`vectrex`", "Vectrex (vector display)", "`vectrex`"],
     ["`apple2`", "Apple II, II+, IIe", "`iie` (enhanced IIe, default), `iie-unenhanced`, "
      "`iiplus`, `ii`"],
+    ["`mac`", "Apple Macintosh 128K, 512K, Plus, SE", "`plus` (default), `128k`, `512k`, `se`"],
     ["`sim6502`", "6502 reference machine for tests", "`default`"],
 ], [0.16, 0.44, 0.40])
 p("`mimic-headless --list` prints the same list from the program itself.")
@@ -376,6 +377,9 @@ table(["Folder", "Machine", "ROMs (example names and sizes)"], [
      "341-0001…0004, II+ 341-0011…0015 and 341-0020, IIe 342-0135 (CD) and 342-0134 "
      "(EF), enhanced IIe 342-0304 and 342-0303; character ROMs 341-0036, 342-0133, "
      "342-0265; Disk II boot PROM 341-0027 and sequencer PROM 341-0028"],
+    ["`mac/`", "Macintosh", "`mac128k.rom` (64 KB), `mac512k.rom` (64 KB), `macplus.rom` "
+     "(128 KB), `macse.rom` (256 KB), or each ROM's two chips (Apple part numbers "
+     "342-0220/0221, 342-0341/0342, 342-0701/0702)"],
     ["`drives/`", "Disk drives", "`dos1541`, `dos1571`, `dos1581`"],
 ], [0.14, 0.16, 0.70])
 p("The Atari 2600 and the NES have no system ROM: the program is on the "
@@ -447,7 +451,10 @@ h2("The status footer")
 p("""Ctrl+Space shows a status line below the picture. On the left is a
 **speed control**: click a step or drag the knob for 10 %, 25 %, 50 %,
 100 %, 150 %, 200 %, 400 % or 800 % of real time (sound is muted away from
-100 %). It then shows the emulated time since power-on (m:ss.t) with the
+100 %). Next to it the **snapshot** button saves the picture as a PNG file
+named after the machine (`mac-001.png`, `mac-002.png` …) in the folder the
+emulator was started from; the footer shows the file name for a few
+seconds. It then shows the emulated time since power-on (m:ss.t) with the
 frame number, the mouse position in picture pixels, the joystick directions
 and the drives' activity and errors.""")
 
@@ -713,12 +720,47 @@ code("""mimic-desktop --machine apple2 --rom-dir roms --disk "Zork I.dsk"
 mimic-desktop --machine apple2 --model iiplus --rom-dir roms --disk game.woz
 mimic-desktop --machine apple2 --model ii --option slot6=none --rom-dir roms""")
 
+h2("Macintosh")
+p("""The compact Macintosh as four models: the 128K and 512K (64 KB ROM,
+400K single-sided drives, the M0110 keyboard without keypad), the Plus
+(128 KB ROM, 800K drives, SCSI, the M0110A keyboard with keypad and arrows)
+and the SE (256 KB ROM, ADB keyboard and mouse, two internal drives, SCSI).
+Without a disk the Mac shows the disk icon with a question mark, as the real
+one does. The screen is the built-in black-and-white monitor (profile
+`mac`).""")
+table(["Option", "Values"], [
+    ["`ram`", "Plus/SE: `512k`, `1m` (default), `2m` or `4m`"],
+    ["`serial`", "`loopback`: both serial ports wired back to themselves"],
+    ["`roms`", "`stub`: a test ROM without the Mac ROMs"],
+], [0.22, 0.78])
+p("""Keyboard: the PC keys sit where the Mac's are on a US layout; **Alt is
+Command** (next to the space bar, as on the Mac), the Windows keys are
+Option, NumLock is the keypad's Clear. The mouse is captured with a click
+into the window. The panel has POWER, RESET and the programmer's INTERRUPT
+switch.""")
+bullets(
+    "**Floppies.** 400K and 800K images, raw (`.dsk`, `.img`) or DiskCopy 4.2 "
+    "(`.image`), with tag bytes; written back in their own format. The first "
+    "`--disk` goes into the internal drive, the next into the external one "
+    "(the SE: the second internal drive first).",
+    "**Hard disks.** A hard disk image (whole 512-byte blocks, with an Apple "
+    "partition map and driver, as Apple's HD SC Setup makes it) given with "
+    "`--disk` goes to the first SCSI ID that is free: a floppy drive refuses "
+    "it and passes it on (Plus and SE).",
+    "**System software.** System 6.0.8 suits the Plus (1 MB or more) and the "
+    "SE; the 128K needs System 1.x/2.x on 400K MFS disks, the 512K up to 3.x.",
+)
+code("""mimic-desktop --machine mac --rom-dir roms --disk "System Tools.image"
+mimic-desktop --machine mac --model se --rom-dir roms --disk system.dsk --disk hd20.img
+mimic-desktop --machine mac --model 128k --rom-dir roms --disk mfs-system.dsk""")
+
 # ---- 6 media ------------------------------------------------------------------
 
 h1("Disks, tapes, cartridges and programs")
 table(["Kind", "Formats", "Option"], [
     ["Disk", "D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF "
-     "(Amiga DD and HD), extended ADF, DMS (read only), DSK/DO/PO/NIB/WOZ (Apple II); "
+     "(Amiga DD and HD), extended ADF, DMS (read only), DSK/DO/PO/NIB/WOZ (Apple II), "
+     "400K/800K DSK and DiskCopy 4.2, SCSI hard disk images (Macintosh); "
      "a folder as a virtual disk",
      "`--disk`"],
     ["Tape", "TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81), WAV (Apple II); a PRG is "
@@ -752,6 +794,7 @@ table(["Profile", "Use"], [
     ["`pet-white`, `pet-green`", "the PET's built-in monitors"],
     ["`ctm644`", "Amstrad colour monitor (CPC)"],
     ["`gt65`", "Amstrad green monitor"],
+    ["`mac`", "the compact Macintosh's built-in black-and-white monitor"],
 ], [0.30, 0.70])
 p("""Own profiles are TOML files that start from a preset and change single
 values (`base = "1084s"` …), loaded with `--crt myprofile.toml`.""")

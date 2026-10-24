@@ -136,11 +136,19 @@ impl Profile {
                 tint: [0.2, 1.0, 0.25],
                 ..base
             },
+            // The compact Macintosh's built-in 9" white monitor (square
+            // pixels, a sharp picture).
+            "mac" => Self {
+                signal: Signal::Monochrome,
+                scanlines: 0.15,
+                tint: [0.92, 0.95, 1.0],
+                ..base
+            },
             _ => return None,
         })
     }
 
-    pub const PRESETS: [&'static str; 11] = [
+    pub const PRESETS: [&'static str; 12] = [
         "raw",
         "1702",
         "1084s",
@@ -152,6 +160,7 @@ impl Profile {
         "pet-green",
         "ctm644",
         "gt65",
+        "mac",
     ];
 
     /// Parse a TOML profile; `base = "<preset>"` starts from a preset.
@@ -192,6 +201,7 @@ impl Profile {
             // The SNES has an RGB output (a composite TV shows colour
             // fringes on its hard edges: `--crt tv`).
             "amiga" | "snes" => "1084s-rgb",
+            "mac" => "mac",
             _ => "raw",
         };
         Self::preset(name).unwrap_or_default()

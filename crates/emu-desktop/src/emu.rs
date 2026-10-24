@@ -108,6 +108,12 @@ pub struct Shared {
     /// Emulation speed set with the footer's slider: an index into
     /// [`crate::footer::SPEEDS`]. Off 100 % the sound is muted.
     pub speed: AtomicU8,
+    /// Set by the footer's snapshot button: save the shown screen as PNG
+    /// (named after [`Shared::snapshot_name`] in the working folder).
+    pub snapshot: AtomicBool,
+    pub snapshot_name: Mutex<String>,
+    /// The last snapshot's message for the footer and when it was saved.
+    pub snapshot_done: Mutex<Option<(String, Instant)>>,
 }
 
 /// Datasette keys from the window.
@@ -174,6 +180,9 @@ impl Shared {
             pause_toggle: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             speed: AtomicU8::new(crate::footer::NORMAL_SPEED as u8),
+            snapshot: AtomicBool::new(false),
+            snapshot_name: Mutex::new(String::from("mimic")),
+            snapshot_done: Mutex::new(None),
         }
     }
 }
@@ -539,8 +548,21 @@ pub fn spawn(
                 }
             }
             let screen = shown_screen(session.machine(), chosen);
+            if shared.snapshot.swap(false, Ordering::Relaxed) {
+                let msg = save_snapshot(&shared, session.machine(), screen);
+                if let Ok(mut s) = shared.snapshot_done.lock() {
+                    *s = Some((msg, Instant::now()));
+                }
+            }
             if shared.footer_on.load(Ordering::Relaxed) {
-                let f = tracker.snapshot(session.machine_mut(), frame_time.as_secs_f64() * 1e3);
+                let mut f = tracker.snapshot(session.machine_mut(), frame_time.as_secs_f64() * 1e3);
+                // The snapshot's file name stays in the footer for 4 s.
+                if let Ok(s) = shared.snapshot_done.lock() {
+                    f.note = s
+                        .as_ref()
+                        .filter(|(_, at)| at.elapsed() < Duration::from_secs(4))
+                        .map(|(m, _)| m.clone());
+                }
                 if let Ok(mut s) = shared.footer.lock() {
                     *s = f;
                 }
@@ -654,6 +676,31 @@ pub fn spawn(
             push_frame(&shared, session.machine(), screen);
         }
     })
+}
+
+/// Save the shown screen (the raw picture, as the debugger and preview
+/// see it) as `<name>-NNN.png` with the first unused number in the working
+/// folder; returns the footer's message.
+fn save_snapshot(shared: &Shared, machine: &dyn Machine, screen: ScreenId) -> String {
+    let frame = machine
+        .screen(screen)
+        .unwrap_or_else(|| machine.framebuffer());
+    let png = emu_preview::encode_png(&frame);
+    let prefix = shared
+        .snapshot_name
+        .lock()
+        .map(|n| n.clone())
+        .unwrap_or_else(|_| "mimic".into());
+    let Some(path) = (1..10_000)
+        .map(|n| std::path::PathBuf::from(format!("{prefix}-{n:03}.png")))
+        .find(|p| !p.exists())
+    else {
+        return "snapshot: no free file name".into();
+    };
+    match std::fs::write(&path, png) {
+        Ok(()) => format!("saved {}", path.display()),
+        Err(e) => format!("snapshot failed: {e}"),
+    }
 }
 
 fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {

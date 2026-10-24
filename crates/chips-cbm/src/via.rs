@@ -27,8 +27,12 @@
 //! (the same rate, eight bits) and 6 (eight bits at half the φ2 rate, the
 //! Vectrex's beam blanking); CB2 carries the bit shifted out and stays at
 //! the last one. After eight bits modes 5 and 6 stop and set the SR flag;
-//! reading or writing the register restarts them. The shift-in modes and
-//! mode 7 (external clock) store the value only.
+//! reading or writing the register restarts them. Modes 3 (shift in) and
+//! 7 (shift out) run on an external clock on CB1 ([`Via::shift_ext`], the
+//! Macintosh keyboard and ADB transceiver): bit 7 first, the SR flag after
+//! eight bits. Mode 2 (shift in at the φ2 rate) and mode 1 store the
+//! value only. CA2 as an input ([`Via::set_ca2`]) sets its flag on the
+//! edge PCR bits 3–1 select.
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -68,6 +72,7 @@ pub struct Via {
     pb7: bool,
     ca1: bool,
     cb1: bool,
+    ca2: bool,
     /// Input latches (ACR bits 0/1) captured on the CA1/CB1 edge.
     ira_latch: u8,
     irb_latch: u8,
@@ -86,6 +91,7 @@ impl Via {
             t2_counter: 0xffff,
             ca1: true,
             cb1: true,
+            ca2: true,
             ..Self::default()
         }
     }
@@ -147,6 +153,47 @@ impl Via {
             self.irb_latch = pb_pins;
         }
         self.cb1 = level;
+    }
+
+    /// CA2 input level: PCR 000/001 flag the falling edge, 010/011 the
+    /// rising edge (001 and 011 are "independent": port A accesses leave
+    /// the flag alone); output modes ignore it.
+    pub fn set_ca2(&mut self, level: bool) {
+        if self.pcr & 0x08 == 0 && level != self.ca2 {
+            let positive = self.pcr & 0x04 != 0;
+            if level == positive {
+                self.ifr |= ifr::CA2;
+            }
+        }
+        self.ca2 = level;
+    }
+
+    /// One clock edge on CB1 from an external device in shift modes 3
+    /// (in: `data_in` enters bit 0) and 7 (out). Returns the bit shifted
+    /// out in mode 7 (bit 7 first), `None` in other modes or after the
+    /// eighth bit.
+    pub fn shift_ext(&mut self, data_in: bool) -> Option<bool> {
+        let mode = (self.acr >> 2) & 7;
+        if !matches!(mode, 3 | 7) || self.sr_bits == 0 {
+            return None;
+        }
+        let out = self.sr & 0x80 != 0;
+        self.sr = if mode == 3 {
+            self.sr << 1 | u8::from(data_in)
+        } else {
+            self.sr.rotate_left(1)
+        };
+        self.sr_cb2 = out;
+        self.sr_bits -= 1;
+        if self.sr_bits == 0 {
+            self.ifr |= ifr::SR;
+        }
+        Some(out)
+    }
+
+    /// Bits the shift register still has to move in modes 3, 5, 6, 7.
+    pub fn shift_bits_left(&self) -> u8 {
+        self.sr_bits
     }
 
     /// One φ2 cycle, before the CPU access of that cycle.
@@ -214,7 +261,7 @@ impl Via {
         let v = self.peek(reg, pa_pins, pb_pins);
         match reg & 0x0f {
             0x0 => self.ifr &= !(ifr::CB1 | ifr::CB2),
-            0x1 => self.ifr &= !(ifr::CA1 | ifr::CA2),
+            0x1 => self.clear_ca_flags(),
             0x4 => self.ifr &= !ifr::T1,
             0x8 => self.ifr &= !ifr::T2,
             0xa => self.restart_shift(),
@@ -262,6 +309,15 @@ impl Via {
         }
     }
 
+    /// A port A access clears CA1's flag and CA2's unless CA2 is an
+    /// independent input.
+    fn clear_ca_flags(&mut self) {
+        self.ifr &= !ifr::CA1;
+        if self.pcr & 0x0a != 0x02 {
+            self.ifr &= !ifr::CA2;
+        }
+    }
+
     /// A shift register access clears its flag and starts eight more bits.
     fn restart_shift(&mut self) {
         self.ifr &= !ifr::SR;
@@ -279,7 +335,7 @@ impl Via {
             }
             0x1 => {
                 self.ora = v;
-                self.ifr &= !(ifr::CA1 | ifr::CA2);
+                self.clear_ca_flags();
             }
             0x2 => self.ddrb = v,
             0x3 => self.ddra = v,
@@ -326,7 +382,7 @@ impl Via {
 }
 
 const TAG: [u8; 4] = *b"6522";
-const VERSION: u16 = 3;
+const VERSION: u16 = 4;
 
 impl Savestate for Via {
     fn save(&self, w: &mut StateWriter) {
@@ -365,6 +421,7 @@ impl Savestate for Via {
             w.u8(self.sr_count);
             w.bool(self.sr_cb2);
             w.u8(self.sr_bits);
+            w.bool(self.ca2);
         });
     }
 
@@ -407,6 +464,9 @@ impl Savestate for Via {
         }
         if version >= 3 {
             v.sr_bits = c.u8()?.min(8);
+        }
+        if version >= 4 {
+            v.ca2 = c.bool()?;
         }
         *self = v;
         Ok(())
@@ -555,5 +615,33 @@ mod tests {
         u.load(&mut StateReader::new(&data)).unwrap();
         assert_eq!(u, v);
         assert_eq!(run(&mut u, 600), run(&mut v, 600));
+    }
+
+    #[test]
+    fn external_clock_shift_and_ca2_input() {
+        let mut v = Via::new();
+        // Mode 7: shift out under CB1.
+        v.write(0xb, 0x1c);
+        v.write(0xa, 0xa5);
+        let bits: Vec<bool> = (0..8).filter_map(|_| v.shift_ext(false)).collect();
+        assert_eq!(bits, [true, false, true, false, false, true, false, true]);
+        assert_ne!(v.ifr & ifr::SR, 0);
+        assert_eq!(v.shift_ext(true), None);
+        // Mode 3: shift in.
+        v.write(0xb, 0x0c);
+        v.read(0xa, 0, 0);
+        for b in [false, true, true, false, false, false, false, true] {
+            v.shift_ext(b);
+        }
+        assert_eq!(v.peek(0xa, 0, 0), 0x61);
+        assert_ne!(v.ifr & ifr::SR, 0);
+        // CA2 falling edge (PCR 000), then rising edge (PCR 010).
+        v.set_ca2(false);
+        assert_ne!(v.ifr & ifr::CA2, 0);
+        v.read(0x1, 0, 0);
+        assert_eq!(v.ifr & ifr::CA2, 0);
+        v.write(0xc, 0x04);
+        v.set_ca2(true);
+        assert_ne!(v.ifr & ifr::CA2, 0);
     }
 }

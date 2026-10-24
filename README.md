@@ -14,7 +14,7 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | --- | --- | --- | --- | --- |
 | MOS 6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 6507, Ricoh 2A03/2A07, CMOS 65C02 | `cpu-6502` | PET, VIC-20, C64, C128, C16/Plus/4, 1541/1571/1581, Atari 8-bit, Atari 2600, NES, Apple II | Tom Harte (6502, nes6502, synertek65c02), Klaus Dormann, Lorenz 264/264 | 97 % (no Rockwell/WDC bit instructions, WAI/STP) |
 | Zilog Z80 | `cpu-z80` | C128, CPC, ZX81, ColecoVision | Tom Harte, ZEXDOC, ZEXALL | 97 % |
-| Motorola 68000 | `cpu-m68k` | Amiga 500/1000/2000/500+ | Tom Harte (all but three contradictory cases) | 97 % |
+| Motorola 68000 | `cpu-m68k` | Amiga 500/1000/2000/500+, Macintosh | Tom Harte (all but three contradictory cases) | 97 % |
 | Motorola 68020 / 68EC020 | `cpu-m68k` | Amiga 1200 | unit tests only; timing approximate, no cache | 60 % |
 | WDC 65C816 (5A22) | `cpu-65816` | SNES | Tom Harte, all 5 080 400 tests | 95 % |
 | Sony SPC700 | `cpu-spc700` | SNES sound module | Tom Harte, all 256 000 tests | 98 % |
@@ -46,7 +46,7 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | Mattel Intellivision | – | Phase 13 | – | 0 % |
 | Sinclair ZX Spectrum 48K/128K | – | Phase 15 | – | 0 % |
 | Apple II / II+ / IIe | `machine-apple2` | II, II+, IIe, enhanced IIe | all four boot with real ROMs; Zork I boots from DSK; a disk built by the tests boots through the Disk II PROMs; cassette save/load through the monitor; colours checked through the composite stage; DOS 3.3/ProDOS disks, Mockingboard software and WOZ copy protections not yet tried | 70 % |
-| Apple Macintosh 128K–SE | – | Phase 17 | – | 0 % |
+| Apple Macintosh 128K–SE | `machine-mac` | 128K, 512K, Plus, SE | all four reach the disk icon with real ROMs (startup sound, RTC, memory test); a disk built by the tests boots through the IWM (400K with the 128K's speed control, 800K); SCSI disks, ADB, SCC and keyboard only unit-tested; System 6 not yet tried | 55 % |
 
 ### Chips
 
@@ -58,7 +58,10 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | MOS 8563 VDC | `chips-cbm` | C128 | 80 % |
 | MOS 6581/8580 SID | `chips-cbm` | C64, C128 | 85 % |
 | MOS 6526 CIA / 8520 | `chips-cbm` | C64, C128, 1571, 1581, Amiga | 95 % |
-| MOS 6522 VIA | `chips-cbm` | VIC-20, PET, 1541, Vectrex | 85 % (shift-in modes, PB6 pulse counting missing) |
+| MOS 6522 VIA | `chips-cbm` | VIC-20, PET, 1541, Vectrex, Macintosh | 90 % (shift-in at the φ2 rate, PB6 pulse counting missing) |
+| Zilog Z8530 SCC | `machine-mac` | Macintosh | 50 % (DCD interrupts, vector, loopback; no baud rates or sync modes) |
+| NCR 5380 SCSI | `machine-mac` | Macintosh Plus, SE | 70 % (no timing, no arbitration with other initiators) |
+| Apple IWM | `drives-other` | Macintosh | 80 % |
 | MOS 6520/6821 PIA | `chips-cbm` | PET, Atari 8-bit | 85 % |
 | MOS 6545 CRTC | `chips-cbm` | PET 4032/8032 | 80 % |
 | MOS 8722 MMU, PLA | `chips-cbm` | C128, C64 | 90 % |
@@ -97,7 +100,8 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | Atari SIO drives 810/1050/XF551, cassette | `drives-other` | 85 % |
 | CPC disc drives and tape | `drives-other` | 85 % |
 | Apple Disk II (P6 sequencer or functional model, quarter tracks, write-back), cassette (WAV) | `drives-other` | 80 % |
-| Image formats: PRG, D64/D71/D81, T64, TAP, CRT, ADF/extended ADF, DMS, ATR, XEX, CAS, CAR, DSK/EDSK, CDT/TZX, DMK, Apple DSK/DO/PO/NIB, WOZ 1/2, WAV | `media` | 90 % |
+| Sony 400K/800K drives (GCR zones, tachometer, PWM speed control, write-back), SCSI hard disks | `drives-other`, `machine-mac` | 75 % |
+| Image formats: PRG, D64/D71/D81, T64, TAP, CRT, ADF/extended ADF, DMS, ATR, XEX, CAS, CAR, DSK/EDSK, CDT/TZX, DMK, Apple DSK/DO/PO/NIB, WOZ 1/2, Mac DSK/DiskCopy 4.2, WAV | `media` | 90 % |
 | Backends: image file, copy-on-write overlay, host directory | `media-backends` | 90 % |
 | Real-hardware backends (OpenCBM, flux readers) | – | 0 % |
 
@@ -109,6 +113,7 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | Paddles | CBM, Atari | 90 % |
 | 1351 mouse | CBM | 90 % |
 | Amiga mouse (quadrature) | Amiga | 95 % |
+| Macintosh mouse (quadrature; ADB on the SE), keyboard M0110/M0110A, ADB keyboard | Macintosh | 50 % (directions and keys not yet checked under a running system) |
 | AMX mouse | CPC | 85 % |
 | Atari keypad, driving controller | Atari | 85 % |
 | ColecoVision controller, Super Action, Driving Module, Roller Controller | Coleco | 75 % (several details unverified) |

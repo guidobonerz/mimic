@@ -63,6 +63,8 @@ pub struct Footer {
     pub frame: u64,
     pub joys: Vec<Joy>,
     pub drives: Vec<Drive>,
+    /// A short message (the snapshot's file name).
+    pub note: Option<String>,
 }
 
 /// `elapsed_ms` as `m:ss.t`.
@@ -164,6 +166,7 @@ impl Tracker {
             frame,
             joys,
             drives,
+            note: None,
         }
     }
 }
@@ -249,6 +252,9 @@ pub fn segments(f: &Footer, mouse: Mouse) -> Vec<(String, Rgb)> {
         };
         out.push((format!("{}: {state}{track}", d.name), colour));
     }
+    if let Some(n) = &f.note {
+        out.push((n.clone(), BUSY));
+    }
     out
 }
 
@@ -287,20 +293,37 @@ impl Slider {
     }
 }
 
+/// Where a footer button lies (window pixels).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Button {
+    pub x0: usize,
+    pub x1: usize,
+}
+
+impl Button {
+    pub fn contains(&self, x: f64) -> bool {
+        x >= self.x0 as f64 && x < self.x1 as f64
+    }
+}
+
+/// The snapshot button's label.
+const SNAPSHOT: &str = " snapshot ";
+const BUTTON: Rgb = [0x3A, 0x3A, 0x3A];
+
 /// Knob and track colours of the speed slider.
 const TRACK: Rgb = [0x50, 0x50, 0x50];
 const KNOB: Rgb = [0x2E, 0x8B, 0x4A];
 
-/// Draw the speed slider (step `speed` of [`SPEEDS`]) and then `segments`,
-/// separated by " | ", into an RGBA strip `width` pixels wide and
-/// [`height`]`(size)` high; text beyond the width is cut off. Returns the
-/// pixels and the slider's track.
+/// Draw the speed slider (step `speed` of [`SPEEDS`]), the snapshot
+/// button and then `segments`, separated by " | ", into an RGBA strip
+/// `width` pixels wide and [`height`]`(size)` high; text beyond the width
+/// is cut off. Returns the pixels, the slider's track and the button.
 pub fn render(
     segments: &[(String, Rgb)],
     speed: usize,
     width: u32,
     size: RasterHeight,
-) -> (Vec<u8>, Slider) {
+) -> (Vec<u8>, Slider, Button) {
     let mut strip = Strip::new(width, size);
     let mut x = size.val() / 2;
     x = strip.text(x, "speed ", DIM);
@@ -324,11 +347,18 @@ pub fn render(
     let label = speed_label(speed.min(SPEEDS.len() - 1));
     let colour = if speed == NORMAL_SPEED { TEXT } else { BUSY };
     x = strip.text(x, &format!(" {label:<4}"), colour);
+    x = strip.text(x, " ", DIM);
+    let button = Button {
+        x0: x,
+        x1: x + strip.text_width(SNAPSHOT),
+    };
+    strip.fill(button.x0, button.x1, 2, BUTTON);
+    x = strip.text(x, SNAPSHOT, TEXT);
     for (text, colour) in segments {
         x = strip.text(x, " | ", DIM);
         x = strip.text(x, text, *colour);
     }
-    (strip.px, slider)
+    (strip.px, slider, button)
 }
 
 /// An RGBA strip one text line high at window resolution.
@@ -435,6 +465,7 @@ mod tests {
                     status: DriveStatus::default(),
                 },
             ],
+            note: Some("saved c64-001.png".into()),
         };
         let s = segments(&f, Mouse::At(12, 34));
         let texts: Vec<&str> = s.iter().map(|(t, _)| t.as_str()).collect();
@@ -446,7 +477,8 @@ mod tests {
                 "control port 2: up right fire",
                 "drive 8: busy T18",
                 "drive 9: ERROR",
-                "tape: empty"
+                "tape: empty",
+                "saved c64-001.png"
             ]
         );
         assert_eq!(s[3].1, BUSY);
@@ -460,7 +492,7 @@ mod tests {
     #[test]
     fn render_draws_text_and_clips() {
         let size = RasterHeight::Size16;
-        let (px, _) = render(&[("I".into(), TEXT)], NORMAL_SPEED, 400, size);
+        let (px, _, _) = render(&[("I".into(), TEXT)], NORMAL_SPEED, 400, size);
         assert_eq!(px.len(), 400 * height(size) as usize * 4);
         assert!(
             px.chunks(4).any(|p| p[0] > BACKGROUND[0] + 0x40),
@@ -477,7 +509,11 @@ mod tests {
     #[test]
     fn speed_slider_steps_follow_the_pointer() {
         let size = RasterHeight::Size16;
-        let (px, s) = render(&[], NORMAL_SPEED, 600, size);
+        let (px, s, b) = render(&[], NORMAL_SPEED, 600, size);
+        assert!(
+            b.x0 >= s.x1 && b.contains((b.x0 + 1) as f64),
+            "snapshot button after the slider"
+        );
         assert!(s.x1 > s.x0);
         let cell = (s.x1 - s.x0) / SPEEDS.len();
         // The knob sits in the cell of the current step.

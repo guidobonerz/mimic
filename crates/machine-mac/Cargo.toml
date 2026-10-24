@@ -1,0 +1,17 @@
+[package]
+name = "machine-mac"
+description = "Apple Macintosh 128K, 512K, Plus and SE"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-m68k.workspace = true
+chips-cbm.workspace = true
+devices-input.workspace = true
+drives-other.workspace = true
+media.workspace = true

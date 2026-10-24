@@ -426,7 +426,42 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         // The P6 is 341-0028; some dumps are named 342-0028.
         optional("disk2-p6", &["341-0028", "3410028", "3420028"], 0x100),
     ];
+    // Macintosh: one image per model (dumps are usually named after the
+    // machine) or its two chips, H the even bytes and L the odd (Apple
+    // part numbers 342-0220/0221 for the 128K/512K, 342-0341/0342 for the
+    // Plus, 342-0701/0702 for the SE). Every ROM is optional: the model
+    // picks its own and reports what is missing.
+    const MAC: &[RomSpec] = &[
+        optional(
+            "mac128k",
+            &["mac128k", "mac-128k", "macintosh-128", "128k"],
+            0x1_0000,
+        ),
+        // The 512K's ROM is a revision of the 128K's (checksum 28BA4E50).
+        optional(
+            "mac512k",
+            &["mac512k", "mac-512k", "macintosh-512k", "512k"],
+            0x1_0000,
+        ),
+        optional("mac128k-h", &["342-0220"], 0x8000),
+        optional("mac128k-l", &["342-0221"], 0x8000),
+        optional(
+            "macplus",
+            &["macplus", "mac-plus", "macintosh-plus", "mac512ke", "plus"],
+            0x2_0000,
+        ),
+        optional("macplus-h", &["342-0341"], 0x1_0000),
+        optional("macplus-l", &["342-0342"], 0x1_0000),
+        optional(
+            "macse",
+            &["macse", "mac-se", "macintosh-se", "se-"],
+            0x4_0000,
+        ),
+        optional("macse-h", &["342-0701"], 0x2_0000),
+        optional("macse-l", &["342-0702"], 0x2_0000),
+    ];
     match machine {
+        "mac" => MAC,
         "apple2" => APPLE2,
         "zx81" => ZX81,
         "vectrex" => VECTREX,
@@ -462,6 +497,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "snes" => &["snes", "sfc", "superfamicom"],
         "vectrex" => &["vectrex"],
         "apple2" => &["apple2", "apple", "appleii"],
+        "mac" => &["mac", "macintosh", "apple"],
         _ => &[],
     }
 }

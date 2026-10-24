@@ -224,6 +224,12 @@ pub fn write_table() -> [u8; 64] {
     WRITE
 }
 
+/// A disk byte → its six-bit value, `None` for bytes outside the table.
+pub fn read_nibble(b: u8) -> Option<u8> {
+    let v = READ[usize::from(b)];
+    (v != 0xff).then_some(v)
+}
+
 /// Encode a sector's 256 bytes into the 343 disk bytes of a data field (without prologue/epilogue).
 pub fn encode_6and2(data: &[u8; 256]) -> [u8; 343] {
     let mut v = [0u8; 342];

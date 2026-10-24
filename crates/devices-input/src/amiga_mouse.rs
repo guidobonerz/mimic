@@ -62,6 +62,7 @@ fn phase_lines(p: i64) -> (bool, bool) {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AmigaMouse {
+    kind: PortKind,
     cycles_per_step: u64,
     /// Horizontal, vertical.
     axes: [Axis; 2],
@@ -72,7 +73,17 @@ pub struct AmigaMouse {
 
 impl AmigaMouse {
     pub fn new(cycles_per_step: u64) -> Self {
+        Self::with_kind(PortKind::AmigaGameport, cycles_per_step)
+    }
+
+    /// A Macintosh mouse.
+    pub fn mac(cycles_per_step: u64) -> Self {
+        Self::with_kind(PortKind::MacMouse, cycles_per_step)
+    }
+
+    fn with_kind(kind: PortKind, cycles_per_step: u64) -> Self {
         Self {
+            kind,
             cycles_per_step: cycles_per_step.max(1),
             axes: [Axis::default(); 2],
             pending: [0; 2],
@@ -84,7 +95,7 @@ impl AmigaMouse {
 
 impl PortDevice for AmigaMouse {
     fn kind(&self) -> PortKind {
-        PortKind::AmigaGameport
+        self.kind
     }
 
     fn read_lines(&self, now: Cycle) -> PortLines {

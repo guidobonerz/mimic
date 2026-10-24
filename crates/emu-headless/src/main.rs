@@ -26,8 +26,10 @@ usage: mimic-headless [options]
                         or as its \"program\" ROM role (sim6502)
   --disk FILE           disk image into the first disk drive (drive 8, Atari D1: ATR;
                         Amiga ADF, HD ADF, extended ADF or DMS; Apple II DSK/DO/PO,
-                        NIB or WOZ in slot 6); repeat for the
-                        next drives (Amiga DF1: with --option drives=2)
+                        NIB or WOZ in slot 6; Mac 400K/800K DSK or DiskCopy 4.2,
+                        hard disk images to SCSI); repeat for the next drives
+                        (Amiga DF1: with --option drives=2); a drive refusing an
+                        image passes it on to the next
   --tape FILE           TAP image into the datasette, CAS into the Atari
                         program recorder, WAV into the Apple II cassette
                         (PLAY pressed); a PRG is recorded
@@ -47,7 +49,7 @@ usage: mimic-headless [options]
   --screen NAME         snapshot this screen (C128: vic or vdc; default: main)
   --crt PROFILE[:N]     snapshot through a monitor profile (raw, 1702, 1084s,
                         1084s-rgb, tv, pal-tv, ntsc-tv, pet-white, pet-green,
-                        ctm644, gt65 or a .toml file) at N rows per line
+                        ctm644, gt65, mac or a .toml file) at N rows per line
                         (default 2)
   --load-state FILE     restore a savestate before running
   --save-state FILE     write a savestate after running
@@ -309,8 +311,29 @@ fn run(args: Args) -> Result<ExitCode, String> {
             )
         });
     }
-    for (path, slot) in args.disk.iter().zip(drives) {
-        insert(machine.as_mut(), slot, path)?;
+    // A drive that refuses an image's format (a Mac floppy drive and a
+    // hard disk image) passes it on to the next free one.
+    let mut free = drives;
+    for path in &args.disk {
+        let mut first_err = None;
+        let mut used = None;
+        for (i, &slot) in free.iter().enumerate() {
+            match insert(machine.as_mut(), slot, path) {
+                Ok(()) => {
+                    used = Some(i);
+                    break;
+                }
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        match used {
+            Some(i) => {
+                free.remove(i);
+            }
+            None => return Err(first_err.unwrap_or_else(|| format!("{path}: no free drive"))),
+        }
     }
     if let Some(path) = &args.tape {
         let slot = slot_of(machine.as_ref(), MediaKind::Tape)

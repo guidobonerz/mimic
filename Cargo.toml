@@ -49,6 +49,7 @@ machine-nes = { path = "crates/machine-nes" }
 machine-snes = { path = "crates/machine-snes" }
 machine-vectrex = { path = "crates/machine-vectrex" }
 machine-apple2 = { path = "crates/machine-apple2" }
+machine-mac = { path = "crates/machine-mac" }
 machine-sim6502 = { path = "crates/machine-sim6502" }
 emu-machines = { path = "crates/emu-machines" }
 emu-debug = { path = "crates/emu-debug" }

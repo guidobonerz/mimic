@@ -34,6 +34,9 @@ pub enum PortKind {
     /// Apple II game I/O: four paddle inputs (two used by a joystick or a
     /// pair of paddles), push buttons, annunciators.
     AppleGame,
+    /// Macintosh 128K/512K/Plus mouse port: 9-pin, quadrature X1/X2 and
+    /// Y1/Y2 and one button (the SE's ADB mouse uses the same device).
+    MacMouse,
     CbmUserPort,
     Iec,
     Sio,

@@ -19,6 +19,7 @@ pub mod dmk;
 pub mod dms;
 pub mod dsk;
 pub mod gcr;
+pub mod macdisk;
 pub mod mfm;
 pub mod prg;
 pub mod t64;

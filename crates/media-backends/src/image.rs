@@ -182,6 +182,10 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
         "d64" | "d71" | "d81" | "d80" | "d82" | "g64" | "atr" | "dsk" | "adf" | "dms" => {
             Some(MediaKind::Disk)
         }
+        // Apple II images; Macintosh floppy (raw, DiskCopy 4.2) and hard
+        // disk images.
+        "do" | "po" | "nib" | "woz" | "img" | "image" | "dc42" | "diskcopy42" | "hda" | "hdv"
+        | "hfv" => Some(MediaKind::Disk),
         "prg" | "p00" | "t64" | "xex" | "com" | "exe" => Some(MediaKind::Program),
         "tap" | "cas" | "cdt" | "tzx" | "p" | "81" => Some(MediaKind::Tape),
         "crt" | "car" | "a26" | "vec" => Some(MediaKind::Cartridge),
