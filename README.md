@@ -30,7 +30,7 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | Commodore C16 / Plus/4 | `machine-ted` | PAL, NTSC | boots BASIC, tape, cartridges | 85 % |
 | Commodore 128 | `machine-c128` | 40/80 columns, Z80 | boots BASIC; VDC; 1571 | 80 % |
 | Atari 400/800/800XL/65XE/130XE | `machine-atari8` | PAL, NTSC | Acid800 52/57 (800XL, 130XE); 5 ANTIC/GTIA edge cases open | 90 % |
-| Atari 2600 | `machine-atari2600` | NTSC, PAL | own TIA/RIOT tests, 24 games; DPC, Supercharger, SECAM missing | 85 % |
+| Atari 2600 | `machine-atari2600` | NTSC, PAL (auto-detected) | own TIA/RIOT tests, 24 games, Pitfall II (DPC); Supercharger, SECAM missing | 88 % |
 | Amstrad CPC | `machine-cpc` | 464, 664, 6128; CRTC 0–2 | Arnold acid tests 66/70; tape and disc | 90 % |
 | Amiga 500/1000/2000 (OCS) | `machine-amiga` | PAL, NTSC | Kickstart 1.2–3.1, Workbench 1.3, demos; bus timing against WinUAE within 0.2–3 % | 85 % |
 | Amiga 500+ (ECS) | `machine-amiga` | `500plus` | Kickstart 2.0/3.1 reach insert-disk; programmable beam partly | 75 % |
@@ -131,7 +131,7 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | Freezer cartridges (Action Replay, Retro Replay, Final Cartridge III) | – | 0 % |
 | VIC-20, C16/Plus/4 ROM cartridges | `devices-cartridge` | 90 % |
 | Atari 8-bit CAR | `devices-cartridge` | 85 % |
-| Atari 2600 bank switching (2K/4K, F8/F6/F4 + Superchip, FE, E0, E7, 3F, FA) | `devices-cartridge` | 85 % |
+| Atari 2600 bank switching (2K/4K, F8/F6/F4 + Superchip, FE, E0, E7, 3F, FA, DPC) | `devices-cartridge` | 88 % |
 | ColecoVision (plain, MegaCart) | `devices-cartridge` | 90 % |
 | NES mappers 0–4 (iNES/NES 2.0) | `devices-cartridge` | 60 % (further mappers missing) |
 | SNES LoROM/HiROM/ExHiROM, SRAM | `devices-cartridge` | 60 % (no coprocessors, SRAM not saved to file) |

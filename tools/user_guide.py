@@ -267,7 +267,7 @@ table(["Machine id", "Machine", "Models (--model)"], [
     ["`c128`", "Commodore 128 (40 and 80 columns, Z80)", "`pal`, `ntsc`"],
     ["`atari8`", "Atari 400/800/800XL/65XE/130XE",
      "`800xl` (default), `65xe`, `130xe`, `800`, `400`; each also `-ntsc`"],
-    ["`atari2600`", "Atari 2600 (VCS)", "`ntsc` (default), `pal`"],
+    ["`atari2600`", "Atari 2600 (VCS)", "`auto` (default: NTSC or PAL from the program's field length), `ntsc`, `pal`"],
     ["`cpc`", "Amstrad CPC", "`6128` (default), `664`, `464`"],
     ["`amiga`", "Commodore Amiga 500/1000/2000 (OCS), 500+ (ECS), 1200 (AGA)",
      "`500` (default), `1000`, `2000`, `500plus`, `1200`; each also `-ntsc`"],
@@ -654,7 +654,7 @@ table(["Option", "Values"], [
     ["`tv`", "`color` or `bw`"],
     ["`left`, `right`", "difficulty switches `b` or `a`"],
     ["`bank`", "force a bank-switching scheme: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, "
-     "`f4sc`, `fa`, `fe`, `e0`, `e7`, `3f` (normally detected)"],
+     "`f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`, `dpc` (Pitfall II; normally detected)"],
 ], [0.22, 0.78])
 p("""Console: F1 SELECT, F2 RESET (held), F3 colour/black-and-white, F4/F5 left/right
 difficulty. Keypads: left 1 2 3 / Q W E / A S D / Z X C, right 8 9 0 / I O P /

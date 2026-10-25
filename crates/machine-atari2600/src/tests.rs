@@ -64,13 +64,20 @@ fn wsync_holds_the_cpu_until_the_next_line() {
 
 #[test]
 fn empty_console_idles_and_free_runs() {
-    let mut m = Atari2600::new(&MachineConfig::default()).unwrap();
-    frame(&mut m);
-    let start = m.now().0;
-    frame(&mut m);
-    let lines = u64::from(tia::free_run_lines(VideoStandard::Ntsc));
-    assert_eq!(m.now().0 - start, lines * 76);
-    assert!(m.board.tia.pixels().iter().all(|&p| p == 0));
+    // "auto" keeps the TIA's PAL limits until (and after) it decides.
+    for (model, standard) in [("ntsc", VideoStandard::Ntsc), ("auto", VideoStandard::Pal)] {
+        let mut m = Atari2600::new(&MachineConfig {
+            model: Some(model.into()),
+            ..MachineConfig::default()
+        })
+        .unwrap();
+        frame(&mut m);
+        let start = m.now().0;
+        frame(&mut m);
+        let lines = u64::from(tia::free_run_lines(standard));
+        assert_eq!(m.now().0 - start, lines * 76, "{model}");
+        assert!(m.board.tia.pixels().iter().all(|&p| p == 0));
+    }
 }
 
 #[test]
@@ -158,7 +165,11 @@ fn with_program(program: &[u8]) -> Atari2600 {
     let mut rom = vec![0xea; 0x1000];
     rom[..program.len()].copy_from_slice(program);
     rom[0xffc..].copy_from_slice(&[0x00, 0xf0, 0x00, 0xf0]);
-    let mut m = Atari2600::new(&MachineConfig::default()).unwrap();
+    let mut m = Atari2600::new(&MachineConfig {
+        model: Some("ntsc".into()),
+        ..MachineConfig::default()
+    })
+    .unwrap();
     m.board.cart = Some(Cart2600::parse(&rom).unwrap());
     m.reset(ResetKind::Soft);
     m
@@ -524,4 +535,221 @@ fn frame_rows_and_savestates_ignore_the_overlay() {
         b.overlay("objects").unwrap().shapes.is_empty(),
         "cleared on load"
     );
+}
+
+/// AUDV0 values seen at every CPU cycle of `frames` frames, and the
+/// distinct palette indices of the last frame.
+fn run_watching_audv0(
+    m: &mut Atari2600,
+    frames: u32,
+) -> (
+    std::collections::BTreeSet<u8>,
+    std::collections::BTreeSet<u8>,
+) {
+    let mut audv = std::collections::BTreeSet::new();
+    let start = m.board.tia.frame();
+    while m.board.tia.frame() < start + u64::from(frames) {
+        m.step_cycle();
+        audv.insert(m.board.tia.regs[usize::from(tia::AUDV0)] & 0x0f);
+    }
+    let colours = m.board.tia.pixels().iter().copied().collect();
+    (audv, colours)
+}
+
+/// Pitfall II (DPC) from `EMU_PITFALL2`: the attract screen draws the
+/// jungle from the DPC's display data, and after RESET the music fetchers
+/// drive AUDV0 through many levels. Optionally `EMU_PITFALL2_PGM` gets
+/// the last frame's palette indices as a PGM picture.
+#[test]
+#[ignore]
+fn pitfall2_dpc_picture_and_music() {
+    let Ok(path) = std::env::var("EMU_PITFALL2") else {
+        eprintln!("EMU_PITFALL2 not set");
+        return;
+    };
+    let rom = std::fs::read(path).unwrap();
+    for len in [rom.len(), 0x2800] {
+        let mut m = with_cart(rom[..len].to_vec(), &[]);
+        assert_eq!(m.board.cart.as_ref().unwrap().scheme, Scheme::Dpc);
+        let (_, colours) = run_watching_audv0(&mut m, 120);
+        assert!(colours.len() >= 6, "attract screen drawn: {colours:?}");
+        key(&mut m, keys::RESET, true);
+        run_watching_audv0(&mut m, 10);
+        key(&mut m, keys::RESET, false);
+        // Harry runs right: the music starts with the play.
+        send(
+            &mut m,
+            InputTarget::Port(PORT1),
+            InputEvent::Digital {
+                dirs: Dirs::RIGHT,
+                buttons: 0,
+            },
+        );
+        let (audv, colours) = run_watching_audv0(&mut m, 300);
+        println!(
+            "{len} bytes: AUDV0 levels {audv:?}, {} colours",
+            colours.len()
+        );
+        assert!(colours.len() >= 6, "play screen drawn");
+        if let Ok(out) = std::env::var("EMU_PITFALL2_PGM") {
+            let px = m.board.tia.pixels();
+            let h = px.len() as u32 / tia::WIDTH;
+            let mut f = format!(
+                "P5 {} {h} 255
+",
+                tia::WIDTH
+            )
+            .into_bytes();
+            f.extend_from_slice(px);
+            std::fs::write(out, f).unwrap();
+        }
+        assert!(audv.len() >= 4, "music on AUDV0: {audv:?}");
+        let state = m.save_state();
+        let mut back = with_cart(rom[..len].to_vec(), &[]);
+        back.load_state(&state).unwrap();
+        frame(&mut m);
+        frame(&mut back);
+        assert_eq!(m.board.tia.pixels(), back.board.tia.pixels());
+        assert_eq!(m.board.cart, back.board.cart, "DPC state restored");
+        if let Ok(out) = std::env::var("EMU_PITFALL2_PGM") {
+            let px = m.board.tia.pixels();
+            let h = px.len() as u32 / tia::WIDTH;
+            let mut f = format!("P5 {} {h} 255\n", tia::WIDTH).into_bytes();
+            f.extend_from_slice(px);
+            std::fs::write(out, f).unwrap();
+        }
+    }
+}
+
+/// A 4 KB cartridge whose frames are `lines` lines (VSYNC to VSYNC):
+/// VSYNC for 3 lines, then `lines - 3` WSYNCs in up to two loops, a
+/// background colour per line.
+fn frames_of(lines: u16) -> Vec<u8> {
+    let rest = lines - 3;
+    let (a, b) = (rest.min(255) as u8, rest.saturating_sub(255) as u8);
+    let mut program = vec![
+        0xa9, 0x02, 0x85, 0x00, // F000: LDA #2, STA VSYNC
+        0x85, 0x02, 0x85, 0x02, 0x85, 0x02, // WSYNC ×3
+        0xa9, 0x00, 0x85, 0x00, // LDA #0, STA VSYNC
+        0xa2, a, // LDX #a
+        0x86, 0x09, // F010: STX COLUBK
+        0x85, 0x02, // STA WSYNC
+        0xca, // DEX
+        0xd0, 0xf9, // BNE F010
+    ];
+    if b > 0 {
+        program.extend([
+            0xa2, b, // LDX #b
+            0x85, 0x02, // F019: STA WSYNC
+            0xca, // DEX
+            0xd0, 0xfb, // BNE F019
+        ]);
+    }
+    program.extend([0x4c, 0x00, 0xf0]); // JMP F000
+    let mut rom = vec![0xea; 0x1000];
+    rom[..program.len()].copy_from_slice(&program);
+    rom[0xffc..].copy_from_slice(&[0x00, 0xf0, 0x00, 0xf0]);
+    rom
+}
+
+fn tv_chip(m: &Atari2600, name: &str) -> u32 {
+    let tv = m.chips().into_iter().find(|c| c.name == "tv").unwrap();
+    tv.regs.iter().find(|r| r.name == name).unwrap().value
+}
+
+#[test]
+fn auto_model_detects_the_tv_standard_from_the_field_length() {
+    for (lines, pal) in [(262, false), (240, false), (312, true), (300, true)] {
+        let rom = frames_of(lines);
+        let mut m = with_cart(rom.clone(), &[]);
+        assert_eq!(tv_chip(&m, "AUTO"), 1);
+        let mut heights = Vec::new();
+        for _ in 0..40 {
+            frame(&mut m);
+            heights.push(m.framebuffer().height);
+        }
+        assert_eq!(tv_chip(&m, "DECIDED"), 1, "{lines} lines");
+        assert_eq!(tv_chip(&m, "STANDARD"), u32::from(pal), "{lines} lines");
+        let want = if pal { 312 } else { 262 };
+        assert_eq!(*heights.last().unwrap(), want);
+        assert_eq!(
+            m.signal().standard,
+            if pal {
+                VideoStandard::Pal
+            } else {
+                VideoStandard::Ntsc
+            }
+        );
+        assert_eq!(m.palette, chips_atari::palette::tia(m.signal().standard));
+        // Every field ends by VSYNC: no extra (blank) field after the
+        // switch, each frame as long as the program's.
+        let start = m.now().0;
+        frame(&mut m);
+        assert_eq!(m.now().0 - start, u64::from(lines) * 76, "{lines} lines");
+        // Savestates keep the decision.
+        let state = m.save_state();
+        let mut back = with_cart(rom, &[]);
+        back.load_state(&state).unwrap();
+        assert_eq!(back.standard, m.standard);
+        assert_eq!(back.tv, m.tv);
+        frame(&mut m);
+        frame(&mut back);
+        assert_eq!(m.board.tia.pixels(), back.board.tia.pixels());
+    }
+}
+
+#[test]
+fn forced_models_do_not_switch() {
+    let mut m = with_cart(frames_of(255), &[]);
+    let mut config = MachineConfig {
+        model: Some("pal".into()),
+        ..MachineConfig::default()
+    };
+    config.options.insert("roms".into(), "stub".into());
+    let mut pal = Atari2600::new(&config).unwrap();
+    for _ in 0..40 {
+        frame(&mut pal);
+    }
+    assert_eq!(tv_chip(&pal, "AUTO"), 0);
+    assert_eq!(pal.signal().standard, VideoStandard::Pal, "stays PAL");
+    // A savestate of the auto model does not load into a forced PAL one
+    // after deciding NTSC.
+    for _ in 0..40 {
+        frame(&mut m);
+    }
+    assert_eq!(m.signal().standard, VideoStandard::Ntsc);
+    assert!(pal.load_state(&m.save_state()).is_err());
+}
+
+/// Solaris (PAL, F6) from `EMU_SOLARIS` on the default model: it is taken
+/// for PAL, after the switch no frame is blank and the frames are as
+/// long as the program's (no extra field between them).
+#[test]
+#[ignore]
+fn solaris_pal_is_detected() {
+    let Ok(path) = std::env::var("EMU_SOLARIS") else {
+        eprintln!("EMU_SOLARIS not set");
+        return;
+    };
+    let mut m = with_cart(std::fs::read(path).unwrap(), &[]);
+    let mut blank_after = 0;
+    let mut lengths = std::collections::BTreeSet::new();
+    for i in 0..300 {
+        let start = m.now().0;
+        frame(&mut m);
+        if tv_chip(&m, "DECIDED") == 1 && i > 60 {
+            let fb = m.framebuffer();
+            let PixelData::Indexed { pixels, .. } = fb.pixels else {
+                panic!()
+            };
+            blank_after += usize::from(pixels.iter().all(|&p| p == pixels[0]));
+            lengths.insert((m.now().0 - start) / 76);
+        }
+    }
+    println!("field lengths after the decision: {lengths:?}");
+    assert_eq!(m.signal().standard, VideoStandard::Pal);
+    assert_eq!(m.framebuffer().height, 312);
+    assert_eq!(m.palette, chips_atari::palette::tia(VideoStandard::Pal));
+    assert_eq!(blank_after, 0, "blank frames after the switch");
+    assert!(lengths.iter().all(|&l| l > 287), "{lengths:?}");
 }

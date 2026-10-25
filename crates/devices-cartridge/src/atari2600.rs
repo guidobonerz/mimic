@@ -14,13 +14,14 @@
 //! | E0     | 8 KB        | four 1 KB segments; `$1FE0–$1FE7`, `$1FE8–$1FEF`, `$1FF0–$1FF7` pick the slice of segments 0–2, segment 3 is the last slice |
 //! | E7     | 16 KB       | `$1FE0–$1FE6`: 2 KB slice at `$1000`; `$1FE7`: 1 KB RAM there instead (write `$1000`, read `$1400`); `$1FE8–$1FEB`: 256-byte RAM block at `$1800` (write) / `$1900` (read); the last 2 KB slice fixed at `$1800` |
 //! | 3F     | 8 KB–512 KB | a write to `$00–$3F` selects the 2 KB slice at `$1000` (data mod slices); the last slice fixed at `$1800` |
+//! | DPC    | 10 KB       | F8 banking of the 8 KB program; the Display Processor Chip's registers at `$1000–$107F` with 2 KB display data ([`dpc`]) |
 //!
 //! Superchip ("SC", on F8/F6/F4): 128 bytes RAM, write port `$1000–$107F`,
 //! read port `$1080–$10FF`. The cartridge has no R/W line: a write to a
 //! read port is ignored here, and a read of a write port returns what is
 //! on the data bus.
 //!
-//! Power-up: F8/F6/F4/FA/FE in their last bank, E0 with slices 0, 1, 2,
+//! Power-up: F8/F6/F4/FA/FE/DPC in their last bank, E0 with slices 0, 1, 2,
 //! E7 and 3F with slice 0.
 //!
 //! Images are raw ROM dumps (`.a26`, `.bin`). [`detect`] picks the scheme
@@ -28,7 +29,9 @@
 //! accesses to the E0/E7 hotspots, RAM ports (the first 256 bytes of every
 //! bank one repeated value, or frequent stores into the write port) for
 //! the Superchip, reset vectors with D5 = 1 in bank 0 and D5 = 0 in the
-//! last bank for FE; [`Cart2600::with_scheme`]
+//! last bank for FE; DPC by its size (10 240 bytes, or 10 495 with the
+//! dump of the chip's random number sequence appended, which is ignored);
+//! [`Cart2600::with_scheme`]
 //! overrides it.
 //!
 //! Source: Kevin Horton, "Cart Information" v6
@@ -40,6 +43,15 @@ use emu_core::media::MediaError;
 use emu_core::{StateError, StateReader, StateWriter};
 
 use crate::slot::CartSlot;
+
+pub mod dpc;
+
+use dpc::Dpc;
+
+/// DPC images: program and display data, optionally followed by the
+/// 255-byte random number dump.
+const DPC_LEN: usize = 0x2800;
+const DPC_LEN_WITH_RNG: usize = 0x28ff;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scheme {
@@ -53,6 +65,8 @@ pub enum Scheme {
     E0,
     E7,
     Tigervision,
+    /// Activision's Display Processor Chip (Pitfall II).
+    Dpc,
 }
 
 impl Scheme {
@@ -68,6 +82,7 @@ impl Scheme {
             Scheme::E0 => "e0",
             Scheme::E7 => "e7",
             Scheme::Tigervision => "3f",
+            Scheme::Dpc => "dpc",
         }
     }
 
@@ -87,6 +102,7 @@ impl Scheme {
             "e0" => Scheme::E0,
             "e7" => Scheme::E7,
             "3f" => Scheme::Tigervision,
+            "dpc" => Scheme::Dpc,
             _ => return None,
         };
         (!sc || matches!(s, Scheme::F8 | Scheme::F6 | Scheme::F4)).then_some((s, sc))
@@ -101,6 +117,7 @@ impl Scheme {
             Scheme::F4 => len == 0x8000,
             Scheme::Fa => len == 0x3000,
             Scheme::Tigervision => len >= 0x1000 && len.is_multiple_of(0x800) && len <= 0x80000,
+            Scheme::Dpc => len == DPC_LEN || len == DPC_LEN_WITH_RNG,
         }
     }
 }
@@ -153,6 +170,7 @@ pub fn detect(rom: &[u8]) -> Result<(Scheme, bool), MediaError> {
         0x2000 if fe => (Scheme::Fe, false),
         0x2000 => (Scheme::F8, superchip(2)),
         0x3000 => (Scheme::Fa, false),
+        DPC_LEN | DPC_LEN_WITH_RNG => (Scheme::Dpc, false),
         0x4000 if hotspot_accesses(rom, 0xe0..=0xe7) >= 2 => (Scheme::E7, false),
         0x4000 => (Scheme::F6, superchip(4)),
         0x8000 if sta_3f >= 2 => (Scheme::Tigervision, false),
@@ -182,6 +200,8 @@ pub struct Cart2600 {
     ram_low: bool,
     /// FE: `$01FE` was accessed; the next bus byte picks the bank.
     fe_armed: bool,
+    /// The Display Processor Chip of a DPC cartridge.
+    dpc: Option<Box<Dpc>>,
 }
 
 impl Cart2600 {
@@ -215,6 +235,7 @@ impl Cart2600 {
             ram_block: 0,
             ram_low: false,
             fe_armed: false,
+            dpc: None,
         };
         c.power_on();
         Ok(c)
@@ -231,8 +252,10 @@ impl Cart2600 {
             Scheme::F8 | Scheme::F6 | Scheme::F4 | Scheme::Fa | Scheme::Fe => {
                 self.rom.len() / 0x1000 - 1
             }
+            Scheme::Dpc => 1,
             _ => 0,
         };
+        self.dpc = (self.scheme == Scheme::Dpc).then(Box::default);
         self.slices = [0, 1, 2];
         self.ram.fill(0);
         self.ram_block = 0;
@@ -243,6 +266,7 @@ impl Cart2600 {
     fn banks(&self) -> usize {
         match self.scheme {
             Scheme::E7 | Scheme::Tigervision => self.rom.len() / 0x800,
+            Scheme::Dpc => 2,
             _ => self.rom.len().div_ceil(0x1000),
         }
     }
@@ -264,11 +288,14 @@ impl Cart2600 {
                 let i = 0x400 + usize::from(self.ram_block) * 0x100 + (off & 0xff);
                 return (off >= 0x900).then(|| self.ram[i]);
             }
+            Scheme::Dpc if off < 0x40 => {
+                return self.dpc.as_ref().map(|d| d.peek(off, self.display()));
+            }
             _ => {}
         }
         Some(match self.scheme {
             Scheme::Plain => self.rom[off & (self.rom.len() - 1)],
-            Scheme::F8 | Scheme::F6 | Scheme::F4 | Scheme::Fa | Scheme::Fe => {
+            Scheme::F8 | Scheme::F6 | Scheme::F4 | Scheme::Fa | Scheme::Fe | Scheme::Dpc => {
                 self.rom[self.bank * 0x1000 + off]
             }
             Scheme::E0 => {
@@ -315,7 +342,7 @@ impl Cart2600 {
         }
         let hot = |lo: u16, hi: u16| (lo..=hi).contains(&a).then(|| usize::from(a - lo));
         match self.scheme {
-            Scheme::F8 => self.bank = hot(0x1ff8, 0x1ff9).unwrap_or(self.bank),
+            Scheme::F8 | Scheme::Dpc => self.bank = hot(0x1ff8, 0x1ff9).unwrap_or(self.bank),
             Scheme::F6 => self.bank = hot(0x1ff6, 0x1ff9).unwrap_or(self.bank),
             Scheme::F4 => self.bank = hot(0x1ff4, 0x1ffb).unwrap_or(self.bank),
             Scheme::Fa => self.bank = hot(0x1ff8, 0x1ffa).unwrap_or(self.bank),
@@ -335,6 +362,17 @@ impl Cart2600 {
             },
             _ => {}
         }
+        if let Some(d) = &mut self.dpc {
+            let reg = usize::from(a & 0x0fff);
+            match write {
+                Some(v) if (0x40..0x80).contains(&reg) => d.write(reg, v),
+                None if reg < 0x40 => {
+                    let display = &self.rom[0x2000..0x2000 + dpc::DISPLAY_LEN];
+                    return Some(d.read(reg, display));
+                }
+                _ => {}
+            }
+        }
         match write {
             Some(v) => {
                 self.write_ram(a, v);
@@ -342,6 +380,27 @@ impl Cart2600 {
             }
             None => self.read_at(a),
         }
+    }
+
+    /// DPC: the 2 KB display data after the program.
+    fn display(&self) -> &[u8] {
+        self.rom
+            .get(0x2000..0x2000 + dpc::DISPLAY_LEN)
+            .unwrap_or(&[])
+    }
+
+    /// One CPU cycle of a CPU clocked at `cpu_hz` (the DPC's music
+    /// oscillator runs on emulated time); nothing for other schemes.
+    #[inline]
+    pub fn tick(&mut self, cpu_hz: u32) {
+        if let Some(d) = &mut self.dpc {
+            d.tick(cpu_hz);
+        }
+    }
+
+    /// The DPC's registers for a debugger view; `None` for other schemes.
+    pub fn dpc_registers(&self) -> Option<Vec<(&'static str, u32, u8)>> {
+        self.dpc.as_ref().map(|d| d.registers())
     }
 
     /// A write into a RAM write port.
@@ -385,6 +444,9 @@ impl Cart2600 {
             w.bool(self.ram_low);
             w.bool(self.fe_armed);
         });
+        if let Some(d) = &self.dpc {
+            d.save(w);
+        }
     }
 
     /// Banking state and RAM; the ROM is the inserted image.
@@ -414,6 +476,9 @@ impl Cart2600 {
         self.slices = slices;
         self.ram.copy_from_slice(ram);
         self.ram_block = ram_block;
+        if let Some(d) = &mut self.dpc {
+            d.load(r)?;
+        }
         self.ram_low = ram_low;
         self.fe_armed = fe_armed;
         Ok(())
@@ -593,6 +658,47 @@ mod tests {
         assert!(detect(&[0u8; 0x1800]).is_err());
         assert_eq!(Scheme::from_name("f6sc"), Some((Scheme::F6, true)));
         assert_eq!(Scheme::from_name("e0sc"), None);
+    }
+
+    #[test]
+    fn dpc_banks_registers_and_detection() {
+        let mut r = rom(0x2800, 0x1000);
+        r[0x2000 + 0x7ff] = 0xab; // display byte at counter 0
+        r.extend((0..255).map(|i| i as u8)); // the random number dump
+        assert_eq!(detect(&r).unwrap(), (Scheme::Dpc, false));
+        assert_eq!(detect(&r[..0x2800]).unwrap(), (Scheme::Dpc, false));
+        let mut c = Cart2600::parse(&r).unwrap();
+        assert_eq!(read(&mut c, 0x1100), Some(1), "starts in bank 1");
+        read(&mut c, 0x1ff8);
+        assert_eq!(read(&mut c, 0x1100), Some(0), "F8 hotspots");
+        assert_eq!(read(&mut c, 0x1040), Some(0), "write registers read as ROM");
+        c.access(0x1053, Some(0)); // DF3 counter 0
+        assert_eq!(c.peek(0x100b), 0xab);
+        assert_eq!(read(&mut c, 0x100b), Some(0xab), "DF3 data");
+        assert_eq!(read(&mut c, 0x1000), Some(1), "random number");
+        assert_eq!(Scheme::from_name("dpc"), Some((Scheme::Dpc, false)));
+        // Music: DF5 in music mode with top 1 toggles at 10 kHz.
+        c.access(0x1045, Some(1));
+        c.access(0x105d, Some(0x10));
+        let before = c.peek(0x1004);
+        let mut changes = 0;
+        let mut last = before;
+        for _ in 0..1_193 {
+            c.tick(1_193_182);
+            let v = c.peek(0x1004);
+            changes += u32::from(v != last);
+            last = v;
+        }
+        assert!(
+            (19..=21).contains(&changes),
+            "{changes} amplitude changes in 1 ms"
+        );
+        let mut w = StateWriter::new();
+        c.save(&mut w);
+        let bytes = w.into_bytes();
+        let mut back = Cart2600::parse(&r).unwrap();
+        back.load(&mut StateReader::new(&bytes)).unwrap();
+        assert_eq!(back, c);
     }
 
     #[test]

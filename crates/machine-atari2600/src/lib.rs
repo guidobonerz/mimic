@@ -18,9 +18,15 @@
 //! TIA reads drive D7 and D6 only; the other data lines keep what the
 //! last bus cycle left on them.
 //!
-//! Models: "ntsc" (default; 3.579545 MHz colour clock, 262 lines) and
-//! "pal" (3.546894 MHz, 312 lines); the CPU runs at a third of the colour
-//! clock. Per CPU cycle: the CPU (held by WSYNC through RDY), the RIOT
+//! Models: "auto" (default), "ntsc" (3.579545 MHz colour clock, 262
+//! lines) and "pal" (3.546894 MHz, 312 lines); the CPU runs at a third of
+//! the colour clock. A cartridge is made for one TV standard: "auto"
+//! starts as NTSC and decides once after power-up from the lengths of
+//! the program's fields (VSYNC to VSYNC, see `TvDetect`), then switches
+//! palette, picture height and clock. Its TIA runs with the PAL limits
+//! throughout (a field without VSYNC ends after 352 lines), so a PAL
+//! program's 312-line fields never split into an extra blank field while
+//! the decision is pending. Per CPU cycle: the CPU (held by WSYNC through RDY), the RIOT
 //! timer, three TIA colour clocks.
 //!
 //! Options:
@@ -31,7 +37,7 @@
 //!   "b" (default) or "a".
 //! - `bank`: the cartridge's bank-switching scheme instead of the
 //!   detected one: 2k, 4k, f8, f6, f4 (each also with "sc" for the
-//!   Superchip, e.g. f8sc), fa, fe, e0, e7, 3f (see
+//!   Superchip, e.g. f8sc), fa, fe, e0, e7, 3f, dpc (see
 //!   [`devices_cartridge::atari2600`]).
 //! - `roms`: "stub" inserts a built-in test cartridge ([`stub`]).
 //!
@@ -121,7 +127,7 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "atari2600",
         name: "Atari 2600",
-        models: &["ntsc", "pal"],
+        models: &["auto", "ntsc", "pal"],
         create: |config| Ok(Box::new(Atari2600::new(config)?)),
     }
 }
@@ -223,6 +229,20 @@ impl Bus for Board {
     }
 }
 
+/// The RIOT timer's contents at power-up are undefined; the console starts
+/// it counting at the 1024-cycle rate from [`TIMER_AT_POWER_UP`] (about
+/// 55 ms), so a program that waits for INTIM = 0 before it ever set the
+/// timer sees the zero for a whole interval. Pitfall II does that in its
+/// first frame: with the timer already run out (counting every cycle) its
+/// 14-cycle loop polling INTIM never meets the zero of the odd phase.
+fn power_up_timer(riot: &mut Riot) {
+    // TIM1024T, no interrupt.
+    riot.write(0x297, TIMER_AT_POWER_UP);
+}
+
+/// The RIOT timer value at power-up (a choice: real chips come up random).
+const TIMER_AT_POWER_UP: u8 = 0x40;
+
 fn port_option(
     config: &MachineConfig,
     key: &str,
@@ -270,8 +290,66 @@ fn switch_option(
     }
 }
 
+/// TV standard detection of the "auto" model: from power-up on, the
+/// fields that end by VSYNC are counted, skipping the first
+/// [`TvDetect::SKIP`] (start-up code) and fields of fewer than 200 lines;
+/// after [`TvDetect::VOTES`] of them the standard is PAL if most were
+/// longer than [`TvDetect::PAL_LINES`] lines, else NTSC. Without enough
+/// VSYNCed fields within [`TvDetect::GIVE_UP`] fields it stays NTSC. The
+/// decision is made once (from emulated fields only, so it is
+/// deterministic) and is part of the savestate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TvDetect {
+    /// The "auto" model.
+    auto: bool,
+    decided: bool,
+    /// Fields since power-up.
+    fields: u16,
+    /// Fields that count, and those of them longer than PAL_LINES.
+    votes: u16,
+    pal_votes: u16,
+}
+
+impl TvDetect {
+    const SKIP: u16 = 4;
+    const VOTES: u16 = 16;
+    const PAL_LINES: u16 = 287;
+    const GIVE_UP: u16 = 300;
+
+    /// A field of `lines` lines ended; the standard once decided.
+    fn field(&mut self, lines: u16) -> Option<VideoStandard> {
+        if !self.auto || self.decided {
+            return None;
+        }
+        self.fields += 1;
+        let vsynced = (200..tia::free_run_lines(VideoStandard::Pal)).contains(&lines);
+        if self.fields > Self::SKIP && vsynced {
+            self.votes += 1;
+            self.pal_votes += u16::from(lines > Self::PAL_LINES);
+        }
+        if self.votes < Self::VOTES && self.fields < Self::GIVE_UP {
+            return None;
+        }
+        self.decided = true;
+        Some(if self.pal_votes * 2 > self.votes {
+            VideoStandard::Pal
+        } else {
+            VideoStandard::Ntsc
+        })
+    }
+
+    /// Power-up: decide again.
+    fn restart(&mut self) {
+        *self = Self {
+            auto: self.auto,
+            ..Self::default()
+        };
+    }
+}
+
 pub struct Atari2600 {
     standard: VideoStandard,
+    tv: TvDetect,
     cpu: Cpu6502,
     board: Board,
     sched: Scheduler,
@@ -302,11 +380,14 @@ struct Snapshot {
 
 impl Atari2600 {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let standard = match config.model.as_deref() {
-            None | Some("ntsc") => VideoStandard::Ntsc,
-            Some("pal") => VideoStandard::Pal,
+        let (standard, auto) = match config.model.as_deref() {
+            None | Some("auto") => (VideoStandard::Ntsc, true),
+            Some("ntsc") => (VideoStandard::Ntsc, false),
+            Some("pal") => (VideoStandard::Pal, false),
             Some(other) => return Err(ConfigError::UnknownModel(other.into())),
         };
+        // "auto": the TIA keeps the PAL limits (see the module comment).
+        let tia_standard = if auto { VideoStandard::Pal } else { standard };
         let stub = match config.options.get("roms").map(String::as_str) {
             None => false,
             Some("stub") => true,
@@ -316,7 +397,7 @@ impl Atari2600 {
             None => None,
             Some(name) => Some(Scheme::from_name(name).ok_or_else(|| {
                 ConfigError::Invalid(format!(
-                    "bank option '{name}' (2k, 4k, f8, f6, f4, f8sc, f6sc, f4sc, fa, fe, e0, e7, 3f)"
+                    "bank option '{name}' (2k, 4k, f8, f6, f4, f8sc, f6sc, f4sc, fa, fe, e0, e7, 3f, dpc)"
                 ))
             })?),
         };
@@ -336,11 +417,16 @@ impl Atari2600 {
         cpu.reset();
         let mut riot = Riot::new();
         riot.set_port_b_input(switches);
+        power_up_timer(&mut riot);
         let mut m = Self {
             standard,
+            tv: TvDetect {
+                auto,
+                ..TvDetect::default()
+            },
             cpu,
             board: Board {
-                tia: Tia::new(standard),
+                tia: Tia::new(tia_standard),
                 riot,
                 cart: None,
                 data_bus: 0,
@@ -395,8 +481,22 @@ impl Atari2600 {
         }
     }
 
+    /// Switches the TV standard ("auto" model, at the end of a field):
+    /// palette, picture height, clock. The TIA keeps its PAL limits.
+    fn set_standard(&mut self, standard: VideoStandard) {
+        if standard == self.standard {
+            return;
+        }
+        self.standard = standard;
+        self.palette = chips_atari::palette::tia(standard);
+        if let Some(audio) = Decimator::new(cpu_hz(standard), emu_core::SAMPLE_RATE) {
+            self.audio = audio;
+        }
+    }
+
     /// One CPU cycle. Returns `Some` if emulation must stop.
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        let line_before = self.board.tia.line();
         // A cartridge went in or out: power up again.
         if self.cart.take_changed() {
             self.reset(ResetKind::Hard);
@@ -418,6 +518,9 @@ impl Atari2600 {
             CycleResult::Busy
         };
         self.board.riot.tick();
+        if let Some(c) = &mut self.board.cart {
+            c.tick(cpu_hz(self.standard));
+        }
         let mut new_field = false;
         for _ in 0..3 {
             new_field |= self.board.tia.tick();
@@ -425,6 +528,9 @@ impl Atari2600 {
         if new_field {
             if let Some(rec) = &mut self.board.overlay {
                 rec.end_field();
+            }
+            if let Some(standard) = self.tv.field(line_before + 1) {
+                self.set_standard(standard);
             }
         }
         // Keypad rows right after the program sets them; time-dependent
@@ -658,6 +764,11 @@ impl Machine for Atari2600 {
         if kind == ResetKind::Hard {
             self.board.tia.reset();
             self.board.riot.reset();
+            power_up_timer(&mut self.board.riot);
+            if self.tv.auto {
+                self.tv.restart();
+                self.set_standard(VideoStandard::Ntsc);
+            }
             self.board.cart = self.power_on_cart();
             self.board.data_bus = 0;
         }
@@ -671,7 +782,10 @@ impl Machine for Atari2600 {
             width: tia::WIDTH,
             height: tia::height(self.standard),
             pixels: PixelData::Indexed {
-                pixels: self.board.tia.pixels(),
+                // "auto" before or after deciding NTSC: the TIA's picture
+                // has PAL height, the NTSC picture is its top.
+                pixels: &self.board.tia.pixels()
+                    [..(tia::WIDTH * tia::height(self.standard)) as usize],
                 palette: &self.palette,
             },
             luma_chroma: None,
@@ -765,7 +879,37 @@ impl Machine for Atari2600 {
                 ("TIMINT", 0x285, r.flags()),
             ],
         );
-        vec![chip("tia", tia_regs), riot]
+        // The TV standard: STANDARD 0 = NTSC, 1 = PAL; AUTO 1 for the
+        // "auto" model, DECIDED once it chose; the fields it counted.
+        let tv = &self.tv;
+        let tv = ChipInfo {
+            name: "tv",
+            regs: [
+                (
+                    "STANDARD",
+                    u32::from(self.standard == VideoStandard::Pal),
+                    1,
+                ),
+                ("AUTO", u32::from(tv.auto), 1),
+                ("DECIDED", u32::from(tv.decided), 1),
+                ("FIELDS", u32::from(tv.fields), 16),
+                ("VOTES", u32::from(tv.votes), 16),
+                ("PALVOTES", u32::from(tv.pal_votes), 16),
+            ]
+            .into_iter()
+            .map(|(name, value, bits)| ChipReg {
+                name,
+                addr: None,
+                value,
+                bits,
+            })
+            .collect(),
+        };
+        let mut chips = vec![chip("tia", tia_regs), riot, tv];
+        if let Some(regs) = self.board.cart.as_ref().and_then(|c| c.dpc_registers()) {
+            chips.push(chip("dpc", regs));
+        }
+        chips
     }
 
     fn devices(&self) -> Vec<DeviceId> {
@@ -862,10 +1006,15 @@ impl Machine for Atari2600 {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"A26M", 1, |w| {
+        w.chunk(*b"A26M", 2, |w| {
             w.bool(self.field_done_pending);
             w.u8(self.board.data_bus);
             w.u8(self.switches);
+            w.bool(self.standard == VideoStandard::Pal);
+            w.bool(self.tv.decided);
+            w.u16(self.tv.fields);
+            w.u16(self.tv.votes);
+            w.u16(self.tv.pal_votes);
             self.audio.save(w);
         });
         self.cpu.save(&mut w);
@@ -901,10 +1050,32 @@ impl Machine for Atari2600 {
             audio: self.audio,
         };
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"A26M", 1)?;
+        let (version, mut c) = r.chunk(*b"A26M", 2)?;
         let field_done_pending = c.bool()?;
         next.board.data_bus = c.u8()?;
         let switches = c.u8()?;
+        let (mut standard, mut tv) = (self.standard, self.tv);
+        if version >= 2 {
+            standard = if c.bool()? {
+                VideoStandard::Pal
+            } else {
+                VideoStandard::Ntsc
+            };
+            tv.decided = c.bool()?;
+            tv.fields = c.u16()?;
+            tv.votes = c.u16()?;
+            tv.pal_votes = c.u16()?;
+            if (!tv.auto && standard != self.standard)
+                || tv.votes > tv.fields
+                || tv.pal_votes > tv.votes
+            {
+                return Err(StateError::Invalid("TV standard"));
+            }
+            if standard != self.standard {
+                next.audio = Decimator::new(cpu_hz(standard), emu_core::SAMPLE_RATE)
+                    .ok_or(StateError::Invalid("audio rate"))?;
+            }
+        }
         next.audio.load(&mut c)?;
         next.cpu.load(&mut r)?;
         next.board.tia.load(&mut r)?;
@@ -951,6 +1122,9 @@ impl Machine for Atari2600 {
         self.samples.clear();
         self.field_done_pending = field_done_pending;
         self.switches = switches;
+        self.standard = standard;
+        self.palette = chips_atari::palette::tia(standard);
+        self.tv = tv;
         self.refresh_ports();
         Ok(())
     }
