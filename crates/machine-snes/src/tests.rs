@@ -289,3 +289,158 @@ fn options_and_debugger() {
     let spc = m.debug_target(SPC).unwrap();
     assert_eq!(spc.peek(ARAM_SPACE, 0x200, Size::Byte), Some(0xe8));
 }
+
+/// Development aid: run a cartridge (EMU_CART) for EMU_FRAMES frames and
+/// print the S-PPU's registers.
+#[test]
+#[ignore]
+fn trace_cart() {
+    let Some(cart) = std::env::var_os("EMU_CART") else {
+        return;
+    };
+    let mut m = machine(&[("roms", "stub")], "ntsc", std::fs::read(cart).unwrap());
+    let n: usize = std::env::var("EMU_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    frames(&mut m, n);
+    if let Ok(b) = std::env::var("EMU_PRESS") {
+        // Hold these pad buttons (bit 3 = Start) for 10 frames, run on,
+        // and write the picture as a PPM.
+        let buttons: u8 = b.parse().unwrap();
+        let at = m.now();
+        m.input(TimedInput {
+            at,
+            target: InputTarget::Port(PortId(0)),
+            event: InputEvent::Digital { dirs: Dirs(0), buttons },
+        });
+        for _ in 0..10 {
+            frames(&mut m, 1);
+            println!(
+                "pad regs {:02x?} game held {:02x?} new {:02x?}",
+                &m.board.joy, &m.board.wram[0x2b7..0x2bb], &m.board.wram[0x2bb..0x2bf]
+            );
+        }
+        let at = m.now();
+        m.input(TimedInput {
+            at,
+            target: InputTarget::Port(PortId(0)),
+            event: InputEvent::Digital { dirs: Dirs(0), buttons: 0 },
+        });
+        let after: usize = std::env::var("EMU_AFTER")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300);
+        frames(&mut m, after);
+        if let Ok(d) = std::env::var("EMU_THEN_RIGHT") {
+            let hold: usize = d.parse().unwrap();
+            let at = m.now();
+            m.input(TimedInput {
+                at,
+                target: InputTarget::Port(PortId(0)),
+                event: InputEvent::Digital { dirs: Dirs::RIGHT, buttons: 0 },
+            });
+            frames(&mut m, hold);
+        }
+        let f = m.framebuffer();
+        let mut ppm = format!("P6 {} {} 255
+", f.width, f.height).into_bytes();
+        for y in 0..f.height {
+            for x in 0..f.width {
+                let c = f.rgb_at(x, y).unwrap_or_default();
+                ppm.extend_from_slice(&[c.r, c.g, c.b]);
+            }
+        }
+        std::fs::write("target/tmp/press.ppm", ppm).unwrap();
+        println!("wrote target/tmp/press.ppm");
+        return;
+    }
+    if std::env::var_os("EMU_HDMA_LINES").is_some() {
+        let mut last = (u16::MAX, 0u16, 0u8, false);
+        for _ in 0..200_000 {
+            m.step_cycle();
+            let b = m.beam().unwrap();
+            let d = &m.board.dma[4];
+            let now = (b.line, d.a2a, d.ntrl, d.terminated);
+            if std::env::var_os("EMU_HDMAEN_ONLY").is_some() {
+                if m.board.hdmaen != last.2 {
+                    println!(
+                        "E L{:3} c{:4} hdmaen {:02x} pc {:06x}",
+                        b.line,
+                        b.cycle,
+                        m.board.hdmaen,
+                        m.cpu.pc24()
+                    );
+                    last.2 = m.board.hdmaen;
+                }
+                continue;
+            }
+            if now.1 != last.1
+                || now.2 != last.2
+                || now.3 != last.3
+                || (b.line < 3 && b.line != last.0)
+            {
+                println!(
+                    "H L{:3} c{:4} a2a {:04x} ntrl {:02x} term {} hdmaen {:02x} bgmode {:x}",
+                    b.line,
+                    b.cycle,
+                    d.a2a,
+                    d.ntrl,
+                    d.terminated,
+                    m.board.hdmaen,
+                    m.board.ppu.bgmode
+                );
+            }
+            last = now;
+        }
+        return;
+    }
+    if std::env::var_os("EMU_PPU_LINES").is_some() {
+        // Register changes during one frame, by raster line.
+        let mut last = m.board.ppu.debug_regs();
+        let start = m.beam().map_or(0, |b| b.frame);
+        while m.beam().map_or(0, |b| b.frame) == start {
+            m.step_cycle();
+            let now = m.board.ppu.debug_regs();
+            let changed: Vec<String> = now
+                .iter()
+                .zip(&last)
+                .filter(|(a, b)| a.1 != b.1 && a.0 != "VMADD")
+                .map(|(a, _)| format!("{}={:x}", a.0, a.1))
+                .collect();
+            if !changed.is_empty() {
+                let b = m.beam().unwrap();
+                println!("L{:3} c{:4} {}", b.line, b.cycle, changed.join(" "));
+            }
+            last = now;
+        }
+        return;
+    }
+    println!("wram 1f50: {:02x?}", &m.board.wram[0x1f50..0x1f90]);
+    if let Ok(base) = std::env::var("EMU_MAP") {
+        let base = usize::from_str_radix(&base, 16).unwrap();
+        let v = m.board.ppu.vram_words();
+        for row in 0..28 {
+            let line: Vec<String> = (0..32)
+                .map(|c| format!("{:03x}", v[(base + row * 32 + c) & 0x7fff] & 0x3ff))
+                .collect();
+            println!("map {row:2}: {}", line.join(" "));
+        }
+    }
+    for (i, d) in m.board.dma.iter().enumerate() {
+        println!(
+            "dma{i}: dmap {:02x} bbad {:02x} a1 {:02x}:{:04x} das {:02x}:{:04x} a2a {:04x} ntrl {:02x}",
+            d.dmap, d.bbad, d.a1b, d.a1t, d.dasb, d.das, d.a2a, d.ntrl
+        );
+    }
+    for c in m.chips() {
+        if std::env::var_os("EMU_ALL_CHIPS").is_some() || c.name.contains("ppu") {
+            let regs: Vec<String> = c
+                .regs
+                .iter()
+                .map(|r| format!("{}={:x}", r.name, r.value))
+                .collect();
+            println!("{}: {}", c.name, regs.join(" "));
+        }
+    }
+}

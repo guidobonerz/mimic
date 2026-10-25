@@ -23,10 +23,10 @@
 //! integration units are this project's calibration: the executive's ±127
 //! at scale $7F reaches the screen's edges ([`HALF_W`], [`HALF_H`]).
 //!
-//! **Controllers.** The comparator on PB5 is high while the DAC is above
+//! **Controllers.** The comparator on PB5 is high while the DAC is below
 //! the potentiometer the multiplexer's second half selects (PB2–1: 00
 //! controller 1 X, 01 controller 1 Y, 10 controller 2 X, 11 controller 2
-//! Y; the potentiometers give the lower voltage for right and up); the executive
+//! Y; the potentiometers give the higher voltage for right and up); the executive
 //! finds the stick by successive approximation. The
 //! buttons reach the AY's I/O port A (bits 0–3 controller 1, 4–7
 //! controller 2, low = pressed); button 4 of controller 2 is also CA1,
@@ -385,22 +385,46 @@ impl Board {
         (x - i32::from(aim[0])).abs() <= 2 && (y - i32::from(aim[1])).abs() <= 2
     }
 
-    /// The comparator (PB5): DAC above the selected potentiometer.
-    ///
-    /// The potentiometers give the lower voltage for right and up (checked
-    /// with Scramble: both axes were reversed the other way, user report
-    /// 2026-10-24).
+    /// Port B as the analog side sees it: PB0–PB4 (the multiplexer's
+    /// enable and select, the AY's BC1/BDIR) follow the output register
+    /// even where DDRB makes them inputs, as the common Vectrex emulators
+    /// have it; Vectrex Maze (1998) relies on that — its `NEG <$02` turns
+    /// DDRB from $9F into $61 every frame and it still draws and reads the
+    /// joystick. PB5–PB7 as the VIA drives them (inputs high).
+    fn pb_pins(&self) -> u8 {
+        (self.via.port_b_out() & 0xe0) | (self.via.orb & 0x1f)
+    }
+
+    /// The comparator (PB5): high while the DAC is below the selected
+    /// potentiometer, which gives the higher voltage for right and up. The
+    /// executive's digital read (`Joy_Digital`) needs this direction: it
+    /// takes PB5 at DAC 0 and then at +64 or −64, and a centred stick must
+    /// give high at −64 and low at +64. Its analog read (successive
+    /// approximation, Scramble) then finds the potentiometer's value.
     fn comparator(&self, ports: &[Option<Box<dyn PortDevice>>; 2]) -> bool {
-        let pb = self.via.port_b_out();
+        let pb = self.pb_pins();
         let sel = usize::from((pb >> 1) & 3);
         let l = lines(ports, sel >> 1, Cycle(self.cycle));
         let dac = i32::from(self.via.port_a_out() as i8);
-        dac > -1 - pot(l.analog[sel & 1])
+        dac < pot(l.analog[sel & 1])
+    }
+
+    /// A port B read: PB5 is the comparator even where DDRB makes it an
+    /// output (a 6522 would read its output register there). Vectrex Maze
+    /// (1998) turns DDRB into $61 with a stray `NEG <$02` on every step
+    /// forward and was made on an emulator that read the comparator
+    /// anyway; on the 6522's rule its joystick would stop working.
+    fn pb5(addr: u16, v: u8, pins: u8) -> u8 {
+        if addr & 15 == 0 {
+            (v & !0x20) | (pins & 0x20)
+        } else {
+            v
+        }
     }
 
     /// Port pins as the VIA reads them.
     fn via_pins(&self, ports: &[Option<Box<dyn PortDevice>>; 2]) -> (u8, u8) {
-        let pb = self.via.port_b_out();
+        let pb = self.pb_pins();
         let function = (pb >> 3) & 3;
         let pa = if function == 1 {
             self.ay.read(self.buttons(ports).0)
@@ -408,7 +432,9 @@ impl Board {
             0xff
         };
         let cmp = if self.comparator(ports) { 0x20 } else { 0 };
-        (pa, 0xdf | cmp)
+        // PB0–PB4 read back at the level the analog side sees (see
+        // `pb_pins`), so read-modify-write instructions keep them.
+        (pa, 0xc0 | (self.pb_pins() & 0x1f) | cmp)
     }
 
     /// What the viewer sees of the phosphor now: through the 3D Imager's
@@ -438,7 +464,7 @@ impl Board {
     fn tick(&mut self, ports: &mut [Option<Box<dyn PortDevice>>; 2]) {
         self.via.tick();
         let pa = self.via.port_a_out();
-        let pb = self.via.port_b_out();
+        let pb = self.pb_pins();
         let (buttons, b4) = self.buttons(ports);
         // CA1: high unless button 4 of controller 2 is held.
         if b4 == self.ca1 {
@@ -508,7 +534,7 @@ impl Board {
             0xc800..=0xcfff => self.ram[usize::from(addr & 0x3ff)],
             0xd000..=0xdfff => {
                 let (pa, pb) = ports.map_or((0xff, 0xff), |p| self.via_pins(p));
-                self.via.peek(addr as u8 & 15, pa, pb)
+                Self::pb5(addr, self.via.peek(addr as u8 & 15, pa, pb), pb)
             }
             0xe000..=0xffff => self.rom[usize::from(addr & 0x1fff)],
             _ => 0xff,
@@ -529,7 +555,7 @@ impl M6809Bus for VxBus<'_> {
         let v = match addr {
             0xd000..=0xdfff => {
                 let (pa, pb) = self.b.via_pins(self.ports);
-                self.b.via.read(addr as u8 & 15, pa, pb)
+                Board::pb5(addr, self.b.via.read(addr as u8 & 15, pa, pb), pb)
             }
             _ => self.b.peek(addr, None),
         };

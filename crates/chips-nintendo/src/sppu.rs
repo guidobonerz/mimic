@@ -148,6 +148,50 @@ fn rgb(c: u16, bright: u8) -> Rgb8 {
 }
 
 impl SPpu {
+    /// VRAM as words (debugger, tests).
+    pub fn vram_words(&self) -> &[u16] {
+        &self.vram
+    }
+
+    /// The registers for the debugger's chip view: name, value, bits.
+    pub fn debug_regs(&self) -> Vec<(&'static str, u32, u8)> {
+        const SC: [&str; 4] = ["BG1SC", "BG2SC", "BG3SC", "BG4SC"];
+        const HO: [&str; 4] = ["BG1HOFS", "BG2HOFS", "BG3HOFS", "BG4HOFS"];
+        const VO: [&str; 4] = ["BG1VOFS", "BG2VOFS", "BG3VOFS", "BG4VOFS"];
+        let mut v = vec![
+            ("INIDISP", u32::from(self.inidisp), 8),
+            ("OBSEL", u32::from(self.obsel), 8),
+            ("BGMODE", u32::from(self.bgmode), 8),
+            ("MOSAIC", u32::from(self.mosaic), 8),
+        ];
+        for (name, sc) in SC.iter().zip(self.bgsc) {
+            v.push((*name, u32::from(sc), 8));
+        }
+        v.push(("BG12NBA", u32::from(self.nba[0] | self.nba[1] << 4), 8));
+        v.push(("BG34NBA", u32::from(self.nba[2] | self.nba[3] << 4), 8));
+        for (i, (h, vo)) in HO.iter().zip(VO).enumerate() {
+            v.push((*h, u32::from(self.hofs[i]), 10));
+            v.push((vo, u32::from(self.vofs[i]), 10));
+        }
+        v.extend([
+            ("VMAIN", u32::from(self.vmain), 8),
+            ("VMADD", u32::from(self.vmaddr), 16),
+            ("M7SEL", u32::from(self.m7sel), 8),
+            ("W12SEL", u32::from(self.wsel[0]), 8),
+            ("W34SEL", u32::from(self.wsel[1]), 8),
+            ("WOBJSEL", u32::from(self.wsel[2]), 8),
+            ("TM", u32::from(self.tm), 8),
+            ("TS", u32::from(self.ts), 8),
+            ("TMW", u32::from(self.tmw), 8),
+            ("TSW", u32::from(self.tsw), 8),
+            ("CGWSEL", u32::from(self.cgwsel), 8),
+            ("CGADSUB", u32::from(self.cgadsub), 8),
+            ("COLDATA", u32::from(self.fixed), 15),
+            ("SETINI", u32::from(self.setini), 8),
+        ]);
+        v
+    }
+
     pub fn new(pal: bool) -> Self {
         Self {
             vram: vec![0; 0x8000],

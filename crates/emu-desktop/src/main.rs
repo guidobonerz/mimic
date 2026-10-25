@@ -531,6 +531,8 @@ struct App {
 /// What must be shut down when the window closes.
 struct Running {
     emu: std::thread::JoinHandle<()>,
+    /// The sound output; playing stops when it is dropped.
+    _audio: Option<cpal::Stream>,
     server: Option<DebugServer>,
     preview: Option<PreviewServer>,
 }
@@ -1296,8 +1298,8 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
     shared.joy_port.store(joy_port, Ordering::Relaxed);
     shared.joy_ports.store(joy_ports, Ordering::Relaxed);
     let (tx, rx) = mpsc::channel();
-    let _stream = audio::start(shared.clone());
-    if _stream.is_none() {
+    let audio_stream = audio::start(shared.clone());
+    if audio_stream.is_none() {
         eprintln!("no audio device: running silent, paced by the clock");
     }
     let mut server = None;
@@ -1385,6 +1387,7 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
         panel: args.panel,
         running: Running {
             emu,
+            _audio: audio_stream,
             server,
             preview,
         },
@@ -1474,6 +1477,7 @@ fn run() -> Result<(), String> {
                 panel: false,
                 running: Running {
                     emu: std::thread::spawn(|| {}),
+                    _audio: None,
                     server: None,
                     preview: None,
                 },

@@ -487,12 +487,17 @@ impl Board {
         }
     }
 
-    /// Line 0: load each enabled HDMA channel's first table entry.
+    /// Line 0: every channel starts the frame unfinished and without a
+    /// pending transfer; each enabled one loads its first table entry. A
+    /// channel enabled later in the frame runs from its A2A and NTRL as
+    /// they are (Super Ghouls'n Ghosts enables its HDMA at line 38, where
+    /// the playfield begins under the status bar).
     fn hdma_init(&mut self) -> u32 {
         let mut cost = 0;
         for ch in 0..8 {
             let d = &mut self.dma[ch];
-            d.terminated = true;
+            d.terminated = false;
+            d.do_transfer = false;
             if self.hdmaen & (1 << ch) == 0 {
                 continue;
             }
@@ -1372,12 +1377,11 @@ impl Machine for Snes {
             },
             ChipInfo {
                 name: "ppu",
-                regs: vec![
-                    reg("INIDISP", u32::from(p.inidisp), 8),
-                    reg("BGMODE", u32::from(p.bgmode), 8),
-                    reg("SETINI", u32::from(p.setini), 8),
-                    reg("VMADD", u32::from(p.vmaddr), 16),
-                ],
+                regs: p
+                    .debug_regs()
+                    .into_iter()
+                    .map(|(name, value, bits)| reg(name, value, bits))
+                    .collect(),
             },
             ChipInfo {
                 name: "apu-ports",

@@ -84,8 +84,8 @@ fn comparator_finds_the_stick() {
         b.via.write(0, 0x80 | (sel << 1));
         b.via_pins(&m.ports).1 & 0x20 != 0
     };
-    assert!(cmp(&m, 0x10, 0), "DAC above the centred stick");
-    assert!(!cmp(&m, 0xf0, 0));
+    assert!(!cmp(&m, 0x10, 0), "DAC above the centred stick: low");
+    assert!(cmp(&m, 0xf0, 0), "DAC below it: high");
     push(
         &mut m,
         InputTarget::Port(PORT1),
@@ -95,9 +95,9 @@ fn comparator_finds_the_stick() {
         },
     );
     frames(&mut m, 1);
-    assert!(cmp(&m, 0x81, 0), "stick right: the X pot reads -128");
-    assert!(!cmp(&m, 0x7e, 1), "stick down: the Y pot reads +127");
-    assert!(cmp(&m, 0x10, 2), "controller 2 centred");
+    assert!(cmp(&m, 0x7e, 0), "stick right: the X pot is at the top");
+    assert!(!cmp(&m, 0x81, 1), "stick down: the Y pot is at the bottom");
+    assert!(cmp(&m, 0xf0, 2), "controller 2 centred");
 }
 
 #[test]
@@ -304,4 +304,156 @@ fn imager_spins_signals_ca1_and_colours_by_eye() {
         ..MachineConfig::default()
     })
     .is_err());
+}
+
+/// Development aid: run the system ROM (EMU_ROM_DIR/vectrex/*.vec or .bin)
+/// with a cartridge (EMU_CART) for EMU_FRAMES frames and print where the
+/// CPU spends the next frame.
+#[test]
+#[ignore]
+fn trace_cart() {
+    let (Some(dir), Some(cart)) = (
+        std::env::var_os("EMU_ROM_DIR"),
+        std::env::var_os("EMU_CART"),
+    ) else {
+        return;
+    };
+    let rom_path = std::fs::read_dir(std::path::Path::new(&dir).join("vectrex"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            std::fs::metadata(p)
+                .map(|m| m.len())
+                .is_ok_and(|l| l == 0x2000 || l == 0x1000)
+        })
+        .unwrap();
+    let mut config = MachineConfig::default();
+    config
+        .roms
+        .insert("vectrex".into(), std::fs::read(rom_path).unwrap());
+    let mut m = Vectrex::new(&config).unwrap();
+    m.media_slot(SLOT_CARTRIDGE)
+        .unwrap()
+        .insert(Media {
+            kind: MediaKind::Cartridge,
+            name: "cart.vec".into(),
+            backend: Box::new(MemBackend(std::fs::read(cart).unwrap())),
+        })
+        .unwrap();
+    let n: usize = std::env::var("EMU_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    if std::env::var_os("EMU_DDRB").is_some() {
+        let mut last = m.board.via.ddrb;
+        let end = m.now().0 + n as u64 * FRAME_CYCLES;
+        while m.now().0 < end {
+            let pc = m.cpu().pc;
+            m.step_cycle();
+            if m.board.via.ddrb != last {
+                last = m.board.via.ddrb;
+                println!(
+                    "DDRB {last:02x} at {} pc {pc:04x} {}",
+                    m.now().0,
+                    m.disassemble(u32::from(pc))
+                );
+            }
+        }
+        return;
+    }
+    frames(&mut m, n);
+    if let Ok(dir) = std::env::var("EMU_JOY") {
+        let d = match dir.as_str() {
+            "up" => Dirs::UP,
+            "down" => Dirs::DOWN,
+            "left" => Dirs::LEFT,
+            _ => Dirs::RIGHT,
+        };
+        let ram = |m: &Vectrex| (0xc885..0xc88c).map(|a| m.peek_cpu(a)).collect::<Vec<u8>>();
+        println!("before {:02x?}", ram(&m));
+        push(
+            &mut m,
+            InputTarget::Port(PORT1),
+            InputEvent::Digital {
+                dirs: d,
+                buttons: 0,
+            },
+        );
+        for _ in 0..30 {
+            frames(&mut m, 1);
+            if std::env::var_os("EMU_JOY_EACH").is_some() {
+                println!(
+                    "  joy {:02x} {:02x} c885 {:02x} c887 {:02x} {:02x} ddrb {:02x}",
+                    m.peek_cpu(0xc81b),
+                    m.peek_cpu(0xc81c),
+                    m.peek_cpu(0xc885),
+                    m.peek_cpu(0xc887),
+                    m.peek_cpu(0xc888),
+                    m.board.via.ddrb
+                );
+            }
+        }
+        println!(
+            "after  {:02x?} (joy {:02x?})",
+            ram(&m),
+            [m.peek_cpu(0xc81b), m.peek_cpu(0xc81c)]
+        );
+        push(
+            &mut m,
+            InputTarget::Port(PORT1),
+            InputEvent::Digital {
+                dirs: Dirs(0),
+                buttons: 0,
+            },
+        );
+        return;
+    }
+    if std::env::var_os("EMU_ANALOG").is_some() {
+        let mut last = String::new();
+        for _ in 0..FRAME_CYCLES {
+            let pc = m.cpu().pc;
+            m.step_cycle();
+            let a = m.analog();
+            let pb = m.board.via.port_b_out();
+            let line = format!(
+                "pa {:4} pb {:02x} ysh {:4} zref {:4} z {:4} x {:6} y {:6} ca2 {} acr {:02x}",
+                m.board.via.port_a_out() as i8,
+                pb,
+                a.ysh,
+                a.zero_ref,
+                a.z,
+                a.x,
+                a.y,
+                m.board.via.ca2_out(),
+                m.board.via.acr
+            );
+            if line != last {
+                println!("A {:6} {pc:04x} {line}", m.now().0);
+                last = line;
+            }
+        }
+        return;
+    }
+    let mut hist = std::collections::BTreeMap::<u16, u32>::new();
+    let end = m.now().0 + FRAME_CYCLES;
+    while m.now().0 < end {
+        *hist.entry(m.cpu().pc).or_default() += 1;
+        m.step_cycle();
+    }
+    let mut v: Vec<_> = hist.into_iter().collect();
+    v.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+    for (pc, n) in v.iter().take(20) {
+        println!("{pc:04x} {n:6} {}", m.disassemble(u32::from(*pc)));
+    }
+    if let Ok(spec) = std::env::var("EMU_DIS") {
+        let (a, k) = spec.split_once(',').unwrap();
+        let mut a = u32::from_str_radix(a, 16).unwrap();
+        for _ in 0..k.parse::<usize>().unwrap() {
+            let i = m.disassemble(a);
+            println!("D {a:04x} {i}");
+            a += i.bytes.len().max(1) as u32;
+        }
+    }
+    println!("regs {:?}", m.regs());
 }
