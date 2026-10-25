@@ -102,9 +102,15 @@ usage: mimic-desktop [options]
   --rom ROLE=FILE       a single ROM image for a role (repeatable)
   --speed PERCENT       start at 10, 25, 50, 100, 150, 200, 400 or 800 % speed
   --option KEY=VALUE    machine option (repeatable)
-  --crt PROFILE         monitor: raw, 1702, 1084s, 1084s-rgb, tv, pal-tv, ntsc-tv,
-                        pet-white, pet-green, ctm644, gt65, mac or a .toml file
-                        (default: the machine's own monitor)
+  --net on|off          the host network for the C64's WiC64 (--option
+                        userport=wic64) and Ultimate command interface
+                        (--option uci=on); default on, off: no network
+  --uci-dir DIR         the Ultimate command interface's DOS folder (default
+                        ./ultimate, created on the first write)
+  --crt PROFILE         monitor: raw, lite, 1702, 1084s, 1084s-rgb, tv, pal-tv,
+                        ntsc-tv, pet-white, pet-green, ctm644, gt65, mac or a
+                        .toml file, re-read when it changes (default: the
+                        machine's own monitor)
   --scale N             initial window size in rows per line (default 2;
                         less if the window would not fit the screen)
   --deinterlace MODE    interlaced pictures (Amiga LACE): weave (default, both
@@ -115,6 +121,15 @@ usage: mimic-desktop [options]
                         (default 127.0.0.1:6580)
   --vice [ADDR]         serve the VICE binary monitor protocol for VS64 & co.
                         (default 127.0.0.1:6502); implies --debug
+  --rewind-mb N         memory for rewinding with Ctrl+R (default 128; 0 = off)
+  --cheats DIR          cheat database: DIR/<machine>/<crc32>.toml applies to
+                        the images inserted (default: $EMU_CHEATS_DIR, else
+                        ./cheats if it exists)
+  --cheat FILE          load a cheat file: .toml, POKE list (.pokes/.bas),
+                        VICE monitor commands (.mon), address/value codes
+                        (.txt) (repeatable)
+  --input FILE          joystick mapping profile (TOML); default: the one
+                        saved with SAVE MAPPING (<user folder>/input/<machine>.toml)
   --footer              start with the status footer shown (Ctrl+Space)
   --no-panel            start with the console panel hidden (Ctrl+P)
   --joykeys KEYS        keys that play the joystick: cursor (cursor keys,
@@ -143,6 +158,8 @@ left 1 2 3 / Q W E / A S D / Z X C, right 8 9 0 / I O P / K L ; / , . /.
 F12 switches between a machine's screens (C128: 40-column VIC and
 80-column VDC; the window starts on the one the 40/80 key selects).
 Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
+Ctrl+R (held) runs the machine backwards at twice real speed through the
+last frames kept in memory (--rewind-mb); on release it runs on from there.
 Disks: Ctrl+D puts the next disk of the --disk list into the first drive;
 dropping an image file onto the window inserts it there.
 Ctrl+P shows or hides the console panel: the machine's buttons and
@@ -152,7 +169,10 @@ button stops the whole machine and lets it run again (lit while stopped,
 also by a debugger; the title bar shows where). Its JOY KEYS
 switch picks the keys that play the joystick: CURSOR (cursor keys, Space
 fires), NUMPAD or OFF; JOY PORT (machines with several joystick ports)
-moves the joysticks to another port.
+moves the joysticks to another port; PAD FIRE picks the gamepad button that
+fires (SOUTH = A on Xbox pads); SAVE MAPPING keeps these three for the
+machine. Cheats (from --cheat, the cheat database or the debugger) appear
+as OFF/ON switches.
 Ctrl+Space shows or hides the status footer: a speed slider (click a step
 or drag the knob: 10 % to 800 % of real time; sound is muted off
 100 %), a snapshot button (saves the picture as <machine>-NNN.png in
@@ -161,6 +181,9 @@ pointer position in frame pixels, joystick directions and drive
 activity/errors.
 With --option port1=mouse1351 (or paddles, driving, also port2) a click into the
 window captures the mouse for the machine; the middle button releases it.
+With a light pen (--option port1=lightpen on the C64/C128/Atari 8-bit,
+port0=lightpen on the Amiga, expansion=lightpen on the CPC) or a Zapper /
+Super Scope the pointer over the picture aims it, the left button is its button.
 
 EMU_DESKTOP_DEBUG=1 prints frame and audio statistics every 5 s.";
 
@@ -177,6 +200,16 @@ struct Args {
     cart: Option<String>,
     crt: Option<String>,
     deinterlace: Deinterlace,
+    rewind_mb: u32,
+    cheats_dir: Option<PathBuf>,
+    /// `--net off`: the devices see no network.
+    net_off: bool,
+    /// `--uci-dir`.
+    uci_dir: Option<PathBuf>,
+    /// Filled by `build_machine`: the machine's host-service journal.
+    host_journal: Option<emu_core::host::Journal>,
+    cheat: Vec<String>,
+    input: Option<PathBuf>,
     scale: u32,
     debug: Option<SocketAddr>,
     vice: Option<SocketAddr>,
@@ -207,6 +240,13 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         cart: None,
         crt: None,
         deinterlace: Deinterlace::Weave,
+        rewind_mb: emu_debug::session::DEFAULT_BUDGET_MB,
+        cheats_dir: None,
+        net_off: false,
+        uci_dir: None,
+        host_journal: None,
+        cheat: Vec::new(),
+        input: None,
         scale: 2,
         debug: None,
         vice: None,
@@ -230,6 +270,14 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
             "--cart" => a.cart = Some(value("--cart")?),
             "--footer" => a.footer = true,
             "--no-panel" => a.panel = false,
+            "--net" => {
+                a.net_off = match value("--net")?.as_str() {
+                    "on" => false,
+                    "off" => true,
+                    other => return Err(format!("--net on|off, got '{other}'")),
+                }
+            }
+            "--uci-dir" => a.uci_dir = Some(PathBuf::from(value("--uci-dir")?)),
             "--joyport" => {
                 let v = value("--joyport")?;
                 let n = v
@@ -278,6 +326,13 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
                     _ => return Err(format!("--deinterlace {v}: weave or bob")),
                 };
             }
+            "--cheats" => a.cheats_dir = Some(PathBuf::from(value("--cheats")?)),
+            "--cheat" => a.cheat.push(value("--cheat")?),
+            "--input" => a.input = Some(PathBuf::from(value("--input")?)),
+            "--rewind-mb" => {
+                let v = value("--rewind-mb")?;
+                a.rewind_mb = v.parse().map_err(|_| format!("bad --rewind-mb '{v}'"))?;
+            }
             "--scale" => {
                 let v = value("--scale")?;
                 a.scale = v.parse().map_err(|_| format!("bad scale '{v}'"))?;
@@ -309,6 +364,44 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         a.debug = DEFAULT_DEBUG_ADDR.parse().ok();
     }
     Ok(Some(a))
+}
+
+/// A `--crt` profile file, re-read when it changes so a profile can be
+/// edited live. Polled from the window side about once a second; the
+/// emulation never waits for it.
+struct CrtWatch {
+    path: PathBuf,
+    modified: Option<std::time::SystemTime>,
+    checked: std::time::Instant,
+}
+
+impl CrtWatch {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            modified: Self::modified(&path),
+            path,
+            checked: std::time::Instant::now(),
+        }
+    }
+
+    fn modified(path: &Path) -> Option<std::time::SystemTime> {
+        std::fs::metadata(path).and_then(|m| m.modified()).ok()
+    }
+
+    /// The profile again when the file changed since the last look (at most
+    /// one look a second).
+    fn poll(&mut self) -> Option<Result<Profile, String>> {
+        if self.checked.elapsed() < std::time::Duration::from_secs(1) {
+            return None;
+        }
+        self.checked = std::time::Instant::now();
+        let modified = Self::modified(&self.path);
+        if modified.is_none() || modified == self.modified {
+            return None;
+        }
+        self.modified = modified;
+        Some(load_profile(&self.path.to_string_lossy()))
+    }
 }
 
 fn load_profile(name: &str) -> Result<Profile, String> {
@@ -371,6 +464,14 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
     let mut m = emu_machines::registry()
         .create(&args.machine, &args.config)
         .map_err(|e| e.to_string())?;
+    // Network and folder for the devices that reach outside (UCI, WiC64),
+    // in a journal the debugger's recordings carry.
+    let journal = media_backends::host_journal(
+        !args.net_off,
+        Some(args.uci_dir.clone().unwrap_or_else(|| "ultimate".into())),
+    );
+    m.attach_host(journal.services());
+    args.host_journal = Some(journal);
     if let Some(p) = &args.prg {
         insert(m.as_mut(), MediaKind::Program, p)?;
     }
@@ -469,6 +570,8 @@ struct App {
     /// What the title bar shows now (title plus stop status).
     shown_title: String,
     profile: Profile,
+    /// The `--crt` file to re-read when it changes.
+    crt_watch: Option<CrtWatch>,
     scale: u32,
     shared: Arc<Shared>,
     input: Sender<HostEvent>,
@@ -484,6 +587,11 @@ struct App {
     shift: bool,
     /// A port device wants the host mouse.
     wants_mouse: bool,
+    /// A light pen or light gun is plugged in: the pointer over the picture
+    /// aims it (no capture), with these buttons (bit 0 left, bit 1 right).
+    has_pad: bool,
+    wants_pointer: bool,
+    pointer_buttons: u8,
     /// The host mouse is captured for the machine.
     mouse_captured: bool,
     /// Host mouse buttons while captured (bit 0 left, bit 1 right).
@@ -498,6 +606,8 @@ struct App {
     swallow_i: bool,
     /// The D of a Ctrl+D is down; its release is not sent either.
     swallow_d: bool,
+    /// The R of a Ctrl+R is held (rewinding); its release is not sent either.
+    swallow_r: bool,
     panel_on: bool,
     /// The panel's clickable areas, its top and row height (window
     /// pixels) and number of rows.
@@ -541,10 +651,15 @@ struct Running {
 struct Started {
     title: String,
     profile: Profile,
+    /// `--crt` named a profile file (not a preset).
+    crt_file: Option<PathBuf>,
     scale: u32,
     shared: Arc<Shared>,
     input: Sender<HostEvent>,
     wants_mouse: bool,
+    wants_pointer: bool,
+    /// The machine has a gamepad joystick (the panel offers PAD FIRE).
+    has_pad: bool,
     footer: bool,
     panel: bool,
     running: Running,
@@ -664,10 +779,14 @@ impl App {
     fn attach(&mut self, st: Started, event_loop: &ActiveEventLoop) {
         self.title = st.title;
         self.profile = st.profile;
+        self.crt_watch = st.crt_file.map(CrtWatch::new);
         self.scale = st.scale;
         self.shared = st.shared;
         self.input = st.input;
         self.wants_mouse = st.wants_mouse;
+        self.wants_pointer = st.wants_pointer;
+        self.has_pad = st.has_pad;
+        self.pointer_buttons = 0;
         self.footer_on = st.footer;
         self.panel_on = st.panel;
         self.running = Some(st.running);
@@ -755,6 +874,29 @@ impl App {
             self.shared.joy_port.store(value, Ordering::Relaxed);
             return;
         }
+        if id == panel::PAD_FIRE {
+            self.shared.pad_fire.store(value, Ordering::Relaxed);
+            return;
+        }
+        if id == panel::SAVE_MAPPING {
+            if value != 0 {
+                self.shared.save_mapping.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
+        if id >= panel::CHEAT_BASE {
+            let i = usize::from(id - panel::CHEAT_BASE);
+            let row = self
+                .shared
+                .cheats
+                .lock()
+                .ok()
+                .and_then(|c| c.get(i).cloned());
+            if let (Some(row), Ok(mut clicks)) = (row, self.shared.cheat_clicks.lock()) {
+                clicks.push((row.id, value == 1));
+            }
+            return;
+        }
         if let Ok(mut e) = self.shared.panel_events.lock() {
             e.push((id, value));
         }
@@ -778,6 +920,19 @@ impl App {
         self.mouse_sum = (0, 0);
     }
 
+    /// Where the pointer is over the picture (frame pixels) and its
+    /// buttons, for a light pen or light gun.
+    fn send_pointer(&self) {
+        let pos = self
+            .cursor
+            .and_then(|(x, y)| self.gfx.as_ref()?.frame_pos(x, y))
+            .map(|(x, y)| (x.min(0xfffe) as u16, y.min(0xfffe) as u16));
+        let _ = self.input.send(HostEvent::Pointer {
+            pos,
+            buttons: self.pointer_buttons,
+        });
+    }
+
     fn send_mouse(&self, dx: i16, dy: i16) {
         let _ = self.input.send(HostEvent::Mouse {
             dx,
@@ -788,6 +943,22 @@ impl App {
 }
 
 impl App {
+    /// Live profile editing: take over the `--crt` file when it changed.
+    fn reload_crt_profile(&mut self) {
+        match self.crt_watch.as_mut().and_then(CrtWatch::poll) {
+            Some(Ok(p)) => {
+                eprintln!("monitor profile '{}' reloaded", p.name);
+                if let Some(g) = &mut self.gfx {
+                    g.set_profile(p.clone());
+                }
+                self.profile = p;
+            }
+            // Keep the last good profile while the file does not parse.
+            Some(Err(e)) => eprintln!("monitor profile: {e}"),
+            None => {}
+        }
+    }
+
     /// Record a vertical blank (redraws return from a blocking present) and
     /// refine the measured refresh period for the emulation's phase lock.
     fn track_vsync(&mut self) {
@@ -966,6 +1137,20 @@ impl ApplicationHandler for App {
                     self.panel_send(id, 0);
                 }
             }
+            // A light pen / light gun: the buttons over the picture.
+            WindowEvent::MouseInput { state, button, .. }
+                if self.wants_pointer
+                    && !self.mouse_captured
+                    && matches!(button, MouseButton::Left | MouseButton::Right) =>
+            {
+                let bit = if button == MouseButton::Left { 1 } else { 2 };
+                if state == ElementState::Pressed {
+                    self.pointer_buttons |= bit;
+                } else {
+                    self.pointer_buttons &= !bit;
+                }
+                self.send_pointer();
+            }
             WindowEvent::MouseInput { state, button, .. } if self.wants_mouse => {
                 let down = state == ElementState::Pressed;
                 match (self.mouse_captured, button) {
@@ -989,8 +1174,16 @@ impl ApplicationHandler for App {
                 if self.speed_drag {
                     self.speed_from_pointer();
                 }
+                if self.wants_pointer {
+                    self.send_pointer();
+                }
             }
-            WindowEvent::CursorLeft { .. } => self.cursor = None,
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor = None;
+                if self.wants_pointer {
+                    self.send_pointer();
+                }
+            }
             WindowEvent::DroppedFile(path) => {
                 if let Ok(mut d) = self.shared.dropped_disks.lock() {
                     d.push(path.to_string_lossy().into_owned());
@@ -1075,6 +1268,15 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // Ctrl+R held rewinds.
+                if event.physical_key == PhysicalKey::Code(KeyCode::KeyR)
+                    && (self.ctrl || self.swallow_r)
+                {
+                    let down = event.state == ElementState::Pressed;
+                    self.swallow_r = down;
+                    self.shared.rewinding.store(down, Ordering::Relaxed);
+                    return;
+                }
                 if let PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) =
                     event.physical_key
                 {
@@ -1126,6 +1328,7 @@ impl ApplicationHandler for App {
                     }
                     q.pop_front()
                 });
+                self.reload_crt_profile();
                 if let Some(g) = &mut self.gfx {
                     if let Some(f) = frame {
                         g.upload(&f, self.scale);
@@ -1155,7 +1358,23 @@ impl ApplicationHandler for App {
                                 self.shared.joy_port.load(Ordering::Relaxed),
                             ));
                         }
-                        let (rgba, hits, n) = panel::render(&controls, width, size);
+                        if self.has_pad {
+                            controls.push(panel::pad_fire_control(
+                                self.shared.pad_fire.load(Ordering::Relaxed),
+                            ));
+                        }
+                        controls.push(panel::save_mapping_control());
+                        let mut items: Vec<panel::Item> =
+                            controls.iter().map(panel::Item::from).collect();
+                        if let Ok(cheats) = self.shared.cheats.lock() {
+                            items.extend(cheats.iter().enumerate().map(|(i, c)| panel::Item {
+                                id: panel::CHEAT_BASE + i as u16,
+                                name: c.label.clone(),
+                                positions: vec!["OFF".into(), "ON".into()],
+                                value: u8::from(c.enabled),
+                            }));
+                        }
+                        let (rgba, hits, n) = panel::render_items(&items, width, size);
                         strip.extend_from_slice(&rgba);
                         self.panel_hits = hits;
                         self.panel_rows = n;
@@ -1232,19 +1451,31 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
         Some(name) => load_profile(name)?,
         None => Profile::default_for(&args.machine),
     };
-    let mut input_profile = InputProfile::default_for(&args.machine);
     // A mouse or paddles in a control port: the captured host mouse drives
-    // them (click the window to capture, middle button to release).
-    for (option, port) in [("port1", 0u8), ("port2", 1), ("joy1", 0)] {
-        if matches!(
-            args.config.options.get(option).map(String::as_str),
-            Some("mouse1351" | "paddles" | "amx" | "driving")
-        ) {
-            input_profile
-                .mouse
-                .push(emu_input::profile::MouseMap { port });
+    // them (click the window to capture, middle button to release); a light
+    // pen or light gun: the host pointer over the picture aims it (no
+    // capture), the left button is its button.
+    let mut input_profile = InputProfile::for_options(&args.machine, &args.config.options);
+    // A saved mapping (SAVE MAPPING) or --input replaces the joysticks; the
+    // devices the options plug in keep their mouse and pointer.
+    let saved = args.input.clone().or_else(|| {
+        emu_profile::user_dir()
+            .map(|d| d.join("input").join(format!("{}.toml", args.machine)))
+            .filter(|p| p.is_file())
+    });
+    if let Some(path) = saved {
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut p =
+            InputProfile::from_toml(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        if p.machine != args.machine {
+            return Err(format!("{}: a mapping for {}", path.display(), p.machine));
         }
+        p.mouse = input_profile.mouse;
+        p.pointer = input_profile.pointer;
+        input_profile = p;
     }
+    let wants_pointer = !input_profile.pointer.is_empty();
     let wants_mouse = !input_profile.mouse.is_empty();
     let mut mapper = Mapper::new(input_profile);
     if let Some(keys) = args.joykeys {
@@ -1292,11 +1523,52 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
     if let Ok(mut fields) = shared.fields.lock() {
         fields.mode = args.deinterlace;
     }
+    shared.rewind_mb.store(args.rewind_mb, Ordering::Relaxed);
     shared.footer_on.store(args.footer, Ordering::Relaxed);
     shared.panel_on.store(args.panel, Ordering::Relaxed);
     shared.joy_keys.store(joy_keys, Ordering::Relaxed);
     shared.joy_port.store(joy_port, Ordering::Relaxed);
     shared.joy_ports.store(joy_ports, Ordering::Relaxed);
+    let has_pad = mapper.pad_fire().is_some();
+    let pad_fire = mapper
+        .pad_fire()
+        .and_then(|b| panel::PAD_FIRE_BUTTONS.iter().position(|&x| x == b))
+        .unwrap_or(0) as u8;
+    shared.pad_fire.store(pad_fire, Ordering::Relaxed);
+    // Cheats: files from --cheat now (to report errors before the window
+    // opens), the database and the start images on the emulation thread.
+    let main_space = machine
+        .memory_spaces()
+        .first()
+        .map_or("cpu", |s| s.name)
+        .to_string();
+    let mut cheat_files = Vec::new();
+    for path in &args.cheat {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        let file =
+            emu_cheats::import::import(emu_cheats::format_for_path(path), &text, &main_space)
+                .map_err(|e| format!("{path}: {e}"))?;
+        cheat_files.push(file);
+    }
+    if let Ok(mut c) = shared.startup_cheats.lock() {
+        *c = cheat_files;
+    }
+    if let Ok(mut d) = shared.cheats_dir.lock() {
+        *d = args.cheats_dir.clone().or_else(emu_cheats::default_dir);
+    }
+    if let Ok(mut j) = shared.host_journal.lock() {
+        *j = args.host_journal.take();
+    }
+    if let Ok(mut i) = shared.startup_images.lock() {
+        *i = args
+            .disk
+            .iter()
+            .chain(&args.prg)
+            .chain(&args.tape)
+            .chain(&args.cart)
+            .cloned()
+            .collect();
+    }
     let (tx, rx) = mpsc::channel();
     let audio_stream = audio::start(shared.clone());
     if audio_stream.is_none() {
@@ -1376,13 +1648,21 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
             .map_or(footer::NORMAL_SPEED, |(i, _)| i);
         shared.speed.store(step as u8, Ordering::Relaxed);
     }
+    let crt_file = args
+        .crt
+        .as_deref()
+        .filter(|name| Profile::preset(name).is_none())
+        .map(PathBuf::from);
     Ok(Started {
         title: format!("mimic — {}", args.machine),
         profile,
+        crt_file,
         scale: args.scale,
         shared,
         input: tx,
         wants_mouse,
+        wants_pointer,
+        has_pad,
         footer: args.footer,
         panel: args.panel,
         running: Running {
@@ -1469,10 +1749,13 @@ fn run() -> Result<(), String> {
             let st = Started {
                 title: "mimic — choose a profile".into(),
                 profile: Profile::preset("raw").unwrap_or_default(),
+                crt_file: None,
                 scale: 1,
                 shared,
                 input: tx,
                 wants_mouse: false,
+                wants_pointer: false,
+                has_pad: false,
                 footer: false,
                 panel: false,
                 running: Running {
@@ -1497,6 +1780,7 @@ fn run() -> Result<(), String> {
         title: st.title,
         shown_title: String::new(),
         profile: st.profile,
+        crt_watch: st.crt_file.map(CrtWatch::new),
         scale: st.scale,
         shared: st.shared,
         input: st.input,
@@ -1512,6 +1796,9 @@ fn run() -> Result<(), String> {
         period_ns: 0.0,
         shift: false,
         wants_mouse: st.wants_mouse,
+        wants_pointer: st.wants_pointer,
+        has_pad: st.has_pad,
+        pointer_buttons: 0,
         mouse_captured: false,
         mouse_buttons: 0,
         ctrl: false,
@@ -1520,6 +1807,7 @@ fn run() -> Result<(), String> {
         swallow_p: false,
         swallow_i: false,
         swallow_d: false,
+        swallow_r: false,
         panel_on: st.panel,
         panel_hits: Vec::new(),
         panel_top: 0.0,
@@ -1566,5 +1854,32 @@ mod tests {
     #[test]
     fn window_icon_decodes() {
         assert!(super::window_icon().is_some());
+    }
+
+    /// The `--crt` file is looked at once a second and re-read when its
+    /// modification time changed; a broken file reports an error.
+    #[test]
+    fn crt_profile_file_is_reloaded_when_it_changes() {
+        let dir = std::env::temp_dir().join(format!("mimic-crt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("monitor.toml");
+        std::fs::write(&path, "base = \"1702\"\n").unwrap();
+        let mut watch = super::CrtWatch::new(path.clone());
+        let past = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        watch.checked = past;
+        assert!(watch.poll().is_none(), "unchanged");
+        std::fs::write(&path, "base = \"1702\"\nbloom = 0.5\n").unwrap();
+        // A change within the second waits for the next look.
+        watch.modified = None;
+        watch.checked = std::time::Instant::now();
+        assert!(watch.poll().is_none());
+        watch.checked = past;
+        let p = watch.poll().expect("changed").unwrap();
+        assert_eq!(p.bloom, 0.5);
+        std::fs::write(&path, "bloom = \"x\"\n").unwrap();
+        watch.modified = None;
+        watch.checked = past;
+        assert!(watch.poll().expect("changed").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

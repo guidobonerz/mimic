@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mimic monitor editor</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f4f4f2; --fg: #1d1d1b; --muted: #6b6b66; --panel: #e6e6e2; --line: #cfcfca; --accent: #2e6b3a; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ecebe6; --muted: #9b9a94; --panel: #242422; --line: #3a3a37; --accent: #4f9a5d; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header strong { margin-right: auto; }
+  select, button, input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; }
+  button { cursor: pointer; background: var(--panel); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px; }
+  @media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  main { display: flex; justify-content: center; align-items: flex-start; min-width: 0; }
+  img { max-width: 100%; background: #000; }
+  form { display: grid; grid-template-columns: auto minmax(0, 1fr) 3.5em; gap: 6px 8px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+  form label { color: var(--muted); }
+  form output { font-variant-numeric: tabular-nums; text-align: right; }
+  textarea { width: 100%; margin-top: 10px; font: 12px/1.4 ui-monospace, monospace; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+  #err { color: #c2410c; min-height: 1.4em; }
+</style>
+</head>
+<body>
+<header>
+  <strong>mimic monitor editor</strong>
+  <label>Start from <select id="base" aria-label="Preset"></select></label>
+  <label>Scale <select id="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+  <button id="save" title="Download the profile; use it with --crt FILE.toml (the desktop reloads it when the file changes)">Save TOML</button>
+</header>
+<div class="layout">
+  <main><img id="pic" alt="The machine's picture through the profile"></main>
+  <aside>
+    <form id="form"></form>
+    <div id="err"></div>
+    <textarea id="toml" rows="12" spellcheck="false" aria-label="Profile as TOML"></textarea>
+  </aside>
+</div>
+<script>
+"use strict";
+// Numeric fields with their ranges; the rest are edited in the TOML box.
+const FIELDS = [
+  ["scanlines", 0, 1, 0.01], ["gamma", 0.5, 2, 0.01], ["saturation", 0, 2, 0.01],
+  ["mask_strength", 0, 1, 0.01], ["mask_pitch", 1, 8, 0.1], ["bloom", 0, 1, 0.01],
+  ["curvature", 0, 0.25, 0.005], ["vignette", 0, 1, 0.01], ["persistence", 0, 0.95, 0.01],
+  ["luma_bandwidth", 0, 8, 0.1], ["chroma_bandwidth", 0, 4, 0.1],
+];
+const CHOICES = { signal: ["rgb", "composite", "s-video", "monochrome"], mask: ["none", "shadow", "aperture", "slot"] };
+const $ = (id) => document.getElementById(id);
+let values = {};
+
+// The editor works on a small TOML subset: key = value lines.
+function parse(text) {
+  const v = {};
+  for (const line of text.split("\n")) {
+    const m = line.match(/^\s*([a-z_]+)\s*=\s*(.+?)\s*$/);
+    if (m) v[m[1]] = m[2];
+  }
+  return v;
+}
+function serialize() {
+  return Object.entries(values).map(([k, v]) => `${k} = ${v}`).join("\n") + "\n";
+}
+
+function buildForm() {
+  const form = $("form");
+  form.replaceChildren();
+  for (const [key, choices] of Object.entries(CHOICES)) {
+    const l = document.createElement("label");
+    l.textContent = key;
+    const sel = document.createElement("select");
+    sel.style.gridColumn = "span 2";
+    for (const c of choices) sel.append(new Option(c, c));
+    sel.value = (values[key] || "").replace(/"/g, "");
+    sel.onchange = () => { values[key] = `"${sel.value}"`; changed(); };
+    form.append(l, sel);
+  }
+  for (const [key, min, max, step] of FIELDS) {
+    const l = document.createElement("label");
+    l.textContent = key;
+    const r = document.createElement("input");
+    Object.assign(r, { type: "range", min, max, step, value: values[key] ?? min });
+    r.setAttribute("aria-label", key);
+    const o = document.createElement("output");
+    o.textContent = Number(r.value).toFixed(2);
+    r.oninput = () => { values[key] = r.value; o.textContent = Number(r.value).toFixed(2); changed(); };
+    form.append(l, r, o);
+  }
+}
+
+let timer = 0;
+function changed(fromBox = false) {
+  if (!fromBox) $("toml").value = serialize();
+  clearTimeout(timer);
+  timer = setTimeout(refresh, 120);
+}
+
+function refresh() {
+  const q = new URLSearchParams({ filter: "crt", scale: $("scale").value, profile_toml: $("toml").value, t: Date.now() });
+  const img = new Image();
+  img.onload = () => { $("pic").src = img.src; $("err").textContent = ""; };
+  img.onerror = async () => {
+    const r = await fetch("/snapshot.png?" + q);
+    $("err").textContent = r.ok ? "" : await r.text();
+  };
+  img.src = "/snapshot.png?" + q;
+}
+
+async function load(name) {
+  const r = await fetch("/crt/profile" + (name ? "?name=" + encodeURIComponent(name) : ""));
+  const j = await r.json();
+  if (!$("base").options.length) {
+    $("base").append(new Option("the machine's monitor", ""), ...j.presets.map((p) => new Option(p, p)));
+  }
+  $("toml").value = j.toml;
+  values = parse(j.toml);
+  buildForm();
+  refresh();
+}
+
+$("base").onchange = () => load($("base").value);
+$("scale").onchange = refresh;
+$("toml").oninput = () => { values = parse($("toml").value); buildForm(); changed(true); };
+$("save").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([$("toml").value], { type: "text/plain" }));
+  a.download = (values.name || "\"monitor\"").replace(/"/g, "") + ".toml";
+  a.click();
+};
+// The picture moves: refresh it now and then (persistence needs a stream,
+// the editor shows single frames).
+setInterval(refresh, 2000);
+load("");
+</script>
+</body>
+</html>

@@ -197,3 +197,53 @@ fn debugger_view_and_ports() {
         .connect(PortId(1), Box::new(Joystick::new(PortKind::CbmControl)))
         .is_ok());
 }
+
+#[test]
+fn graphics_views_follow_the_ted() {
+    let mut m = stub();
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["charset", "bitmap", "screen", "palette"]);
+    // Matrix $0800 (codes $0C00), characters $1000 from RAM, bitmap $2000.
+    for (reg, v) in [(0x12u32, 0x08u32), (0x13, 0x10), (0x14, 0x08), (0x15, 0x71)] {
+        assert!(m.poke(CPU_SPACE, 0xff00 + reg, Size::Byte, v));
+    }
+    m.mem.ram[0x0800] = 0x46; // blue, luminance 4
+    m.mem.ram[0x0c00] = 1;
+    m.mem.ram[0x1008] = 0x80;
+    m.mem.ram[0x2000] = 0x80;
+    let sc = m.gfx_view("screen", &GfxOptions::new()).unwrap();
+    assert_eq!((sc.width, sc.height, sc.addr), (320, 200, 0x0800));
+    assert_eq!(sc.raw.len(), 2000);
+    assert_eq!(sc.param("rom"), Some(0));
+    assert_eq!(sc.frame().rgb_at(0, 0), Some(m.palette[0x46]));
+    assert_eq!(sc.frame().rgb_at(1, 0), Some(m.palette[0x71]));
+    let bm = m.gfx_view("bitmap", &GfxOptions::new()).unwrap();
+    assert_eq!((bm.addr, bm.raw.len()), (0x2000, 8000));
+    // Code $01: hue 1 for set bits with the attribute's luminance 6.
+    assert_eq!(bm.frame().rgb_at(0, 0), Some(m.palette[0x61]));
+    let cs = m.gfx_view("charset", &GfxOptions::new()).unwrap();
+    assert_eq!(cs.raw[8], 0x80);
+    let p = m.gfx_view("palette", &GfxOptions::new()).unwrap();
+    assert_eq!(p.raw.len(), 128);
+}
+
+#[test]
+fn overlays_record_dma_lines() {
+    let mut m = stub();
+    let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
+    assert_eq!(ids, ["badlines"]);
+    assert_eq!(m.frame_row(274), Some(0));
+    assert_eq!(m.frame_row(250), None);
+    let plain = m.save_state();
+    m.set_overlays(&["badlines"]);
+    assert_eq!(m.save_state(), plain, "the record is not state");
+    assert!(m.poke(CPU_SPACE, 0xff06, Size::Byte, 0x1b));
+    let mut dbg = DebugHooks::new();
+    for _ in 0..2 {
+        while m.run_frame(&mut dbg) != StopReason::FrameDone {}
+    }
+    let o = m.overlay("badlines").unwrap();
+    assert_eq!(o.shapes.len(), 25);
+    m.set_overlays(&[]);
+    assert!(m.overlay("badlines").is_none());
+}

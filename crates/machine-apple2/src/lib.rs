@@ -70,9 +70,11 @@
 #![forbid(unsafe_code)]
 
 pub mod font;
+pub mod gfx;
 pub mod keyboard;
 pub mod mem;
 pub mod mockingboard;
+pub mod overlay;
 pub mod stub;
 pub mod video;
 
@@ -648,6 +650,8 @@ pub struct Apple2 {
     input: InputQueue,
     frame_done_pending: bool,
     palette: [Rgb8; 2],
+    /// Debug overlay record (not machine state, see [`overlay`]).
+    modes_rec: overlay::ModesRecord,
 }
 
 impl Apple2 {
@@ -774,6 +778,7 @@ impl Apple2 {
             port,
             input: InputQueue::new(),
             frame_done_pending: false,
+            modes_rec: overlay::ModesRecord::default(),
             palette: [
                 Rgb8 { r: 0, g: 0, b: 0 },
                 Rgb8 {
@@ -835,7 +840,16 @@ impl Apple2 {
             frame: v.frame,
             line: v.line,
             cycle: v.h,
-            hpos: v.h * video::DOTS as u16,
+            // Frame column of the cycle's first dot; the horizontal
+            // blanking before the picture maps to column 0.
+            hpos: if v.h < video::FIRST_VISIBLE {
+                0
+            } else {
+                (video::BORDER_X as usize
+                    + video::PHASE_PX
+                    + usize::from(v.h - video::FIRST_VISIBLE) * video::DOTS * video::PX_PER_DOT)
+                    as u16
+            },
         }
     }
 
@@ -847,8 +861,16 @@ impl Apple2 {
         if std::mem::take(&mut self.board.reset_pressed) {
             self.reset_key();
         }
+        if self.modes_rec.on {
+            let b = &self.board;
+            let aux = b.mem.aux_kind != Aux::None;
+            self.modes_rec.sample(&b.video, &b.modes, aux);
+        }
         let b = &mut self.board;
         let (byte, frame) = b.video.cycle(&b.mem.main, b.mem.video_aux(), &b.modes);
+        if frame && self.modes_rec.on {
+            self.modes_rec.frame_done();
+        }
         b.float = byte;
         b.frame_done |= frame;
         let beam = self.beam_pos();
@@ -1034,6 +1056,36 @@ impl Machine for Apple2 {
             luma_chroma: None,
             signal: self.signal(),
         }
+    }
+
+    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+        self.views()
+    }
+
+    /// See [`gfx`]: character generator, text page, lo-res, hi-res, colours.
+    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+        self.view(id, opts)
+    }
+
+    fn overlays(&self) -> Vec<emu_core::overlay::OverlayInfo> {
+        vec![overlay::ModesRecord::info()]
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.modes_rec.set(ids.contains(&overlay::MODES_ID));
+    }
+
+    /// See [`overlay`]: the video mode per line.
+    fn overlay(&self, id: &str) -> Option<emu_core::overlay::Overlay> {
+        match id {
+            overlay::MODES_ID => self.modes_rec.overlay(self.board.video.line),
+            _ => None,
+        }
+    }
+
+    /// The 192 visible lines sit below the frame's top border.
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        (line < video::ACTIVE_LINES).then(|| u32::from(line) + video::BORDER_Y)
     }
 
     fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {

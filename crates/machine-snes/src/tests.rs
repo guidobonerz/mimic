@@ -290,6 +290,131 @@ fn options_and_debugger() {
     assert_eq!(spc.peek(ARAM_SPACE, 0x200, Size::Byte), Some(0xe8));
 }
 
+#[test]
+fn gfx_views_show_the_ppu_memories() {
+    let mut m = machine(&[], "ntsc", upload_rom());
+    frames(&mut m, 2);
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["tiles", "screen", "sprites", "palette"]);
+    // A 2 bpp tile at VRAM byte $4000 with its top-left pixel colour 1.
+    assert!(m.poke(VRAM_SPACE, 0x4000, Size::Byte, 0x80));
+    let state = m.save_state();
+    let opts = GfxOptions::new()
+        .with("bpp", 2)
+        .with("addr", 0x4000)
+        .with("count", 1);
+    let t = m.gfx_view("tiles", &opts).unwrap();
+    assert_eq!((t.space, t.addr, t.raw.len()), (VRAM_SPACE, 0x4000, 16));
+    assert_eq!(t.raw[0], 0x80);
+    assert_ne!(t.frame().rgb_at(0, 0), t.frame().rgb_at(1, 0));
+    for id in ["screen", "sprites", "palette"] {
+        let v = m.gfx_view(id, &GfxOptions::new()).unwrap();
+        assert!(v.width > 0 && !v.raw.is_empty(), "{id}");
+    }
+    assert_eq!(
+        m.gfx_view("palette", &GfxOptions::new()).unwrap().space,
+        CGRAM_SPACE
+    );
+    assert_eq!(m.save_state(), state, "views leave the machine as it was");
+}
+
+#[test]
+fn overlays_show_hdma_lines_interrupts_and_sprites() {
+    use emu_core::overlay::{colors, Shape};
+    let mut m = machine(&[], "ntsc", upload_rom());
+    frames(&mut m, 2);
+    let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
+    assert_eq!(ids, ["sprites", "hdma", "irq"]);
+    // HDMA channel 2, one byte to CGADD ($2121), table at $7E:1000: one
+    // transfer then 2 idle lines, then two transfers (repeat mode), end.
+    m.board.wram[0x1000..0x1006].copy_from_slice(&[0x03, 0x0f, 0x82, 0x0a, 0x0b, 0x00]);
+    let d = &mut m.board.dma[2];
+    (d.dmap, d.bbad, d.a1t, d.a1b) = (0x00, 0x21, 0x1000, 0x7e);
+    m.board.hdmaen = 0x04;
+    // V-IRQ at line 100 and the NMI; object 3 at X = 60, Y = 49.
+    (m.board.nmitimen, m.board.vtime) = (0xa0, 100);
+    m.board.ppu.write(0x00, 0x0f);
+    for i in 0..128 {
+        m.board.ppu.oam[i * 4 + 1] = 0xf0;
+    }
+    m.board.ppu.oam[12..14].copy_from_slice(&[60, 49]);
+    let state = m.save_state();
+    frames(&mut m, 1);
+    assert!(m.overlay("hdma").is_none(), "switched off");
+    m.load_state(&state).unwrap();
+    m.set_overlays(&["sprites", "hdma", "irq"]);
+    frames(&mut m, 1);
+    let band = |y: i32| Shape::Band {
+        y,
+        h: 1,
+        color: colors::SERIES[2],
+        label: Some("ch2 $2121".into()),
+    };
+    let hdma = m.overlay("hdma").unwrap().shapes;
+    assert_eq!(hdma, [band(0), band(3), band(4)], "lines 1, 4 and 5");
+    let irq = m.overlay("irq").unwrap().shapes;
+    let labels: Vec<_> = irq
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Mark { label, .. } => label.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["IRQ 100:2", "NMI 225:0"]);
+    assert!(matches!(irq[0], Shape::Mark { x: 0, y: 99, .. }));
+    let spr = m.overlay("sprites").unwrap().shapes;
+    assert!(
+        spr.contains(&Shape::Rect {
+            x: 120,
+            y: 49,
+            w: 16,
+            h: 8,
+            color: colors::SERIES[3],
+            label: Some("3".into()),
+        }),
+        "{spr:?}"
+    );
+    assert_eq!(m.frame_row(1), Some(0));
+    assert_eq!(m.frame_row(0), None);
+    // Recording changes nothing in the emulation.
+    let on = m.save_state();
+    m.load_state(&state).unwrap();
+    m.set_overlays(&[]);
+    frames(&mut m, 1);
+    assert_eq!(m.save_state(), on);
+    assert!(m.overlay("irq").is_none());
+}
+
+#[test]
+fn beam_hpos_is_the_frame_column() {
+    let mut m = machine(&[], "ntsc", upload_rom());
+    frames(&mut m, 2);
+    // Object 3 at X = 60, Y = 49: tile 0, its left pixel colour 1 (red).
+    let p = &mut m.board.ppu;
+    p.write(0x00, 0x0f);
+    p.write(0x01, 0x00);
+    p.write(0x2c, 0x10); // OBJ on the main screen
+    for i in 0..128 {
+        p.oam[i * 4 + 1] = 0xf0;
+    }
+    p.oam[12..16].copy_from_slice(&[60, 49, 0, 0x30]);
+    p.vram[0] = 0x0080;
+    p.cgram[129] = 0x001f;
+    frames(&mut m, 1);
+    let row = m.frame_row(50).unwrap();
+    let f = m.framebuffer();
+    let red = f.rgb_at(120, row);
+    assert_ne!(red, f.rgb_at(119, row));
+    assert_eq!(red, f.rgb_at(121, row), "two columns a pixel");
+    // The dot of picture pixel 60 reports its frame column.
+    m.board.h = (22 + 60) * 4;
+    assert_eq!(m.beam().unwrap().hpos, 120);
+    m.board.h = 0;
+    assert_eq!(m.beam().unwrap().hpos, 0);
+    m.board.h = 1300;
+    assert_eq!(m.beam().unwrap().hpos, 511);
+}
+
 /// Development aid: run a cartridge (EMU_CART) for EMU_FRAMES frames and
 /// print the S-PPU's registers.
 #[test]
@@ -312,20 +437,28 @@ fn trace_cart() {
         m.input(TimedInput {
             at,
             target: InputTarget::Port(PortId(0)),
-            event: InputEvent::Digital { dirs: Dirs(0), buttons },
+            event: InputEvent::Digital {
+                dirs: Dirs(0),
+                buttons,
+            },
         });
         for _ in 0..10 {
             frames(&mut m, 1);
             println!(
                 "pad regs {:02x?} game held {:02x?} new {:02x?}",
-                &m.board.joy, &m.board.wram[0x2b7..0x2bb], &m.board.wram[0x2bb..0x2bf]
+                m.board.joy,
+                &m.board.wram[0x2b7..0x2bb],
+                &m.board.wram[0x2bb..0x2bf]
             );
         }
         let at = m.now();
         m.input(TimedInput {
             at,
             target: InputTarget::Port(PortId(0)),
-            event: InputEvent::Digital { dirs: Dirs(0), buttons: 0 },
+            event: InputEvent::Digital {
+                dirs: Dirs(0),
+                buttons: 0,
+            },
         });
         let after: usize = std::env::var("EMU_AFTER")
             .ok()
@@ -338,13 +471,20 @@ fn trace_cart() {
             m.input(TimedInput {
                 at,
                 target: InputTarget::Port(PortId(0)),
-                event: InputEvent::Digital { dirs: Dirs::RIGHT, buttons: 0 },
+                event: InputEvent::Digital {
+                    dirs: Dirs::RIGHT,
+                    buttons: 0,
+                },
             });
             frames(&mut m, hold);
         }
         let f = m.framebuffer();
-        let mut ppm = format!("P6 {} {} 255
-", f.width, f.height).into_bytes();
+        let mut ppm = format!(
+            "P6 {} {} 255
+",
+            f.width, f.height
+        )
+        .into_bytes();
         for y in 0..f.height {
             for x in 0..f.width {
                 let c = f.rgb_at(x, y).unwrap_or_default();

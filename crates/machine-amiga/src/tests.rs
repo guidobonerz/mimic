@@ -812,3 +812,118 @@ fn attached_audio_channel_modulates_the_next() {
         "an attached channel is silent"
     );
 }
+
+#[test]
+fn graphics_views_decode_chip_ram_without_side_effects() {
+    let mut m = stub();
+    frames(&mut m, 2);
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["sprites", "bitplanes", "palette"]);
+    // One low-resolution plane at $20000, pixel 0 of line 0 set.
+    m.board.mem.chip.set_word(0x2_0000, 0x8000);
+    let c = &mut m.board.custom;
+    for (r, v) in [
+        (chips_amiga::reg::BPLCON0, 0x1200),
+        (chips_amiga::reg::DIWSTRT, 0x2c81),
+        (chips_amiga::reg::DIWSTOP, 0x2cc1),
+        (chips_amiga::reg::DDFSTRT, 0x38),
+        (chips_amiga::reg::DDFSTOP, 0xd0),
+        (chips_amiga::reg::BPL1PTH, 0x0002),
+        (chips_amiga::reg::BPL1PTH + 2, 0x0000),
+        (chips_amiga::reg::COLOR00 + 2, 0x0f0),
+    ] {
+        c.write(r, v);
+    }
+    let before = m.save_state();
+    let v = m
+        .gfx_view("bitplanes", &emu_core::GfxOptions::new())
+        .unwrap();
+    assert_eq!(v.space, CHIP_SPACE);
+    assert_eq!((v.width, v.height, v.addr), (320, 256, 0x2_0000));
+    assert_eq!(v.raw.len(), 40 * 256);
+    assert_eq!(v.frame().rgb_at(0, 0), Some(Rgb8 { r: 0, g: 255, b: 0 }));
+    let p = m.gfx_view("palette", &emu_core::GfxOptions::new()).unwrap();
+    assert_eq!(p.param("color01"), Some(0x0f0));
+    let s = m.gfx_view("sprites", &emu_core::GfxOptions::new()).unwrap();
+    assert_eq!(s.width, 8 * 17 - 1);
+    assert!(m.gfx_view("nope", &emu_core::GfxOptions::new()).is_none());
+    assert_eq!(m.save_state(), before, "views change nothing");
+}
+
+#[test]
+fn overlays_record_only_when_switched_on_and_stay_out_of_savestates() {
+    let mut m = stub();
+    let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
+    assert_eq!(ids, ["dma", "sprites", "copper"]);
+    assert_eq!(m.frame_row(26), Some(0));
+    assert_eq!(m.frame_row(10), None);
+    frames(&mut m, 1);
+    assert!(m.overlay("dma").is_none(), "off");
+    let mut twin = stub();
+    frames(&mut twin, 1);
+    m.set_overlays(&["dma", "copper"]);
+    frames(&mut m, 2);
+    frames(&mut twin, 2);
+    assert_eq!(
+        m.save_state(),
+        twin.save_state(),
+        "recording changes nothing"
+    );
+    // The stub's Copper list changes COLOR00 at two lines.
+    let c = m.overlay("copper").unwrap();
+    assert!(!c.shapes.is_empty());
+    let d = m.overlay("dma").unwrap();
+    let emu_core::overlay::Shape::Cells { ref cells, .. } = d.shapes[0] else {
+        panic!()
+    };
+    assert!(cells.contains(&8), "free slots");
+    assert!(m.overlay("sprites").is_none(), "not switched on");
+    let s = m.save_state();
+    m.load_state(&s).unwrap();
+    assert!(m.overlay("dma").is_some(), "still recording after a load");
+}
+
+#[test]
+fn light_pen_in_game_port_0_freezes_the_beam_counters() {
+    let mut m = stub_with(None, &[("port0", "lightpen")]);
+    frames(&mut m, 2);
+    // LPEN on; the stub's picture is green (bright) below line $80.
+    m.board.custom.write(chips_amiga::reg::BPLCON0, 0x0208);
+    let now = m.now().0;
+    m.input(TimedInput {
+        at: Cycle(now),
+        target: InputTarget::Port(PortId(0)),
+        event: emu_core::input::InputEvent::LightPen {
+            x: 200,
+            y: 150,
+            trigger: true,
+        },
+    });
+    frames(&mut m, 2);
+    // Row 150 is line 26 + 150 = $B0; column 200 colour clock 108 of Agnus.
+    let vhposr = |m: &Amiga| peek_cpu(m, 0xdf_f006, Size::Word);
+    assert_eq!(vhposr(&m), 0xb000 | 108);
+    // The button (LPENPR, pin 5) reads on POTGOR bit 8 (DATLX) low.
+    assert_eq!(peek_cpu(&m, 0xdf_f016, Size::Word) & 0x0100, 0);
+    // Savestate round trip keeps the latch and the pen's aim.
+    let s = m.save_state();
+    let mut n = stub_with(None, &[("port0", "lightpen")]);
+    n.load_state(&s).unwrap();
+    assert_eq!(vhposr(&n), 0xb000 | 108);
+    frames(&mut n, 1);
+    assert_eq!(vhposr(&n), 0xb000 | 108);
+    // In the red part (luma 76) the pen sees no light: the counters
+    // freeze at the end of the field instead.
+    let now = n.now().0;
+    n.input(TimedInput {
+        at: Cycle(now),
+        target: InputTarget::Port(PortId(0)),
+        event: emu_core::input::InputEvent::LightPen {
+            x: 200,
+            y: 50,
+            trigger: false,
+        },
+    });
+    frames(&mut n, 2);
+    assert_eq!(vhposr(&n), (312 & 0xff) << 8 | 226);
+}

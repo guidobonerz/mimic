@@ -20,6 +20,13 @@
   #panel .switch { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
   #panel button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 4px; border: 1px solid var(--muted); background: var(--panel); color: var(--fg); cursor: pointer; }
   #panel button.on { background: #2e6b3a; border-color: #2e6b3a; color: #fff; }
+  #overlays { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  details { padding: 0 16px 16px; }
+  summary { cursor: pointer; color: var(--muted); }
+  #gfxbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 8px 0; }
+  #gfxbar input[type=text] { font: inherit; width: 16em; }
+  #gfximg { image-rendering: pixelated; max-width: 100%; background: #000; }
+  #gfxparams { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); word-break: break-all; }
 </style>
 </head>
 <body>
@@ -30,10 +37,23 @@
   <label>FPS <select id="fps"><option>10</option><option>25</option><option selected>50</option></select></label>
   <label title="Sound of the machine (raw filter only)"><input type="checkbox" id="sound"> Sound</label>
   <label title="Keys and gamepads go to the emulated machine (C64: Esc = RUN/STOP, numeric keypad = joystick)"><input type="checkbox" id="input" checked> Input</label>
+  <span id="overlays" title="Debug overlays on the raw picture"></span>
+  <a href="/crt" target="_blank" rel="noopener" title="Edit a monitor profile">monitor editor</a>
 </header>
 <main><canvas id="screen" width="384" height="272"></canvas></main>
 <div id="panel" aria-label="Console controls"></div>
 <div id="status">connecting…</div>
+<details id="gfx">
+  <summary>Graphics data</summary>
+  <div id="gfxbar">
+    <label>View <select id="gfxview"></select></label>
+    <label title="Options as name=value, e.g. index=2 addr=$2000">Options <input type="text" id="gfxopts" placeholder="index=0 addr=$2000"></label>
+    <label>Scale <select id="gfxscale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+    <label><input type="checkbox" id="gfxlive" checked> Live</label>
+  </div>
+  <img id="gfximg" alt="">
+  <div id="gfxparams"></div>
+</details>
 <script>
 "use strict";
 const canvas = document.getElementById("screen");
@@ -47,16 +67,26 @@ let chain = Promise.resolve();
 
 // raw: the /stream endpoint (palette indices, changed lines, audio), coloured
 // and scaled here; crt: server-rendered PNGs from /preview.
+// Overlays need server-drawn pictures: with any switched on, the raw
+// picture also comes as PNGs from /preview.
+const overlayBox = document.getElementById("overlays");
+function chosenOverlays() {
+  return [...overlayBox.querySelectorAll("input:checked")].map((i) => i.value);
+}
 function connect() {
   if (socket) { socket.onclose = null; socket.close(); }
-  const raw = filter.value === "raw";
+  const overlays = filter.value === "raw" ? chosenOverlays() : [];
+  const raw = filter.value === "raw" && overlays.length === 0;
+  if (!raw) aspect = 1;
   const url = raw
     ? `/stream?fps=${fps.value}&audio=${audio ? 1 : 0}`
-    : `/preview?format=png&${controls.map((c) => `${c.id}=${c.value}`).join("&")}`;
+    : `/preview?format=png&${controls.map((c) => `${c.id}=${c.value}`).join("&")}`
+      + (overlays.length ? `&overlay=${overlays.join(",")}` : "");
   pic = null;
   socket = new WebSocket(`ws://${location.host}${url}`);
   socket.binaryType = "arraybuffer";
   socket.onmessage = raw ? (ev) => onRaw(ev.data) : (ev) => { chain = chain.then(() => draw(ev.data)); };
+  socket.rawMode = raw;
   socket.onclose = () => { status.textContent = "disconnected – retrying"; setTimeout(connect, 1000); };
 }
 
@@ -259,6 +289,60 @@ function renderPanel(controls) {
     }
   }
 }
+async function loadOverlays() {
+  try {
+    const list = await (await fetch("/overlays")).json();
+    overlayBox.replaceChildren(...list.map((o) => {
+      const l = document.createElement("label");
+      l.title = o.name;
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.value = o.id;
+      box.onchange = connect;
+      l.append(box, " " + o.id);
+      return l;
+    }));
+  } catch (e) { /* older server: no overlays */ }
+}
+
+// Graphics data views: /gfx lists them, /gfx/<id>.png decodes one.
+const gfx = document.getElementById("gfx"), gfxView = document.getElementById("gfxview");
+const gfxOpts = document.getElementById("gfxopts"), gfxScale = document.getElementById("gfxscale");
+const gfxImg = document.getElementById("gfximg"), gfxParams = document.getElementById("gfxparams");
+async function loadGfx() {
+  try {
+    const views = await (await fetch("/gfx")).json();
+    gfxView.replaceChildren(...views.map((v) => {
+      const o = document.createElement("option");
+      o.value = v.id;
+      o.textContent = `${v.name} (${v.id})`;
+      o.title = "options: " + v.options.join(", ");
+      return o;
+    }));
+    gfx.hidden = views.length === 0;
+  } catch (e) { gfx.hidden = true; }
+}
+function gfxUrl() {
+  const q = new URLSearchParams({ scale: gfxScale.value });
+  for (const w of gfxOpts.value.split(/\s+/).filter(Boolean)) {
+    const [k, v] = w.split("=");
+    if (k && v !== undefined) q.set(k, v.replace(/^\$/, "0x"));
+  }
+  return `/gfx/${gfxView.value}.png?${q}`;
+}
+function refreshGfx() {
+  if (!gfx.open || !gfxView.value) return;
+  const img = new Image();
+  img.onload = () => { gfxImg.src = img.src; gfxParams.textContent = ""; };
+  img.onerror = () => { gfxParams.textContent = "view not available"; };
+  img.src = gfxUrl() + `&t=${Date.now()}`;
+}
+for (const el of [gfxView, gfxOpts, gfxScale]) el.onchange = refreshGfx;
+gfx.ontoggle = refreshGfx;
+setInterval(() => { if (document.getElementById("gfxlive").checked) refreshGfx(); }, 1000);
+loadOverlays();
+loadGfx();
+
 async function pollPanel() {
   try {
     const r = await fetch("/controls", { cache: "no-store" });

@@ -23,7 +23,9 @@
 //! | `frame_ready` | after every emulated frame while running; only to clients that `subscribe` to it |
 //! | `media_changed` | media inserted or ejected through the protocol      |
 //! | `device_connected` | a device plugged into or pulled from a port (`device: null`) |
+//! | `cheats_loaded` | the cheat database had cheats for an inserted image (`game`) |
 //! | `freeze_blocked_write` | a guest write to a frozen address was suppressed (at most one per frame; to subscribers). A write watchpoint on the address stops at the code |
+//! | `stopped_frame` | after `stopped`, to subscribers: the (partial) picture as PNG with the beam marked and the debugger's overlays |
 //!
 //! Execution commands come in two flavours. `step_instr`, `step_cycle`,
 //! `step_line`, `step_frame`, `pause` and `reset` are synchronous: the
@@ -52,9 +54,24 @@
 //! 8 adds the console panel: `controls` (the machine's buttons and
 //! switches with their state) and `set_control`, and the `"panel"` input
 //! target with `{"type": "control", "id": n, "value": v}` events.
+//! 9 adds graphics data views: `gfx_list` (the machine's views with their
+//! kind, name and options) and `gfx_get` (one view decoded: picture as
+//! `png`, `qoi` or `indexed` pixels with palette, its parameters and the
+//! raw bytes). It also adds rewind: `rewind_config` (a savestate every
+//! `frames` frames in a ring within `budget_mb`), `rewind_info`, `rewind`
+//! (back `count` states, paused there) and `step_back` (the main CPU
+//! `count` instructions back, by replaying from the newest earlier state),
+//! debug overlays (`overlay_list`, `overlay_set`, `overlay_get`), `frame`
+//! (the current, while paused partial, picture with overlays) and the
+//! optional `stopped_frame` event (that picture with the beam marked,
+//! after each `stopped`), cheat imports (`format` of `cheats_load`: POKE
+//! lists, VICE monitor commands, address/value codes) and the per-game
+//! cheat database (loaded on `insert_media`, event `cheats_loaded`).
 //!
 //! Every change to this message set needs a contract test and a bump of
 //! [`PROTOCOL_VERSION`].
+
+use std::collections::BTreeMap;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -62,7 +79,7 @@ use serde_json::{json, Value};
 use emu_core::{BeamPos, StopReason};
 
 pub const PROTOCOL_NAME: &str = "mimic-debug";
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Request {
@@ -202,10 +219,12 @@ pub enum Command {
     SearchResults {
         max: Option<u32>,
     },
-    /// Add the freezes of a TOML cheat file (`path` on this host, or `text`).
+    /// Add the cheats of a file (`path` on this host, or `text`) in
+    /// `format`: `toml` (default), `pokes`, `vice` or `codes`.
     CheatsLoad {
         path: Option<String>,
         text: Option<String>,
+        format: Option<String>,
     },
     /// The freezes as a TOML cheat file; written to `path` if given.
     CheatsSave {
@@ -235,6 +254,54 @@ pub enum Command {
     },
     SymbolsList,
     SymbolsClear,
+    /// Keep a savestate every `frames` frames (0 = off) in a ring of at
+    /// most `budget_mb` MB.
+    RewindConfig {
+        frames: Option<u32>,
+        budget_mb: Option<u32>,
+    },
+    RewindInfo,
+    /// Go back `count` (default 1) states of the ring and stay paused.
+    Rewind {
+        count: Option<u32>,
+    },
+    /// Main CPU: `count` (default 1) instructions back, synchronous.
+    StepBack {
+        count: Option<u32>,
+    },
+    /// The debug overlays: generic (`beam`, `grid`) and the machine's.
+    OverlayList,
+    /// Switch the debugger's overlays (replacing its earlier choice);
+    /// machine overlays are recorded from then on.
+    OverlaySet {
+        #[serde(default)]
+        overlays: Vec<String>,
+    },
+    /// One overlay's shapes for the current frame.
+    OverlayGet {
+        overlay: String,
+    },
+    /// The current (while paused: partial) picture as `png` (default) or
+    /// `qoi`, `scale` 1–8, `overlays` drawn on the raw main screen.
+    Frame {
+        screen: Option<String>,
+        format: Option<String>,
+        scale: Option<u32>,
+        #[serde(default)]
+        overlays: Vec<String>,
+    },
+    /// The graphics data views the machine offers.
+    GfxList,
+    /// One view decoded. `format`: `png` (default), `qoi` or `indexed`
+    /// (palette indices or RGB bytes, base64); `scale` 1–8 enlarges
+    /// `png`/`qoi`; `options` by name (see `gfx_list`).
+    GfxGet {
+        view: String,
+        format: Option<String>,
+        scale: Option<u32>,
+        #[serde(default)]
+        options: BTreeMap<String, u32>,
+    },
     /// Ports with their kind, connection state and the devices the
     /// frontend can plug in.
     ListPorts,
@@ -350,6 +417,12 @@ pub const COMMANDS: &[&str] = &[
     "disasm",
     "beam",
     "chips",
+    "overlay_list",
+    "overlay_set",
+    "overlay_get",
+    "frame",
+    "gfx_list",
+    "gfx_get",
     "break_add",
     "break_remove",
     "break_enable",
@@ -357,6 +430,10 @@ pub const COMMANDS: &[&str] = &[
     "break_list",
     "save_state",
     "load_state",
+    "rewind_config",
+    "rewind_info",
+    "rewind",
+    "step_back",
     "trace_start",
     "trace_stop",
     "trace_read",
@@ -397,10 +474,12 @@ pub const EVENTS: &[&str] = &[
     "frame_ready",
     "media_changed",
     "device_connected",
+    "cheats_loaded",
     "freeze_blocked_write",
+    "stopped_frame",
 ];
 /// Events a client must ask for with `subscribe`.
-pub const OPTIONAL_EVENTS: &[&str] = &["frame_ready", "freeze_blocked_write"];
+pub const OPTIONAL_EVENTS: &[&str] = &["frame_ready", "freeze_blocked_write", "stopped_frame"];
 
 pub fn ok(id: u64, result: Value) -> Value {
     json!({"id": id, "ok": true, "result": result})
@@ -532,6 +611,14 @@ mod tests {
         assert_eq!(r.cmd, Command::StepLine);
         let r = parse_request(r#"{"id":10,"cmd":"step_instr"}"#).unwrap();
         assert_eq!(r.cmd, Command::StepInstr { count: None });
+        let r =
+            parse_request(r#"{"id":11,"cmd":"gfx_get","view":"sprites","options":{"index":3}}"#)
+                .unwrap();
+        let Command::GfxGet { view, options, .. } = r.cmd else {
+            panic!("gfx_get")
+        };
+        assert_eq!(view, "sprites");
+        assert_eq!(options.get("index"), Some(&3));
     }
 
     #[test]

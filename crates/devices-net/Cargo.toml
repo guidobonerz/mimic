@@ -1,0 +1,12 @@
+[package]
+name = "devices-net"
+description = "Devices that reach outside the machine through emu-core host services: Ultimate 64 command interface, WiC64"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

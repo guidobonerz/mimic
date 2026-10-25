@@ -63,6 +63,18 @@ own section.
 | CRT cartridges | CRT format documentation of the VICE cartridge tools; C64-Wiki | `media/src/crt.rs`, `devices-cartridge/src/banked.rs` |
 | EasyFlash | skoe, EasyFlash programmer's documentation; AMD Am29F040B data sheet | `devices-cartridge/src/easyflash.rs`, `flash.rs` |
 
+### Real hardware: flux readers and real drives (`media-backends`, features `flux`, `greaseweazle`, `opencbm`)
+
+| Topic | Document | Used in |
+| --- | --- | --- |
+| Greaseweazle USB protocol | Keir Fraser, Greaseweazle firmware `inc/cdc_acm_protocol.h` (commands, acks, bus types, flux stream opcodes, N28 encoding, the 10000/9600-baud reset) and host tools `src/greaseweazle/usb.py` (command framing, `<4BI4B3H14x` GET_INFO layout, READ_FLUX with `revs + 1` index pulses, flux stream decoding), https://github.com/keirf/greaseweazle-firmware, https://github.com/keirf/greaseweazle — public domain (Unlicense); read as documentation, no code copied | `media-backends/src/greaseweazle.rs` |
+| OpenCBM API | `include/opencbm.h` (function signatures, `CBM_FILE` per platform, `__cdecl`, `cbm_device_type_e`) and the doxygen comments of `lib/cbm.c` (return values of `cbm_driver_open_ex`, `cbm_raw_read`, `cbm_device_status`, `cbm_exec_command` …), https://github.com/OpenCBM/OpenCBM — GPL; only the interface was used, no code copied | `media-backends/src/opencbm/ffi.rs` |
+| DOS direct access | *1541 User's Guide*, "Direct access commands" (`#` buffer channel, `U1`/`U2`, `B-P`, error channel); *1571 User's Guide* (`U0>M1`); *1581 User's Guide* | `media-backends/src/opencbm/mod.rs` |
+| 1541 bit rates, GCR framing | *Inside the 1541* (read/write electronics, SYNC detection, GCR); 1541 service manual (16 MHz / 13–16 / 4 bit clock per speed zone) | `media-backends/src/flux/gcr.rs` |
+| G64 | Peter Schepers, "G64 (Raw GCR binary representation of 1541 disks)", G64.TXT; VICE manual, emulator file formats | `media/src/g64.rs` |
+| MFM, IBM track format | WD1772 and NEC µPD765 data sheets (MFM clock rule, `$A1` with missing clock = `$4489`, ID/data address marks, CRC-CCITT); IBM *Diskette General Information Manual* | `media-backends/src/flux/mfm.rs`, `disk.rs` |
+| Amiga MFM | Amiga Hardware Reference Manual ch. 8 "Disk"; Laurent Clévy, ADF FAQ | `media-backends/src/flux/mfm.rs` (via `media/src/adf.rs`) |
+
 ### Atari 8-bit
 
 | Topic | Document | Used in |
@@ -75,6 +87,8 @@ own section.
 | Memory map, PORTB banking | *Atari 800XL Field Service Manual* | `machine-atari8/src/memory.rs` |
 | 130XE: 64 KB extended RAM in four 16 KB banks at $4000–$7FFF, PORTB bit 4 (CPU) and bit 5 (ANTIC) enable them separately, bits 2–3 select the bank | *Atari 130XE Field Service Manual*; Altirra Hardware Reference Manual, "PORTB" / "Extended memory" | `machine-atari8/src/memory.rs` (`Kind::Xe130`) |
 | 400/800: 8–48 KB RAM, 10 KB OS-A/OS-B at $D800–$FFFF, nothing at $C000–$CFFF, left/right cartridge slots, PIA port B = joystick ports 3/4 (TRIG2/3, POT4–7), the RESET key wired to ANTIC's /RNMI (NMIST/NMIEN bit 5) | *Atari 400/800 Operating System User's Manual* (memory map, RNMI); *Atari 400/800 Hardware Manual* (PIA and port wiring); Altirra Hardware Reference Manual, "ANTIC" NMIEN/NMIST | `machine-atari8/src/memory.rs` (`Kind::Old`), `lib.rs`, `chips-atari/src/antic.rs` (`reset_key`) |
+| Graphics data views of the Atari 8-bit: P/M memory layout from PMBASE (double-line missiles +$180, players +$200 + $80·n; single-line +$300, +$400 + $100·n), display-list walk (blank/JMP/JVB/LMS, 1 KB display-list and 4 KB memory-scan counters, playfield widths), character modes 2–7 with CHBASE/CHACTL | Altirra Hardware Reference Manual, "ANTIC" and "GTIA"; *Atari 400/800 Hardware Manual* (ANTIC/GTIA register descriptions) | `chips-atari/src/antic/gfx.rs` |
+| Graphics data view of the Atari 2600 TIA: GRP/ENAM/ENABL, NUSIZ copies and sizes, REFP, CTRLPF, PF0–PF2 bit order, VDEL old/new graphics, object start delays | Steve Wright, *Stella Programmer's Guide* (1979); Andrew Towers, "Atari 2600 TIA Hardware Notes" (2003) | `chips-atari/src/tia/gfx.rs` |
 | SIO protocol | *Atari 400/800 OS Manual*, "Serial I/O" | `drives-other/src/sio.rs` |
 | XEX | *Atari DOS 2.0S Reference Manual*, "Binary file format" | `media/src/xex.rs` |
 | ATR | ATR format as published with the SIO2PC project (Nick Kennedy) | `media/src/atr.rs` |
@@ -152,7 +166,11 @@ own section.
 | NES APU: frame counter, length table, envelope, sweep, pulse duty, triangle, noise periods, DMC rates, mixer formulas | NESdev wiki, "APU", "APU Frame Counter", "APU Length Counter", "APU Envelope", "APU Sweep", "APU Pulse", "APU Triangle", "APU Noise", "APU DMC", "APU Mixer" (read 2026-10-23) | `chips-nintendo/src/apu.rs` |
 | NES cartridges: iNES and NES 2.0 headers, mirroring, NROM, MMC1, UxROM, CNROM, MMC3 (and MMC3A), bus conflicts | NESdev wiki, "INES", "NES 2.0", "Mirroring", "NROM", "MMC1", "UxROM", "CNROM", "MMC3", "Bus conflict" (read 2026-10-23) | `devices-cartridge/src/nes.rs` |
 | NES controllers: standard controller, Four Score signatures, Zapper lines, Arkanoid controller | NESdev wiki, "Standard controller", "Controller reading", "Four Score", "Zapper", "Arkanoid controller" (read 2026-10-23) | `devices-input/src/nes.rs`, `machine-nes` |
-| 68020 instruction set and programming model: full-format extension words, bit field instructions, CAS/CAS2, CHK2/CMP2, PACK/UNPK, MULx.L/DIVx.L, MOVEC control registers, RTD, TRAPcc, LINK.L, EXTB, the M bit with MSP/ISP, exception stack frame formats 0/1/2 and RTE's handling, VBR, misaligned operands | Motorola M68000 Family Programmer's Reference Manual (M68000PM/AD rev. 1), sections 2 (addressing modes), 4 (integer instructions), 6 (exception processing). The timing is an approximation (3-clock bus cycles on the 68000's microcycle sequences), no bus-trace suite being available for the 68020 | `cpu-m68k/src/exec020.rs`, `cpu-m68k/src/ea.rs`, `cpu-m68k/src/lib.rs` |
+| Graphics data views of the TMS9918A/TMS9929A: table addresses, Graphics I/II colour tables and masks, Multicolour, Text, sprite attributes and 16×16 quadrant order | Texas Instruments, *TMS9918A/TMS9928A/TMS9929A Video Display Processors Data Manual* (1982), sections 2.2–2.4 (as for the chip) | `chips-ti/src/vdp/gfx.rs` |
+| Graphics data views of the NES PPU: pattern table layout, nametables and attribute quadrants, OAM bytes and 8×16 sprites, palette mirrors, scroll from t and fine x | NESdev wiki, "PPU pattern tables", "PPU nametables", "PPU attribute tables", "PPU OAM", "PPU palettes", "PPU scrolling" | `chips-nintendo/src/ppu/gfx.rs` |
+| Graphics data views of the SNES S-PPU: VRAM bit-plane tile format, BGxSC/BGxNBA, Mode 7 map and tile bytes, OBSEL sizes, name select gap and large-object tile stride, OAM high table, CGRAM | fullsnes, "SNES PPU Video Memory (VRAM)", "SNES PPU Sprites (OBJ)", "SNES PPU Color Palette Memory (CGRAM)" (https://problemkaputt.de/fullsnes.htm) | `chips-nintendo/src/sppu/gfx.rs` |
+| 68020 instruction set and programming model: full-format extension words, bit field instructions, CAS/CAS2, CHK2/CMP2, PACK/UNPK, MULx.L/DIVx.L, MOVEC control registers, RTD, TRAPcc, LINK.L, EXTB, the M bit with MSP/ISP, exception stack frame formats 0/1/2 and RTE's handling, VBR, misaligned operands | Motorola M68000 Family Programmer's Reference Manual (M68000PM/AD rev. 1), sections 2 (addressing modes), 4 (integer instructions), 6 (exception processing). The timing follows the User's Manual (next row) | `cpu-m68k/src/exec020.rs`, `cpu-m68k/src/ea.rs`, `cpu-m68k/src/lib.rs` |
+| 68020 instruction cache (64 long-word entries, direct mapped by A7–A2, tag A31–A8 + FC2 and a valid bit, CACR E/F/CE/C, CAAR, cleared at reset, data never cached) and instruction timing (tables 8.2.1–8.2.18: fetch/fetch immediate/calculate/calculate immediate/jump effective address, MOVE, special-purpose MOVE, arithmetic, immediate, BCD, single-operand, shift/rotate, bit, bit field, branch, control, exception-related, save/restore; best/cache/worst case with read/prefetch/write counts; 3-clock bus cycles; long-word prefetch; bus controller/sequencer concurrency and overlap, section 8.1) | Motorola, *MC68020/MC68EC020 Microprocessors User's Manual* (MC68020UM/AD, first edition, 1992), sections 4 "On-Chip Cache Memory" and 8 "Instruction Execution Timing" (copy read: https://media.nostalgianerd.com/file/mc68020.pdf, 2026-10-25). The cache-case column is the model's data; how the internal clocks lie between the bus cycles is this project's model | `cpu-m68k/src/timing020.rs`, `cpu-m68k/src/lib.rs` |
 | A1200 Gayle: id register at $DE1000 read bit-serially in D7 (A1200 id $D0, a write restarts), IDE/status registers at $DA0000–$DAFFFF (unused here: no drive) | Linux kernel `arch/m68k/include/asm/amigayle.h` (register addresses and id constants as hardware facts; GPL text not copied); amiga-dev wiki | `machine-amiga/src/memory.rs` (`Gayle`) |
 | ECS registers: VPOSR Agnus ids (8372 $20 PAL / $30 NTSC, LOL bit 7), DENISEID $FC for the 8373, BEAMCON0 bit layout, HTOTAL/VTOTAL meaning under VARBEAMEN, DIWHIGH bit layout (13 stop H8, 10–8 stop V, 5 start H8, 2–0 start V), BLTSIZV/BLTSIZH, BPLCON0 ECSENA/SHRES and the BPLCON3 bits it gates, super-hires with two planes and two colour bits per gun | Amiga Hardware Reference Manual, 3rd edition, appendix C "Custom chip register list, alphabetical" with the ECS entries (https://www.theflatnet.de/pub/cbm/amiga/AmigaDevDocs/hard_c.html, read 2026-10-23); amiga-dev.wikidot.com register pages bplcon0, bplcon3, beamcon0, diwhigh, ddfstrt (read 2026-10-23); that the 2 MB 8375 reports the same id as the 8372A comes from community measurements (xSysInfo issue 61, https://github.com/reinauer/xSysInfo/issues/61). Not in the sources and this project's reading: the super-hires fetch order, which two colour bits survive (the upper ones here), DIWHIGH being reset by DIWSTRT/DIWSTOP writes (the HRM's "if DIWHIGH is written last"), BEAMCON0's power-on PAL bit following the chip's strap | `chips-amiga/src/custom.rs`, `chips-amiga/src/denise.rs`, `chips-amiga/src/blitter.rs`, `chips-amiga/src/regnames.rs` |
 | High-density floppy drive: $AAAAAAAA identification with an HD disk, DD identification with a DD disk, 150 rpm for HD disks (twice the bit cells per track at Paula's clock), 22 sectors per track, 1 760 KB ADF | Commodore *A3000/A4000 HD floppy* documentation as summarised by the trackdisk.device autodocs (`TD_GETDRIVETYPE`, `DRIVE3_5_150RPM`) and the ADF FAQ | `drives-other/src/amiga_drive.rs`, `media/src/adf.rs` (`Density`) |
@@ -168,6 +186,7 @@ own section.
 | The ULA's display mechanism: NOP substitution on M1 fetches with A15 set and D6 clear, the pattern address from I, the character code and the 3-bit line counter LCNTR, the shift register at 6.5 MHz; /INT from refresh address line A6 (R bit 6); the NMI generator (207 T-states per line) and /WAIT while halted; VSYNC on `IN ($FE)`, off on any `OUT`; `OUT ($FD)`/`OUT ($FE)` NMI off/on | Wilf Rigter, "The ZX81 Video Display System" and his ULA notes (as reproduced in the ZX81 community's hardware documentation); Sinclair ZX81 Service Manual (ULA pinout); observable behaviour only, no emulator code | `chips-sinclair/src/ula.rs`, `machine-zx81/src/lib.rs` |
 | ROM entry points for the tape traps (NEXT-PROG $0347, HEADER $02FF, SLOW/FAST $0207), system variables D_FILE $400C, E_LINE $4014, the program area from VERSN $4009, character codes | Ian Logan and Frank O'Hara, *The Complete ZX81 ROM Disassembly* (Melbourne House, 1983); the user's `zx81.edition3.sym` label file | `machine-zx81/src/lib.rs`, `tests/tests/zx81_boot.rs` |
 | .P file layout: the bytes from $4009 up to E_LINE as the ROM saves them | Logan/O'Hara (SAVE routine); common ZX81 emulator documentation of the ".P" format | `machine-zx81/src/lib.rs` (`PTape`) |
+| Character set (64 codes, bit 7 inverse, patterns at $1E00 through I); the display file from D_FILE (leading NEWLINE, 24 lines of up to 32 codes, collapsed lines below 3¼ KB of RAM) for the graphics data views | Sinclair, *ZX81 BASIC Programming* manual (Steven Vickers, 1981), appendix A and chapter 27 "Organization of memory"; Logan/O'Hara (CLS, the character patterns) | `machine-zx81/src/gfx.rs` |
 
 ### Vectrex
 
@@ -195,6 +214,7 @@ own section.
 | P6 PROM address and data line order (A7 S0, A6 S2, A5 S3, A4 /PULSE, A3 Q7, A2 Q6, A1 QA, A0 S1; next state reflected in D7–D4) | Christer Ericson, notes on the P6 state machine ROM (retro.co.za/ccc/apple2/christer/Apple/p6.notes.html, via a search summary 2026-10-24); confirmed here by reading GCR nibbles through the user's 341-0028 image, which only this order does | `drives-other/src/disk2.rs` |
 | Hi-res colours as an NTSC monitor shows them (green, violet, orange, blue at about 105°, 285°, 15°, 195°) | common Apple II colour descriptions (Apple II Reference Manual, "High-Resolution Graphics"); the picture phase checked with `video-crt`'s composite stage | `machine-apple2/src/video.rs` |
 | Mockingboard: two 6522s at $Cn00/$Cn80, port A data, port B BC1/BDIR//RESET, AY-3-8910 per VIA, IRQ | Sweet Micro Systems, *Mockingboard* manual (programming section) | `machine-apple2/src/mockingboard.rs` |
+| RGB values of the 16 lo-res colours for the graphics data views (4-bit RGB per colour; an approximation of an NTSC monitor's picture) and the simple hi-res colour rule (adjacent dots white, lone dots violet/green or blue/orange by column parity and bit 7) | Apple, *Apple IIGS Hardware Reference* (1987), "Video" (the IIGS's colour table for the Apple II modes); Apple II Reference Manual, "High-Resolution Graphics" | `machine-apple2/src/gfx.rs` |
 | 65C02 instructions, addressing modes, cycle table, decimal mode; the undefined opcodes' lengths and bus cycles, decimal-mode dummy reads | WDC W65C02S data sheet, table 5-7; Rockwell R65C02 data sheet; Bruce Clark, "Decimal Mode" appendix A (65C02 SBC); Tom Harte, SingleStepTests `65x02/synertek65c02` (MIT) | `cpu-6502` (`Variant::Cmos65C02`) |
 | WAV files (RIFF chunks, `fmt `, `data`, PCM sample layouts) | Microsoft/IBM, *Multimedia Programming Interface and Data Specifications 1.0* (1991), "WAVE Form" | `media/src/wav.rs` |
 
@@ -213,6 +233,7 @@ own section.
 | 3.5" GCR sector layout (address field, format byte, data field of 699 + 4 bytes, gaps, 2:1 interleave), the data checksum's byte order | CiderPress II, "Nibble notes" and "DiskCopy notes" (ciderpress2.com/formatdoc); Clock Signal (MIT, git.applefritter.com/6502/CLK, commit 5a9f3cf, decoder) | `media/src/macdisk.rs` |
 | The 400K drive's speed control: the 128K ROM's speed table, its tachometer measurement and the shift register it steps to make the pulse-width byte | the user's 128K ROM, read by disassembly while it ran (2026-10-24); no code taken from it | `machine-mac` (`PWM_WIDTH`), `drives-other/src/iwm.rs` |
 | Boot blocks ('LK', bbEntry, bbVersion $44xx for the Plus/SE ROMs to run the code), MFS master directory block | the user's Plus ROM (disassembly of its boot routine); *Inside Macintosh* II, "The File Manager" | `tests/tests/mac.rs` |
+| Screen buffer layout for the graphics data view (512 × 342, 64 bytes a line, MSB left, 1 = black, main buffer $5900 / alternate $D900 below the top of RAM, VIA PA6) | *Inside Macintosh* III, "The Video Interface"; Apple, *Guide to the Macintosh Family Hardware* (2nd ed., 1990), chapter 3 | `machine-mac/src/gfx.rs` |
 
 ### Video, colour and host conventions
 
@@ -220,10 +241,35 @@ own section.
 | --- | --- | --- |
 | YUV, square-pixel rates | ITU-R Recommendation BT.601 | `video-crt` |
 | PAL/NTSC subcarrier frequencies, colour burst | PAL and NTSC broadcast standards (ITU-R BT.470) | `video-crt/src/signal.rs` |
+| CRT stage: phosphor masks (shadow mask with delta-gun dot triads, aperture grille, slot mask with in-line guns), halation, barrel curvature, vignette, phosphor decay | No outside document consulted (2026-10-25): the effects follow general knowledge of colour picture tubes; the formulas (triangular phosphor weights, 7-tap glow, the curvature mapping, max-based decay) are this project's own, no shader pack or emulator code was used | `video-crt/src/cpu.rs`, `video-crt/src/shaders/crt.wgsl` |
 | Host key names | W3C *UI Events KeyboardEvent code values* | `emu-input`, `emu-desktop`, `emu-preview` |
 | VICE binary monitor protocol | VICE manual, chapter "Binary monitor" (API version 2) | `emu-debug/src/vice.rs` |
 | Symbol files | VICE monitor label files; KickAssembler `.sym` format | `emu-debug/src/symbols.rs` |
 | base64 | RFC 4648 | `emu-debug/src/protocol.rs` |
+| VICE monitor commands imported as cheats (`>` memory set, `f` fill) | VICE manual, chapter "Monitor" | `emu-cheats/src/import.rs` |
+| Cheat database key (CRC-32 of the image) | ISO/IEC 3309 / IEEE 802.3 CRC-32, check value `CBF43926` | `emu-cheats/src/lib.rs` |
+| BASIC `POKE` statements (decimal; `$`/`&` hex on the C64 BASIC extensions and the CPC) | Commodore 64 Programmer's Reference Guide (BASIC keywords); Amstrad CPC 6128 User Instructions (Locomotive BASIC, `&` hex) | `emu-cheats/src/import.rs` |
+| WebAssembly exports without bindings; AudioWorklet; Gamepad standard mapping; IndexedDB; Pointer Lock | WebAssembly Core Specification 1.0 (W3C); Web Audio API (W3C, AudioWorklet); Gamepad (W3C, "standard" mapping); Indexed Database API 3.0 (W3C); Pointer Lock 2.0 (W3C) | `emu-web/src/abi.rs`, `emu-web/www/mimic.js` |
+| Rewind differences (XOR, zero-run lengths as LEB128) | LEB128 as in the DWARF 5 standard, section 7.6 | `emu-core/src/rewind.rs` |
+| Light pens: VIC-II LP latch ($D013 = X/2, $D014 = raster, IRQ bit 3, once a frame; control port 1 pin 6 shared with fire) | Christian Bauer, "The MOS 6567/6569 video controller (VIC-II)", section 3.11; *Commodore 64 Programmer's Reference Guide*, appendix I (control port pinout) | `chips-cbm/src/vic2.rs`, `machine-c64`, `machine-c128`, `devices-input/src/lightpen.rs` |
+| Light pens: ANTIC PENH (colour clock) / PENV (VCOUNT), trigger line as the light-pen input | Altirra Hardware Reference Manual, "ANTIC" (light pen registers); *De Re Atari*, chapter 8 | `chips-atari/src/antic.rs`, `machine-atari8` |
+| Light pens: Agnus LPEN (BPLCON0 bit 3), VPOSR/VHPOSR frozen by a trigger or at the end of the field, released at line 20; pins 6 (LPENTG) and 5 (LPENPR) of game port 0; ECS BEAMCON0 LPENDIS | *Amiga Hardware Reference Manual*, 3rd edition, "Reading the light pen", "Connector pin usage for light pen inputs", appendix C (BEAMCON0) | `chips-amiga/src/custom.rs`, `machine-amiga` |
+| Light pens: 6845 LPSTB latching the refresh address into R16 (MA13–8) / R17 (MA7–0); CPC expansion port pin 47 LPEN | Motorola MC6845 data sheet ("Light pen registers"); cpcwiki, "Connector:Expansion port" | `chips-amstrad/src/crtc.rs`, `machine-cpc` |
+| Light-pen threshold (Rec. 601 luma) | ITU-R Recommendation BT.601 | `devices-input/src/lightpen.rs` |
+
+### Network devices (C64 Ultimate command interface, WiC64)
+
+Documentation only; the 1541 Ultimate and WiC64 firmware sources are GPL and were not used (golden rule 7).
+
+- Ultimate documentation, "Core UCI Architecture" (https://1541u-documentation.readthedocs.io/en/latest/uci/core_uci_architecture.html) — registers $DF1C–$DF1F, control and status bits, the state machine, queue sizes (`devices-net::uci`).
+- Ultimate documentation, "Ultimate DOS Target" (https://1541u-documentation.readthedocs.io/en/latest/uci/ultimate_dos_target.html) — DOS commands, open attributes, file info packet, directory entries, status texts.
+- Ultimate documentation, "Network Target" (https://1541u-documentation.readthedocs.io/en/latest/uci/network_target.html) — socket commands, MAC/IP answers, READ_SOCKET/WRITE_SOCKET formats.
+- Ultimate documentation, "Control Target" (https://1541u-documentation.readthedocs.io/en/latest/uci/control_target.html) — IDENTIFY, GET_HWINFO.
+- WiC64 library README (https://github.com/WiC64-Team/wic64-library) — legacy, standard and extended protocols, status codes, the command list and behaviour (`devices-net::wic64`); command ids from its `wic64.h` constants.
+- Forum64, "WiC64 Hardware Infos" (https://www.forum64.de/index.php?thread/119265-wic64-hardware-infos/) and pagetable.com (https://www.pagetable.com/?p=1656) — the user-port wiring: PA2 direction, PC2 and FLAG2 handshake.
+- C64 Programmer's Reference Guide, appendix I — user port pinout (`emu-core::port::user_port`); MOS 6526 data sheet — PC pulses after port B accesses.
+- Howard Hinnant, "chrono-Compatible Low-Level Date Algorithms" (http://howardhinnant.github.io/date_algorithms.html, public domain) — civil date from days (`emu-core::host::HostTime::local`).
+- RFC 9112 (HTTP/1.1 message syntax, chunked transfer coding) — the small HTTP client in `media-backends::net`.
 
 ## Test suites and test data
 
@@ -263,6 +309,8 @@ Pages fetched or searched while building (beyond the documents above):
 - Harte Z80 per-T-state bus traces (`cycles` in the test data) — the M-cycle placement of `Z80::step_timed` is checked against them.
 - The Acid800 1.2 archive's own `README.html` and test sources — how standalone tests report pass/fail (`_testPassed`, `_testFailed`, `_testSkipped` labels in the `.lab` files).
 - Acid800 test sources (MIT) as hardware measurements: the expected values and cycle comments of `antic_dmapattern` (playfield and refresh DMA slots), `antic_pfstarttiming`/`antic_pfstoptiming` (DMA window edges), `antic_vscroll`/`antic_vscroldli`, `antic_dlitiming`, `antic_blockednmi`, `antic_linebuffering`, `gtia_pmresize`/`gtia_pmoverlap`/`gtia_pmretrigger` (player width logic and retrigger) and `pokey_sertiming`. The models in `chips-atari` and `cpu-6502` were fitted to these results; no test code was copied.
+- Light pens (2026-10-25): Amiga Hardware Reference Manual, light pen pages of the Amiga Developer CD 2.1 HTML copy (https://discmaster.textfiles.com/file/18/Amiga%20Developer%20CD%20v2.1.iso/Reference/HTML/Hardware_Manual_guide/node018A.html and the pin table in node0189/node010E) — LPEN, the VPOSR freeze and its release at line 20, LPENTG/LPENPR pins; cpcwiki, "Connector:Expansion port" (https://www.cpcwiki.eu/index.php/Connector:Expansion_port) — LPEN on pin 47; C64-Wiki "Control Port" (https://www.c64-wiki.com/wiki/Controlport) — pin 6 "Button A / LP"; searches (summaries only) on C64 and Atari light-pen button wiring (a hackaday.io log naming pin 3; atarimania FAQ and COMPUTE! articles on the CX70/CX75, PENH/PENV and LPENH/LPENV shadows) — the pens' button pins stay unverified.
+- Real hardware (2026-10-25): the Greaseweazle repositories' `COPYING` (Unlicense, public domain), `inc/cdc_acm_protocol.h` and `src/greaseweazle/usb.py`; OpenCBM's `opencbm/include/opencbm.h` and the doc comments of `opencbm/lib/cbm.c` (interface only, GPL code not used).
 
 ## Software dependencies
 
@@ -270,7 +318,8 @@ Third-party Rust crates (see `Cargo.toml` for exact versions): `winit`
 (windowing), `wgpu` (GPU rendering), `naga` (WGSL validation in tests),
 `cpal` (audio), `gilrs` (gamepads), `tokio` and `tokio-tungstenite` (debug
 and preview servers), `futures-util`, `serde`, `serde_json`, `toml`, `png`, `flate2` (gzip test data),
-`qoi`, `pollster`, `criterion` (benchmarks). The Python debug client uses
+`qoi`, `pollster`, `criterion` (benchmarks); optional for real hardware:
+`serialport` (Greaseweazle) and `libloading` (OpenCBM at run time). The Python debug client uses
 the Python standard library only.
 
 ## User-supplied ROMs

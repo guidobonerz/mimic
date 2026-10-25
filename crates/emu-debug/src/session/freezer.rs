@@ -6,85 +6,30 @@
 //! candidate addresses taken with peeks between frames; it never halts or
 //! slows emulation beyond the copy.
 
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use emu_cheats::search::{Op, Search};
 use emu_core::{FreezeId, FreezeMode, MemSpaceId, Size};
+
+use emu_cheats::CheatFile;
 
 use super::Session;
 
 /// Most addresses one search may cover.
-pub const MAX_SEARCH: u32 = 1 << 24;
+pub const MAX_SEARCH: u32 = emu_cheats::search::MAX_SEARCH;
 /// Most results one `search_results` returns.
 pub const MAX_RESULTS: u32 = 10_000;
 
-/// A cheat search in progress: candidate addresses and their last values.
-#[derive(Clone, Debug)]
-pub(super) struct Search {
-    space: MemSpaceId,
-    size: Size,
-    candidates: Vec<(u32, u32)>,
-}
-
 fn size_from(bytes: Option<u8>) -> Result<Size, String> {
-    match bytes.unwrap_or(1) {
-        1 => Ok(Size::Byte),
-        2 => Ok(Size::Word),
-        4 => Ok(Size::Long),
-        n => Err(format!("size must be 1, 2 or 4, not {n}")),
-    }
+    emu_cheats::size_from(bytes.unwrap_or(1))
 }
 
 fn mode_from(name: Option<&str>) -> Result<FreezeMode, String> {
-    match name.unwrap_or("block_writes") {
-        "block_writes" => Ok(FreezeMode::BlockWrites),
-        "reapply_per_frame" => Ok(FreezeMode::ReapplyPerFrame),
-        "reapply_on_read" => Ok(FreezeMode::ReapplyOnRead),
-        other => Err(format!("unknown freeze mode '{other}'")),
-    }
+    emu_cheats::mode_from(name.unwrap_or("block_writes"))
 }
 
 fn mode_name(mode: FreezeMode) -> &'static str {
-    match mode {
-        FreezeMode::BlockWrites => "block_writes",
-        FreezeMode::ReapplyPerFrame => "reapply_per_frame",
-        FreezeMode::ReapplyOnRead => "reapply_on_read",
-    }
-}
-
-/// One entry of a cheat file (TOML `[[freeze]]` table).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CheatFreeze {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    /// Memory space by name (`cpu`, `ram` …), so files work across runs.
-    pub space: String,
-    pub addr: u32,
-    #[serde(default = "one")]
-    pub size: u8,
-    pub value: u32,
-    #[serde(default = "block_writes")]
-    pub mode: String,
-    #[serde(default = "yes")]
-    pub enabled: bool,
-}
-
-fn one() -> u8 {
-    1
-}
-
-fn block_writes() -> String {
-    "block_writes".into()
-}
-
-fn yes() -> bool {
-    true
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CheatFile {
-    #[serde(default)]
-    pub freeze: Vec<CheatFreeze>,
+    emu_cheats::mode_name(mode)
 }
 
 /// `freeze_add` arguments.
@@ -213,79 +158,27 @@ impl Session {
             .map_or(16, |s| s.addr_bits);
         let start = addr.unwrap_or(0);
         let len = len.unwrap_or_else(|| (1u64 << bits).min(u64::from(MAX_SEARCH)) as u32);
-        if len == 0 || len > MAX_SEARCH {
-            return Err(format!("len must be 1–{MAX_SEARCH:#x}"));
-        }
         let owner = self.space_owner(space)?;
         let target = self.machine.debug_target(owner).ok_or("no debug target")?;
-        let step = size.bytes();
-        let mut candidates = Vec::new();
-        let mut off = 0;
-        while off + step <= len {
-            let a = start.wrapping_add(off);
-            if let Some(v) = target.peek(space, a, size) {
-                candidates.push((a, v));
-            }
-            off += step;
-        }
-        let n = candidates.len();
-        self.search = Some(Search {
-            space,
-            size,
-            candidates,
-        });
+        let search = Search::start(space, size, start, len, |a| target.peek(space, a, size))?;
+        let n = search.candidates.len();
+        self.search = Some(search);
         Ok(json!({"candidates": n}))
     }
 
     pub(super) fn search_next(&mut self, op: &str, value: Option<u32>) -> Result<Value, String> {
-        let mask = self.search.as_ref().ok_or("no search started")?.size.mask();
-        let need = || value.ok_or_else(|| format!("'{op}' needs a value"));
-        let keep: Box<dyn Fn(u32, u32) -> bool> = match op {
-            "eq" => {
-                let v = need()?;
-                Box::new(move |_, now| now == v)
-            }
-            "ne" => {
-                let v = need()?;
-                Box::new(move |_, now| now != v)
-            }
-            "lt" => {
-                let v = need()?;
-                Box::new(move |_, now| now < v)
-            }
-            "gt" => {
-                let v = need()?;
-                Box::new(move |_, now| now > v)
-            }
-            "increased" => Box::new(|old, now| now > old),
-            "decreased" => Box::new(|old, now| now < old),
-            "unchanged" => Box::new(|old, now| now == old),
-            "changed" => Box::new(|old, now| now != old),
-            "increased_by" => {
-                let d = need()?;
-                Box::new(move |old, now| now == old.wrapping_add(d) & mask)
-            }
-            "decreased_by" => {
-                let d = need()?;
-                Box::new(move |old, now| now == old.wrapping_sub(d) & mask)
-            }
-            other => return Err(format!("unknown search operation '{other}'")),
-        };
+        let op = Op::parse(op, value)?;
         let mut search = self.search.take().ok_or("no search started")?;
-        let owner = self.space_owner(search.space)?;
-        let target = self.machine.debug_target(owner).ok_or("no debug target")?;
-        let (space, size) = (search.space, search.size);
-        search.candidates.retain_mut(|(addr, last)| {
-            let Some(now) = target.peek(space, *addr, size) else {
-                return false;
-            };
-            let kept = keep(*last, now);
-            *last = now;
-            kept
+        let result = self.space_owner(search.space).and_then(|owner| {
+            let target = self
+                .machine
+                .debug_target(owner)
+                .ok_or_else(|| "no debug target".to_string())?;
+            let (space, size) = (search.space, search.size);
+            Ok(search.next(op, |a| target.peek(space, a, size)))
         });
-        let n = search.candidates.len();
         self.search = Some(search);
-        Ok(json!({"candidates": n}))
+        Ok(json!({"candidates": result?}))
     }
 
     pub(super) fn search_results(&mut self, max: Option<u32>) -> Result<Value, String> {
@@ -306,37 +199,22 @@ impl Session {
     }
 
     pub(super) fn cheats_save(&self, path: Option<&str>) -> Result<Value, String> {
-        let spaces = self.machine.memory_spaces();
-        let file = CheatFile {
-            freeze: self
-                .hooks
-                .freezes()
-                .filter_map(|(_, f)| {
-                    let space = spaces.iter().find(|s| s.id == f.space)?.name.to_string();
-                    Some(CheatFreeze {
-                        label: f.label.clone(),
-                        space,
-                        addr: f.addr,
-                        size: f.size.bytes() as u8,
-                        value: f.value,
-                        mode: mode_name(f.mode).into(),
-                        enabled: f.enabled,
-                    })
-                })
-                .collect(),
-        };
-        let text = toml::to_string(&file).map_err(|e| e.to_string())?;
+        let file = emu_cheats::from_hooks(self.machine.as_ref(), &self.hooks);
+        let text = file.to_toml();
         if let Some(path) = path {
             std::fs::write(path, &text).map_err(|e| format!("{path}: {e}"))?;
         }
         Ok(json!({"text": text, "freezes": file.freeze.len()}))
     }
 
-    /// Add the freezes of a cheat file (all or nothing).
+    /// Add the cheats of a file (all or nothing). `format`: `toml`
+    /// (default), `pokes`, `vice` or `codes` (see `emu_cheats::import`);
+    /// imported addresses refer to the main CPU's space.
     pub(super) fn cheats_load(
         &mut self,
         path: Option<&str>,
         text: Option<String>,
+        format: Option<&str>,
     ) -> Result<Value, String> {
         let text = match (path, text) {
             (Some(path), None) => {
@@ -349,69 +227,51 @@ impl Session {
             (None, Some(text)) => text,
             _ => return Err("give either path or text".into()),
         };
-        let file: CheatFile = toml::from_str(&text).map_err(|e| format!("cheat file: {e}"))?;
-        let spaces = self.machine.memory_spaces();
-        let mut specs = Vec::with_capacity(file.freeze.len());
-        for c in &file.freeze {
-            let space = spaces
-                .iter()
-                .find(|s| s.name == c.space)
-                .ok_or_else(|| format!("unknown memory space '{}'", c.space))?;
-            size_from(Some(c.size))?;
-            mode_from(Some(&c.mode))?;
-            specs.push(FreezeSpec {
-                space: Some(space.id.0),
-                addr: c.addr,
-                size: Some(c.size),
-                value: Some(c.value),
-                mode: Some(c.mode.clone()),
-                label: c.label.clone(),
-                enabled: Some(c.enabled),
-            });
-        }
-        let mut ids = Vec::new();
-        for spec in specs {
-            ids.push(self.freeze_add(spec)?["freeze"].clone());
-        }
-        Ok(json!({"freezes": ids}))
+        let space = self
+            .machine
+            .memory_spaces()
+            .first()
+            .map_or("cpu", |s| s.name)
+            .to_string();
+        let file = emu_cheats::import::import(format.unwrap_or("toml"), &text, &space)?;
+        self.apply_cheats(&file)
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    /// Apply a cheat file a frontend loaded (all or nothing).
+    pub fn apply_cheat_file(&mut self, file: &CheatFile) -> Result<(), String> {
+        self.apply_cheats(file).map(|_| ())
+    }
 
-    #[test]
-    fn cheat_files_round_trip_through_toml() {
-        let file = CheatFile {
-            freeze: vec![
-                CheatFreeze {
-                    label: Some("Lives".into()),
-                    space: "cpu".into(),
-                    addr: 0x0810,
-                    size: 1,
-                    value: 9,
-                    mode: "block_writes".into(),
-                    enabled: true,
-                },
-                CheatFreeze {
-                    label: None,
-                    space: "ram".into(),
-                    addr: 0xc000,
-                    size: 2,
-                    value: 0x1234,
-                    mode: "reapply_per_frame".into(),
-                    enabled: false,
-                },
-            ],
+    pub(super) fn apply_cheats(&mut self, file: &CheatFile) -> Result<Value, String> {
+        let applied = emu_cheats::apply(file, self.machine.as_mut(), &mut self.hooks)?;
+        let ids: Vec<u32> = applied.freezes.iter().map(|f| f.0).collect();
+        Ok(json!({"freezes": ids, "patches": applied.patches, "game": file.game}))
+    }
+
+    /// Folder of the per-game cheat database (`cheats/<machine>/<crc>.toml`).
+    pub fn set_cheats_dir(&mut self, dir: Option<std::path::PathBuf>) {
+        self.cheats_dir = dir;
+    }
+
+    /// Load the database's cheats for an image just inserted, if any; the
+    /// game name. Frontends call this for images inserted at start.
+    pub fn cheats_for_image(&mut self, data: &[u8]) -> Result<Option<String>, String> {
+        let Some(dir) = self.cheats_dir.clone() else {
+            return Ok(None);
         };
-        let text = toml::to_string(&file).unwrap();
-        assert!(text.contains("[[freeze]]"));
-        assert_eq!(toml::from_str::<CheatFile>(&text).unwrap(), file);
-        let minimal: CheatFile =
-            toml::from_str("[[freeze]]\nspace = \"cpu\"\naddr = 2048\nvalue = 3\n").unwrap();
-        assert_eq!(minimal.freeze[0].size, 1);
-        assert_eq!(minimal.freeze[0].mode, "block_writes");
-        assert!(minimal.freeze[0].enabled);
+        let machine = self.machine_id.clone();
+        match emu_cheats::lookup(&dir, &machine, data)? {
+            Some(file) => {
+                let game = file
+                    .game
+                    .clone()
+                    .unwrap_or_else(|| emu_cheats::media_key(data));
+                self.apply_cheats(&file)?;
+                self.events
+                    .push(json!({"event": "cheats_loaded", "game": game}));
+                Ok(Some(game))
+            }
+            None => Ok(None),
+        }
     }
 }

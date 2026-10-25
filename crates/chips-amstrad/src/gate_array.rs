@@ -283,6 +283,51 @@ impl GateArray {
     }
 }
 
+/// The address of the first of the two bytes the Gate Array fetches for
+/// CRTC address `ma` and row address `ra`: `MA13–12 · RA2–0 · MA9–0 · 0`
+/// (bits 15–14, 13–11, 10–1, 0); MA11–10 and RA4–3 are not connected.
+pub fn video_address(ma: u16, ra: u8) -> u16 {
+    ((ma & 0x3000) << 2) | (u16::from(ra & 7) << 11) | ((ma & 0x3ff) << 1)
+}
+
+/// The pens of the pixels a screen byte holds in `mode`, left to right,
+/// and how many there are: mode 0 two of 16 pens (bits 7 3 5 1 and 6 2 4
+/// 0, least significant first), mode 1 four of 4 (bits 7/3 … 4/0), mode 2
+/// eight of 2, mode 3 two of 4 (bits 7/3 and 6/2). For the graphics
+/// views; [`GateArray`]'s drawing keeps its own decoding, specialised per
+/// mode (sharing this function cost the CPC about 20 % of its speed,
+/// measured 2026-10-25); `byte_pens_match_the_drawn_pixels` checks that
+/// both agree.
+pub fn byte_pens(mode: u8, b: u8) -> ([u8; 8], usize) {
+    let bit = |n: u8| (b >> n) & 1;
+    let mut px = [0u8; 8];
+    let n = match mode & 3 {
+        0 => {
+            px[0] = bit(7) | bit(3) << 1 | bit(5) << 2 | bit(1) << 3;
+            px[1] = bit(6) | bit(2) << 1 | bit(4) << 2 | bit(0) << 3;
+            2
+        }
+        1 => {
+            for i in 0..4u8 {
+                px[usize::from(i)] = bit(7 - i) | bit(3 - i) << 1;
+            }
+            4
+        }
+        2 => {
+            for i in 0..8u8 {
+                px[usize::from(i)] = bit(7 - i);
+            }
+            8
+        }
+        _ => {
+            px[0] = bit(7) | bit(3) << 1;
+            px[1] = bit(6) | bit(2) << 1;
+            2
+        }
+    };
+    (px, n)
+}
+
 const TAG: [u8; 4] = *b"GATE";
 const VERSION: u16 = 1;
 
@@ -433,6 +478,35 @@ mod tests {
         assert_eq!(px[row], 4, "border");
         let s = row + 4 * 16;
         assert_eq!(&px[s..s + 4], &[3, 3, 20, 20]);
+    }
+
+    #[test]
+    fn byte_pens_match_the_drawn_pixels() {
+        let mut ram = vec![0u8; 0x10000];
+        let out = CrtcOut {
+            disp: true,
+            ..CrtcOut::default()
+        };
+        for mode in 0..4 {
+            for b in [0x00, 0x81, 0x5a, 0xc3, 0x0f, 0xff] {
+                ram[0] = b;
+                ram[1] = !b;
+                let mut ga = GateArray::new();
+                for pen in 0..16 {
+                    ga.inks[pen] = pen as u8;
+                }
+                ga.mode = mode;
+                ga.draw(out, &ram);
+                let mut want = Vec::new();
+                for v in [b, !b] {
+                    let (px, n) = byte_pens(mode, v);
+                    for &p in &px[..n] {
+                        want.extend(std::iter::repeat_n(p, 8 / n));
+                    }
+                }
+                assert_eq!(&ga.pixels()[..16], &want[..], "mode {mode} byte {b:02x}");
+            }
+        }
     }
 
     #[test]

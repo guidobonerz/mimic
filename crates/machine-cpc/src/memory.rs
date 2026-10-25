@@ -111,6 +111,19 @@ impl Memory {
     pub fn video(&self) -> &[u8] {
         &self.ram[..0x10000]
     }
+
+    /// All RAM, banks 0–3 (the base 64 KB) then 4–7 (the 6128's extra
+    /// 64 KB), whatever the configuration maps for the Z80.
+    pub fn ram(&self) -> &[u8] {
+        &self.ram
+    }
+
+    /// Write RAM by its [`Memory::ram`] index (debugger pokes).
+    pub fn set_ram(&mut self, i: usize, v: u8) {
+        if let Some(b) = self.ram.get_mut(i) {
+            *b = v;
+        }
+    }
 }
 
 const TAG: [u8; 4] = *b"CMEM";

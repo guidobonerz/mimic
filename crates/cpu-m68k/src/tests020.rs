@@ -4,7 +4,7 @@
 
 use emu_core::{Bus, Savestate, Size, StateReader, StateWriter};
 
-use crate::{sr, Model, NoWait, Step, M68000};
+use crate::{cacr, fc, sr, Access, Model, NoWait, Step, TimedBus68, M68000};
 
 /// 64 KB of RAM without wait states.
 struct Ram(Vec<u8>);
@@ -411,4 +411,511 @@ fn savestate_keeps_the_control_registers() {
     assert_eq!((other.vbr, other.cacr), (0x1234, 1));
     use emu_core::Cpu;
     assert_eq!(other.regs(), cpu.regs());
+}
+
+// ---------------------------------------------------------------- cache and timing
+
+/// RAM with a fixed number of wait states per bus cycle that records the
+/// cycles (kind, function code, address, starting clock).
+struct TBus {
+    ram: Ram,
+    waits: u32,
+    cycles: Vec<(Access, u8, u32, u32)>,
+}
+
+impl Bus for TBus {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        self.ram.read(addr, size)
+    }
+    fn peek(&self, addr: u32, size: Size) -> u32 {
+        self.ram.peek(addr, size)
+    }
+    fn write(&mut self, addr: u32, size: Size, v: u32) {
+        self.ram.write(addr, size, v);
+    }
+    fn addr_bits(&self) -> u8 {
+        24
+    }
+}
+
+impl TimedBus68 for TBus {
+    fn bus_cycle(&mut self, access: Access, fc: u8, addr: u32, _: Size, t: u32) -> u32 {
+        self.cycles.push((access, fc, addr, t));
+        self.waits
+    }
+}
+
+impl TBus {
+    /// Instruction fetches recorded since the last call.
+    fn take_fetches(&mut self) -> usize {
+        let n = self
+            .cycles
+            .iter()
+            .filter(|c| c.1 & 3 == 2 && c.0 == Access::Read)
+            .count();
+        self.cycles.clear();
+        n
+    }
+}
+
+/// A 68020 with `program` at $400 on a bus with `waits` wait states; with
+/// `cached`, the cache is on and holds the program ($400–$4FF; the
+/// handler at $600 shares its entries).
+fn timed_setup(program: &[u16], cached: bool, waits: u32) -> (M68000, TBus) {
+    let (mut cpu, ram) = setup(program);
+    let bus = TBus {
+        ram,
+        waits,
+        cycles: Vec::new(),
+    };
+    if cached {
+        cpu.cacr = cacr::E;
+        cpu.preload_cache(&bus, 0x400, 0x500, fc::SUPERVISOR_PROGRAM);
+    }
+    (cpu, bus)
+}
+
+/// Clocks of the next instruction on its own: from an idle bus controller
+/// until the following instruction can start and the bus is idle again
+/// (the manual's "no overlap" cases).
+fn alone(cpu: &mut M68000, bus: &mut TBus) -> u32 {
+    cpu.settle_020();
+    match cpu.step_timed(bus) {
+        Step::Done { clocks } => clocks + cpu.settle_020(),
+        s => panic!("{s:?}"),
+    }
+}
+
+/// Registers the timing programs use: A0/A1 point at long-aligned data,
+/// D1 = 4 (an aligned index), A7 at a long-aligned stack whose top holds
+/// a return address in the cached program area.
+fn timing_regs(cpu: &mut M68000, bus: &mut TBus) {
+    cpu.a[0] = 0x2000;
+    cpu.a[1] = 0x2100;
+    cpu.d[0] = 100;
+    cpu.d[1] = 4;
+    cpu.a[7] = 0x7ffc;
+    bus.ram.write(0x7ffc, Size::Long, 0x480);
+    bus.ram.write(0x2000, Size::Long, 0x2100);
+    bus.ram.write(0x2104, Size::Long, 0x1234_5678);
+}
+
+/// One instruction alone, cached or not, with `waits` wait states.
+fn time_of(program: &[u16], cached: bool, waits: u32, prep: fn(&mut M68000)) -> u32 {
+    let (mut cpu, mut bus) = timed_setup(program, cached, waits);
+    timing_regs(&mut cpu, &mut bus);
+    prep(&mut cpu);
+    alone(&mut cpu, &mut bus)
+}
+
+fn no_prep(_: &mut M68000) {}
+
+/// (name, program, clocks, the table the number comes from).
+type Case = (&'static str, &'static [u16], u32, &'static str);
+
+/// Instructions in the cache: the "cache case" column of MC68020UM
+/// section 8.2 (zero wait states, no overlap), the operation's entry plus
+/// the effective address entry its footnote names.
+const CACHE_CASES: &[Case] = &[
+    ("NOP", &[0x4e71], 2, "8.2.16 NOP 2(0/0/0)"),
+    ("MOVEQ #1,D0", &[0x7001], 2, "8.2.9 MOVEQ 2(0/0/0)"),
+    (
+        "ADD.L D1,D0",
+        &[0xd081],
+        2,
+        "8.2.8 ADD EA,Dn 2 + 8.2.1 Dn 0",
+    ),
+    (
+        "ADD.L (A0),D0",
+        &[0xd090],
+        6,
+        "8.2.8 ADD EA,Dn 2 + 8.2.1 (An) 4(1/0/0)",
+    ),
+    (
+        "ADD.L D0,(A0)",
+        &[0xd190],
+        8,
+        "8.2.8 ADD Dn,EA 4(0/0/1) + 8.2.1 (An) 4(1/0/0)",
+    ),
+    (
+        "ADD.L (0,A0,D1.W),D0",
+        &[0xd0b0, 0x1000],
+        9,
+        "8.2.8 ADD EA,Dn 2 + 8.2.1 (d8,An,Xn) 7(1/0/0)",
+    ),
+    ("MOVE.L D0,(A0)", &[0x2080], 4, "8.2.6 Rn -> (An) 4(0/0/1)"),
+    (
+        "MOVE.L (A0),(A1)",
+        &[0x2290],
+        7,
+        "8.2.6 (An) -> (An) 7(1/0/1)",
+    ),
+    (
+        "MOVE.L (0,A0),D1",
+        &[0x2228, 0x0000],
+        7,
+        "8.2.6 (d16,An) -> Dn 7(1/0/0)",
+    ),
+    (
+        "MOVE.L #imm,D0",
+        &[0x203c, 0x1234, 0x5678],
+        6,
+        "8.2.6 #<data>.L -> Dn 6(0/0/0)",
+    ),
+    (
+        "MOVE.L ([0,A0],4),D0",
+        &[0x2030, 0x0162, 0x0000, 0x0004],
+        18,
+        "8.2.6 ([d16,B],I,d16) -> Dn 18(2/0/0)",
+    ),
+    (
+        "ADDI.L #imm,D0",
+        &[0x0680, 0x1234, 0x5678],
+        6,
+        "8.2.9 ADDI #,Dn 2 + 8.2.2 #<data>.L,Dn 4",
+    ),
+    (
+        "LEA (16,A0),A1",
+        &[0x43e8, 0x0010],
+        4,
+        "8.2.16 LEA 2 + 8.2.3 (d16,An) 2",
+    ),
+    (
+        "MULU.L D1,D0",
+        &[0x4c01, 0x0000],
+        45,
+        "8.2.8 MUL.L 43 + 8.2.2 #<data>.W,Dn 2",
+    ),
+    (
+        "DIVU.W D1,D0",
+        &[0x80c1],
+        44,
+        "8.2.8 DIVU.W 44 + 8.2.1 Dn 0",
+    ),
+    ("LSL.L #2,D0", &[0xe588], 4, "8.2.12 LSL Dn (static) 4"),
+    ("ROXL.L #2,D0", &[0xe590], 12, "8.2.12 ROXL Dn 12"),
+    (
+        "BFEXTU D0{4:8},D1",
+        &[0xe9c0, 0x1108],
+        8,
+        "8.2.14 BFEXTU Dn 8",
+    ),
+    ("BRA.S", &[0x600e], 6, "8.2.15 Bcc (taken) 6"),
+    (
+        "BEQ.S (not taken)",
+        &[0x670e],
+        4,
+        "8.2.15 Bcc.B (not taken) 4",
+    ),
+    (
+        "DBRA D0 (loops)",
+        &[0x51c8, 0x000e],
+        6,
+        "8.2.15 DBcc (false, not expired) 6",
+    ),
+    ("JMP (A0)", &[0x4ed0], 6, "8.2.16 JMP 4 + 8.2.5 (An) 2"),
+    (
+        "JSR (A0)",
+        &[0x4e90],
+        7,
+        "8.2.16 JSR 5(0/0/1) + 8.2.5 (An) 2",
+    ),
+    ("RTS", &[0x4e75], 10, "8.2.16 RTS 10(1/0/0)"),
+    (
+        "MOVEM.L D0-D3,-(A7)",
+        &[0x48e7, 0xf000],
+        20,
+        "8.2.7 MOVEM RL,EA 4+3n + 8.2.4 #<data>.W,(An)+ 4",
+    ),
+    (
+        "MOVEM.L (A0),D0-D3",
+        &[0x4cd0, 0x000f],
+        26,
+        "8.2.7 MOVEM EA,RL 8+4n + 8.2.4 #<data>.W,(An) 2",
+    ),
+    (
+        "MOVEC D0,VBR",
+        &[0x4e7b, 0x0801],
+        12,
+        "8.2.7 MOVEC Rn,Cr 12",
+    ),
+    (
+        "CAS.W D2,D3,(A0) (fails)",
+        &[0x0cd0, 0x00c2],
+        14,
+        "8.2.16 CAS unsuccessful 12(1/0/0) + 8.2.4 #<data>.W,(An) 2",
+    ),
+    ("TRAP #0", &[0x4e40], 20, "8.2.17 TRAP #n 20(1/0/4)"),
+];
+
+#[test]
+fn cache_case_matches_the_timing_tables() {
+    for &(name, program, expected, table) in CACHE_CASES {
+        let (mut cpu, mut bus) = timed_setup(program, true, 0);
+        timing_regs(&mut cpu, &mut bus);
+        if name.starts_with("JMP") || name.starts_with("JSR") {
+            cpu.a[0] = 0x440;
+        }
+        if name.starts_with("CAS") {
+            cpu.d[2] = 0x5555;
+        }
+        if name.starts_with("TRAP") {
+            // The handler at $600 shares the program's cache entries.
+            cpu.preload_cache(&bus, 0x600, 0x608, fc::SUPERVISOR_PROGRAM);
+        }
+        assert_eq!(alone(&mut cpu, &mut bus), expected, "{name}: {table}");
+    }
+}
+
+#[test]
+fn cas_success_takes_the_successful_row() {
+    // CAS.W D2,D3,(A0) with D2 equal to the operand (0): 8.2.16 CAS
+    // (successful compare) 15(1/0/1) + 8.2.4 #<data>.W,(An) 2.
+    let t = time_of(&[0x0cd0, 0x00c2], true, 0, |cpu| cpu.d[2] = 0);
+    assert_eq!(t, 17);
+}
+
+/// Without the cache the prefetches add their bus cycles where they do
+/// not overlap the internal clocks; the flow changes and the simplest
+/// instructions reach the manual's worst case.
+#[test]
+fn no_cache_adds_the_prefetches() {
+    let cases: &[Case] = &[
+        ("NOP", &[0x4e71], 3, "8.2.16 NOP worst case 3(0/1/0)"),
+        ("ADD.L D1,D0", &[0xd081], 3, "8.2.8 ADD EA,Dn 3(0/1/0)"),
+        (
+            "ADD.L (A0),D0",
+            &[0xd090],
+            7,
+            "8.2.8 ADD EA,Dn 3(0/1/0) + 8.2.1 (An) 4(1/0/0)",
+        ),
+        (
+            "ADD.L D0,(A0)",
+            &[0xd190],
+            10,
+            "8.2.8 ADD Dn,EA 6(0/1/1) + 8.2.1 (An) 4(1/0/0)",
+        ),
+        ("DIVU.W D1,D0", &[0x80c1], 44, "8.2.8 DIVU.W 44(0/1/0)"),
+        ("BRA.S", &[0x600e], 9, "8.2.15 Bcc (taken) 9(0/2/0)"),
+        (
+            "DBRA D0 (loops)",
+            &[0x51c8, 0x000e],
+            9,
+            "8.2.15 DBcc (false, not expired) 9(0/2/0)",
+        ),
+        (
+            "JMP (A0)",
+            &[0x4ed0],
+            9,
+            "8.2.16 JMP 7(0/2/0) + 8.2.5 (An) 2(0/0/0)",
+        ),
+    ];
+    for &(name, program, expected, table) in cases {
+        let t = time_of(program, false, 0, |cpu| cpu.a[0] = 0x440);
+        let t = if name.starts_with("JMP") {
+            t
+        } else {
+            time_of(program, false, 0, no_prep)
+        };
+        assert_eq!(t, expected, "{name}: {table}");
+    }
+    // Never faster than in the cache.
+    for &(name, program, cc, _) in CACHE_CASES {
+        let t = time_of(program, false, 0, |cpu| {
+            if cpu.prefetch_queue()[0] & 0xffc0 == 0x4e80 {
+                cpu.a[0] = 0x440;
+            }
+        });
+        assert!(t >= cc, "{name}: {t} without the cache, {cc} with");
+    }
+}
+
+#[test]
+fn wait_states_stretch_only_real_bus_cycles() {
+    // In the cache, one wait state per cycle costs a NOP nothing and each
+    // operand cycle one clock (MC68020UM 8.1.5, example 4).
+    assert_eq!(time_of(&[0x4e71], true, 1, no_prep), 2);
+    assert_eq!(time_of(&[0xd090], true, 1, no_prep), 7);
+    assert_eq!(time_of(&[0x2290], true, 1, no_prep), 9);
+    // Without it the prefetch's cycle grows too.
+    assert_eq!(time_of(&[0x4e71], false, 1, no_prep), 4);
+    assert_eq!(time_of(&[0xd090], false, 1, no_prep), 9);
+}
+
+/// MOVEQ #1,D2; MOVEC D2,CACR (enable); loop: ADDQ.L #1,D0; DBRA D1,loop.
+const LOOP: &[u16] = &[0x7401, 0x4e7b, 0x2002, 0x5280, 0x51c9, 0xfffc];
+
+fn steps_on(cpu: &mut M68000, bus: &mut TBus, n: usize) {
+    for _ in 0..n {
+        cpu.step_timed(bus);
+    }
+}
+
+fn set_cacr(cpu: &mut M68000, v: u32) {
+    use emu_core::Cpu;
+    cpu.set_reg("CACR", v);
+}
+
+#[test]
+fn cache_hits_take_no_bus_cycles() {
+    let (mut cpu, mut bus) = timed_setup(LOOP, false, 0);
+    cpu.d[1] = 100;
+    steps_on(&mut cpu, &mut bus, 2);
+    assert_eq!(cpu.cacr, cacr::E);
+    bus.take_fetches();
+    // First pass: the loop's long words come over the bus.
+    steps_on(&mut cpu, &mut bus, 2);
+    assert!(bus.take_fetches() > 0);
+    // Then they come from the cache.
+    for _ in 0..5 {
+        steps_on(&mut cpu, &mut bus, 2);
+        assert_eq!(bus.take_fetches(), 0);
+    }
+    // Disabling it does not flush it; while it is off every pass fetches.
+    set_cacr(&mut cpu, 0);
+    for _ in 0..2 {
+        steps_on(&mut cpu, &mut bus, 2);
+        assert!(bus.take_fetches() > 0);
+    }
+    set_cacr(&mut cpu, cacr::E);
+    steps_on(&mut cpu, &mut bus, 2);
+    assert_eq!(bus.take_fetches(), 0, "the entries stayed valid");
+}
+
+#[test]
+fn the_tag_holds_fc2() {
+    // loop: ADDQ.L #1,D0; BRA.S loop.
+    let (mut cpu, mut bus) = timed_setup(&[0x5280, 0x60fc], true, 0);
+    steps_on(&mut cpu, &mut bus, 4);
+    assert_eq!(bus.take_fetches(), 0, "supervisor program space cached");
+    // The same addresses in user program space miss, then hit too.
+    cpu.set_sr(cpu.sr() & !sr::S);
+    steps_on(&mut cpu, &mut bus, 2);
+    assert!(bus.cycles.iter().any(|c| c.1 == fc::USER_PROGRAM));
+    bus.take_fetches();
+    steps_on(&mut cpu, &mut bus, 4);
+    assert_eq!(bus.take_fetches(), 0, "both are cached now");
+}
+
+#[test]
+fn freeze_keeps_the_entries() {
+    let (mut cpu, mut bus) = timed_setup(&[0x5280, 0x60fc], false, 0);
+    // Frozen before anything was cached: misses are not filled.
+    set_cacr(&mut cpu, cacr::E | cacr::F);
+    steps_on(&mut cpu, &mut bus, 2);
+    bus.take_fetches();
+    steps_on(&mut cpu, &mut bus, 2);
+    assert!(bus.take_fetches() > 0);
+    // Unfrozen they are; frozen again, the cached loop stays.
+    set_cacr(&mut cpu, cacr::E);
+    steps_on(&mut cpu, &mut bus, 2);
+    set_cacr(&mut cpu, cacr::E | cacr::F);
+    bus.take_fetches();
+    steps_on(&mut cpu, &mut bus, 4);
+    assert_eq!(bus.take_fetches(), 0);
+}
+
+#[test]
+fn clear_entry_and_clear_cache() {
+    // MOVE.L #$404,D2; MOVEC D2,CAAR; MOVEQ #5,D3; MOVEC D3,CACR (CE|E);
+    // MOVEQ #9,D4; MOVEC D4,CACR (C|E).
+    let program = [
+        0x243c, 0x0000, 0x0404, 0x4e7b, 0x2802, 0x7605, 0x4e7b, 0x3002, 0x7809, 0x4e7b, 0x4002,
+    ];
+    let (mut cpu, mut bus) = timed_setup(&program, true, 0);
+    let cached = |cpu: &M68000, a: u32| {
+        cpu.icache
+            .lookup(cpu.cacr, a, fc::SUPERVISOR_PROGRAM)
+            .is_some()
+    };
+    steps_on(&mut cpu, &mut bus, 4);
+    assert_eq!(cpu.caar, 0x404);
+    assert!(!cached(&cpu, 0x404), "the entry CAAR selects is cleared");
+    assert!(cached(&cpu, 0x400) && cached(&cpu, 0x408));
+    assert_eq!(cpu.cacr, cacr::E, "CE reads as zero");
+    steps_on(&mut cpu, &mut bus, 2);
+    assert!((0x440..0x500).step_by(4).all(|a| !cached(&cpu, a)));
+    assert_eq!(cpu.cacr, cacr::E, "C reads as zero");
+}
+
+/// Enable the cache (or not), JSR $440; MOVE.W #$7002,$440 (MOVEQ #2,D0
+/// over MOVEQ #1,D0); JSR $440; MOVEQ #9,D3; MOVEC D3,CACR (C|E); JSR
+/// $440. At $440: MOVEQ #1,D0; RTS. D0 after each JSR's return.
+fn self_modifying(enable: bool) -> Vec<u32> {
+    let (mut cpu, mut bus) = timed_setup(
+        &[
+            if enable { 0x7401 } else { 0x7400 },
+            0x4e7b,
+            0x2002,
+            0x4eb8,
+            0x0440,
+            0x31fc,
+            0x7002,
+            0x0440,
+            0x4eb8,
+            0x0440,
+            0x7609,
+            0x4e7b,
+            0x3002,
+            0x4eb8,
+            0x0440,
+        ],
+        false,
+        0,
+    );
+    bus.ram.write(0x440, Size::Long, 0x7001_4e75);
+    steps_on(&mut cpu, &mut bus, 2);
+    let mut d0 = Vec::new();
+    for n in [3, 4, 5] {
+        steps_on(&mut cpu, &mut bus, n);
+        d0.push(cpu.d[0]);
+    }
+    d0
+}
+
+#[test]
+fn self_modifying_code_needs_a_cache_clear() {
+    // In the cache the old instruction runs until the cache is cleared.
+    assert_eq!(self_modifying(true), [1, 1, 2]);
+    // Without the cache the new one runs at once.
+    assert_eq!(self_modifying(false), [1, 2, 2]);
+}
+
+#[test]
+fn reset_clears_the_cache() {
+    let (mut cpu, mut bus) = timed_setup(&[0x4e71], true, 0);
+    let held = |cpu: &M68000| {
+        cpu.icache
+            .lookup(cacr::E, 0x400, fc::SUPERVISOR_PROGRAM)
+            .is_some()
+    };
+    assert!(held(&cpu));
+    cpu.reset_timed(&mut bus);
+    assert_eq!(cpu.cacr, 0);
+    assert!(!held(&cpu));
+}
+
+#[test]
+fn savestate_keeps_cache_and_pipeline() {
+    let (mut cpu, mut bus) = timed_setup(LOOP, false, 1);
+    cpu.d[1] = 50;
+    steps_on(&mut cpu, &mut bus, 9);
+    let mut w = StateWriter::new();
+    cpu.save(&mut w);
+    let data = w.into_bytes();
+    let mut other = M68000::with_model(Model::Mc68020);
+    other.load(&mut StateReader::new(&data)).unwrap();
+    assert_eq!(other.icache, cpu.icache);
+    assert_eq!(other.pipe.bus_free, cpu.pipe.bus_free);
+    assert_eq!(other.prefetch_queue(), cpu.prefetch_queue());
+    let mut bus2 = TBus {
+        ram: Ram(bus.ram.0.clone()),
+        waits: 1,
+        cycles: Vec::new(),
+    };
+    bus.cycles.clear();
+    for _ in 0..20 {
+        assert_eq!(cpu.step_timed(&mut bus), other.step_timed(&mut bus2));
+    }
+    assert_eq!(bus.cycles, bus2.cycles);
 }

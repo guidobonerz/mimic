@@ -37,6 +37,7 @@ use chips_cbm::via::Via;
 use chips_cbm::vic;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
+use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
@@ -614,6 +615,33 @@ impl Machine for Vic20 {
             luma_chroma: None,
             signal: t.signal(),
         }
+    }
+
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        self.io.vic.frame_row(line)
+    }
+
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        vic::gfx::views("VIC")
+    }
+
+    /// The VIC's views; addresses are CPU addresses (see
+    /// [`memory::vic_to_cpu`]).
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        let info = self.gfx_views().into_iter().find(|v| v.id == id)?;
+        let view = VicView(&self.mem);
+        let ctx = vic::gfx::GfxContext {
+            mem: &view,
+            space: CPU_SPACE,
+            palette: &self.palette,
+            to_cpu: memory::vic_to_cpu,
+            from_cpu: memory::cpu_to_vic,
+        };
+        Some(
+            self.io
+                .vic
+                .gfx_view(info.id, info.kind, info.name, &ctx, opts),
+        )
     }
 
     fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {

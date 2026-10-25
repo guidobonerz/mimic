@@ -37,6 +37,8 @@
 //! block operations complete at once (the status is always ready);
 //! horizontal smooth scroll, semigraphics and light pen are not modelled.
 
+pub mod gfx;
+
 use emu_core::frame::{FieldParity, OutputType, Rgb8, SignalInfo, VideoStandard};
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 

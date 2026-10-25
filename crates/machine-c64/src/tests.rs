@@ -448,7 +448,14 @@ fn restore_key_raises_nmi() {
 fn ports_accept_only_control_port_devices() {
     let mut m = stub();
     let names: Vec<_> = m.ports().iter().map(|p| (p.name, p.connected)).collect();
-    assert_eq!(names, [("control port 1", false), ("control port 2", true)]);
+    assert_eq!(
+        names,
+        [
+            ("control port 1", false),
+            ("control port 2", true),
+            ("user port", false)
+        ]
+    );
     let atari = Box::new(Joystick::new(PortKind::AtariJoy));
     assert!(matches!(
         m.connect(CONTROL_PORT_1, atari),
@@ -775,4 +782,131 @@ fn a_1351_in_port_1_shows_in_potx_poty() {
     assert_eq!(m.peek(CPU_SPACE, 0xd41a, Size::Byte), Some(4), "POTY");
     // The left button is fire on control port 1 (CIA1 port B bit 4).
     assert_eq!(m.peek(CPU_SPACE, 0xdc01, Size::Byte).unwrap() & 0x10, 0);
+}
+
+#[test]
+fn overlays_record_bad_lines_and_sprites() {
+    let mut m = stub();
+    let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
+    assert_eq!(ids, ["badlines", "sprites"]);
+    assert!(m.overlay("badlines").is_none(), "off by default");
+    assert_eq!(m.frame_row(16), Some(0));
+    assert_eq!(m.frame_row(15), None);
+    let plain = m.save_state();
+    m.set_overlays(&["badlines", "sprites"]);
+    assert_eq!(m.save_state(), plain, "the record is not state");
+    m.io.vic.write(0x11, 0x1b);
+    m.io.vic.write(0x15, 0x01);
+    m.io.vic.write(0x00, 100);
+    m.io.vic.write(0x01, 80);
+    let mut dbg = DebugHooks::new();
+    for _ in 0..2 {
+        while m.run_frame(&mut dbg) != StopReason::FrameDone {}
+    }
+    let bad = m.overlay("badlines").unwrap();
+    assert_eq!(bad.shapes.len(), 25);
+    assert!(matches!(
+        bad.shapes[0],
+        emu_core::overlay::Shape::Band { y, .. } if y == m.frame_row(0x33).unwrap() as i32
+    ));
+    let sp = m.overlay("sprites").unwrap();
+    let row = m.frame_row(81).unwrap() as i32;
+    assert!(matches!(
+        sp.shapes[..],
+        [emu_core::overlay::Shape::Rect { x: 108, y, w: 24, h: 21, .. }] if y == row
+    ));
+    m.set_overlays(&[]);
+    assert!(m.overlay("sprites").is_none());
+}
+
+fn pen_event(at: u64, x: u16, y: u16, trigger: bool) -> TimedInput {
+    TimedInput {
+        at: Cycle(at),
+        target: InputTarget::Port(CONTROL_PORT_1),
+        event: emu_core::input::InputEvent::LightPen { x, y, trigger },
+    }
+}
+
+/// White border with the display off, a light pen in control port 1.
+fn pen_machine() -> C64 {
+    let code = [
+        0xa9, 0x01, 0x8d, 0x20, 0xd0, // LDA #1; STA $D020
+        0xa9, 0x0b, 0x8d, 0x11, 0xd0, // LDA #$0B; STA $D011 (DEN off)
+        0x4c, 0x0a, 0xe0, // JMP *
+    ];
+    let mut config = config_with(&code, &[0x40], &[0x40]);
+    config.options.insert("port1".into(), "lightpen".into());
+    C64::new(&config).unwrap()
+}
+
+fn lp(m: &C64) -> (u8, u8) {
+    let r = |a| m.peek(CPU_SPACE, a, Size::Byte).unwrap() as u8;
+    (r(0xd013), r(0xd014))
+}
+
+#[test]
+fn light_pen_in_control_port_1_latches_the_vic_ii() {
+    let mut m = pen_machine();
+    let now = m.now().0;
+    m.input(pen_event(now, 100, 50, true));
+    for _ in 0..2 {
+        m.run_frame(&mut DebugHooks::new());
+    }
+    // Frame pixel (100, 50): X = 92, raster line 66 (PAL, 16 + 50).
+    assert_eq!(lp(&m), (46, 66));
+    assert_ne!(m.peek(CPU_SPACE, 0xd019, Size::Byte).unwrap() & 0x08, 0);
+    // The pen's button reads as joystick left (CIA 1 PB2), its sensor
+    // pulse never shows as fire (PB4).
+    let pb = m.peek(CPU_SPACE, 0xdc01, Size::Byte).unwrap();
+    assert_eq!(pb & 0x14, 0x10);
+
+    // Savestate: the pen's aim comes back with it.
+    let s = m.save_state();
+    let now = m.now().0;
+    m.input(pen_event(now, 100, 80, false));
+    m.run_frame(&mut DebugHooks::new());
+    assert_eq!(lp(&m).1, 96);
+    m.load_state(&s).unwrap();
+    m.run_frame(&mut DebugHooks::new());
+    assert_eq!(lp(&m).1, 66);
+}
+
+#[test]
+fn light_pen_off_the_picture_or_without_light_latches_nothing() {
+    let mut m = pen_machine();
+    let now = m.now().0;
+    m.input(pen_event(now, 0xffff, 0xffff, false));
+    m.run_frame(&mut DebugHooks::new());
+    m.run_frame(&mut DebugHooks::new());
+    assert_eq!(m.peek(CPU_SPACE, 0xd019, Size::Byte).unwrap() & 0x08, 0);
+    // Black border: no light.
+    let now = m.now().0;
+    m.input(pen_event(now, 100, 50, false));
+    assert!(m.poke(CPU_SPACE, 0xd020, Size::Byte, 0));
+    m.run_frame(&mut DebugHooks::new());
+    assert_eq!(m.peek(CPU_SPACE, 0xd019, Size::Byte).unwrap() & 0x08, 0);
+}
+
+#[test]
+fn fire_on_control_port_1_latches_the_light_pen_registers() {
+    let mut m = stub();
+    m.run_frame(&mut DebugHooks::new());
+    assert!(m
+        .connect(
+            CONTROL_PORT_1,
+            Box::new(Joystick::new(PortKind::CbmControl))
+        )
+        .is_ok());
+    assert_eq!(m.peek(CPU_SPACE, 0xd019, Size::Byte).unwrap() & 0x08, 0);
+    let line = m.beam().unwrap().line;
+    let now = m.now().0;
+    m.input(joy_event(
+        now,
+        CONTROL_PORT_1,
+        emu_core::input::Dirs::NONE,
+        1,
+    ));
+    m.step_cycle();
+    assert_ne!(m.peek(CPU_SPACE, 0xd019, Size::Byte).unwrap() & 0x08, 0);
+    assert_eq!(lp(&m).1, line as u8);
 }

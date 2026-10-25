@@ -136,6 +136,26 @@ impl Memory {
     }
 }
 
+/// CPU address of a VIC address: VIC `$2000–$3FFF` is CPU `$0000–$1FFF`,
+/// VIC `$0000–$1FFF` is CPU `$8000–$9FFF`.
+pub fn vic_to_cpu(addr: u16) -> u32 {
+    if addr & 0x2000 != 0 {
+        u32::from(addr & 0x1fff)
+    } else {
+        0x8000 | u32::from(addr & 0x1fff)
+    }
+}
+
+/// VIC address of a CPU address. The VIC sees only CPU `$0000–$1FFF` and
+/// `$8000–$9FFF`; other addresses fold onto those by A15 and A0–A12.
+pub fn cpu_to_vic(addr: u32) -> u16 {
+    if addr & 0x8000 != 0 {
+        addr as u16 & 0x1fff
+    } else {
+        0x2000 | (addr as u16 & 0x1fff)
+    }
+}
+
 /// The VIC's view: its `$2000–$3FFF` are CPU `$0000–$1FFF`, its
 /// `$0000–$1FFF` are CPU `$8000–$9FFF`.
 pub struct VicView<'a>(pub &'a Memory);

@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod overlay;
 pub mod raw;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;
@@ -207,9 +208,46 @@ pub enum Filter {
 
 impl Filter {
     pub fn render(&self, frame: &OwnedFrame) -> RgbImage {
+        self.render_with(frame, None)
+    }
+
+    /// Like [`Filter::render_with`], with phosphor persistence from `crt`'s
+    /// history (one `Crt` per stream).
+    pub fn render_stream(
+        &self,
+        frame: &OwnedFrame,
+        overlays: Option<&overlay::OverlaySet>,
+        crt: &mut video_crt::Crt,
+    ) -> RgbImage {
+        match self {
+            Filter::Crt { profile, scale } => {
+                let img = crt.render(&frame.as_frame_ref(), profile, *scale);
+                RgbImage {
+                    width: img.width,
+                    height: img.height,
+                    data: img.rgb.clone(),
+                }
+            }
+            raw => raw.render_with(frame, overlays),
+        }
+    }
+
+    /// Render with debug overlays drawn on the raw picture before scaling;
+    /// the CRT path never shows them (golden rule 9).
+    pub fn render_with(
+        &self,
+        frame: &OwnedFrame,
+        overlays: Option<&overlay::OverlaySet>,
+    ) -> RgbImage {
         let f = frame.as_frame_ref();
         match self {
-            Filter::Raw { scale } => RgbImage::from_frame(&f).scaled(*scale),
+            Filter::Raw { scale } => {
+                let mut img = RgbImage::from_frame(&f);
+                if let Some(o) = overlays {
+                    o.draw(&mut img);
+                }
+                img.scaled(*scale)
+            }
             Filter::Crt { profile, scale } => {
                 let img = video_crt::render(&f, profile, *scale);
                 RgbImage {
@@ -272,6 +310,11 @@ pub fn dirty_rect(prev: &RgbImage, cur: &RgbImage) -> Option<Rect> {
         w: (right - left + 1) as u32,
         h: (bottom - top + 1) as u32,
     })
+}
+
+/// The picture of a graphics data view, `scale` times enlarged, encoded.
+pub fn encode_gfx(view: &emu_core::GfxView, format: Format, scale: u32) -> Vec<u8> {
+    format.encode(&RgbImage::from_frame(&view.frame()).scaled(scale.clamp(1, 8)))
 }
 
 /// Image formats of the stream.

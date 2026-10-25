@@ -16,7 +16,7 @@
 //! | 9   | CHBASE                        | –           |
 //! | A   | WSYNC                         | –           |
 //! | B   | –                             | VCOUNT      |
-//! | C/D | –                             | PENH / PENV |
+//! | C/D | –                             | PENH / PENV (light pen) |
 //! | E   | NMIEN                         | –           |
 //! | F   | NMIRES                        | NMIST       |
 //!
@@ -184,6 +184,10 @@ pub struct Antic {
     pub dmactl: u8,
     pub chactl: u8,
     pub dlist: u16,
+    /// The display-list counter as the field's display began (line 8): the
+    /// start of the display list the OS (or a JVB) set up, for debugger
+    /// views; `dlist` itself runs on through the list.
+    pub dlist_start: u16,
     pub hscrol: u8,
     pub vscrol: u8,
     pub pmbase: u8,
@@ -245,6 +249,9 @@ pub struct Antic {
     /// Graphics bytes of the current line.
     data: [u8; 48],
     slots: [Slot; CYCLES_PER_LINE as usize],
+    /// PENH / PENV: the light-pen latch.
+    penh: u8,
+    penv: u8,
 }
 
 impl Antic {
@@ -254,6 +261,7 @@ impl Antic {
             dmactl: 0,
             chactl: 0,
             dlist: 0,
+            dlist_start: 0,
             hscrol: 0,
             vscrol: 0,
             pmbase: 0,
@@ -291,6 +299,8 @@ impl Antic {
             names: [0; 48],
             data: [0; 48],
             slots: [Slot::Free; CYCLES_PER_LINE as usize],
+            penh: 0,
+            penv: 0,
         }
     }
 
@@ -316,12 +326,33 @@ impl Antic {
         self.line
     }
 
+    /// A pulse on the light-pen input (a joystick port's trigger line,
+    /// pin 6): PENH latches the horizontal colour clock `cc` the beam is
+    /// at (two per CPU cycle, the same count as the playfield's colour
+    /// clocks), PENV the vertical count as VCOUNT shows it (line / 2).
+    /// Every pulse latches; a light pen sends one per frame (Altirra
+    /// Hardware Reference Manual, "ANTIC" — light pen registers; De Re
+    /// Atari, ch. 8).
+    pub fn light_pen(&mut self, cc: u16) {
+        self.penh = cc as u8;
+        self.penv = (self.line >> 1) as u8;
+    }
+
     pub fn cycle(&self) -> u16 {
         self.cycle
     }
 
     pub fn frame(&self) -> u64 {
         self.frame
+    }
+
+    /// The display-list instruction fetched in this cycle (cycle 1 of a
+    /// line, between [`Antic::tick`] and [`Antic::end_cycle`]); `None`
+    /// otherwise. For debug overlays, not used by the emulation.
+    pub fn fetched_instr(&self) -> Option<u8> {
+        (self.cycle == 1 && self.slots[1] == Slot::Instr)
+            .then_some(self.ir)
+            .flatten()
     }
 
     /// Side-effect-free register read.
@@ -338,8 +369,8 @@ impl Antic {
                     ((self.line + 1) >> 1) as u8
                 }
             }
-            // No light pen.
-            0x0c | 0x0d => 0,
+            0x0c => self.penh,
+            0x0d => self.penv,
             0x0f => self.nmist | 0x1f,
             _ => 0xff,
         }
@@ -679,6 +710,9 @@ impl Antic {
             }
         }
         self.line += 1;
+        if self.line == FIRST_LINE {
+            self.dlist_start = self.dlist;
+        }
         if self.line == VBLANK_LINE {
             // Display ends; the next field starts with a new instruction
             // (or, without display-list DMA, repeats the last one).
@@ -750,56 +784,14 @@ impl Antic {
         if !MODES[usize::from(mode)].chars {
             return mem.dma_read(self.scan_addr(u16::from(i)));
         }
-        let name = self.names[usize::from(i)];
-        let row = u16::from(self.row);
-        let (base, code, row) = match mode {
-            2..=5 => {
-                let row = if matches!(mode, 5) { row / 2 } else { row };
-                (
-                    u16::from(self.chbase & 0xfc) << 8,
-                    u16::from(name & 0x7f),
-                    row,
-                )
-            }
-            _ => {
-                let row = if mode == 7 { row / 2 } else { row };
-                (
-                    u16::from(self.chbase & 0xfe) << 8,
-                    u16::from(name & 0x3f),
-                    row,
-                )
-            }
-        };
-        // Mode 3: lower-case descenders. Codes $60–$7F show their first two
-        // rows at the bottom; the others leave rows 8–9 empty.
-        let row = if mode == 3 {
-            let descender = name & 0x60 == 0x60;
-            match (row, descender) {
-                (0..=1, true) | (8..=9, false) => None,
-                (8..=9, true) => Some(row - 8),
-                _ => Some(row),
-            }
-        } else {
-            Some(row)
-        };
-        let row = row.map(|row| {
-            if self.chactl & 0x04 != 0 {
-                7 - (row & 7)
-            } else {
-                row & 7
-            }
-        });
-        // An empty row is still inverted (Acid800 `antic_charcontrol`).
-        let mut v = row.map_or(0, |row| mem.dma_read(base + code * 8 + row));
-        if matches!(mode, 2 | 3) && name & 0x80 != 0 {
-            if self.chactl & 0x01 != 0 {
-                v = 0;
-            }
-            if self.chactl & 0x02 != 0 {
-                v = !v;
-            }
-        }
-        v
+        char_data(
+            mem,
+            mode,
+            self.chbase,
+            self.chactl,
+            self.names[usize::from(i)],
+            self.row,
+        )
     }
 
     /// Playfield value at colour clock `cc` of the current line.
@@ -815,34 +807,99 @@ impl Antic {
             return Playfield::Background;
         }
         let sub = rel % cc_per_byte;
-        let d = self.data[usize::from(i)];
-        let two = |shift: u16| (d >> shift) & 3;
-        match self.mode {
-            2 | 3 | 0x0f => Playfield::Hires(two(6 - 2 * sub)),
-            4 | 5 => {
-                let v = two(6 - 2 * sub);
-                let name = self.names[usize::from(i)];
-                match v {
-                    0 => Playfield::Background,
-                    3 if name & 0x80 != 0 => Playfield::Pf(3),
-                    v => Playfield::Pf(v - 1),
-                }
-            }
-            6 | 7 => {
-                if d >> (7 - sub) & 1 != 0 {
-                    Playfield::Pf(self.names[usize::from(i)] >> 6)
-                } else {
-                    Playfield::Background
-                }
-            }
-            // 4 pixels of 4 colour clocks, 2 bits each.
-            8 => pf2(two(6 - 2 * (sub / 4))),
-            // 8 pixels of 2 colour clocks, 1 bit.
-            9 => pf1(d >> (7 - sub / 2) & 1),
-            0x0a => pf2(two(6 - 2 * (sub / 2))),
-            0x0b | 0x0c => pf1(d >> (7 - sub) & 1),
-            _ => pf2(two(6 - 2 * sub)),
+        pixel(
+            self.mode,
+            self.data[usize::from(i)],
+            self.names[usize::from(i)],
+            sub,
+        )
+    }
+}
+
+/// Character data of character mode `mode` (2–7) for character name `name`
+/// on scan line `row` of the mode line: the character base from CHBASE
+/// (1 KB aligned for modes 2–5, 512 bytes for 6–7), double-height rows in
+/// modes 5 and 7, mode 3's descenders, and CHACTL's reflection (bit 2),
+/// blanking (bit 0) and inversion (bit 1) of characters with bit 7 in
+/// modes 2 and 3 (Altirra Hardware Reference Manual, "ANTIC: character
+/// modes").
+pub(crate) fn char_data(
+    mem: &dyn AnticMemory,
+    mode: u8,
+    chbase: u8,
+    chactl: u8,
+    name: u8,
+    row: u8,
+) -> u8 {
+    let row = u16::from(row);
+    let (base, code, row) = match mode {
+        2..=5 => {
+            let row = if matches!(mode, 5) { row / 2 } else { row };
+            (u16::from(chbase & 0xfc) << 8, u16::from(name & 0x7f), row)
         }
+        _ => {
+            let row = if mode == 7 { row / 2 } else { row };
+            (u16::from(chbase & 0xfe) << 8, u16::from(name & 0x3f), row)
+        }
+    };
+    // Mode 3: lower-case descenders. Codes $60–$7F show their first two
+    // rows at the bottom; the others leave rows 8–9 empty.
+    let row = if mode == 3 {
+        let descender = name & 0x60 == 0x60;
+        match (row, descender) {
+            (0..=1, true) | (8..=9, false) => None,
+            (8..=9, true) => Some(row - 8),
+            _ => Some(row),
+        }
+    } else {
+        Some(row)
+    };
+    let row = row.map(|row| {
+        if chactl & 0x04 != 0 {
+            7 - (row & 7)
+        } else {
+            row & 7
+        }
+    });
+    // An empty row is still inverted (Acid800 `antic_charcontrol`).
+    let mut v = row.map_or(0, |row| mem.dma_read(base + code * 8 + row));
+    if matches!(mode, 2 | 3) && name & 0x80 != 0 {
+        if chactl & 0x01 != 0 {
+            v = 0;
+        }
+        if chactl & 0x02 != 0 {
+            v = !v;
+        }
+    }
+    v
+}
+
+/// Playfield value of colour clock `sub` within a byte of mode `mode`
+/// (graphics byte `d`, character name `name` for the character modes).
+#[inline]
+pub(crate) fn pixel(mode: u8, d: u8, name: u8, sub: u16) -> Playfield {
+    let two = |shift: u16| (d >> shift) & 3;
+    match mode {
+        2 | 3 | 0x0f => Playfield::Hires(two(6 - 2 * sub)),
+        4 | 5 => match two(6 - 2 * sub) {
+            0 => Playfield::Background,
+            3 if name & 0x80 != 0 => Playfield::Pf(3),
+            v => Playfield::Pf(v - 1),
+        },
+        6 | 7 => {
+            if d >> (7 - sub) & 1 != 0 {
+                Playfield::Pf(name >> 6)
+            } else {
+                Playfield::Background
+            }
+        }
+        // 4 pixels of 4 colour clocks, 2 bits each.
+        8 => pf2(two(6 - 2 * (sub / 4))),
+        // 8 pixels of 2 colour clocks, 1 bit.
+        9 => pf1(d >> (7 - sub / 2) & 1),
+        0x0a => pf2(two(6 - 2 * (sub / 2))),
+        0x0b | 0x0c => pf1(d >> (7 - sub) & 1),
+        _ => pf2(two(6 - 2 * sub)),
     }
 }
 
@@ -893,7 +950,9 @@ fn slot_from_u8(kind: u8, arg: u8) -> Result<Slot, StateError> {
 const TAG: [u8; 4] = *b"ANTC";
 /// Version 2: WSYNC request latch, NMI timing, scrolled-region end.
 /// Version 3: the pending RESET-key NMI.
-const VERSION: u16 = 3;
+/// Version 4: the display list's start of the field.
+/// Version 5: PENH / PENV.
+const VERSION: u16 = 5;
 
 impl Savestate for Antic {
     fn save(&self, w: &mut StateWriter) {
@@ -952,6 +1011,9 @@ impl Savestate for Antic {
                 w.u8(k);
                 w.u8(a);
             }
+            w.u16(self.dlist_start);
+            w.u8(self.penh);
+            w.u8(self.penv);
         });
     }
 
@@ -1010,6 +1072,12 @@ impl Savestate for Antic {
             let a = c.u8()?;
             *s = slot_from_u8(k, a)?;
         }
+        n.dlist_start = if version >= 4 { c.u16()? } else { n.dlist };
+        (n.penh, n.penv) = if version >= 5 {
+            (c.u8()?, c.u8()?)
+        } else {
+            (0, 0)
+        };
         if n.line >= lines(n.standard)
             || n.cycle >= CYCLES_PER_LINE
             || n.mode > 15
@@ -1024,6 +1092,8 @@ impl Savestate for Antic {
         Ok(())
     }
 }
+
+pub mod gfx;
 
 #[cfg(test)]
 mod tests;

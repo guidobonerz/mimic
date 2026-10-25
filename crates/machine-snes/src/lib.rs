@@ -51,6 +51,8 @@
 
 #![forbid(unsafe_code)]
 
+mod overlay;
+
 pub mod apu;
 
 use apu::{Apu, ARAM_SPACE, SMP_HZ};
@@ -61,9 +63,11 @@ use devices_cartridge::CartSlot;
 use devices_input::snes::{pin, NO_AIM};
 use devices_input::{SnesController, SnesKind};
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::overlay::{Overlay, OverlayInfo};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::{
@@ -230,6 +234,8 @@ struct Board {
     resample_pos: u32,
     last_sample: (i16, i16),
     samples: Vec<i16>,
+    /// Debug overlay records (not machine state, not in savestates).
+    ov: overlay::Overlays,
 }
 
 impl Board {
@@ -362,6 +368,9 @@ impl Board {
             2 if v == vb => {
                 self.nmi_flag = true;
                 self.field_done = true;
+                if self.ov.irq && self.nmitimen & 0x80 != 0 {
+                    self.record_event(overlay::Event::Nmi);
+                }
             }
             4 => self.hblank = false,
             24 if v == 0 => stall += self.hdma_init(),
@@ -380,6 +389,7 @@ impl Board {
         }
         // H/V timer interrupts.
         let hirq = u32::from(self.htime) * 4 + 14;
+        let was = self.irq_flag;
         match (self.nmitimen >> 4) & 3 {
             1 if h == hirq => self.irq_flag = true,
             2 if h == 10 && v == self.vtime => self.irq_flag = true,
@@ -390,7 +400,19 @@ impl Board {
             }
             _ => {}
         }
+        if self.ov.irq && self.irq_flag && !was {
+            self.record_event(overlay::Event::HvIrq);
+        }
         stall
+    }
+
+    fn overlay_rows(&self) -> (bool, bool) {
+        (self.ppu.interlace(), self.ppu.field)
+    }
+
+    fn record_event(&mut self, e: overlay::Event) {
+        let rows = self.overlay_rows();
+        self.ov.record_event(e, self.v, (self.h / 4) as u16, rows);
     }
 
     fn new_line(&mut self) {
@@ -553,7 +575,12 @@ impl Board {
                     } else {
                         u32::from(d.a1b) << 16 | u32::from(d.a2a)
                     };
-                    self.transfer(ch, a, d.bbad.wrapping_add(*off));
+                    let reg = d.bbad.wrapping_add(*off);
+                    if self.ov.hdma {
+                        let rows = self.overlay_rows();
+                        self.ov.record_hdma(self.v + 1, ch, reg, rows);
+                    }
+                    self.transfer(ch, a, reg);
                     let d = &mut self.dma[ch];
                     if indirect {
                         d.das = d.das.wrapping_add(1);
@@ -1102,6 +1129,7 @@ impl Snes {
             resample_pos: 0,
             last_sample: (0, 0),
             samples: Vec::new(),
+            ov: overlay::Overlays::default(),
         };
         let mut m = Self {
             model,
@@ -1128,7 +1156,7 @@ impl Snes {
             frame: b.frames,
             line: b.v,
             cycle: (b.h / 4) as u16,
-            hpos: (b.h / 4) as u16,
+            hpos: overlay::dot_column((b.h / 4) as u16),
         }
     }
 
@@ -1156,6 +1184,10 @@ impl Snes {
         };
         self.sched.advance(self.board.clock - before);
         let field = std::mem::take(&mut self.board.field_done);
+        if field && self.board.ov.any() {
+            self.board.ppu.overlay_end_frame();
+            self.board.ov.end_frame();
+        }
         if let Some(dbg) = dbg {
             if let Some(kind) = entered {
                 if dbg.interrupt_armed(kind) {
@@ -1262,6 +1294,7 @@ impl Machine for Snes {
         if std::mem::take(&mut self.field_done_pending) {
             return StopReason::FrameDone;
         }
+        self.board.ov.fresh = false;
         for f in dbg.per_frame_freezes() {
             if f.space == CPU_SPACE {
                 for i in 0..f.size.bytes() {
@@ -1280,6 +1313,7 @@ impl Machine for Snes {
     }
 
     fn step_cycle(&mut self) -> StopReason {
+        self.board.ov.fresh = false;
         self.instruction(None);
         StopReason::StepDone
     }
@@ -1291,6 +1325,7 @@ impl Machine for Snes {
         if kind == ResetKind::Hard {
             b.wram.fill(0x55);
             b.ppu = SPpu::new(self.model == Model::Pal);
+            b.ppu.set_overlays(&b.ov.ids);
             b.apu = Apu::new(self.ipl.as_deref());
             b.cart = self.cart.cart().cloned();
             b.h = 0;
@@ -1310,6 +1345,49 @@ impl Machine for Snes {
         self.cpu.reset();
         self.input.clear();
         self.field_done_pending = false;
+    }
+
+    /// The S-PPU's views: `tiles` (VRAM as 2/4/8 bpp or Mode 7 tiles),
+    /// `screen` (one BG tilemap; Mode 7's 128 × 128 map), `sprites` (OAM)
+    /// and `palette` (CGRAM). Option `addr` is a byte address in the
+    /// `vram` space.
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        sppu::gfx::views("S-PPU")
+    }
+
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        let ctx = sppu::gfx::GfxContext {
+            vram_space: VRAM_SPACE,
+            cgram_space: CGRAM_SPACE,
+            oam_space: OAM_SPACE,
+        };
+        self.board.ppu.gfx_view(id, &ctx, opts)
+    }
+
+    /// `sprites` (boxes per object as the sprite scan found them line by
+    /// line), `hdma` (bands on lines whose registers HDMA rewrote) and
+    /// `irq` (H/V-IRQ and NMI marks).
+    fn overlays(&self) -> Vec<OverlayInfo> {
+        overlay::infos()
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.board.ov.set(ids);
+        self.board.ppu.set_overlays(ids);
+    }
+
+    fn overlay(&self, id: &str) -> Option<Overlay> {
+        let last = self.board.ov.fresh;
+        match id {
+            "sprites" => self.board.ppu.overlay(id, last),
+            _ => self.board.ov.overlay(id, last),
+        }
+    }
+
+    /// Lines 1–239 as the frame is delivered: a row each, or in interlace
+    /// the row of the current field in the 478-row picture.
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        self.board.ppu.frame_row(line)
     }
 
     fn framebuffer(&self) -> FrameRef<'_> {

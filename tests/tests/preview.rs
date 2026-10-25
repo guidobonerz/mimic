@@ -34,13 +34,16 @@ fn start() -> Setup {
     let tap = FrameTap::new();
     tap.publish(session.machine(), true);
     let hook = tap.clone();
+    let idle = tap.clone();
+    session.set_overlay_wants(tap.overlay_wants());
+    session.set_idle_hook(Box::new(move |m| idle.idle(m)));
     // sim6502 is silent: every frame contributes a marker sample instead.
     let format = AudioFormat {
         sample_rate: 48_000,
         channels: 1,
     };
     session.set_frame_hook(Box::new(move |m, running| {
-        hook.publish(m, running);
+        hook.frame(m, running);
         hook.publish_audio(&[AUDIO_MARK, -AUDIO_MARK], format);
     }));
     let inputs = Arc::new(Mutex::new(Vec::new()));
@@ -201,6 +204,70 @@ fn snapshot_viewer_and_errors() {
     assert!(status.contains("200"));
     assert!(header(&headers, "content-type").starts_with("text/html"));
     assert!(String::from_utf8(body).unwrap().contains("/preview"));
+
+    // Graphics data views, decoded by the emulation thread on request.
+    let (status, _, body) = get(addr, "/gfx");
+    assert!(status.contains("200"), "{status}");
+    let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list[0]["id"], "bitmap");
+    assert_eq!(list[0]["kind"], "bitmap");
+    let (status, headers, body) = get(addr, "/gfx/bitmap.png?scale=2&addr=$2000");
+    assert!(status.contains("200"), "{status}");
+    assert_eq!(header(&headers, "content-type"), "image/png");
+    let info = png::Decoder::new(body.as_slice()).read_info().unwrap();
+    assert_eq!((info.info().width, info.info().height), (640, 400));
+    assert!(get(addr, "/gfx/nothing.png").0.contains("404"));
+    assert!(get(addr, "/gfx/bitmap.png?addr=x").0.contains("400"));
+    // Overlays on the raw picture.
+    let (status, _, body) = get(addr, "/overlays");
+    assert!(status.contains("200"));
+    let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list[0]["id"], "beam");
+    let (_, _, plain) = get(addr, "/snapshot.png");
+    let (status, _, grid) = get(addr, "/snapshot.png?overlay=grid");
+    assert!(status.contains("200"), "{status}");
+    let decode = |b: &[u8]| {
+        let mut r = png::Decoder::new(b).read_info().unwrap();
+        let mut buf = vec![0; r.output_buffer_size()];
+        r.next_frame(&mut buf).unwrap();
+        buf
+    };
+    let (p, g) = (decode(&plain), decode(&grid));
+    let row8 = 8 * 384 * 3;
+    assert_ne!(
+        p[row8..row8 + 384 * 3],
+        g[row8..row8 + 384 * 3],
+        "grid line at row 8"
+    );
+    // The monitor editor: page, presets as TOML, pictures through any profile.
+    let (status, _, body) = get(addr, "/crt");
+    assert!(status.contains("200") && String::from_utf8_lossy(&body).contains("profile_toml"));
+    let (_, _, body) = get(addr, "/crt/profile?name=1702");
+    let p: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        p["toml"].as_str().unwrap().contains("mask = \"slot\""),
+        "{p}"
+    );
+    assert!(p["presets"].as_array().unwrap().iter().any(|n| n == "lite"));
+    assert!(get(addr, "/crt/profile?name=nope").0.contains("404"));
+    let (status, _, body) = get(
+        addr,
+        "/snapshot.png?filter=crt&profile_toml=base%20%3D%20%22lite%22%0Ascanlines%20%3D%200.5",
+    );
+    assert!(
+        status.contains("200"),
+        "{status} {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(get(
+        addr,
+        "/snapshot.png?filter=crt&profile_toml=bogus%20%3D%201"
+    )
+    .0
+    .contains("400"));
+    // While paused the idle hook answers.
+    debug(s.debug.addr(), &[r#"{"cmd":"pause"}"#]);
+    assert!(get(addr, "/gfx/bitmap.png").0.contains("200"));
 
     assert!(get(addr, "/snapshot.png?machine=c64").0.contains("404"));
     assert!(get(addr, "/nothing").0.contains("404"));

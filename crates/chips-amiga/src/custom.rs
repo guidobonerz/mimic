@@ -193,6 +193,8 @@ const DIWHIGH_DEFAULT: u16 = 0x2100;
 /// zeros must not stall the line or field counters).
 const MIN_HTOTAL: u16 = 0x40;
 const MIN_VTOTAL: u16 = 0x40;
+/// The light-pen latch is released at the end of vertical blanking.
+const LPEN_RELEASE_LINE: u16 = 20;
 
 /// What happened in one colour clock.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -285,6 +287,16 @@ pub struct Custom {
     cpu_pending: bool,
     spr_dma: [SprDma; 8],
     frame: Vec<Rgb8>,
+    /// Light pen: the beam counters frozen by a trigger (or at the end of
+    /// a field without one) while BPLCON0 LPEN is set, until line 20.
+    lpen_latch: Option<(u16, u16)>,
+    /// Where a light pen on game port 0 points (frame pixels) and the
+    /// luma its photodiode needs; configuration from the port, not state.
+    pen: Option<(u16, u16)>,
+    pen_luma: u32,
+    /// The debug overlays' record while one is switched on (`overlay`;
+    /// not machine state, not saved).
+    rec: Option<Box<overlay::OverlayRecord>>,
 }
 
 impl Custom {
@@ -334,6 +346,10 @@ impl Custom {
             cpu_pending: false,
             spr_dma: [SprDma::Off; 8],
             frame: vec![Rgb8::default(); (WIDTH * standard.height()) as usize],
+            lpen_latch: None,
+            pen: None,
+            pen_luma: 0,
+            rec: None,
         }
     }
 
@@ -350,7 +366,39 @@ impl Custom {
         n.frame = std::mem::take(&mut self.frame);
         n.frame
             .resize((WIDTH * n.standard.height()) as usize, Rgb8::default());
+        n.rec = self.rec.take();
+        n.denise.rec_sprites = self.denise.rec_sprites;
+        n.pen = self.pen;
+        n.pen_luma = self.pen_luma;
         *self = n;
+    }
+
+    /// A light pen on game port 0 points at frame pixel (`x`, `y`) of
+    /// [`Custom::frame`] (`None`: no pen or off the picture); a pixel
+    /// whose Rec. 601 luma reaches `luma` lights it. When the beam draws
+    /// that pixel bright, the pen triggers Agnus' light-pen input (pin 6,
+    /// LPENTG): with BPLCON0 LPEN (bit 3) set, VPOSR/VHPOSR freeze at the
+    /// beam position of that colour clock until line 20; without a
+    /// trigger they freeze at the end of the field (HRM, "Reading the light
+    /// pen"; ECS BEAMCON0 LPENDIS makes reads show the running counters).
+    /// The pen's response delay is not modelled.
+    pub fn set_light_pen(&mut self, aim: Option<(u16, u16)>, luma: u32) {
+        self.pen = aim;
+        self.pen_luma = luma;
+    }
+
+    /// LPEN in BPLCON0 and the ECS LPENDIS: the latch shows in VPOSR/VHPOSR.
+    fn lpen_shown(&self) -> Option<(u16, u16)> {
+        let disabled = self.chipset.ecs_agnus && self.beamcon0() & beamcon0::LPENDIS != 0;
+        self.lpen_latch
+            .filter(|_| self.denise.bplcon0 & 0x0008 != 0 && !disabled)
+    }
+
+    /// The light-pen input triggered now.
+    fn light_pen_strobe(&mut self) {
+        if self.denise.bplcon0 & 0x0008 != 0 && self.lpen_latch.is_none() {
+            self.lpen_latch = Some((self.v, self.h));
+        }
     }
 
     pub fn beamcon0(&self) -> u16 {
@@ -420,6 +468,7 @@ impl Custom {
         self.dmacon & dma::DMAEN != 0 && self.dmacon & bit != 0
     }
 
+    #[inline(always)]
     fn slot(&self, h: u16) -> Slot {
         if h & 1 == 1 && h <= 7 {
             return Slot::Fixed;
@@ -468,6 +517,7 @@ impl Custom {
 
     /// Colour clocks of one fetch unit (every plane fetched once): 8 in
     /// low resolution, 4 in high, 2 in super-hires, times the fetch width.
+    #[inline(always)]
     fn fetch_unit(&self) -> u16 {
         let base = if self.denise.shres() {
             2
@@ -506,6 +556,7 @@ impl Custom {
         (start, start + ((stop - start) / 8 + 1) * 8)
     }
 
+    #[inline(always)]
     fn plane_at(&self, h: u16) -> Option<usize> {
         // No bitplane DMA during vertical blank, even with the window open.
         if !self.bpl_vertical || self.v < self.standard.top() - 1 || !self.dma_on(dma::BPLEN) {
@@ -563,6 +614,29 @@ impl Custom {
     /// Run one colour clock. `cpu_wants`: the CPU waits for a chip bus
     /// slot; [`TickOut::cpu_slot`] says whether it got this one.
     pub fn tick(&mut self, chip: &mut ChipRam, cpu_wants: bool) -> TickOut {
+        // An overlay record or a light pen takes its own copy of the colour
+        // clock, so the emulation without them runs the code it had before
+        // they existed (their checks inline cost the A500 ~3 %, measured
+        // 2026-10-25). The helpers called once per copy (`slot`,
+        // `plane_at`, `fetch_unit`, `audio_tick`, `sprite_lines`,
+        // `last_fetch_group`) are `inline(always)`: with two callers LLVM
+        // kept them out of line, which cost more than the checks.
+        if self.rec.is_some() || self.pen.is_some() {
+            return self.tick_extras(chip, cpu_wants);
+        }
+        self.tick_with::<false>(chip, cpu_wants)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn tick_extras(&mut self, chip: &mut ChipRam, cpu_wants: bool) -> TickOut {
+        self.tick_with::<true>(chip, cpu_wants)
+    }
+
+    /// [`Custom::tick`] with (`EXTRAS`) or without the overlay record and
+    /// light pen.
+    #[inline(always)]
+    fn tick_with<const EXTRAS: bool>(&mut self, chip: &mut ChipRam, cpu_wants: bool) -> TickOut {
         let (v, h) = (self.v, self.h);
         let mut out = TickOut::default();
         if h == 0 {
@@ -583,6 +657,9 @@ impl Custom {
             self.sprite_lines(v);
         }
         if h == denise::LINE_START + DENISE_LAG {
+            if EXTRAS && self.rec.is_some() {
+                self.record_sprite_line(v);
+            }
             self.denise.start_line();
         }
         if v == 0 && h == VERTB_DELAY {
@@ -600,6 +677,7 @@ impl Custom {
         let cpu_unsatisfied = cpu_wants || std::mem::take(&mut self.cpu_pending);
         let mut blitter_took = false;
         let mut copper_took = false;
+        let mut copper_held = false;
         let slot_kind = self.slot(h);
         match slot_kind {
             Slot::Fixed => {}
@@ -642,9 +720,13 @@ impl Custom {
                 if h & 1 == 0 && self.copper.busy_wake > 0 && self.dma_on(dma::COPEN) {
                     // The Copper's wake-up after a WAIT holds the bus.
                     self.copper.busy_wake -= 1;
+                    copper_held = true;
                 } else if h & 1 == 0 && self.copper.wants_slot() && self.dma_on(dma::COPEN) {
                     copper_took = true;
                     if let Some((r, val)) = self.copper.cycle(chip, v, h, self.blitter.busy) {
+                        if EXTRAS && self.rec.is_some() {
+                            self.record_copper_move(v, h, r, val);
+                        }
                         self.write(r, val);
                     }
                 } else if self.blitter.wants_slot() && self.dma_on(dma::BLTEN) {
@@ -678,10 +760,20 @@ impl Custom {
         } else {
             self.cpu_starved
         };
+        if EXTRAS && self.rec.is_some() {
+            self.record_slot(
+                v,
+                h,
+                slot_kind,
+                copper_took || copper_held,
+                blitter_took,
+                out.cpu_slot,
+            );
+        }
         if self.fetched && h == self.fetch_window().1 {
             self.fetched = false;
         }
-        self.render(v, h);
+        self.render::<EXTRAS>(v, h);
         self.audio_tick();
         let a = &self.paula.audio;
         out.audio = [a[0].level() + a[3].level(), a[1].level() + a[2].level()];
@@ -690,6 +782,7 @@ impl Custom {
 
         self.h += 1;
         if self.h >= self.line_len() {
+            let last_h = self.h - 1;
             self.h = 0;
             if self.standard == Standard::Ntsc
                 && !(self.chipset.ecs_agnus && self.beamcon0() & beamcon0::LOLDIS != 0)
@@ -699,10 +792,20 @@ impl Custom {
                 self.lol = false;
             }
             self.v += 1;
+            if self.v == LPEN_RELEASE_LINE {
+                self.lpen_latch = None;
+            }
             if self.v >= self.field_lines() {
+                // No trigger in this field: the counters freeze here.
+                if self.denise.bplcon0 & 0x0008 != 0 && self.lpen_latch.is_none() {
+                    self.lpen_latch = Some((self.v - 1, last_h));
+                }
                 self.v = 0;
                 self.fields += 1;
                 out.field_done = true;
+                if EXTRAS && self.rec.is_some() {
+                    self.record_end_field();
+                }
                 if self.interlaced() {
                     self.lof = !self.lof;
                 }
@@ -714,6 +817,7 @@ impl Custom {
     /// The audio channels' colour clock: samples, block interrupts and the
     /// ADKCON attach modes (a channel's words set the next channel's
     /// volume or period; see `audio`).
+    #[inline(always)]
     fn audio_tick(&mut self) {
         let adk = self.paula.adkcon;
         for n in 0..4 {
@@ -738,6 +842,7 @@ impl Custom {
     /// $2900/$2900 in Sanity's "Interference") fetches new control words
     /// on that line and shows no data; before this rule it fetched data
     /// for the rest of the field, 16 slots a line the CPU never got.
+    #[inline(always)]
     fn sprite_lines(&mut self, v: u16) {
         if v == 0 {
             self.spr_dma = [SprDma::Off; 8];
@@ -776,6 +881,7 @@ impl Custom {
     /// fetches its last word (low resolution: the last 8 colour clocks of
     /// the window; high resolution fetches every plane twice per group, so
     /// the last 4; wider AGA fetches stretch the unit)?
+    #[inline(always)]
     fn last_fetch_group(&self, h: u16) -> bool {
         let end = self.fetch_window().1;
         h + self.fetch_unit() >= end
@@ -792,7 +898,7 @@ impl Custom {
         self.bplpt[p] = self.bplpt[p].wrapping_add(m as i16 as i32 as u32) & self.ptr_mask;
     }
 
-    fn render(&mut self, v: u16, h: u16) {
+    fn render<const EXTRAS: bool>(&mut self, v: u16, h: u16) {
         let dh = self.denise_h(h);
         let mut px = [0u32; 4];
         self.denise.output(dh, &mut px);
@@ -814,6 +920,88 @@ impl Custom {
         let base = (y as u32 * WIDTH + x) as usize;
         for (i, c) in px.iter().enumerate() {
             self.frame[base + i] = denise::rgb24(*c);
+        }
+        if EXTRAS && self.pen.is_some() {
+            self.pen_sees(base, x, y as u32);
+        }
+    }
+
+    /// A light pen points into the picture: did the four pixels at frame
+    /// index `base` (column `x`, row `y`) light it?
+    #[cold]
+    #[inline(never)]
+    fn pen_sees(&mut self, base: usize, x: u32, y: u32) {
+        if let Some((px, py)) = self.pen {
+            if u32::from(py) == y && (x..x + 4).contains(&u32::from(px)) {
+                let c = self.frame[base + (u32::from(px) - x) as usize];
+                let luma =
+                    (299 * u32::from(c.r) + 587 * u32::from(c.g) + 114 * u32::from(c.b)) / 1000;
+                if luma >= self.pen_luma {
+                    self.light_pen_strobe();
+                }
+            }
+        }
+    }
+
+    // The overlay record's hooks: out of line, so the colour clock without
+    // a record keeps its old code (one null test each).
+
+    /// Denise finished raster line `v` - 1: the sprites it showed.
+    #[cold]
+    #[inline(never)]
+    fn record_sprite_line(&mut self, v: u16) {
+        if let Some(rec) = self.rec.as_deref_mut() {
+            let seen = std::mem::replace(&mut self.denise.spr_seen, [overlay::UNSEEN; 8]);
+            if rec.sprites && v > 0 {
+                rec.sprite_line(v - 1, &seen);
+            }
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn record_copper_move(&mut self, v: u16, h: u16, r: u16, val: u16) {
+        if let Some(rec) = self.rec.as_deref_mut() {
+            rec.copper_move(v, h, r, val);
+        }
+    }
+
+    /// Who used colour clock (`v`, `h`).
+    #[cold]
+    #[inline(never)]
+    fn record_slot(
+        &mut self,
+        v: u16,
+        h: u16,
+        slot_kind: Slot,
+        copper: bool,
+        blitter: bool,
+        cpu: bool,
+    ) {
+        if let Some(rec) = self.rec.as_deref_mut() {
+            if rec.dma {
+                use overlay::slot;
+                let code = match slot_kind {
+                    Slot::Fixed => slot::REFRESH,
+                    Slot::Disk => slot::DISK,
+                    Slot::Audio(_) => slot::AUDIO,
+                    Slot::Sprite(..) => slot::SPRITE,
+                    Slot::Plane(_) => slot::BITPLANE,
+                    Slot::Free if copper => slot::COPPER,
+                    Slot::Free if blitter => slot::BLITTER,
+                    Slot::Free if cpu => slot::CPU,
+                    Slot::Free => slot::FREE,
+                };
+                rec.slot(v, h, code);
+            }
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn record_end_field(&mut self) {
+        if let Some(rec) = self.rec.as_deref_mut() {
+            rec.end_field();
         }
     }
 
@@ -1046,9 +1234,13 @@ impl Custom {
                     (_, true, Standard::Ntsc) => 0x32,
                 };
                 let lol = u16::from(self.chipset.ecs_agnus && self.lol) << 7;
-                u16::from(self.lof) << 15 | id << 8 | lol | (self.v >> 8 & 7)
+                let v = self.lpen_shown().map_or(self.v, |(v, _)| v);
+                u16::from(self.lof) << 15 | id << 8 | lol | (v >> 8 & 7)
             }
-            reg::VHPOSR => (self.v & 0xff) << 8 | (self.h & 0xff),
+            reg::VHPOSR => {
+                let (v, h) = self.lpen_shown().unwrap_or((self.v, self.h));
+                (v & 0xff) << 8 | (h & 0xff)
+            }
             reg::DENISEID => {
                 if self.chipset.aga {
                     0xfff8
@@ -1109,7 +1301,7 @@ impl Savestate for Custom {
         // version 6: the serial port and the audio attach alternation;
         // version 7: the ECS registers; version 8: AGA (eight planes, FMODE,
         // Denise's 256 colours of 24 bits).
-        w.chunk(TAG, 8, |w| {
+        w.chunk(TAG, 9, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1151,12 +1343,16 @@ impl Savestate for Custom {
             }
             w.u16(self.diwhigh);
             w.u16(self.fmode);
+            w.bool(self.lpen_latch.is_some());
+            let (lv, lh) = self.lpen_latch.unwrap_or_default();
+            w.u16(lv);
+            w.u16(lh);
         });
     }
 
     /// Atomic; the standard and pointer width are configuration.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (version, mut c) = r.chunk(TAG, 8)?;
+        let (version, mut c) = r.chunk(TAG, 9)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -1215,6 +1411,11 @@ impl Savestate for Custom {
                 n.fmode = c.u16()?;
                 n.denise.fmode = n.fmode;
             }
+            if version >= 9 {
+                let latched = c.bool()?;
+                let (lv, lh) = (c.u16()?, c.u16()?);
+                n.lpen_latch = latched.then_some((lv, lh));
+            }
         } else {
             n.diwhigh = Self::diwhigh_default(n.diwstop);
             n.denise.diwhigh = n.diwhigh;
@@ -1238,10 +1439,17 @@ impl Savestate for Custom {
         n.frame = std::mem::take(&mut self.frame);
         n.frame
             .resize((WIDTH * n.standard.height()) as usize, Rgb8::default());
+        n.rec = self.rec.take();
+        n.denise.rec_sprites = self.denise.rec_sprites;
+        n.pen = self.pen;
+        n.pen_luma = self.pen_luma;
         *self = n;
         Ok(())
     }
 }
+
+pub mod gfx;
+pub mod overlay;
 
 #[cfg(test)]
 mod tests;

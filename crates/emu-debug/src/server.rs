@@ -259,11 +259,12 @@ fn emulation_loop(mut session: Session, endpoint: Endpoint, realtime: bool) {
     loop {
         // Commands first; block only while paused.
         let was_running = session.is_running();
-        let wait = (!was_running).then_some(Duration::from_millis(250));
+        let wait = (!was_running).then_some(Duration::from_millis(50));
         if endpoint.service(&mut session, wait) == Service::Shutdown {
             return;
         }
         if !session.is_running() {
+            session.idle();
             continue;
         }
         if !was_running {

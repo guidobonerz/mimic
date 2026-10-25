@@ -65,9 +65,13 @@
 //!   half speed for HD disks and report DD disks as a DD drive).
 //! - `serial`: "none" (default) or "loopback" (TXD wired to RXD).
 //! - `wcs` (A1000): "rom" (default, Kickstart preloaded) or "disk".
-//! - `port0` / `port1`: game port devices, "mouse", "joystick" or "none"
-//!   (defaults: the mouse in port 0, a joystick in port 1). The ports are
-//!   sampled once a raster line; Denise counts mouse steps into JOYxDAT.
+//! - `port0` / `port1`: game port devices, "mouse", "joystick", "lightpen"
+//!   or "none" (defaults: the mouse in port 0, a joystick in port 1). The
+//!   ports are sampled once a raster line; Denise counts mouse steps into
+//!   JOYxDAT. A light pen works in game port 0 (pin 6 LPENTG to Agnus,
+//!   pin 5 LPENPR, its button, on POT0X): with BPLCON0 LPEN set,
+//!   VPOSR/VHPOSR freeze where the beam draws a bright pixel under its tip
+//!   (`chips_amiga::custom::Custom::set_light_pen`).
 //! - `roms`: "stub" runs a tiny built-in program instead of Kickstart
 //!   ([`stub`]; tests without ROMs).
 //!
@@ -339,9 +343,12 @@ fn port_option(
         // At most one step per 1000 clocks: sampled every line (454), no
         // phase is missed.
         "mouse" => Ok(Some(Box::new(devices_input::AmigaMouse::new(1000)))),
+        "lightpen" => Ok(Some(Box::new(devices_input::LightPen::new(
+            devices_input::LightPenKind::Amiga,
+        )))),
         "none" => Ok(None),
         other => Err(ConfigError::Invalid(format!(
-            "{key} option '{other}' (mouse, joystick or none)"
+            "{key} option '{other}' (mouse, joystick, lightpen or none)"
         ))),
     }
 }
@@ -1155,6 +1162,18 @@ impl Amiga {
         }
         self.board.fire_low = fire;
         self.board.custom.pot_low = pot;
+        self.sync_light_pen();
+    }
+
+    /// Tell Agnus where a light pen in game port 0 points (frame pixels).
+    fn sync_light_pen(&mut self) {
+        let now = self.sched.now();
+        let aim = self.ports[0]
+            .as_ref()
+            .and_then(|d| devices_input::lightpen::aim(&d.read_lines(now)));
+        self.board
+            .custom
+            .set_light_pen(aim.map(|a| (a.x, a.y)), devices_input::lightpen::LIGHT_LUMA);
     }
 
     /// One instruction (or interrupt, or STOP wait). Returns `Some` if
@@ -1407,6 +1426,43 @@ impl Machine for Amiga {
             sample_rate: emu_core::SAMPLE_RATE,
             channels: 2,
         }
+    }
+
+    /// `dma`, `sprites`, `copper` (`chips_amiga::custom::overlay`).
+    fn overlays(&self) -> Vec<emu_core::overlay::OverlayInfo> {
+        Custom::overlays()
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.board.custom.set_overlays(ids);
+    }
+
+    fn overlay(&self, id: &str) -> Option<emu_core::overlay::Overlay> {
+        self.board.custom.overlay(id)
+    }
+
+    /// The picture is one field ([`Custom::frame`]): raster line `line` is
+    /// row `line − top`, interlaced or not.
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        self.board.custom.frame_row(line)
+    }
+
+    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+        self.board.custom.gfx_views()
+    }
+
+    /// The custom chips' views (`chips_amiga::custom::gfx`): sprites,
+    /// bitplanes and palette, decoded from chip RAM ([`CHIP_SPACE`]) and
+    /// the registers as they are now (option `copper=1`: the pointers the
+    /// Copper list sets at the top of the frame).
+    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+        let custom = &self.board.custom;
+        let info = custom.gfx_views().into_iter().find(|v| v.id == id)?;
+        let ctx = chips_amiga::custom::gfx::GfxContext {
+            chip: &self.board.mem.chip,
+            space: CHIP_SPACE,
+        };
+        Some(custom.gfx_view(info.id, info.kind, info.name, &ctx, opts))
     }
 
     fn beam(&self) -> Option<BeamPos> {
@@ -1839,6 +1895,7 @@ impl Machine for Amiga {
         self.input = input;
         self.jam_reported = jam_reported;
         self.ports_due = ports_due;
+        self.sync_light_pen();
         Ok(())
     }
 }

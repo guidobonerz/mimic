@@ -1,8 +1,8 @@
 //! The 68020's additions to the instruction set (M68000 Family
 //! Programmer's Reference Manual, section 4 "Integer instructions", and
-//! section 6 "Exception processing" for RTE's frame formats). Timing is
-//! approximate: a few internal clocks per instruction next to the bus
-//! cycles (see the crate doc).
+//! section 6 "Exception processing" for RTE's frame formats). The
+//! 68020's timing comes from its own tables (`crate::timing020`); the
+//! internal clocks of the 68000 sequences here are ignored on it.
 
 use emu_core::Size;
 
@@ -126,9 +126,9 @@ fn movec(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
         match code {
             0x000 => cpu.sfc = (v & 7) as u8,
             0x001 => cpu.dfc = (v & 7) as u8,
-            // E and F are the only bits that read back; the clear bits
-            // act at once (no cache is modelled).
-            0x002 => cpu.cacr = v & 0x3,
+            // E and F are the only bits that read back; C and CE clear
+            // the cache or one entry at once.
+            0x002 => cpu.write_cacr(v),
             0x800 => cpu.set_usp(v),
             0x801 => cpu.vbr = v,
             0x802 => cpu.caar = v,

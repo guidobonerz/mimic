@@ -312,6 +312,49 @@ impl Machine for Sim6502 {
         }
     }
 
+    /// Lines 0–271 are the frame's rows.
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        (line < video::VISIBLE_LINES).then_some(u32::from(line))
+    }
+
+    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+        vec![emu_core::GfxViewInfo {
+            id: "bitmap",
+            kind: emu_core::GfxKind::Bitmap,
+            name: "raster chip bitmap".into(),
+            options: vec![emu_core::gfx::OPT_ADDR],
+        }]
+    }
+
+    /// The 320 × 200 bitmap at `$2000` (or `addr`) in the chip's colours.
+    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+        if id != "bitmap" {
+            return None;
+        }
+        let base = opts.get("addr").unwrap_or(u32::from(video::BITMAP_BASE)) & 0xffff;
+        let (bg, fg) = (self.video.peek(0xd001) & 15, self.video.peek(0xd002) & 15);
+        let raw: Vec<u8> = (0..8000)
+            .map(|i| self.ram[(base as usize + i) & 0xffff])
+            .collect();
+        let mut c = emu_core::gfx::Canvas::new(320, 200, bg);
+        for (i, &b) in raw.iter().enumerate() {
+            let (x, y) = ((i % 40) as u32 * 8, (i / 40) as u32);
+            c.row_1bpp(x, y, b, fg, Some(bg), 1);
+        }
+        Some(emu_core::GfxView {
+            id: "bitmap",
+            kind: emu_core::GfxKind::Bitmap,
+            name: "raster chip bitmap".into(),
+            space: CPU_SPACE,
+            addr: base,
+            params: vec![("background", u32::from(bg)), ("foreground", u32::from(fg))],
+            width: 320,
+            height: 200,
+            pixels: c.into_pixels(video::PALETTE.to_vec()),
+            raw,
+        })
+    }
+
     fn beam(&self) -> Option<BeamPos> {
         Some(self.video.beam())
     }

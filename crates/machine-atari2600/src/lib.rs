@@ -56,6 +56,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod overlay;
 pub mod stub;
 
 use chips_atari::riot::Riot;
@@ -68,10 +69,12 @@ use emu_core::audio::Decimator;
 use emu_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
+use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::overlay::{Overlay, OverlayInfo};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
@@ -145,6 +148,8 @@ struct Board {
     data_bus: u8,
     /// SWCHA or SWACNT was written: the keypad rows may have changed.
     porta_written: bool,
+    /// Debug overlay recording (not machine state); `None` while off.
+    overlay: Option<Box<overlay::Recorder>>,
 }
 
 impl Board {
@@ -183,6 +188,9 @@ impl Board {
         }
         if a & 0x1000 == 0 {
             if a & 0x80 == 0 {
+                if let Some(rec) = &mut self.overlay {
+                    rec.write((a & 0x3f) as u8, self.tia.line(), self.tia.clock());
+                }
                 self.tia.write(a as u8, v);
             } else {
                 self.riot.write(a, v);
@@ -337,6 +345,7 @@ impl Atari2600 {
                 cart: None,
                 data_bus: 0,
                 porta_written: false,
+                overlay: None,
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -412,6 +421,11 @@ impl Atari2600 {
         let mut new_field = false;
         for _ in 0..3 {
             new_field |= self.board.tia.tick();
+        }
+        if new_field {
+            if let Some(rec) = &mut self.board.overlay {
+                rec.end_field();
+            }
         }
         // Keypad rows right after the program sets them; time-dependent
         // devices (driving controller) once per line.
@@ -687,6 +701,44 @@ impl Machine for Atari2600 {
         }]
     }
 
+    fn overlays(&self) -> Vec<OverlayInfo> {
+        overlay::infos()
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.board.overlay = overlay::Recorder::new(ids).map(Box::new);
+    }
+
+    /// The last complete field's strobes; while the beam is past line 0
+    /// (halted mid-field) the field's so far.
+    fn overlay(&self, id: &str) -> Option<Overlay> {
+        let mid_field = self.board.tia.line() != 0;
+        self.board.overlay.as_ref()?.overlay(id, mid_field)
+    }
+
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        overlay::frame_row(self.standard, line)
+    }
+
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        tia::gfx::views()
+    }
+
+    /// The TIA's objects and playfield as its registers hold them now, and
+    /// the palette (the TIA has no frame memory to browse).
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        let info = self.gfx_views().into_iter().find(|v| v.id == id)?;
+        let ctx = tia::gfx::GfxContext {
+            space: CPU_SPACE,
+            palette: &self.palette,
+        };
+        Some(
+            self.board
+                .tia
+                .gfx_view(info.id, info.kind, info.name, &ctx, opts),
+        )
+    }
+
     fn chips(&self) -> Vec<ChipInfo> {
         let t = &self.board.tia;
         let mut tia_regs: Vec<(&'static str, u32, u8)> = tia::W
@@ -890,6 +942,9 @@ impl Machine for Atari2600 {
         }
         self.cpu = next.cpu;
         self.board = next.board;
+        if let Some(rec) = &mut self.board.overlay {
+            rec.clear();
+        }
         self.sched = next.sched;
         self.input = next.input;
         self.audio = next.audio;

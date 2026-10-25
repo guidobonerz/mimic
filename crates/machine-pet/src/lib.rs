@@ -32,6 +32,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod gfx;
 pub mod keyboard;
 pub mod loader;
 pub mod stub;
@@ -43,6 +44,7 @@ use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use drives_cbm::{IeeeDrive, IeeeLines};
 use drives_other::Datasette;
 use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
+use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
@@ -64,6 +66,8 @@ use video::Video;
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The CPU's view of memory (the PET has no banking).
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
+/// The 2 KB character ROM (the CPU does not see it; read only).
+pub const CHARGEN_SPACE: MemSpaceId = MemSpaceId(1);
 
 pub const KERNAL_SIZE: usize = 0x1000;
 pub const EDITOR_SIZE: usize = 0x800;
@@ -907,13 +911,35 @@ impl Machine for Pet {
     }
 
     fn memory_spaces(&self) -> Vec<MemSpace> {
-        vec![MemSpace {
-            id: CPU_SPACE,
-            name: "cpu",
-            device: CPU,
-            addr_bits: 16,
-            big_endian: false,
-        }]
+        vec![
+            MemSpace {
+                id: CPU_SPACE,
+                name: "cpu",
+                device: CPU,
+                addr_bits: 16,
+                big_endian: false,
+            },
+            MemSpace {
+                id: CHARGEN_SPACE,
+                name: "chargen",
+                device: CPU,
+                addr_bits: 11,
+                big_endian: false,
+            },
+        ]
+    }
+
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        self.video.frame_row(line)
+    }
+
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        gfx::views()
+    }
+
+    /// The character ROM (space `chargen`) and the screen (video RAM).
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        self.view(id, opts)
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -1154,6 +1180,15 @@ impl DebugTarget for Pet {
     }
 
     fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
+        if space == CHARGEN_SPACE {
+            let rom = &self.mem.roms.chargen;
+            let mut v = 0;
+            for i in 0..size.bytes() {
+                let b = rom[addr.wrapping_add(i) as usize % rom.len()];
+                v |= u32::from(b) << (8 * i);
+            }
+            return Some(v);
+        }
         if space != CPU_SPACE {
             return None;
         }

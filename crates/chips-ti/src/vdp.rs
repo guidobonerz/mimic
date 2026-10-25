@@ -168,6 +168,8 @@ pub struct Tms9918 {
     /// Fields since power-on.
     pub fields: u64,
     frame: Vec<u8>,
+    /// Debug overlay records (not machine state, not in savestates).
+    ov: overlay::VdpOverlays,
 }
 
 impl Tms9918 {
@@ -184,6 +186,7 @@ impl Tms9918 {
             dot: 0,
             fields: 0,
             frame: vec![0; (WIDTH * model.height()) as usize],
+            ov: overlay::VdpOverlays::default(),
         }
     }
 
@@ -295,12 +298,18 @@ impl Tms9918 {
 
     /// The picture row of the current line, if it is shown.
     fn picture_row(&self) -> Option<u32> {
+        self.line_row(self.line)
+    }
+
+    /// The picture row (of [`Tms9918::frame`]) showing raster line `line`
+    /// (0 = first active line), if it is shown.
+    pub fn line_row(&self, line: u16) -> Option<u32> {
         let top = self.model.top();
         let lines = self.model.lines();
-        let row = if self.line < 192 + self.model.bottom() {
-            self.line + top
-        } else if self.line >= lines - top {
-            self.line - (lines - top)
+        let row = if line < 192 + self.model.bottom() {
+            line + top
+        } else if line >= lines - top && line < lines {
+            line - (lines - top)
         } else {
             return None;
         };
@@ -321,17 +330,18 @@ impl Tms9918 {
             let text = self.m1();
             let mut line = [0u8; 256];
             if text {
-                self.text_line(y, &mut line);
+                self.text_line(self.name_base(), y, &mut line);
                 for (i, c) in line.iter().take(240).enumerate() {
                     px[LEFT as usize + 8 + i] = *c;
                 }
             } else {
+                let names = self.name_base();
                 if self.m2() {
-                    self.multicolor_line(y, &mut line);
+                    self.multicolor_line(names, y, &mut line);
                 } else if self.m3() {
-                    self.graphics2_line(y, &mut line);
+                    self.graphics2_line(names, y, &mut line);
                 } else {
-                    self.graphics1_line(y, &mut line);
+                    self.graphics1_line(names, y, &mut line);
                 }
                 self.sprites(y, &mut line);
                 for (i, c) in line.iter().enumerate() {
@@ -363,8 +373,9 @@ impl Tms9918 {
         }
     }
 
-    fn graphics1_line(&self, y: u16, out: &mut [u8; 256]) {
-        let names = self.name_base() + usize::from(y / 8) * 32;
+    /// Line `y` with the name table at `names`.
+    fn graphics1_line(&self, names: usize, y: u16, out: &mut [u8; 256]) {
+        let names = names + usize::from(y / 8) * 32;
         let patterns = usize::from(self.regs[4] & 7) << 11;
         let colors = usize::from(self.regs[3]) << 6;
         for col in 0..32 {
@@ -375,8 +386,9 @@ impl Tms9918 {
         }
     }
 
-    fn graphics2_line(&self, y: u16, out: &mut [u8; 256]) {
-        let names = self.name_base() + usize::from(y / 8) * 32;
+    /// Line `y` with the name table at `names`.
+    fn graphics2_line(&self, names: usize, y: u16, out: &mut [u8; 256]) {
+        let names = names + usize::from(y / 8) * 32;
         let third = usize::from(y / 64) << 8;
         let r3 = usize::from(self.regs[3]);
         let r4 = usize::from(self.regs[4]);
@@ -391,8 +403,9 @@ impl Tms9918 {
         }
     }
 
-    fn multicolor_line(&self, y: u16, out: &mut [u8; 256]) {
-        let names = self.name_base() + usize::from(y / 8) * 32;
+    /// Line `y` with the name table at `names`.
+    fn multicolor_line(&self, names: usize, y: u16, out: &mut [u8; 256]) {
+        let names = names + usize::from(y / 8) * 32;
         let patterns = usize::from(self.regs[4] & 7) << 11;
         let row = usize::from((y / 8) & 3) * 2 + usize::from((y & 7) / 4);
         for col in 0..32 {
@@ -405,8 +418,9 @@ impl Tms9918 {
         }
     }
 
-    fn text_line(&self, y: u16, out: &mut [u8; 256]) {
-        let names = self.name_base() + usize::from(y / 8) * 40;
+    /// Line `y` with the name table at `names`.
+    fn text_line(&self, names: usize, y: u16, out: &mut [u8; 256]) {
+        let names = names + usize::from(y / 8) * 40;
         let patterns = usize::from(self.regs[4] & 7) << 11;
         let color = self.regs[7];
         for col in 0..40 {
@@ -447,6 +461,9 @@ impl Tms9918 {
                 continue;
             }
             if shown == 4 {
+                if self.ov.limit {
+                    self.ov.record_limit(y);
+                }
                 if self.status & status::FIFTH == 0 {
                     self.status = (self.status & 0xe0) | status::FIFTH | n;
                 }
@@ -459,6 +476,10 @@ impl Tms9918 {
             let color_byte = self.vram_at(a + 3);
             let color = color_byte & 15;
             let x0 = sx - if color_byte & 0x80 != 0 { 32 } else { 0 };
+            if self.ov.sprites {
+                self.ov
+                    .record_sprite(n, y, LEFT as i32 + x0, (size * mag) as u32);
+            }
             if size == 16 {
                 name &= 0xfc;
             }
@@ -539,6 +560,9 @@ impl Tms9918 {
         Ok(())
     }
 }
+
+pub mod gfx;
+pub mod overlay;
 
 #[cfg(test)]
 mod tests;

@@ -9,7 +9,7 @@
 //! rule 3).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -79,6 +79,27 @@ pub struct Shared {
     /// Set by the window (Ctrl+D): put the next disk of
     /// [`Shared::disk_swap`] into the first drive.
     pub next_disk: AtomicBool,
+    /// The gamepad fire button (position in `panel::PAD_FIRE_BUTTONS`), set
+    /// by the panel's PAD FIRE switch.
+    pub pad_fire: AtomicU8,
+    /// Set by the panel's SAVE MAPPING button.
+    pub save_mapping: AtomicBool,
+    /// The machine's freezes (cheats) for the panel, published while it is
+    /// shown; clicks on them (freeze id, on).
+    pub cheats: Mutex<Vec<CheatRow>>,
+    pub cheat_clicks: Mutex<Vec<(u32, bool)>>,
+    /// Taken by the emulation thread at start: the cheat database folder,
+    /// cheat files to apply and the images inserted at start (their
+    /// database entries apply too).
+    pub cheats_dir: Mutex<Option<std::path::PathBuf>>,
+    /// The machine's host-service journal, handed to the debug session.
+    pub host_journal: Mutex<Option<emu_core::host::Journal>>,
+    pub startup_cheats: Mutex<Vec<emu_cheats::CheatFile>>,
+    pub startup_images: Mutex<Vec<String>>,
+    /// Held by the window (Ctrl+R): run backwards through the rewind ring.
+    pub rewinding: AtomicBool,
+    /// Memory budget of the rewind ring in MB (0 = off), read at start.
+    pub rewind_mb: AtomicU32,
     /// Image files dropped onto the window, for the first drive.
     pub dropped_disks: Mutex<Vec<String>>,
     /// Set by the window (Ctrl+Space): the status footer is shown, so the
@@ -171,6 +192,16 @@ impl Shared {
             disk_swap: Mutex::default(),
             next_disk: AtomicBool::new(false),
             dropped_disks: Mutex::default(),
+            rewinding: AtomicBool::new(false),
+            pad_fire: AtomicU8::new(0),
+            save_mapping: AtomicBool::new(false),
+            cheats: Mutex::default(),
+            cheat_clicks: Mutex::default(),
+            cheats_dir: Mutex::default(),
+            host_journal: Mutex::default(),
+            startup_cheats: Mutex::default(),
+            startup_images: Mutex::default(),
+            rewind_mb: AtomicU32::new(emu_debug::session::DEFAULT_BUDGET_MB),
             footer_on: AtomicBool::new(false),
             footer: Mutex::default(),
             panel_on: AtomicBool::new(false),
@@ -270,6 +301,65 @@ fn swap_disk(m: &mut dyn Machine, path: &str) -> String {
     match slot.insert(media) {
         Ok(()) => format!("{} {name}", info.name),
         Err(e) => format!("{name}: {e}"),
+    }
+}
+
+/// One freeze as the panel shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheatRow {
+    pub id: u32,
+    pub label: String,
+    pub enabled: bool,
+}
+
+/// The session's freezes for the panel.
+fn cheat_rows(session: &mut Session) -> Vec<CheatRow> {
+    let Ok(list) = session.command(Command::FreezeList) else {
+        return Vec::new();
+    };
+    list.as_array()
+        .map(|a| {
+            a.iter()
+                .map(|f| {
+                    let addr = f["addr"].as_u64().unwrap_or(0);
+                    let label = match f["label"].as_str() {
+                        Some(l) => format!("{} ${addr:04X}", l.to_uppercase()),
+                        None => format!("CHEAT ${addr:04X}"),
+                    };
+                    CheatRow {
+                        id: f["freeze"].as_u64().unwrap_or(0) as u32,
+                        label,
+                        enabled: f["enabled"].as_bool().unwrap_or(false),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Apply the cheat database's entry for an image just inserted; a status
+/// line if there was one.
+fn cheats_for_path(session: &mut Session, path: &str) -> Option<String> {
+    let data = std::fs::read(path).ok()?;
+    match session.cheats_for_image(&data) {
+        Ok(Some(game)) => Some(format!("cheats for {game}")),
+        Ok(None) => None,
+        Err(e) => Some(format!("cheats: {e}")),
+    }
+}
+
+/// Keep the current joystick mapping for the machine:
+/// `<user folder>/input/<machine>.toml`.
+fn save_mapping(mapper: &Mapper, machine: &str) -> String {
+    let Some(dir) = emu_profile::user_dir() else {
+        return "no user folder for the mapping".into();
+    };
+    let path = dir.join("input").join(format!("{machine}.toml"));
+    let result = std::fs::create_dir_all(dir.join("input"))
+        .and_then(|()| std::fs::write(&path, mapper.profile().to_toml()));
+    match result {
+        Ok(()) => format!("mapping saved to {}", path.display()),
+        Err(e) => format!("{}: {e}", path.display()),
     }
 }
 
@@ -401,8 +491,49 @@ pub fn spawn(
         session.set_running(true);
         session.set_host(Box::new(crate::host::FrontendHost));
         if let Some(tap) = preview.clone() {
-            session.set_frame_hook(Box::new(move |m, running| tap.publish(m, running)));
+            let idle_tap = tap.clone();
+            session.set_overlay_wants(tap.overlay_wants());
+            session.set_frame_hook(Box::new(move |m, running| tap.frame(m, running)));
+            session.set_idle_hook(Box::new(move |m| idle_tap.idle(m)));
         }
+        // Cheats: the database, files from --cheat, the start images' entries.
+        if let Ok(mut d) = shared.cheats_dir.lock() {
+            session.set_cheats_dir(d.take());
+        }
+        if let Some(j) = shared.host_journal.lock().ok().and_then(|mut j| j.take()) {
+            session.set_host_journal(j);
+        }
+        let files = shared
+            .startup_cheats
+            .lock()
+            .map(|mut c| std::mem::take(&mut *c))
+            .unwrap_or_default();
+        for f in &files {
+            if let Err(e) = session.apply_cheat_file(f) {
+                eprintln!("cheats: {e}");
+            }
+        }
+        let images = shared
+            .startup_images
+            .lock()
+            .map(|mut c| std::mem::take(&mut *c))
+            .unwrap_or_default();
+        for path in &images {
+            if let Some(msg) = cheats_for_path(&mut session, path) {
+                eprintln!("{msg}");
+            }
+        }
+        let machine_name = shared
+            .snapshot_name
+            .lock()
+            .map(|n| n.clone())
+            .unwrap_or_default();
+        let rewind_mb = shared.rewind_mb.load(Ordering::Relaxed);
+        if rewind_mb > 0 {
+            session.rewind_config(Some(1), Some(rewind_mb));
+        }
+        // Ctrl+R held: the machine was running before and resumes after.
+        let mut rewind_resume = false;
         let mut samples = Vec::new();
         let frame_time = session.frame_duration();
         let mut deadline = Instant::now();
@@ -473,7 +604,10 @@ pub fn spawn(
                     == Some(emu_core::media::MediaKind::Cartridge)
             });
             if let Some(path) = carts.last() {
-                let msg = insert_cart(session.machine_mut(), path);
+                let mut msg = insert_cart(session.machine_mut(), path);
+                if let Some(c) = cheats_for_path(&mut session, path) {
+                    msg = format!("{msg}; {c}");
+                }
                 *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
             }
             if let Some(path) = dropped.into_iter().last() {
@@ -499,7 +633,10 @@ pub fn spawn(
             }
             if let Some((path, due)) = &pending_disk {
                 if frames_run >= *due {
-                    let msg = swap_disk(session.machine_mut(), path);
+                    let mut msg = swap_disk(session.machine_mut(), path);
+                    if let Some(c) = cheats_for_path(&mut session, path) {
+                        msg = format!("{msg}; {c}");
+                    }
                     *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
                     pending_disk = None;
                 }
@@ -525,11 +662,41 @@ pub fn spawn(
                     },
                 });
             }
+            let toggles = shared
+                .cheat_clicks
+                .lock()
+                .map(|mut c| std::mem::take(&mut *c))
+                .unwrap_or_default();
+            for (freeze, enabled) in toggles {
+                let _ = session.command(Command::FreezeToggle {
+                    freeze,
+                    enabled: Some(enabled),
+                });
+            }
             if shared.panel_on.load(Ordering::Relaxed) {
                 let controls = session.machine().controls();
                 if let Ok(mut c) = shared.controls.lock() {
                     *c = controls;
                 }
+                let rows = cheat_rows(&mut session);
+                if let Ok(mut c) = shared.cheats.lock() {
+                    *c = rows;
+                }
+            }
+            let fire = crate::panel::PAD_FIRE_BUTTONS
+                .get(usize::from(shared.pad_fire.load(Ordering::Relaxed)))
+                .copied();
+            if let (Some(fire), Some(now_fire)) = (fire, mapper.pad_fire()) {
+                if fire != now_fire {
+                    let now = session.machine().now();
+                    for e in mapper.set_pad_fire(fire, now) {
+                        session.input(e);
+                    }
+                }
+            }
+            if shared.save_mapping.swap(false, Ordering::Relaxed) {
+                let msg = save_mapping(&mapper, &machine_name);
+                *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
             }
             let wanted = JoyKeys::ALL
                 .get(usize::from(shared.joy_keys.load(Ordering::Relaxed)))
@@ -571,6 +738,33 @@ pub fn spawn(
                 }
             }
 
+            // Ctrl+R: two states back per frame time (twice real speed),
+            // silent; on release the machine runs on from there.
+            if shared.rewinding.load(Ordering::Relaxed) && rewind_mb > 0 {
+                if !rewind_resume {
+                    rewind_resume = session.is_running();
+                }
+                if session.rewind_back(2).is_ok() {
+                    push_frame(&shared, session.machine(), screen);
+                }
+                match &endpoint {
+                    Some(ep) => ep.publish(&mut session),
+                    None => drop(session.take_events()),
+                }
+                if let Ok(mut a) = shared.audio.lock() {
+                    a.clear();
+                }
+                shown_at = Some(session.machine().now());
+                thread::sleep(frame_time);
+                continue;
+            }
+            if std::mem::take(&mut rewind_resume) {
+                let _ = session.command(Command::Resume);
+                match &endpoint {
+                    Some(ep) => ep.publish(&mut session),
+                    None => drop(session.take_events()),
+                }
+            }
             let was_running = session.is_running();
             if shared.pause_toggle.swap(false, Ordering::Relaxed) {
                 let cmd = if was_running {
@@ -606,6 +800,7 @@ pub fn spawn(
                         *s = Some(stop_status(reason, pc));
                     }
                 }
+                session.idle();
                 if endpoint.is_none() {
                     thread::sleep(Duration::from_millis(10));
                 }
@@ -736,6 +931,22 @@ fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {
 mod tests {
     use super::*;
     use emu_core::registry::MachineConfig;
+
+    #[test]
+    fn cheats_show_as_panel_rows() {
+        let mut config = MachineConfig::default();
+        config.options.insert("roms".into(), "stub".into());
+        let machine = emu_machines::registry().create("c64", &config).unwrap();
+        let mut session = Session::new(machine, "c64");
+        assert!(cheat_rows(&mut session).is_empty());
+        let file = emu_cheats::import::import("pokes", "POKE 53280,2 : REM border", "cpu").unwrap();
+        session.apply_cheat_file(&file).unwrap();
+        let rows = cheat_rows(&mut session);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "BORDER $D020");
+        assert!(rows[0].enabled);
+        assert_eq!(cheats_for_path(&mut session, "missing.d64"), None);
+    }
 
     #[test]
     fn thread_produces_frames_and_stops() {

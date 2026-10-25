@@ -15,6 +15,11 @@
 //!   buttons), "amx" (AMX mouse) or "none"; `joy2`: a second joystick
 //!   daisy-chained through the first, "joystick" or "none" (default).
 //!   Joystick 0 reads as keyboard line 9, joystick 1 as line 6.
+//! - `expansion`: the expansion port, "lightpen" or "none" (default). The
+//!   pen's strobe goes to LPEN (pin 47) and the CRTC latches the refresh
+//!   address into R16/R17 where the Gate Array draws a bright pixel under
+//!   its tip; it strobes only while its switch is held (see
+//!   `devices_input::lightpen`).
 //!
 //! Media slots: "drive A" and "drive B" (664/6128: DSK images on the
 //! µPD765A, ports &FA7E motor, &FB7E status, &FB7F data) and "tape"
@@ -37,6 +42,7 @@
 
 pub mod keyboard;
 pub mod memory;
+pub mod overlay;
 pub mod stub;
 
 use chips_amstrad::ay::Ay;
@@ -67,10 +73,36 @@ use memory::{Memory, Rom, Roms, ROM_SIZE};
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The Z80's view: memory at 0–&FFFF, I/O ports at `IO_BASE + port`.
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
+/// All RAM by bank: the base 64 KB the Gate Array shows at 0–&FFFF, the
+/// 6128's extra banks 4–7 at &10000–&1FFFF.
+pub const RAM_SPACE: MemSpaceId = MemSpaceId(1);
 
 /// Joystick 0 (the port) and joystick 1 (daisy-chained through it).
 pub const JOY0: PortId = PortId(0);
 pub const JOY1: PortId = PortId(1);
+/// The expansion port (a light pen; [`PortKind::Cartridge`]).
+pub const EXPANSION: PortId = PortId(2);
+
+fn port_kind(id: PortId) -> PortKind {
+    if id == EXPANSION {
+        PortKind::Cartridge
+    } else {
+        PortKind::CpcJoy
+    }
+}
+
+/// `expansion`: "lightpen" or "none" (default).
+fn expansion_option(config: &MachineConfig) -> Result<Option<Box<dyn PortDevice>>, ConfigError> {
+    match config.options.get("expansion").map(String::as_str) {
+        None | Some("none") => Ok(None),
+        Some("lightpen") => Ok(Some(Box::new(devices_input::LightPen::new(
+            devices_input::LightPenKind::Cpc,
+        )))),
+        Some(other) => Err(ConfigError::Invalid(format!(
+            "expansion option '{other}' (lightpen or none)"
+        ))),
+    }
+}
 
 /// T-states one step of AMX mouse motion holds its direction line (1 ms).
 const AMX_STEP: u64 = 4000;
@@ -273,6 +305,23 @@ struct Io {
     cas_in: bool,
     /// The PAL's RAM configurations exist (6128).
     has_pal: bool,
+    /// The debug overlays' record while one is switched on (not machine
+    /// state, not saved).
+    rec: Option<Box<overlay::Record>>,
+    /// Where a light pen on the expansion port points (from its lines, not
+    /// saved; boxed so the hot struct stays small without a pen).
+    pen: Option<Box<PenTarget>>,
+}
+
+/// The monitor position at which a light pen sees its pixel drawn: line,
+/// microsecond, index in the Gate Array's picture; and which hardware
+/// colours light it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PenTarget {
+    line: u16,
+    us: u8,
+    index: usize,
+    lit: [bool; 32],
 }
 
 impl Io {
@@ -327,6 +376,9 @@ impl Io {
 
     /// An I/O write; several chips may be selected at once.
     fn write(&mut self, mem: &mut Memory, port: u16, v: u8) {
+        if self.rec.is_some() {
+            self.record_write(port, v);
+        }
         if port & 0xc000 == 0x4000 {
             if let Some(mmr) = self.ga.write(v) {
                 if self.has_pal {
@@ -357,11 +409,69 @@ impl Io {
         }
     }
 
+    /// The `crtc` overlay's mark for an I/O write, before it happens.
+    #[cold]
+    #[inline(never)]
+    fn record_write(&mut self, port: u16, v: u8) {
+        let beam = self.ga.beam();
+        let mut marks = Vec::new();
+        if port & 0xc000 == 0x4000 {
+            let label = match v >> 6 {
+                0 => None,
+                1 if self.ga.pen == 16 => Some(format!("BORDER={:02}", v & 0x1f)),
+                1 => Some(format!("INK {}={:02}", self.ga.pen, v & 0x1f)),
+                2 => Some(format!("MODE {}", v & 3)),
+                _ if self.has_pal => Some(format!("RAM {}", v & 7)),
+                _ => None,
+            };
+            marks.extend(label.map(|l| (l, true)));
+        }
+        if port & 0x4000 == 0 && (port >> 8) & 3 == 1 {
+            marks.push((format!("R{}={v:02X}", self.crtc.addr), false));
+        }
+        if let Some(rec) = self.rec.as_deref_mut() {
+            for (label, ga) in marks {
+                rec.mark(beam, label, ga);
+            }
+        }
+    }
+
+    /// A light pen on the expansion port or an overlay record: the chips
+    /// take [`Io::tick_us_extras`] (decided once per [`catch_up`], not per
+    /// microsecond, so the emulation without them pays nothing).
+    fn extras(&self) -> bool {
+        self.pen.is_some() || self.rec.is_some()
+    }
+
     /// One microsecond of video.
+    #[inline]
     fn tick_us(&mut self, mem: &Memory) {
         let out = self.crtc.tick();
         self.vsync = out.vsync;
         self.ga.tick(out, mem.video());
+    }
+
+    /// [`Io::tick_us`] with a light pen on the expansion port or an
+    /// overlay switched on.
+    #[cold]
+    #[inline(never)]
+    fn tick_us_extras(&mut self, mem: &Memory) {
+        let (line, us, _) = self.ga.beam();
+        let out = self.crtc.tick();
+        self.vsync = out.vsync;
+        self.ga.tick(out, mem.video());
+        if let Some(pen) = self.pen.as_deref() {
+            if pen.us == us && pen.line == line {
+                // The pen's pixel was drawn bright: a strobe on LPEN.
+                let colour = self.ga.pixels()[pen.index];
+                if pen.lit.get(usize::from(colour)) == Some(&true) {
+                    self.crtc.light_pen(out.ma);
+                }
+            }
+        }
+        if let Some(rec) = self.rec.as_deref_mut() {
+            rec.tick(self.ga.beam(), out.vsync);
+        }
     }
 }
 
@@ -390,9 +500,29 @@ struct Side<'a> {
 
 /// Run the chips up to (not including) T-state `to`.
 fn catch_up(mem: &Memory, io: &mut Io, now: &mut u64, to: u64, side: &mut Side<'_>) {
+    if io.extras() {
+        catch_up_with::<true>(mem, io, now, to, side);
+    } else {
+        catch_up_with::<false>(mem, io, now, to, side);
+    }
+}
+
+/// [`catch_up`] with (`EXTRAS`) or without a light pen and overlay record.
+#[inline(always)]
+fn catch_up_with<const EXTRAS: bool>(
+    mem: &Memory,
+    io: &mut Io,
+    now: &mut u64,
+    to: u64,
+    side: &mut Side<'_>,
+) {
     while *now < to {
         if *now % T_PER_US == CHIP_PHASE {
-            io.tick_us(mem);
+            if EXTRAS {
+                io.tick_us_extras(mem);
+            } else {
+                io.tick_us(mem);
+            }
             io.ay.tick();
             if io.has_fdc {
                 for d in side.drives.iter_mut() {
@@ -532,7 +662,8 @@ pub struct Cpc {
     audio: Decimator,
     samples: Vec<i16>,
     field_done_pending: bool,
-    ports: [Option<Box<dyn PortDevice>>; 2],
+    /// Joystick port, daisy-chained joystick, expansion port.
+    ports: [Option<Box<dyn PortDevice>>; 3],
     /// T-state of the next port refresh.
     ports_due: u64,
     drives: [CpcDrive; 2],
@@ -588,6 +719,8 @@ impl Cpc {
                 vsync: false,
                 cas_in: false,
                 has_pal: model == Model::Cpc6128,
+                rec: None,
+                pen: None,
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -599,6 +732,7 @@ impl Cpc {
             ports: [
                 port_option(config, "joy1", "joystick", true)?,
                 port_option(config, "joy2", "none", false)?,
+                expansion_option(config)?,
             ],
             ports_due: 0,
             drives: [CpcDrive::new(), CpcDrive::new()],
@@ -622,10 +756,12 @@ impl Cpc {
         }
     }
 
-    /// Read the joystick port's lines into the keyboard matrix.
+    /// Read the joystick port's lines into the keyboard matrix, and where
+    /// a light pen on the expansion port points.
     fn refresh_ports(&mut self) {
         let now = self.sched.now();
-        for (i, dev) in self.ports.iter_mut().enumerate() {
+        self.sync_light_pen();
+        for (i, dev) in self.ports.iter_mut().take(2).enumerate() {
             self.io.joy[i] = match dev {
                 Some(d) => {
                     d.write_lines(PortLines::default(), now);
@@ -634,6 +770,31 @@ impl Cpc {
                 None => 0,
             };
         }
+    }
+
+    /// The CRTC's light-pen input from a pen on the expansion port: the
+    /// position (frame pixels; the picture's rows are monitor lines) at
+    /// which the Gate Array draws its pixel.
+    fn sync_light_pen(&mut self) {
+        let now = self.sched.now();
+        let aim = self.ports[usize::from(EXPANSION.0)]
+            .as_ref()
+            .and_then(|d| devices_input::lightpen::aim(&d.read_lines(now)));
+        let palette = &self.palette;
+        self.io.pen = aim.and_then(|a| {
+            (u32::from(a.x) < gate_array::WIDTH && u32::from(a.y) < gate_array::HEIGHT).then(|| {
+                let mut lit = [false; 32];
+                for (lit, &c) in lit.iter_mut().zip(palette) {
+                    *lit = devices_input::lightpen::lit(c);
+                }
+                Box::new(PenTarget {
+                    line: a.y,
+                    us: (a.x / 16) as u8,
+                    index: usize::from(a.y) * gate_array::WIDTH as usize + usize::from(a.x),
+                    lit,
+                })
+            })
+        });
     }
 
     /// One instruction (or interrupt response). Returns `Some` if
@@ -880,13 +1041,67 @@ impl Machine for Cpc {
     }
 
     fn memory_spaces(&self) -> Vec<MemSpace> {
-        vec![MemSpace {
-            id: CPU_SPACE,
-            name: "cpu",
-            device: CPU,
-            addr_bits: 17,
-            big_endian: false,
-        }]
+        vec![
+            MemSpace {
+                id: CPU_SPACE,
+                name: "cpu",
+                device: CPU,
+                addr_bits: 17,
+                big_endian: false,
+            },
+            MemSpace {
+                id: RAM_SPACE,
+                name: "ram",
+                device: CPU,
+                addr_bits: self.mem.ram().len().trailing_zeros() as u8,
+                big_endian: false,
+            },
+        ]
+    }
+
+    /// `crtc`, `vsync` ([`overlay`]).
+    fn overlays(&self) -> Vec<emu_core::overlay::OverlayInfo> {
+        overlay::overlays()
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.io.rec = overlay::record(ids, self.io.rec.take());
+    }
+
+    fn overlay(&self, id: &str) -> Option<emu_core::overlay::Overlay> {
+        self.io.rec.as_deref()?.overlay(id, self.io.ga.beam().0)
+    }
+
+    /// The picture's rows are the monitor's lines 0–271 ([`BeamPos::line`]).
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        (u32::from(line) < gate_array::HEIGHT).then_some(u32::from(line))
+    }
+
+    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+        chips_amstrad::gfx::views()
+    }
+
+    /// The CRTC/Gate Array views (`chips_amstrad::gfx`): the screen as
+    /// the chips address it now and the pens, from the base 64 KB of RAM
+    /// ([`RAM_SPACE`]).
+    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+        let info = chips_amstrad::gfx::views()
+            .into_iter()
+            .find(|v| v.id == id)?;
+        let ctx = chips_amstrad::gfx::GfxContext {
+            ram: self.mem.video(),
+            space: RAM_SPACE,
+            palette: &self.palette,
+        };
+        Some(chips_amstrad::gfx::gfx_view(
+            &self.io.crtc,
+            &self.io.ga,
+            info.id,
+            info.kind,
+            info.name,
+            &ctx,
+            opts,
+        ))
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -982,24 +1197,28 @@ impl Machine for Cpc {
     }
 
     fn ports(&self) -> Vec<PortInfo> {
-        [(JOY0, "joystick port"), (JOY1, "joystick 2 (daisy chain)")]
-            .into_iter()
-            .map(|(id, name)| PortInfo {
-                id,
-                kind: PortKind::CpcJoy,
-                name,
-                connected: self.ports[usize::from(id.0)].is_some(),
-            })
-            .collect()
+        [
+            (JOY0, "joystick port"),
+            (JOY1, "joystick 2 (daisy chain)"),
+            (EXPANSION, "expansion port"),
+        ]
+        .into_iter()
+        .map(|(id, name)| PortInfo {
+            id,
+            kind: port_kind(id),
+            name,
+            connected: self.ports[usize::from(id.0)].is_some(),
+        })
+        .collect()
     }
 
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError> {
         let Some(slot) = self.ports.get_mut(usize::from(port.0)) else {
             return Err(PortError::NoSuchPort(port));
         };
-        if dev.kind() != PortKind::CpcJoy {
+        if dev.kind() != port_kind(port) {
             return Err(PortError::Incompatible {
-                port: PortKind::CpcJoy,
+                port: port_kind(port),
                 device: dev.kind(),
             });
         }
@@ -1076,7 +1295,7 @@ impl Machine for Cpc {
         for d in &self.drives {
             d.save(&mut w);
         }
-        for (i, tag) in [*b"JOY0", *b"JOY1"].into_iter().enumerate() {
+        for (i, tag) in [*b"JOY0", *b"JOY1", *b"EXPN"].into_iter().enumerate() {
             w.chunk(tag, 1, |w| {
                 w.bytes(
                     &self.ports[i]
@@ -1128,7 +1347,12 @@ impl Machine for Cpc {
             CpcDrive::new().load(&mut r)?;
         }
         let mut port_states = Vec::new();
-        for tag in [*b"JOY0", *b"JOY1"] {
+        for tag in [*b"JOY0", *b"JOY1", *b"EXPN"] {
+            // States from before the expansion port end after JOY1.
+            if tag == *b"EXPN" && r.remaining() == 0 {
+                port_states.push(Vec::new());
+                continue;
+            }
             let (_, mut c) = r.chunk(tag, 1)?;
             port_states.push(c.bytes()?.to_vec());
         }
@@ -1163,6 +1387,7 @@ impl Machine for Cpc {
         self.samples.clear();
         self.field_done_pending = field_done_pending;
         self.ports_due = ports_due;
+        self.sync_light_pen();
         Ok(())
     }
 }
@@ -1177,6 +1402,15 @@ impl DebugTarget for Cpc {
     }
 
     fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
+        if space == RAM_SPACE {
+            let ram = self.mem.ram();
+            let mut v = 0;
+            for i in 0..size.bytes() {
+                let a = addr.wrapping_add(i) as usize % ram.len();
+                v |= u32::from(ram[a]) << (8 * i);
+            }
+            return Some(v);
+        }
         if space != CPU_SPACE {
             return None;
         }
@@ -1189,6 +1423,14 @@ impl DebugTarget for Cpc {
     }
 
     fn poke(&mut self, space: MemSpaceId, addr: u32, size: Size, v: u32) -> bool {
+        if space == RAM_SPACE {
+            let len = self.mem.ram().len();
+            for i in 0..size.bytes() {
+                let a = addr.wrapping_add(i) as usize % len;
+                self.mem.set_ram(a, (v >> (8 * i)) as u8);
+            }
+            return true;
+        }
         if space != CPU_SPACE {
             return false;
         }

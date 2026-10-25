@@ -645,6 +645,9 @@ fn pea(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
 /// Control address calculation as LEA/PEA do it: (d8,An,Xn) and
 /// (d8,PC,Xn) take "n np n".
 fn control_ea(cpu: &mut M68000, bus: &mut dyn TimedBus68, m: u16, r: usize) -> Res<u32> {
+    if m != 6 && !(m == 7 && r == 3) {
+        cpu.note_mode(m, r, true);
+    }
     Ok(match (m, r) {
         (2, _) => cpu.a[r],
         (5, _) => {
@@ -774,7 +777,10 @@ fn movem(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, to_regs: bool) -> 
     }
     let mask = cpu.ext(bus)?;
     let mut addr = match m {
-        3 | 4 => cpu.a[r],
+        3 | 4 => {
+            cpu.note_mode(m, r, true);
+            cpu.a[r]
+        }
         _ => control_ea_movem(cpu, bus, m, r)?,
     };
     if to_regs {
@@ -795,8 +801,11 @@ fn movem(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, to_regs: bool) -> 
             }
             addr = addr.wrapping_add(sz.bytes());
         }
-        // The extra read.
-        cpu.read(bus, addr, Size::Word)?;
+        // The extra read (the 68000's; the 68020 reads only the
+        // registers).
+        if !cpu.is_020() {
+            cpu.read(bus, addr, Size::Word)?;
+        }
         if m == 3 {
             cpu.a[r] = addr;
         }
@@ -832,6 +841,9 @@ fn movem(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, to_regs: bool) -> 
 /// MOVEM's address calculation after the mask word: (d8,An,Xn) and
 /// (d8,PC,Xn) "n np".
 fn control_ea_movem(cpu: &mut M68000, bus: &mut dyn TimedBus68, m: u16, r: usize) -> Res<u32> {
+    if m != 6 && !(m == 7 && r == 3) {
+        cpu.note_mode(m, r, true);
+    }
     Ok(match (m, r) {
         (2, _) => cpu.a[r],
         (5, _) => {
@@ -999,6 +1011,7 @@ fn jsr_jmp(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, jsr: bool) -> Re
         }
         return cpu.prefetch(bus);
     }
+    cpu.note_mode(m, r, true);
     // Return address: the instruction after the extension words.
     let ret = cpu.pc().wrapping_add(match (m, r) {
         (2, _) => 2,

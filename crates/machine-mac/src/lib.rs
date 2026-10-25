@@ -70,6 +70,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adb;
+pub mod gfx;
 pub mod keyboard;
 pub mod rtc;
 pub mod scc;
@@ -1138,6 +1139,21 @@ impl Machine for Mac {
             luma_chroma: None,
             signal: self.signal(),
         }
+    }
+
+    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+        self.views()
+    }
+
+    /// Lines 0–341 of a frame are the picture's rows (the vertical
+    /// blanking follows them); [`BeamPos::hpos`] is two pixels a clock.
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        (u32::from(line) < video::HEIGHT).then_some(u32::from(line))
+    }
+
+    /// See [`gfx`]: the 512 × 342 screen buffer.
+    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+        self.view(id, opts)
     }
 
     fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {

@@ -530,3 +530,15 @@ fn b_iwm(m: &Mac) -> String {
     let i = &m.board.iwm;
     format!("lines {:02x} drives {:?}", i.lines, i.drives)
 }
+
+#[test]
+fn frame_rows_and_beam_columns_match_the_screen() {
+    let mut m = mac("plus");
+    assert_eq!(m.frame_row(0), Some(0));
+    assert_eq!(m.frame_row(341), Some(341));
+    assert_eq!(m.frame_row(342), None, "vertical blanking");
+    m.board.clock = 5 * video::LINE_CLOCKS + 10;
+    let b = m.beam().unwrap();
+    assert_eq!((b.line, b.hpos), (5, 20));
+    assert!(m.overlays().is_empty());
+}

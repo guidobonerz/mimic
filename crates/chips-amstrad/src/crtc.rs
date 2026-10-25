@@ -21,7 +21,13 @@
 //! 1 status (bit 5: vertical blanking, set while the row counter is at or
 //! past R6, cleared at row 0; bit 6: light pen strobe, set at power-on and
 //! cleared by reading R16 or R17, Arnold acid test `type1ctrl`), &BFxx
-//! reads the selected register. No light pen is fitted, so R16/R17 stay 0.
+//! reads the selected register. R16/R17 hold the light-pen address: a
+//! strobe on LPSTB (the CPC's expansion port pin 47, LPEN) latches the
+//! refresh address MA13–MA8 into R16 and MA7–MA0 into R17 ([`Crtc::light_pen`];
+//! Motorola MC6845 data sheet, "Light pen registers"; cpcwiki,
+//! "Connector:Expansion port"). Which character's address the strobe
+//! catches (the 6845 synchronises it to the character clock) is taken as
+//! the character being shown — not verified per CRTC type.
 //!
 //! [`Crtc::tick`] is one character clock (1 µs on the CPC). Type 1 reloads
 //! the start address at the start of every line of row 0; types 0 and 2
@@ -169,6 +175,15 @@ impl Crtc {
         if matches!(self.addr, 16 | 17) {
             self.lpen_full = false;
         }
+    }
+
+    /// A light-pen strobe (LPSTB rising edge) while the CRTC shows the
+    /// character at refresh address `ma`: R16 = MA13–8, R17 = MA7–0, and
+    /// the type 1 status bit 6 (register full) is set.
+    pub fn light_pen(&mut self, ma: u16) {
+        self.regs[16] = (ma >> 8) as u8 & 0x3f;
+        self.regs[17] = ma as u8;
+        self.lpen_full = true;
     }
 
     /// Port &BExx (no side effects).
@@ -442,6 +457,28 @@ mod tests {
         c.select(31);
         assert_eq!(c.read(), 0xff);
         assert_eq!(c.status() & 0x20, 0);
+    }
+
+    #[test]
+    fn light_pen_strobe_latches_the_refresh_address() {
+        for kind in [CrtcType::T0, CrtcType::T1, CrtcType::T2] {
+            let mut c = Crtc::new(kind);
+            c.light_pen(0x3123);
+            for (r, v) in [(16, 0x31), (17, 0x23)] {
+                c.select(r);
+                assert_eq!(c.read(), v, "{kind:?} R{r}");
+            }
+            // R16/R17 are read only.
+            c.select(16);
+            c.write(0);
+            assert_eq!(c.read(), 0x31);
+            c.after_read();
+            if kind == CrtcType::T1 {
+                assert_eq!(c.status() & 0x40, 0);
+                c.light_pen(0x0001);
+                assert_ne!(c.status() & 0x40, 0);
+            }
+        }
     }
 
     #[test]

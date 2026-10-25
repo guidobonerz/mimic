@@ -1,10 +1,22 @@
-//! Web frontend (wasm32).
+//! Web frontend (wasm32): every machine in the browser.
+//!
+//! [`app::WebEmu`] is the emulator as the page drives it (uploaded ROMs and
+//! images, one running machine, RGBA picture, float sound, browser input);
+//! [`abi`] exports it as plain WebAssembly functions for `www/mimic.js`,
+//! without generated bindings. The page itself lives in `www/` (build with
+//! `tools/build-web.sh`).
 //!
 //! Start profiles come as the text of a `profiles.yaml` the page loads
 //! (there is no file system): [`profile_args`] turns one into the command
 //! line the frontend starts its machine with, without the servers.
 
-#![forbid(unsafe_code)]
+// Exported functions need `#[no_mangle]`, which counts as unsafe code; only
+// the `abi` module has them, and it has no `unsafe` blocks.
+#![deny(unsafe_code)]
+
+pub mod abi;
+pub mod app;
+pub mod cheats;
 
 /// The command line for profile `name` of the profile file text `yaml`;
 /// the file's ROM folder stands in when the profile names none.

@@ -38,6 +38,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod gfx;
 pub mod keyboard;
 pub mod memory;
 pub mod stub;
@@ -624,6 +625,22 @@ impl Machine for Zx81 {
             luma_chroma: None,
             signal: self.signal(),
         }
+    }
+
+    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+        self.views()
+    }
+
+    /// The ULA's picture window starts [`ula::V_OFFSET`] lines after
+    /// VSYNC; [`BeamPos::hpos`] counts from its left edge.
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        let row = u32::from(line).checked_sub(ula::V_OFFSET)?;
+        (row < ula::HEIGHT).then_some(row)
+    }
+
+    /// See [`gfx`]: the character set and the display file.
+    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+        self.view(id, opts)
     }
 
     fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {

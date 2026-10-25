@@ -175,6 +175,11 @@ impl MediaBackend for CowOverlay {
     }
 }
 
+/// Media kind from a file name's extension (a name without a folder).
+pub fn kind_for_name(name: &str) -> Option<MediaKind> {
+    kind_for(Path::new(name))
+}
+
 /// Media kind from a file name extension.
 pub fn kind_for(path: &Path) -> Option<MediaKind> {
     let ext = path.extension()?.to_string_lossy().to_lowercase();
@@ -198,7 +203,6 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
 /// saves it (C16/Plus/4 format for "c16" and "plus4", the PET/VIC-20/C64
 /// format otherwise), named after the file.
 pub fn open_tape(path: &Path, machine_id: &str) -> Result<Media, MediaError> {
-    use media::tap::{encode_cbm, encode_ted, TapMachine, Video};
     let is_prg = path
         .extension()
         .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("prg"));
@@ -210,24 +214,42 @@ pub fn open_tape(path: &Path, machine_id: &str) -> Result<Media, MediaError> {
         return Ok(media);
     }
     let prg = std::fs::read(path).map_err(|e| MediaError::Backend(e.to_string()))?;
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    tape_from_bytes(&name, prg, machine_id)
+}
+
+/// [`open_tape`] for bytes that did not come from a file (the browser): a
+/// file `name` ending in `.prg` is recorded as the machine saves it, other
+/// names are taken as tape images.
+pub fn tape_from_bytes(name: &str, data: Vec<u8>, machine_id: &str) -> Result<Media, MediaError> {
+    use media::tap::{encode_cbm, encode_ted, TapMachine, Video};
+    let path = Path::new(name);
+    let is_prg = path
+        .extension()
+        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("prg"));
+    if !is_prg {
+        return Ok(from_bytes(name, data, MediaKind::Tape));
+    }
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().to_uppercase())
         .unwrap_or_default();
-    let name: Vec<u8> = stem
+    let tape_name: Vec<u8> = stem
         .bytes()
         .filter(|c| c.is_ascii_graphic() || *c == b' ')
         .take(16)
         .collect();
     let tap = match machine_id {
-        "c16" | "plus4" => encode_ted(&prg, &name, true, Video::Pal)?,
+        "c16" | "plus4" => encode_ted(&data, &tape_name, true, Video::Pal)?,
         id => {
             let machine = match id {
                 "vic20" => TapMachine::Vic20,
                 "pet" => TapMachine::Pet,
                 _ => TapMachine::C64,
             };
-            encode_cbm(&prg, &name, true, machine, Video::Pal)?
+            encode_cbm(&data, &tape_name, true, machine, Video::Pal)?
         }
     };
     Ok(Media {
@@ -237,6 +259,16 @@ pub fn open_tape(path: &Path, machine_id: &str) -> Result<Media, MediaError> {
             data: tap.to_bytes()?,
         }),
     })
+}
+
+/// Media from bytes in memory (uploaded in the browser) as `kind`, behind
+/// a copy-on-write overlay like files: writes stay in the overlay.
+pub fn from_bytes(name: &str, data: Vec<u8>, kind: MediaKind) -> Media {
+    Media {
+        name: name.rsplit(['/', '\\']).next().unwrap_or(name).to_string(),
+        kind,
+        backend: Box::new(CowOverlay::new(Box::new(MemoryBackend { data }))),
+    }
 }
 
 /// A cartridge image behind a copy-on-write overlay: a CRT file, or a raw

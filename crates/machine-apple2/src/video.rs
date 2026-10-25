@@ -271,7 +271,7 @@ impl Video {
 
     /// Seven dots of character `code` in cell row `row`, bit 0 first,
     /// inverse and flashing applied.
-    fn char_dots(&self, code: u8, row: u8, altchar: bool) -> u8 {
+    pub(crate) fn char_dots(&self, code: u8, row: u8, altchar: bool) -> u8 {
         if let Some(rom) = &self.char_rom {
             return self.rom_dots(rom, code, row, altchar);
         }

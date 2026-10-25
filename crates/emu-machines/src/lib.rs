@@ -24,18 +24,26 @@ fn joystick_port(kind: PortKind) -> bool {
 }
 
 /// Names of the devices [`create_device`] makes for a port of `kind`.
+///
+/// "lightpen" works where the machine wires the port to its video chip's
+/// light-pen input: C64/C128 control port 1, Atari 8-bit joystick ports,
+/// Amiga game port 0, the CPC's expansion port. In another port of the same
+/// kind (or on a VIC-20, C16/Plus/4, 2600) it only reports its button.
 pub fn device_names(kind: PortKind) -> Vec<&'static str> {
     match kind {
-        PortKind::CbmControl => vec!["joystick", "paddles", "mouse1351"],
-        PortKind::AtariJoy => vec!["joystick", "paddles", "keypad", "driving"],
+        PortKind::CbmControl => vec!["joystick", "paddles", "mouse1351", "lightpen"],
+        PortKind::AtariJoy => vec!["joystick", "paddles", "keypad", "driving", "lightpen"],
         PortKind::CpcJoy => vec!["joystick", "amx"],
-        PortKind::AmigaGameport => vec!["mouse", "joystick"],
+        PortKind::AmigaGameport => vec!["mouse", "joystick", "lightpen"],
+        // The CPC's expansion port.
+        PortKind::Cartridge => vec!["lightpen"],
         PortKind::ColecoControl => vec!["controller", "superaction", "driving", "roller"],
         PortKind::NesControl => vec!["controller", "zapper", "arkanoid"],
         PortKind::SnesControl => vec!["pad", "mouse", "superscope"],
         PortKind::VectrexControl => vec!["controller", "lightpen"],
         PortKind::AppleGame => vec!["joystick", "paddles"],
         PortKind::MacMouse => vec!["mouse"],
+        PortKind::CbmUserPort => vec!["wic64"],
         k if joystick_port(k) => vec!["joystick"],
         _ => Vec::new(),
     }
@@ -94,6 +102,10 @@ pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> 
         };
         return Some(Box::new(AppleJoystick::new(k)));
     }
+    if name == "lightpen" {
+        return devices_input::LightPenKind::for_port(kind)
+            .map(|k| Box::new(devices_input::LightPen::new(k)) as Box<dyn PortDevice>);
+    }
     match name {
         "joystick" if joystick_port(kind) => Some(Box::new(devices_input::Joystick::new(kind))),
         "paddles" if matches!(kind, PortKind::CbmControl | PortKind::AtariJoy) => {
@@ -118,6 +130,8 @@ pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> 
         }
         // One step of motion per millisecond of the CPC's 4 MHz clock.
         "amx" if kind == PortKind::CpcJoy => Some(Box::new(devices_input::AmxMouse::new(4000))),
+        // Its network comes from the machine's host services on connect.
+        "wic64" if kind == PortKind::CbmUserPort => Some(Box::new(devices_net::Wic64::new())),
         _ => None,
     }
 }
@@ -157,8 +171,19 @@ mod tests {
     fn device_catalogue() {
         assert_eq!(
             device_names(PortKind::CbmControl),
-            ["joystick", "paddles", "mouse1351"]
+            ["joystick", "paddles", "mouse1351", "lightpen"]
         );
+        for kind in [
+            PortKind::CbmControl,
+            PortKind::AtariJoy,
+            PortKind::AmigaGameport,
+            PortKind::Cartridge,
+        ] {
+            assert!(device_names(kind).contains(&"lightpen"));
+            let pen = create_device("lightpen", kind).unwrap();
+            assert_eq!(pen.kind(), kind);
+        }
+        assert!(create_device("lightpen", PortKind::CpcJoy).is_none());
         assert!(create_device("mouse1351", PortKind::CbmControl).is_some());
         assert_eq!(
             create_device("paddles", PortKind::AtariJoy).map(|d| d.kind()),

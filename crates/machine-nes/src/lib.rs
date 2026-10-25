@@ -66,6 +66,8 @@
 
 #![forbid(unsafe_code)]
 
+mod overlay;
+
 use chips_nintendo::ppu::{self, PpuBus};
 use chips_nintendo::{Apu, ApuModel, Ppu, PpuModel};
 use cpu_6502::{Config, Cpu6502, Variant};
@@ -75,9 +77,11 @@ use devices_input::nes::{pin, NO_AIM};
 use devices_input::{NesController, NesKind};
 use emu_core::audio::Decimator;
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::overlay::{Overlay, OverlayInfo};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::{
@@ -526,6 +530,8 @@ pub struct Nes {
     sched: Scheduler,
     input: InputQueue,
     field_done_pending: bool,
+    /// Debug overlay records (not machine state).
+    ov: overlay::Overlays,
 }
 
 fn new_cpu() -> Cpu6502 {
@@ -601,6 +607,7 @@ impl Nes {
             sched: Scheduler::new(),
             input: InputQueue::new(),
             field_done_pending: false,
+            ov: overlay::Overlays::default(),
         })
     }
 
@@ -614,7 +621,7 @@ impl Nes {
             frame: p.fields,
             line: p.line,
             cycle: p.dot / 3,
-            hpos: p.dot,
+            hpos: overlay::dot_column(p.dot),
         }
     }
 
@@ -708,6 +715,12 @@ impl Nes {
         // PPUSTATUS read in the cycle the flag rose cancels the NMI.
         self.cpu
             .sample_interrupts(self.board.ppu.nmi(), self.board.apu.irq() || cart_irq);
+        if self.ov.irq {
+            let b = &self.board;
+            let cart = b.cart.as_ref().is_some_and(NesCart::irq);
+            self.ov
+                .sample([b.ppu.nmi(), cart, b.apu.irq()], b.ppu.line, b.ppu.dot);
+        }
         self.board.cycle += 1;
         self.sched.tick();
         let level = self.board.apu.output() - 32_768;
@@ -721,6 +734,10 @@ impl Nes {
                 .push((y >> 16).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16);
         }
         let field = std::mem::take(&mut self.board.field_done);
+        if field && self.ov.any() {
+            self.board.ppu.overlay_end_frame();
+            self.ov.end_frame();
+        }
         if let Some(dbg) = dbg {
             if let CycleResult::InstrDone { next_pc } = result {
                 if let Some(kind) = self.cpu.take_interrupt() {
@@ -830,8 +847,9 @@ impl Machine for Nes {
         if std::mem::take(&mut self.field_done_pending) {
             return StopReason::FrameDone;
         }
-        let b = self.beam_pos();
-        if b.line == 241 && b.hpos < 4 {
+        self.ov.fresh = false;
+        let p = &self.board.ppu;
+        if p.line == 241 && p.dot < 4 {
             for f in dbg.per_frame_freezes() {
                 if f.space == CPU_SPACE {
                     for i in 0..f.size.bytes() {
@@ -851,6 +869,7 @@ impl Machine for Nes {
     }
 
     fn step_cycle(&mut self) -> StopReason {
+        self.ov.fresh = false;
         match self.cycle(None) {
             Some(stop @ StopReason::CpuJam { .. }) => stop,
             _ => StopReason::StepDone,
@@ -867,6 +886,7 @@ impl Machine for Nes {
             b.ram.fill(0);
             b.ciram.fill(0);
             b.ppu = Ppu::new(b.ppu.model);
+            b.ppu.set_overlays(&self.ov.ids);
             b.apu = Apu::new(b.apu.model);
             b.cart = self.cart.cart().cloned();
             if let Some(c) = &mut b.cart {
@@ -894,6 +914,50 @@ impl Machine for Nes {
             luma_chroma: None,
             signal: self.signal(),
         }
+    }
+
+    /// The PPU's views: `tiles` (both pattern tables through the mapper's
+    /// CHR banking), `screen` (the four nametables as mirrored),
+    /// `sprites` (OAM) and `palette`; read through the peek path, so
+    /// mappers watching A12 (MMC3) see nothing.
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        ppu::gfx::views(self.board.ppu.model.chip_name())
+    }
+
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        let b = &self.board;
+        let peek = |a: u16| peek_ppu(b.cart.as_ref(), &b.ciram, a);
+        let ctx = ppu::gfx::GfxContext {
+            peek: &peek,
+            space: PPU_SPACE,
+            oam_space: OAM_SPACE,
+        };
+        b.ppu.gfx_view(id, &ctx, opts)
+    }
+
+    /// `sprites` (boxes per sprite as evaluated line by line), `sprite0`
+    /// (where the sprite-0 hit happened) and `irq` (NMI, mapper and APU
+    /// requests with line and dot).
+    fn overlays(&self) -> Vec<OverlayInfo> {
+        overlay::infos(self.board.ppu.model.chip_name())
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.ov.set(ids, self.board.ppu.model.chip_name());
+        self.board.ppu.set_overlays(ids);
+    }
+
+    fn overlay(&self, id: &str) -> Option<Overlay> {
+        let last = self.ov.fresh;
+        match id {
+            "irq" => self.ov.irq_overlay(last),
+            _ => self.board.ppu.overlay(id, last),
+        }
+    }
+
+    /// Lines 0–239 are the picture's rows.
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        (usize::from(line) < ppu::HEIGHT).then_some(u32::from(line))
     }
 
     fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {

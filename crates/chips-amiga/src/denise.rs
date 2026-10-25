@@ -165,6 +165,12 @@ pub struct Denise {
     pub clxcon2: u16,
     /// Collisions seen since CLXDAT was last read (bits 14–0).
     pub clxdat: u16,
+    /// The `sprites` overlay records where sprites show (not machine
+    /// state; `custom::overlay`).
+    pub(crate) rec_sprites: bool,
+    /// First and last pixel each sprite showed on this line while
+    /// recording.
+    pub(crate) spr_seen: [(u32, u32); 8],
 }
 
 /// One sprite's registers and shifter.
@@ -271,6 +277,8 @@ impl Denise {
             clxcon: 0,
             clxcon2: 0,
             clxdat: 0,
+            rec_sprites: false,
+            spr_seen: [(u32::MAX, 0); 8],
         }
     }
 
@@ -386,6 +394,7 @@ impl Denise {
 
     /// The frontmost sprite colour at this pixel (pair, colour register)
     /// and every sprite's value.
+    #[inline(always)]
     fn sprite_pixel(&mut self, x: u32) -> (Option<(u8, u8)>, [u8; 8]) {
         let width = self.sprite_width();
         let step = self.sprite_step();
@@ -555,6 +564,26 @@ impl Denise {
     /// The four high-resolution pixels of colour clock `h` (Denise line
     /// coordinates) as 24-bit colours.
     pub fn output(&mut self, h: u32, out: &mut [u32; 4]) {
+        // The `sprites` overlay's record takes its own copy of the loop:
+        // its check in the pixel loop cost the A500 ~6 % (measured
+        // 2026-10-25). `color` and `sprite_pixel` are `inline(always)`: with
+        // two copies (and the graphics views calling `color`) LLVM kept
+        // them out of line.
+        if self.rec_sprites {
+            return self.output_recording(h, out);
+        }
+        self.output_with::<false>(h, out);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn output_recording(&mut self, h: u32, out: &mut [u32; 4]) {
+        self.output_with::<true>(h, out);
+    }
+
+    /// [`Denise::output`] with (`REC`) or without the `sprites` record.
+    #[inline(always)]
+    fn output_with<const REC: bool>(&mut self, h: u32, out: &mut [u32; 4]) {
         let (start, stop) = self.window();
         let hires = self.hires();
         let shres = self.shres();
@@ -626,7 +655,11 @@ impl Denise {
             // with `tools/amiga_sprtest.py`). Interference hides its sprite
             // boxes behind its raster bars by switching to BPU = 0 four lines
             // before it stops sprite DMA.
-            let sprite = sprite.filter(|_| (inside && self.armed) || border_sprites);
+            let shown = (inside && self.armed) || border_sprites;
+            let sprite = sprite.filter(|_| shown);
+            if REC && sprites_live && shown {
+                self.record_sprites_seen(x, vals);
+            }
             if inside && self.armed {
                 if vals != [0; 8] {
                     self.clxdat |= self.collisions(index, &vals);
@@ -673,9 +706,21 @@ impl Denise {
         }
     }
 
+    /// The `sprites` overlay: the sprites opaque in `vals` showed at `x`.
+    #[cold]
+    #[inline(never)]
+    fn record_sprites_seen(&mut self, x: u32, vals: [u8; 8]) {
+        for (s, &v) in self.spr_seen.iter_mut().zip(&vals) {
+            if v != 0 {
+                *s = (s.0.min(x), s.1.max(x));
+            }
+        }
+    }
+
     /// The playfield colour of a pixel and the playfield (1 or 2) it comes
     /// from, `None` where both are transparent.
-    fn color(&mut self, index: u8, planes: usize) -> (u32, Option<u8>) {
+    #[inline(always)]
+    pub(crate) fn color(&mut self, index: u8, planes: usize) -> (u32, Option<u8>) {
         let ham = self.bplcon0 & 0x0800 != 0;
         let dual = self.bplcon0 & 0x0400 != 0;
         let single = (index != 0).then_some(2);

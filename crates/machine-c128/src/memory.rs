@@ -294,8 +294,12 @@ pub struct VicView<'a> {
     pub cart: Option<&'a dyn ExpansionCart>,
 }
 
-impl VicMemory for VicView<'_> {
-    fn read(&self, addr: u16) -> u8 {
+impl VicView<'_> {
+    /// The VIC's byte at `addr` with RAM from `ram_bank` (the MMU's choice
+    /// in [`VicMemory::read`]; the debugger's graphics views may pick
+    /// another).
+    #[inline]
+    pub fn read_bank(&self, addr: u16, ram_bank: Option<u8>) -> u8 {
         let m = self.mem;
         let addr = addr & 0x3fff;
         if m.ultimax() && addr & 0x3000 == 0x3000 {
@@ -310,8 +314,39 @@ impl VicMemory for VicView<'_> {
             let half = if c64 { 0 } else { 0x1000 };
             return m.roms.chargen[half | usize::from(addr & 0x0fff)];
         }
-        let bank = if c64 { 0 } else { m.mmu.vic_bank() };
+        let bank = ram_bank.unwrap_or(if c64 { 0 } else { m.mmu.vic_bank() });
         m.ram_at(bank, self.base | addr)
+    }
+
+    /// RAM bank the VIC sees now (bank 0 in C64 mode).
+    pub fn ram_bank(&self) -> u8 {
+        if self.mem.mmu.c64_mode() {
+            0
+        } else {
+            self.mem.mmu.vic_bank() & 1
+        }
+    }
+}
+
+/// [`VicView`] with a RAM bank of the debugger's choice, for graphics views.
+pub struct GfxVicView<'a> {
+    pub view: VicView<'a>,
+    pub ram_bank: u8,
+}
+
+impl VicMemory for GfxVicView<'_> {
+    fn read(&self, addr: u16) -> u8 {
+        self.view.read_bank(addr, Some(self.ram_bank))
+    }
+
+    fn color(&self, index: u16) -> u8 {
+        self.view.color(index)
+    }
+}
+
+impl VicMemory for VicView<'_> {
+    fn read(&self, addr: u16) -> u8 {
+        self.read_bank(addr, None)
     }
 
     fn color(&self, index: u16) -> u8 {

@@ -480,3 +480,206 @@ fn the_130xe_switches_banks_for_cpu_and_antic() {
     let mut xl = stub("800xl");
     assert!(xl.load_state(&s).is_err());
 }
+
+#[test]
+fn gfx_views_follow_the_display_list_and_antic_banking() {
+    let mut m = stub("800xl");
+    frames(&mut m, 2);
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["players", "charset", "screen", "palette"]);
+    // The stub's list: 24 blank lines, 24 mode 2 lines from $4000, JVB.
+    poke(&mut m, 0xd409, 0x30); // CHBASE $3000 (RAM)
+    poke(&mut m, 0x3008, 0xff); // char 1, row 0
+    poke(&mut m, 0x4000, 0x01);
+    let s = m.gfx_view("screen", &GfxOptions::new()).unwrap();
+    assert_eq!(s.space, ANTIC_SPACE);
+    assert_eq!(s.param("dlist"), Some(0xf100));
+    assert_eq!(s.param("first_lms"), Some(u32::from(stub::SCREEN)));
+    assert_eq!(s.param("mode_lines"), Some(24));
+    assert_eq!((s.width, s.height), (384, 24 + 24 * 8));
+    assert_eq!(s.raw.len(), 24 * 40);
+    let lum = (m.io.gtia.colpf[2] & 0xf0) | (m.io.gtia.colpf[1] & 0x0f);
+    match &s.pixels {
+        emu_core::gfx::GfxPixels::Indexed { pixels, palette } => {
+            assert_eq!(pixels[24 * 384 + 32], lum);
+            assert_eq!(palette.len(), 256);
+        }
+        _ => panic!("indexed"),
+    }
+    let c = m.gfx_view("charset", &GfxOptions::new()).unwrap();
+    assert_eq!((c.addr, c.raw[8]), (0x3000, 0xff));
+    let p = m.gfx_view("players", &GfxOptions::new()).unwrap();
+    assert_eq!(p.param("source"), Some(1), "no P/M DMA: registers");
+    assert_eq!(
+        m.gfx_view("palette", &GfxOptions::new()).unwrap().raw.len(),
+        256
+    );
+    assert!(m.gfx_view("nope", &GfxOptions::new()).is_none());
+
+    // 130XE: ANTIC sees extended bank 1 at $4000, the CPU main RAM.
+    let mut m = stub("130xe");
+    frames(&mut m, 1);
+    poke(&mut m, 0xd303, 0x30);
+    poke(&mut m, 0xd301, 0xff);
+    poke(&mut m, 0xd303, 0x34);
+    poke(&mut m, 0xd301, 0xff);
+    poke(&mut m, 0x4000, 0x11);
+    poke(&mut m, 0xd301, 0xe7); // CPU bank 1
+    poke(&mut m, 0x4000, 0x22);
+    poke(&mut m, 0xd301, 0xd7); // ANTIC bank 1, CPU main RAM
+    assert_eq!(byte(&m, 0x4000), 0x11);
+    assert_eq!(m.peek(ANTIC_SPACE, 0x4000, Size::Byte), Some(0x22));
+    let s = m.gfx_view("screen", &GfxOptions::new()).unwrap();
+    assert_eq!(s.raw[0], 0x22, "decoded from ANTIC's bank");
+}
+
+fn band_labels(o: &emu_core::overlay::Overlay) -> Vec<(i32, u32, String)> {
+    o.shapes
+        .iter()
+        .filter_map(|s| match s {
+            emu_core::overlay::Shape::Band { y, h, label, .. } => {
+                Some((*y, *h, label.clone().unwrap_or_default()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn overlays_record_the_display_list_players_and_dlis() {
+    let mut m = stub("800xl");
+    assert_eq!(m.overlays().len(), 3);
+    assert!(m.overlay("dlist").is_none(), "off by default");
+    m.set_overlays(&["dlist", "players", "dli"]);
+    // The stub's list: 3 × 8 blank lines, mode 2 with LMS, 23 × mode 2, JVB.
+    poke(&mut m, 0xd00d, 0xff); // GRAFP0 (no P/M DMA: stays)
+    poke(&mut m, 0xd000, 0x80); // HPOSP0
+    poke(&mut m, 0xd008, 0x01); // SIZEP0 double
+    frames(&mut m, 2);
+    let d = m.overlay("dlist").unwrap();
+    assert_eq!(
+        band_labels(&d),
+        [
+            (0, 24, "BLK x3".to_string()),
+            (24, 8, "2 LMS".to_string()),
+            (32, 184, "2 x23".to_string()),
+            (216, 24, "JVB".to_string()),
+        ]
+    );
+    let p = m.overlay("players").unwrap();
+    assert_eq!(
+        p.shapes,
+        [emu_core::overlay::Shape::Rect {
+            x: 2 * (0x80 - 32),
+            y: 0,
+            w: 32,
+            h: 240,
+            color: emu_core::overlay::colors::SERIES[0],
+            label: Some("P0".into()),
+        }]
+    );
+    assert!(m.overlay("dli").unwrap().shapes.is_empty());
+
+    // A list of our own with a DLI on its third blank mode line.
+    let dl = [0x70, 0x70, 0xf0, 0x42, 0x00, 0x40, 0x41, 0x00, 0x30];
+    for (i, &b) in dl.iter().enumerate() {
+        poke(&mut m, 0x3000 + i as u16, b);
+    }
+    poke(&mut m, 0xd402, 0x00);
+    poke(&mut m, 0xd403, 0x30);
+    poke(&mut m, 0xd40e, 0xc0); // NMIEN: DLI + VBI
+    frames(&mut m, 2);
+    assert_eq!(
+        band_labels(&m.overlay("dlist").unwrap()),
+        [
+            (0, 16, "BLK x2".to_string()),
+            (16, 8, "BLK DLI".to_string()),
+            (24, 8, "2 LMS".to_string()),
+            (32, 208, "JVB".to_string()),
+        ]
+    );
+    let dli = m.overlay("dli").unwrap();
+    assert_eq!(dli.shapes.len(), 1);
+    match &dli.shapes[0] {
+        emu_core::overlay::Shape::Mark { y, label, .. } => {
+            assert_eq!(*y, 31 - 8, "last line of the mode line");
+            assert_eq!(label.as_deref(), Some("DLI"));
+        }
+        s => panic!("{s:?}"),
+    }
+    // Switched off: nothing.
+    m.set_overlays(&["players"]);
+    assert!(m.overlay("dlist").is_none());
+    m.set_overlays(&[]);
+    assert!(m.overlay("players").is_none());
+    assert!(m.overlay_rec.is_none());
+}
+
+#[test]
+fn frame_rows_and_savestates_ignore_overlays() {
+    let m = stub("800xl");
+    assert_eq!(m.frame_row(7), None);
+    assert_eq!(m.frame_row(8), Some(0));
+    assert_eq!(m.frame_row(247), Some(239));
+    assert_eq!(m.frame_row(248), None);
+    let mut a = stub("800xl");
+    let mut b = stub("800xl");
+    b.set_overlays(&["dlist", "players", "dli"]);
+    frames(&mut a, 3);
+    frames(&mut b, 3);
+    assert_eq!(a.save_state(), b.save_state());
+    assert_eq!(a.framebuffer().pixels, b.framebuffer().pixels);
+    b.load_state(&a.save_state()).unwrap();
+    assert!(
+        b.overlay("dlist").unwrap().shapes.is_empty(),
+        "cleared on load"
+    );
+}
+
+fn pen_event(at: u64, port: u8, x: u16, y: u16, trigger: bool) -> TimedInput {
+    TimedInput {
+        at: Cycle(at),
+        target: InputTarget::Port(PortId(port)),
+        event: emu_core::input::InputEvent::LightPen { x, y, trigger },
+    }
+}
+
+#[test]
+fn light_pen_latches_penh_and_penv() {
+    let mut config = MachineConfig {
+        model: Some("800xl".into()),
+        ..MachineConfig::default()
+    };
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("port1".into(), "lightpen".into());
+    let mut m = Atari8::new(&config).unwrap();
+    frames(&mut m, 2);
+    // Display DMA off, white background: the whole picture is lit.
+    poke(&mut m, 0xd400, 0x00);
+    poke(&mut m, 0xd01a, 0x0f);
+    let now = m.now().0;
+    m.input(pen_event(now, 0, 100, 50, true));
+    frames(&mut m, 2);
+    // Frame column 100 is colour clock 32 + 50; row 50 is line 8 + 50,
+    // VCOUNT 29.
+    assert_eq!((byte(&m, 0xd40c), byte(&m, 0xd40d)), (82, 29));
+    // The pen's button is the stick's up line (PORTA bit 0, port 1).
+    poke(&mut m, 0xd302, 0x3c);
+    assert_eq!(byte(&m, 0xd300) & 0x0f, 0x0e);
+    // Savestate: the registers and the pen's aim come back.
+    let s = m.save_state();
+    let now = m.now().0;
+    m.input(pen_event(now, 0, 200, 100, false));
+    frames(&mut m, 1);
+    assert_eq!((byte(&m, 0xd40c), byte(&m, 0xd40d)), (132, 54));
+    m.load_state(&s).unwrap();
+    assert_eq!((byte(&m, 0xd40c), byte(&m, 0xd40d)), (82, 29));
+    frames(&mut m, 1);
+    assert_eq!((byte(&m, 0xd40c), byte(&m, 0xd40d)), (82, 29));
+    // A black picture does not light the pen: the latch stays.
+    poke(&mut m, 0xd01a, 0x00);
+    let now = m.now().0;
+    m.input(pen_event(now, 0, 200, 100, false));
+    frames(&mut m, 2);
+    assert_eq!((byte(&m, 0xd40c), byte(&m, 0xd40d)), (82, 29));
+}

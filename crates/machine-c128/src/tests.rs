@@ -229,3 +229,136 @@ fn debugger_view() {
     assert_eq!(chips, ["vic2", "cia1", "cia2", "mmu", "vdc"]);
     assert!(m.debug_target(DeviceId("drive8")).is_none());
 }
+
+#[test]
+fn graphics_views_of_the_vic_and_the_vdc() {
+    let mut m = stub();
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(
+        ids,
+        [
+            "sprites",
+            "charset",
+            "bitmap",
+            "screen",
+            "palette",
+            "vdc-charset",
+            "vdc-screen",
+            "vdc-palette"
+        ]
+    );
+    // VIC-IIe: screen $0400, characters $2000 in VIC bank 0.
+    m.io.vic.write(0x18, 0x18);
+    m.mem.ram[0x0400] = 1;
+    m.mem.ram[0x2008] = 0x80;
+    m.mem.color[0] = 2;
+    m.mem.color[0x400] = 2;
+    m.mem.ram[0x1_0400] = 3;
+    let opts = GfxOptions::new().with("bank", 0);
+    let sc = m.gfx_view("screen", &opts).unwrap();
+    assert_eq!((sc.width, sc.height), (320, 200));
+    assert_eq!(sc.space, RAM_SPACE);
+    assert_eq!(sc.addr, 0x0400);
+    assert_eq!(sc.param("rambank"), Some(0));
+    assert_eq!(sc.raw.len(), 1000);
+    assert_eq!(sc.frame().rgb_at(0, 0), Some(m.vic_palette[2]));
+    assert_eq!(
+        sc.frame().rgb_at(1, 0),
+        Some(m.vic_palette[0]),
+        "background"
+    );
+    let sc1 = m
+        .gfx_view("screen", &opts.clone().with("rambank", 1))
+        .unwrap();
+    assert_eq!(sc1.addr, 0x1_0400);
+    assert_eq!(sc1.raw[0], 3);
+    let by_addr = m
+        .gfx_view("screen", &GfxOptions::new().with("addr", 0x1_0400))
+        .unwrap();
+    assert_eq!((by_addr.addr, by_addr.raw[0]), (0x1_0400, 3));
+    assert_eq!(m.gfx_view("charset", &opts).unwrap().raw.len(), 2048);
+
+    // VDC: the KERNAL layout (screen 0, attributes $0800, characters $2000).
+    assert!(m.poke(VDC_SPACE, 0, Size::Byte, 1));
+    assert!(m.poke(VDC_SPACE, 0x0800, Size::Byte, 0x0d));
+    assert!(m.poke(VDC_SPACE, 0x2000 + 16, Size::Byte, 0x80));
+    let v = m.gfx_view("vdc-screen", &GfxOptions::new()).unwrap();
+    assert_eq!(v.space, VDC_SPACE);
+    assert_eq!((v.width, v.height), (640, 200));
+    assert_eq!(v.frame().rgb_at(0, 0), Some(m.vdc_palette[13]));
+    assert_eq!(v.frame().rgb_at(1, 0), Some(m.vdc_palette[0]));
+    let cs = m.gfx_view("vdc-charset", &GfxOptions::new()).unwrap();
+    assert_eq!(cs.param("charbase"), Some(0x2000));
+    assert_eq!(cs.raw.len(), 512 * 16);
+    let p = m.gfx_view("vdc-palette", &GfxOptions::new()).unwrap();
+    assert_eq!(p.raw.len(), 16);
+    assert!(m.gfx_view("vdc-nothing", &GfxOptions::new()).is_none());
+    assert!(m.gfx_view("nothing", &GfxOptions::new()).is_none());
+}
+
+#[test]
+fn overlays_record_bad_lines_and_sprites() {
+    let mut m = stub();
+    let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
+    assert_eq!(ids, ["badlines", "sprites"]);
+    assert!(m.overlay("badlines").is_none(), "off by default");
+    assert_eq!(m.frame_row(16), Some(0));
+    assert_eq!(m.frame_row(15), None);
+    let plain = m.save_state();
+    m.set_overlays(&["badlines", "sprites"]);
+    assert_eq!(m.save_state(), plain, "the record is not state");
+    m.io.vic.write(0x11, 0x1b);
+    m.io.vic.write(0x15, 0x01);
+    m.io.vic.write(0x00, 100);
+    m.io.vic.write(0x01, 80);
+    let mut dbg = DebugHooks::new();
+    for _ in 0..2 {
+        while m.run_frame(&mut dbg) != StopReason::FrameDone {}
+    }
+    let bad = m.overlay("badlines").unwrap();
+    assert_eq!(bad.shapes.len(), 25);
+    assert!(matches!(
+        bad.shapes[0],
+        emu_core::overlay::Shape::Band { y, .. } if y == m.frame_row(0x33).unwrap() as i32
+    ));
+    let sp = m.overlay("sprites").unwrap();
+    let row = m.frame_row(81).unwrap() as i32;
+    assert!(matches!(
+        sp.shapes[..],
+        [emu_core::overlay::Shape::Rect { x: 108, y, w: 24, h: 21, .. }] if y == row
+    ));
+    m.set_overlays(&[]);
+    assert!(m.overlay("sprites").is_none());
+}
+
+#[test]
+fn light_pen_in_control_port_1_latches_the_vic_iie() {
+    let mut m = stub_with("pal", &[("port1", "lightpen")]);
+    for _ in 0..3 {
+        m.run_frame(&mut DebugHooks::new());
+    }
+    let r = |m: &C128, a| m.peek(CPU_SPACE, a, Size::Byte).unwrap() as u8;
+    // White border, display off: the pen sees light everywhere.
+    assert!(m.poke(CPU_SPACE, 0xd020, Size::Byte, 1));
+    assert!(m.poke(CPU_SPACE, 0xd011, Size::Byte, 0x0b));
+    let now = m.now().0;
+    m.input(TimedInput {
+        at: Cycle(now),
+        target: InputTarget::Port(PortId(0)),
+        event: InputEvent::LightPen {
+            x: 100,
+            y: 50,
+            trigger: false,
+        },
+    });
+    m.run_frame(&mut DebugHooks::new());
+    m.run_frame(&mut DebugHooks::new());
+    // Frame pixel (100, 50): X = 92, raster line 66, as on the C64.
+    assert_eq!((r(&m, 0xd013), r(&m, 0xd014)), (46, 66));
+    assert_ne!(r(&m, 0xd019) & 0x08, 0);
+    let s = m.save_state();
+    let mut n = stub_with("pal", &[("port1", "lightpen")]);
+    n.load_state(&s).unwrap();
+    n.run_frame(&mut DebugHooks::new());
+    assert_eq!(r(&n, 0xd014), 66);
+}

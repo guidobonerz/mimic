@@ -39,15 +39,19 @@
 //! are legal and performed as the bus allows (byte cycles at odd addresses,
 //! one 32-bit cycle for an aligned long). CALLM/RTM and the coprocessor
 //! instructions take the F-line exception, like on the 68EC020 without a
-//! coprocessor. The caches are not modelled (CACR is a plain register).
+//! coprocessor.
 //!
-//! **68020 timing** is approximate: the bus cycle takes three clocks, the
-//! prefetch stays word by word and the internal clocks are the 68000's
-//! sequences, so an instruction costs about what the 68020 spends without
-//! cache hits; the A1200's 14 MHz clock then gives roughly the real
-//! machine's speed. No test suite with 68020 bus traces was available
-//! (Tom Harte's tests cover the 68000 only); the new instructions are
-//! checked by unit tests against the Programmer's Reference Manual.
+//! **68020 cache and timing** (module `timing020`): the 256-byte instruction
+//! cache with CACR (E, F, C, CE) and CAAR; instruction words come from it
+//! without a bus cycle, misses fetch long words in the background. The
+//! bus cycle takes three clocks plus the bus's wait states; the internal
+//! clocks of each instruction come from the cache-case column of the
+//! MC68020 User's Manual's timing tables, so an instruction in the cache
+//! takes the manual's cache-case time at zero wait states. No test suite
+//! with 68020 bus traces was available (Tom Harte's tests cover the 68000
+//! only); the new instructions are checked by unit tests against the
+//! Programmer's Reference Manual, the timing against the User's Manual's
+//! tables.
 //!
 //! Sources: Motorola M68000 Family Programmer's Reference Manual
 //! (M68000PM/AD) and MC68000 User's Manual (M68000UM/AD), sections on
@@ -55,8 +59,10 @@
 //! SingleStepTests 680x0 (MIT) for the bus-cycle order; "YACHT — Yet
 //! Another Cycle Hunting Table" (gist cbmeeks/e759c7061d61ec4ac354a7df44a4a8f1)
 //! for the per-instruction cycle sequences; Flamewing's analysis of the
-//! BCD instructions for ABCD/SBCD/NBCD flags. The implementation
-//! is this project's own.
+//! BCD instructions for ABCD/SBCD/NBCD flags; Motorola MC68020/MC68EC020
+//! Microprocessors User's Manual (MC68020UM/AD), sections 4 (cache) and 8
+//! (instruction execution timing). The implementation is this project's
+//! own.
 
 #![forbid(unsafe_code)]
 
@@ -66,6 +72,10 @@ mod exec;
 mod exec020;
 #[cfg(test)]
 mod tests020;
+mod timing020;
+
+pub use timing020::cacr;
+use timing020::{ICache, Pipe};
 
 use emu_core::{
     Bus, Cpu, CycleResult, Instr, InterruptKind, Register, RegisterSet, Savestate, Size,
@@ -241,6 +251,10 @@ pub struct M68000 {
     entered: Option<InterruptKind>,
     /// Trace pending after the current instruction (T set at its start).
     trace: bool,
+    /// 68020: the bus controller and prefetch next to the sequencer.
+    pipe: Pipe,
+    /// 68020: the instruction cache.
+    icache: ICache,
 }
 
 impl Default for M68000 {
@@ -279,6 +293,8 @@ impl M68000 {
             t: 0,
             entered: None,
             trace: false,
+            pipe: Pipe::default(),
+            icache: ICache::default(),
         }
     }
 
@@ -436,6 +452,9 @@ impl M68000 {
         self.trace = false;
         self.vbr = 0;
         self.cacr = 0;
+        // The cache is cleared, E and F with it (MC68020UM 4.2).
+        self.icache.clear();
+        self.pipe = Pipe::default();
         self.set_sr((self.sr & !(sr::T | sr::T0 | sr::M)) | sr::S | sr::IPL);
         let r: Res = (|| {
             self.idle(bus, 16);
@@ -448,15 +467,29 @@ impl M68000 {
         if r.is_err() {
             self.halted = true;
         }
+        if self.is_020() {
+            self.pipe.rebase(self.t);
+        }
     }
 
     /// One instruction (or exception, or STOP wait) with bus timing.
     pub fn step_timed(&mut self, bus: &mut dyn TimedBus68) -> Step {
+        let step = self.step_body(bus);
+        if self.is_020() {
+            // The bus controller may still be busy (a write, a prefetch):
+            // its times carry over to the next step.
+            self.pipe.rebase(self.t);
+        }
+        step
+    }
+
+    fn step_body(&mut self, bus: &mut dyn TimedBus68) -> Step {
         self.t = 0;
         if self.halted {
             return Step::Halted;
         }
         if self.interrupt_pending() {
+            self.pipe.plan_done = true;
             let level = self.ipl;
             if level == 7 {
                 self.nmi_seen = true;
@@ -473,15 +506,25 @@ impl M68000 {
             return self.done();
         }
         if self.stopped {
-            self.idle(bus, 4);
+            self.t += 4;
             return Step::Stopped { clocks: self.t };
         }
         self.trace = self.sr & sr::T != 0;
         let op = self.ird;
         self.ir = op;
         self.instr_pc = self.pc();
+        if self.is_020() {
+            // The sequencer starts when the opcode has arrived.
+            self.t = self.pipe.ird_ready;
+            let plan = timing020::classify(self, op);
+            self.pipe.begin(plan);
+        }
         match exec::execute(self, bus, op) {
             Ok(()) => {
+                if self.is_020() {
+                    self.finish_plan();
+                    self.pipe.plan_done = true;
+                }
                 if self.trace && !self.halted {
                     let pc = self.pc();
                     self.idle(bus, 4);
@@ -510,8 +553,145 @@ impl M68000 {
 
     // ------------------------------------------------------------ bus
 
+    /// Internal clocks of the 68000's sequences. The 68020 takes its
+    /// internal clocks from the timing tables instead ([`timing020`]).
     pub(crate) fn idle(&mut self, _bus: &mut dyn TimedBus68, clocks: u32) {
-        self.t += clocks;
+        if !self.is_020() {
+            self.t += clocks;
+        }
+    }
+
+    // ------------------------------------------------------------ 68020 timing
+
+    /// Spend internal clocks up to `target` of the instruction's plan.
+    fn spend_to(&mut self, target: u16) {
+        if target > self.pipe.spent {
+            self.t += u32::from(target - self.pipe.spent);
+            self.pipe.spent = target;
+        }
+    }
+
+    /// Before an operand read: the effective address calculation.
+    fn start_plan(&mut self) {
+        if !self.pipe.lead_done && !self.pipe.plan_done {
+            self.pipe.lead_done = true;
+            let lead = self.pipe.lead();
+            self.spend_to(lead);
+        }
+    }
+
+    /// Before a write or a change of flow, and at the end: the rest of the
+    /// instruction's internal clocks.
+    fn finish_plan(&mut self) {
+        if !self.pipe.plan_done {
+            self.pipe.lead_done = true;
+            let total = self.pipe.total();
+            self.spend_to(total);
+        }
+    }
+
+    /// An exception replaces the rest of the instruction: its own internal
+    /// clocks (MC68020UM table 8.2.17).
+    fn exception_clocks_020(&mut self, internal: u16) {
+        self.pipe.plan_done = true;
+        self.t += u32::from(internal);
+    }
+
+    /// 68020 timing: the class of an effective address the instruction
+    /// calculates (non-indexed modes; [`Self::indexed`] notes those).
+    pub(crate) fn note_mode(&mut self, m: u16, r: usize, long: bool) {
+        if self.is_020() {
+            self.pipe.note_ea(timing020::mode_class(m, r, long));
+        }
+    }
+
+    pub(crate) fn note_class(&mut self, class: u8) {
+        if self.is_020() {
+            self.pipe.note_ea(class);
+        }
+    }
+
+    /// Write CACR: E and F stay, C clears the cache, CE the entry CAAR
+    /// selects (MC68020UM 4.3.1).
+    pub(crate) fn write_cacr(&mut self, v: u32) {
+        if v & cacr::C != 0 {
+            self.icache.clear();
+        }
+        if v & cacr::CE != 0 {
+            self.icache.clear_entry(self.caar);
+        }
+        self.cacr = v & (cacr::E | cacr::F);
+    }
+
+    /// A 68020 bus cycle: it starts when the bus controller is free; reads
+    /// stall the sequencer until the data arrives, a write is handed over
+    /// and runs while the sequencer goes on.
+    fn cycle_020(
+        &mut self,
+        bus: &mut dyn TimedBus68,
+        access: Access,
+        fc: u8,
+        addr: u32,
+        size: Size,
+    ) {
+        if access == Access::Write {
+            self.pipe.wrote = true;
+            self.finish_plan();
+        } else {
+            self.start_plan();
+        }
+        let start = self.t.max(self.pipe.bus_free);
+        let waits = bus.bus_cycle(access, fc, addr, size, start);
+        let clocks = if access == Access::ReadModifyWrite {
+            6
+        } else {
+            3
+        };
+        let end = start + waits + clocks;
+        self.pipe.bus_free = end;
+        self.t = if access == Access::Write { start } else { end };
+    }
+
+    /// 68020 instruction fetch into IRC: from the fetch buffer, the cache
+    /// or a long-word bus cycle the bus controller runs in the background.
+    fn fill_irc_020(&mut self, bus: &mut dyn TimedBus68) -> Res {
+        let a = self.au;
+        if a & 1 != 0 {
+            self.irc = self.read_program(bus, a)?;
+            self.pipe.irc_ready = self.t;
+            self.au = a.wrapping_add(2);
+            return Ok(());
+        }
+        let fc = self.program_fc();
+        let la = a & !3;
+        let p = &self.pipe;
+        let (data, ready) = if p.buf_valid && p.buf_addr == la && p.buf_fc == fc {
+            (p.buf_data, p.buf_ready)
+        } else if let Some(d) = self.icache.lookup(self.cacr, la, fc) {
+            (d, self.t)
+        } else {
+            let start = self.t.max(self.pipe.bus_free);
+            let waits = bus.bus_cycle(Access::Read, fc, la & 0xff_ffff, Size::Long, start);
+            let end = start + waits + 3;
+            self.pipe.bus_free = end;
+            let d = bus.read(la & 0xff_ffff, Size::Long);
+            self.icache.fill(self.cacr, la, fc, d);
+            (d, end)
+        };
+        let p = &mut self.pipe;
+        p.buf_valid = true;
+        p.buf_addr = la;
+        p.buf_fc = fc;
+        p.buf_data = data;
+        p.buf_ready = ready;
+        p.irc_ready = ready;
+        self.irc = if a & 2 == 0 {
+            (data >> 16) as u16
+        } else {
+            data as u16
+        };
+        self.au = a.wrapping_add(2);
+        Ok(())
     }
 
     fn data_fc(&self) -> u8 {
@@ -535,12 +715,14 @@ impl M68000 {
     }
 
     fn cycle(&mut self, bus: &mut dyn TimedBus68, access: Access, fc: u8, addr: u32, size: Size) {
+        if self.is_020() {
+            return self.cycle_020(bus, access, fc, addr, size);
+        }
         let waits = bus.bus_cycle(access, fc, addr, size, self.t);
-        let clocks = match (access, self.is_020()) {
-            (Access::ReadModifyWrite, false) => 10,
-            (Access::ReadModifyWrite, true) => 6,
-            (_, false) => 4,
-            (_, true) => 3,
+        let clocks = if access == Access::ReadModifyWrite {
+            10
+        } else {
+            4
         };
         self.t += waits + clocks;
     }
@@ -673,6 +855,10 @@ impl M68000 {
     /// Take the extension word in IRC and refill IRC.
     pub(crate) fn ext(&mut self, bus: &mut dyn TimedBus68) -> Res<u16> {
         let w = self.irc;
+        if self.is_020() {
+            // The sequencer needs the word now.
+            self.t = self.t.max(self.pipe.irc_ready);
+        }
         self.fill_irc(bus)?;
         Ok(w)
     }
@@ -686,6 +872,9 @@ impl M68000 {
 
     /// Read the next program word into IRC.
     pub(crate) fn fill_irc(&mut self, bus: &mut dyn TimedBus68) -> Res {
+        if self.is_020() {
+            return self.fill_irc_020(bus);
+        }
         self.irc = self.read_program(bus, self.au)?;
         self.au = self.au.wrapping_add(2);
         Ok(())
@@ -694,6 +883,7 @@ impl M68000 {
     /// The end-of-instruction prefetch: IRC moves to IRD, IRC is refilled.
     pub(crate) fn prefetch(&mut self, bus: &mut dyn TimedBus68) -> Res {
         self.ird = self.irc;
+        self.pipe.ird_ready = self.pipe.irc_ready;
         self.fill_irc(bus)
     }
 
@@ -701,6 +891,12 @@ impl M68000 {
     /// address error); the closing [`Self::prefetch`] then completes the
     /// queue.
     pub(crate) fn jump(&mut self, bus: &mut dyn TimedBus68, pc: u32) -> Res {
+        if self.is_020() {
+            // The change of flow flushes the pipe; the instruction's work
+            // precedes the fetch at the target.
+            self.finish_plan();
+            self.pipe.buf_valid = false;
+        }
         self.au = pc;
         self.fill_irc(bus)
     }
@@ -791,6 +987,11 @@ impl M68000 {
                 vec,
                 vector::CHK | vector::TRAPV | vector::ZERO_DIVIDE | vector::TRACE
             );
+            self.exception_clocks_020(if format2 {
+                timing020::EXCEPTION_LONG
+            } else {
+                timing020::EXCEPTION_SHORT
+            });
             let old_sr = self.sr;
             self.set_sr((self.sr | sr::S) & !(sr::T | sr::T0));
             return self.push_frame_020(bus, vec, pc, old_sr, format2.then_some(self.instr_pc));
@@ -884,6 +1085,11 @@ impl M68000 {
     /// with M set, the state switches to the interrupt stack and a format
     /// 1 (throwaway) frame goes there too.
     fn interrupt_020(&mut self, bus: &mut dyn TimedBus68, level: u8) -> Res {
+        self.exception_clocks_020(if self.sr & sr::M != 0 {
+            timing020::INTERRUPT_MASTER
+        } else {
+            timing020::INTERRUPT
+        });
         let old_sr = self.sr;
         let vec = vector::SPURIOUS + level;
         self.set_sr((self.sr | sr::S) & !(sr::T | sr::T0) & !sr::IPL | (u16::from(level) << 8));
@@ -1065,7 +1271,7 @@ impl Cpu for M68000 {
             "SSP" => self.set_ssp(v),
             "MSP" if self.is_020() => self.set_msp(v),
             "VBR" if self.is_020() => self.vbr = v,
-            "CACR" if self.is_020() => self.cacr = v,
+            "CACR" if self.is_020() => self.write_cacr(v),
             "CAAR" if self.is_020() => self.caar = v,
             "SFC" if self.is_020() => self.sfc = (v & 7) as u8,
             "DFC" if self.is_020() => self.dfc = (v & 7) as u8,
@@ -1084,6 +1290,27 @@ impl Cpu for M68000 {
     }
 }
 
+#[cfg(test)]
+impl M68000 {
+    /// 68020 tests: wait until the bus controller is idle and the next
+    /// opcode has arrived; returns the clocks waited.
+    pub(crate) fn settle_020(&mut self) -> u32 {
+        let wait = self.pipe.bus_free.max(self.pipe.ird_ready);
+        self.pipe.rebase(wait);
+        wait
+    }
+
+    /// 68020 tests: fill the cache with the long words of `from..to` in
+    /// program space `fc` (as earlier executions would have).
+    pub(crate) fn preload_cache(&mut self, bus: &dyn Bus, from: u32, to: u32, fc: u8) {
+        let mut a = from & !3;
+        while a < to {
+            self.icache.fill(self.cacr, a, fc, bus.peek(a, Size::Long));
+            a += 4;
+        }
+    }
+}
+
 impl M68000 {
     /// After a debugger PC change: refill the queue from the new PC
     /// (peeking, without bus cycles).
@@ -1095,8 +1322,9 @@ impl M68000 {
 }
 
 const TAG: [u8; 4] = *b"M68K";
-/// Version 2: the 68020 registers.
-const VERSION: u16 = 2;
+/// Version 2: the 68020 registers; version 3: the 68020's instruction
+/// cache and bus controller state.
+const VERSION: u16 = 3;
 
 impl Savestate for M68000 {
     fn save(&self, w: &mut StateWriter) {
@@ -1118,6 +1346,10 @@ impl Savestate for M68000 {
             }
             w.u8(self.sfc);
             w.u8(self.dfc);
+            if self.is_020() {
+                self.pipe.save(w);
+                self.icache.save(w);
+            }
         });
     }
 
@@ -1150,6 +1382,13 @@ impl Savestate for M68000 {
             n.sfc = c.u8()? & 7;
             n.dfc = c.u8()? & 7;
         }
+        n.pipe = Pipe::default();
+        n.icache = ICache::default();
+        if version >= 3 && n.is_020() {
+            n.pipe.load(&mut c)?;
+            n.icache.load(&mut c)?;
+        }
+        n.cacr &= cacr::E | cacr::F;
         *self = n;
         Ok(())
     }

@@ -23,7 +23,9 @@
 //! ("1571" with `roms["dos1571"]`, the default when given; "1541" with
 //! `roms["dos1541"]`; "1581" with `roms["dos1581"]`; "virtual"; "none"),
 //! `drive8_ppm` (drive crystal deviation, see [`drives_cbm::serial`]),
-//! `autostart` ("on"), `port2` ("joystick"/"none"), `roms` = "stub".
+//! `autostart` ("on"), `port1`/`port2` ("joystick", "paddles",
+//! "mouse1351", "none"; port 1 also "lightpen": control port 1 pin 6 is
+//! the VIC-IIe's LP input, as on the C64), `roms` = "stub".
 //!
 //! ROMs (`MachineConfig::roms`, user-supplied): "kernal" (16 KB, with the
 //! screen editor and the Z80 BIOS), "basic-lo", "basic-hi" (16 KB each),
@@ -45,10 +47,12 @@ use chips_cbm::{vdc, vic2};
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use cpu_z80::{IO_BASE, Z80};
 use emu_core::frame::{FrameRef, PixelData, Rgb8, ScreenId, ScreenInfo};
+use emu_core::gfx::{GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::overlay::{Overlay, OverlayInfo};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::{
@@ -65,7 +69,7 @@ use drives_other::Datasette;
 use io::Io;
 use loader::{Autostart, ProgramSlot, BOOT_FRAMES};
 use media::tap::TapMachine;
-use memory::{Memory, Read, Roms, VicView, Write, CHARGEN_SIZE, ROM_16K};
+use memory::{GfxVicView, Memory, Read, Roms, VicView, Write, CHARGEN_SIZE, ROM_16K};
 
 pub const CPU: DeviceId = DeviceId("cpu");
 pub const Z80_DEV: DeviceId = DeviceId("z80");
@@ -88,6 +92,12 @@ const VIC_REGS: [&str; 47] = [
     "IRR", "IMR", "MXDP", "MXMC", "MXXE", "MXM", "MXD", "EC", "B0C", "B1C", "B2C", "B3C", "MM0",
     "MM1", "M0C", "M1C", "M2C", "M3C", "M4C", "M5C", "M6C", "M7C",
 ];
+
+/// Graphics view option: which 64 KB RAM bank the VIC-IIe views read.
+const OPT_RAMBANK: GfxOptionInfo = GfxOptionInfo {
+    name: "rambank",
+    help: "RAM bank 0/1 the VIC-IIe reads (default: the MMU's RCR bits 6-7; bit 16 of addr also selects it)",
+};
 
 const MMU_REGS: [&str; 12] = [
     "CR", "PCRA", "PCRB", "PCRC", "PCRD", "MCR", "RCR", "P0L", "P0H", "P1L", "P1H", "VR",
@@ -372,7 +382,7 @@ impl C128 {
             Some("80") => true,
             Some(other) => return Err(ConfigError::Invalid(format!("display option '{other}'"))),
         };
-        let port1 = devices_input::control_port_option("port1", option("port1"), "none", true)?;
+        let port1 = devices_input::cbm_port_option("port1", option("port1"), "none", true, true)?;
         let port2 = devices_input::control_port_option("port2", option("port2"), "joystick", true)?;
         let stub = option("roms") == Some("stub");
         let drive_roms = if stub {
@@ -700,6 +710,30 @@ impl C128 {
             self.io.port_lines[i] = lines.map_or(0, |l| l.pulled_low);
             self.io.port_analog[i] = lines.map_or([u16::MAX; 2], |l| l.analog);
         }
+        if i == 0 {
+            // Control port 1 pin 6 is the VIC-IIe's LP input: the fire
+            // button latches the beam position.
+            let fire = self.io.port_lines[0] & devices_input::joystick::pin::FIRE != 0;
+            self.io.vic.set_lp_line(fire);
+            self.sync_light_pen();
+        }
+    }
+
+    /// Tell the VIC-IIe where a light pen in control port 1 points (frame
+    /// pixels of the VIC screen) and which colours light it; no pen:
+    /// `None`. The VDC's light-pen input is not wired to the port.
+    fn sync_light_pen(&mut self) {
+        let lines = self.ports[0]
+            .as_ref()
+            .map(|d| d.read_lines(self.sched.now()));
+        let aim = lines.as_ref().and_then(devices_input::lightpen::aim);
+        let lit = self
+            .vic_palette
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| devices_input::lightpen::lit(c))
+            .fold(0u16, |m, (n, _)| m | 1 << n);
+        self.io.vic.set_light_pen(aim.map(|a| (a.x, a.y)), lit);
     }
 
     fn refresh_ports(&mut self) {
@@ -894,6 +928,7 @@ impl Machine for C128 {
         self.field_done_pending = false;
         self.boot_frame = self.io.vic.beam().frame;
         self.booted = false;
+        self.sync_light_pen();
     }
 
     fn framebuffer(&self) -> FrameRef<'_> {
@@ -922,6 +957,83 @@ impl Machine for C128 {
             VDC_SCREEN => Some(self.vdc_frame()),
             _ => None,
         }
+    }
+
+    fn overlays(&self) -> Vec<OverlayInfo> {
+        vic2::overlay::overlays()
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.io.vic.set_overlays(ids);
+    }
+
+    fn overlay(&self, id: &str) -> Option<Overlay> {
+        self.io.vic.overlay(id)
+    }
+
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        self.io.vic.frame_row(line)
+    }
+
+    /// The VIC-IIe's views (as on the C64) and the VDC's (`vdc-*`).
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        let mut views = vic2::gfx::views(
+            "VIC-IIe",
+            ["sprites", "charset", "bitmap", "screen", "palette"],
+        );
+        for v in &mut views {
+            if v.kind != GfxKind::Palette {
+                v.options.push(OPT_RAMBANK);
+            }
+        }
+        views.extend(vdc::gfx::views());
+        views
+    }
+
+    /// VIC-IIe views: option `bank` (or bits 14–15 of `addr`) selects the
+    /// 16 KB bank instead of CIA2's, `rambank` (or bit 16 of `addr`) the
+    /// 64 KB RAM bank instead of the MMU's; addresses are reported in the
+    /// `ram` space (17 bits). VDC views read VDC RAM (`vdcram` space).
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        if id.starts_with("vdc-") {
+            let ctx = vdc::gfx::GfxContext {
+                space: VDC_SPACE,
+                palette: &self.vdc_palette,
+            };
+            return self.io.vdc.gfx_view(id, &ctx, opts);
+        }
+        let info = self.gfx_views().into_iter().find(|v| v.id == id)?;
+        let bank = match (opts.get("bank"), opts.get("addr")) {
+            (Some(b), _) => (b as u16 & 3) << 14,
+            (None, Some(a)) => a as u16 & 0xc000,
+            (None, None) => self.io.vic_base(),
+        };
+        let view = VicView {
+            mem: &self.mem,
+            base: bank,
+            cart: self.cart.cart().map(|c| c.as_ref()),
+        };
+        let ram_bank = match (opts.get("rambank"), opts.get("addr")) {
+            (Some(b), _) => (b & 1) as u8,
+            (None, Some(a)) if a > 0xffff => ((a >> 16) & 1) as u8,
+            _ => view.ram_bank(),
+        };
+        let view = GfxVicView { view, ram_bank };
+        let ctx = vic2::gfx::GfxContext {
+            mem: &view,
+            bank_base: bank,
+            space: RAM_SPACE,
+            palette: &self.vic_palette,
+        };
+        let mut v = self
+            .io
+            .vic
+            .gfx_view(info.id, info.kind, info.name, &ctx, opts);
+        if v.kind != GfxKind::Palette {
+            v.addr |= u32::from(ram_bank) << 16;
+            v.params.insert(1, ("rambank", u32::from(ram_bank)));
+        }
+        Some(v)
     }
 
     fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
@@ -1311,6 +1423,7 @@ impl Machine for C128 {
         self.autostart = autostart;
         self.boot_frame = boot_frame;
         self.booted = booted;
+        self.sync_light_pen();
         Ok(())
     }
 }

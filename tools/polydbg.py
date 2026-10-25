@@ -356,6 +356,45 @@ def cmd_chips(c, args):
     out(args, chips, text)
 
 
+def gfx_options(words):
+    """NAME=VALUE words into the numeric options of gfx_get."""
+    opts = {}
+    for w in words:
+        name, sep, value = w.partition("=")
+        if not sep or not name:
+            raise ValueError("option %r is not NAME=VALUE" % w)
+        opts[name] = parse_number(value)
+    return opts
+
+
+def cmd_gfx(c, args):
+    """Graphics data views: list them, or save one as an image."""
+    if not args.view:
+        views = c.call("gfx_list")
+        text = []
+        for v in views:
+            opts = ", ".join(o["name"] for o in v["options"])
+            text.append("%-14s %-8s %s%s" % (v["id"], v["kind"], v["name"],
+                                            "  [%s]" % opts if opts else ""))
+        out(args, views, text or ["(this machine has no graphics views)"])
+        return
+    import base64
+    r = c.call("gfx_get", view=args.view, format=args.format, scale=args.scale,
+               options=gfx_options(args.options))
+    path = args.output or "%s.%s" % (args.view, args.format)
+    with open(path, "wb") as f:
+        f.write(base64.b64decode(r["image"]))
+    if args.raw:
+        with open(args.raw, "wb") as f:
+            f.write(base64.b64decode(r["raw"]))
+    params = "  ".join("%s=%s" % kv for kv in r["params"].items())
+    out(args, r, [
+        "%s: %dx%d from space %d at $%04x -> %s" % (r["name"], r["width"], r["height"],
+                                                    r["space"], r["addr"], path),
+        params,
+    ])
+
+
 def cmd_dlist(c, args):
     """Atari 8-bit: the ANTIC display list (from DLISTL/H unless given)."""
     if args.addr:
@@ -422,6 +461,59 @@ def cmd_resume(c, args):
 def cmd_step(c, args):
     s = c.step(args.count)
     out(args, s, [format_stop(s)])
+
+
+def cmd_back(c, args):
+    """Step the main CPU backwards (replayed from the newest earlier state)."""
+    s = c.call("step_back", count=args.count)
+    out(args, s, [format_stop(s)])
+
+
+def cmd_rewind(c, args):
+    """Rewind ring: switch on/off, show it, or go back COUNT states."""
+    if args.on is not None or args.budget is not None:
+        r = c.call("rewind_config", frames=args.on, budget_mb=args.budget)
+    elif args.count:
+        r = c.call("rewind", count=args.count)
+        out(args, r, ["frame %s  %s" % (r.get("frame"), format_stop(r))])
+        return
+    else:
+        r = c.call("rewind_info")
+    if not r.get("enabled"):
+        out(args, r, ["rewind off (polydbg rewind --on 1)"])
+        return
+    out(args, r, [
+        "every %d frame(s), %d states, %.1f of %.0f MB, frames %s..%s" % (
+            r["interval"], r["entries"], r["bytes"] / 1048576.0, r["budget"] / 1048576.0,
+            (r.get("oldest") or {}).get("frame"), (r.get("newest") or {}).get("frame")),
+    ])
+
+
+def cmd_overlay(c, args):
+    """List overlays, or switch the debugger's set (none: off)."""
+    if args.ids is None:
+        r = c.call("overlay_list")
+        text = ["%-10s %s%s" % (o["id"], o["name"], "  *" if o["id"] in r["active"] else "")
+                for o in r["overlays"]]
+        out(args, r, text)
+    else:
+        r = c.call("overlay_set", overlays=[i for i in args.ids.split(",") if i])
+        out(args, r, ["active: %s" % (", ".join(r["active"]) or "none")])
+
+
+def cmd_picture(c, args):
+    """Save the current (partial) picture with overlays."""
+    import base64
+    overlays = [i for i in (args.overlays or "").split(",") if i]
+    r = c.call("frame", screen=args.screen, scale=args.scale, format=args.format,
+               overlays=overlays)
+    path = args.output or "picture.%s" % args.format
+    with open(path, "wb") as f:
+        f.write(base64.b64decode(r["image"]))
+    beam = r.get("beam") or {}
+    out(args, r, ["%dx%d -> %s (beam line %s cycle %s%s)" % (
+        r["width"], r["height"], path, beam.get("line"), beam.get("cycle"),
+        ", partial" if r["partial"] else "")])
 
 
 def cmd_next(c, args):
@@ -681,6 +773,14 @@ def build_parser(shell=False):
     sp.add_argument("--device")
     sp = add("chips", cmd_chips, "chip registers (all, or one chip by name)")
     sp.add_argument("name", nargs="?")
+    sp = add("gfx", cmd_gfx, "graphics data views: list, or save VIEW as an image "
+             "(options as NAME=VALUE, e.g. index=2 addr=$2000)")
+    sp.add_argument("view", nargs="?")
+    sp.add_argument("options", nargs="*")
+    sp.add_argument("-o", "--output", help="image file (default VIEW.png)")
+    sp.add_argument("--raw", help="also write the raw bytes to this file")
+    sp.add_argument("--scale", type=int, default=1)
+    sp.add_argument("--format", default="png", choices=["png", "qoi"])
     sp = add("dlist", cmd_dlist, "Atari: decode the ANTIC display list (default: at DLIST)")
     sp.add_argument("addr", nargs="?")
     sp = add("break", cmd_break, "add a breakpoint: address/symbol, raster line, or irq/nmi")
@@ -699,6 +799,21 @@ def build_parser(shell=False):
     sp.add_argument("--timeout", type=float)
     sp = add("step", cmd_step, "step instructions")
     sp.add_argument("count", nargs="?", type=int, default=1)
+    sp = add("back", cmd_back, "step instructions backwards")
+    sp.add_argument("count", nargs="?", type=int, default=1)
+    sp = add("rewind", cmd_rewind, "rewind ring: info, --on N (every N frames, 0 off), "
+             "--budget MB, or go back COUNT states")
+    sp.add_argument("count", nargs="?", type=int)
+    sp.add_argument("--on", type=int)
+    sp.add_argument("--budget", type=int)
+    sp = add("overlay", cmd_overlay, "list overlays, or set them: beam,grid,sprites (\"\" = off)")
+    sp.add_argument("ids", nargs="?")
+    sp = add("picture", cmd_picture, "save the current (partial) picture, with --overlays beam,grid,…")
+    sp.add_argument("-o", "--output")
+    sp.add_argument("--overlays")
+    sp.add_argument("--screen")
+    sp.add_argument("--scale", type=int, default=1)
+    sp.add_argument("--format", default="png", choices=["png", "qoi"])
     add("next", cmd_next, "step over a subroutine call")
     add("finish", cmd_finish, "run until the current subroutine returns")
     sp = add("until", cmd_until, "run to an address or symbol")

@@ -13,6 +13,7 @@ Inhalt:
 5. [Desktop-Frontend `emu-desktop`](#5-desktop-frontend-emu-desktop)
 6. [Kommandozeilen-Frontend `emu-headless`](#6-kommandozeilen-frontend-emu-headless)
 7. [Medien: Disketten, Bänder, Module, Programme](#7-medien-disketten-bänder-module-programme)
+   - [7a. Echte Hardware: Greaseweazle und ZoomFloppy](#7a-echte-hardware-greaseweazle-und-zoomfloppy)
 8. [Monitorprofile (CRT)](#8-monitorprofile-crt)
 9. [Live-Preview im Browser](#9-live-preview-im-browser)
 10. [Debug-Schnittstelle](#10-debug-schnittstelle)
@@ -132,7 +133,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 
 | Maschine | Optionen |
 | --- | --- |
-| C64 | `sid=6581\|8580`, `cia=6526\|6526a`, `drive8=1541\|1571\|1581\|virtual\|none`, `drive8_ppm=N`, `port1`/`port2=joystick\|paddles\|mouse1351\|none`, `autostart=on` |
+| C64 | `sid=6581\|8580`, `cia=6526\|6526a`, `drive8=1541\|1571\|1581\|virtual\|none`, `drive8_ppm=N`, `port1`/`port2=joystick\|paddles\|mouse1351\|none`, `autostart=on`, `uci=on` (Ultimate Command Interface, Abschnitt 7b), `userport=wic64\|none` (WiC64, Abschnitt 7b), `net=on\|off` |
 | VIC-20 | `ram=none\|3k\|8k\|16k\|24k\|all`, `port1=joystick\|none`, `drive8=…`, `autostart=on` |
 | PET | `ram=8k\|16k\|32k`, `keyboard=graphics\|business`, `hz=50\|60`, `drive8=virtual\|none` |
 | C16/Plus/4 | `ram=16k\|64k`, `drive8=…`, `port1=joystick\|none`, `autostart=on` |
@@ -253,7 +254,17 @@ die Mausposition, die Joystick-Richtungen und der Zustand der Laufwerke.
 
 **Weitere Tasten:** F12 wechselt zwischen den Bildschirmen einer Maschine
 (C128: VIC und VDC). Datasette/Kassette: F9 PLAY, Shift+F9 RECORD, F10 STOP,
-F11 REWIND.
+F11 REWIND. **Ctrl+R** (gedrückt halten) spult zurück: die Maschine läuft
+mit doppelter Geschwindigkeit rückwärts durch die letzten Bilder im
+Speicher (`--rewind-mb N`, Standard 128 MB, 0 = aus) und läuft beim
+Loslassen von dort weiter.
+
+**Cheats:** `--cheat DATEI` lädt eine Cheat-Datei (`.toml`, POKE-Liste
+`.pokes`/`.bas`, VICE-Monitorbefehle `.mon`, Adresse/Wert-Codes `.txt`),
+`--cheats ORDNER` die Cheat-Datenbank (`ORDNER/<maschine>/<crc32>.toml`
+gilt automatisch für eingelegte Images, auch beim Disk-Wechsel; Standard
+`EMU_CHEATS_DIR` oder `./cheats`). Die Konsolen-Leiste zeigt jeden Cheat
+als Schalter OFF/ON.
 
 **Joystick:** Erster Gamepad und eine Tastatur-Belegung (beim C64/C128
 Port 2, bei VIC-20, C16/Plus/4, Atari und CPC Port 1). Welche Tasten den
@@ -263,6 +274,16 @@ beim Atari 2600, bei der ColecoVision, beim NES und beim SNES, die keine Tastatu
 Feuer 0 oder rechte Strg (Standard bei den Computern), **OFF** = nur Gamepad
 (Standard beim CPC, dessen Ziffernblock die Funktionstasten sind). Bei CURSOR
 spielen die Cursortasten und die Leertaste den Joystick statt zu tippen.
+**PAD FIRE** wählt die Gamepad-Taste für Feuer (SOUTH = A beim Xbox-Pad,
+EAST, WEST, NORTH), **SAVE MAPPING** speichert JOY KEYS, JOY PORT und PAD
+FIRE für die Maschine (`%APPDATA%\mimic\input\<maschine>.toml`); beim
+nächsten Start gilt die gespeicherte Belegung. `--input DATEI.toml` lädt
+eine andere Belegung (`[[joystick]]`-Tabellen wie gespeichert).
+
+**Lightpen:** `--option port1=lightpen` (C64/C128, Atari 8-bit: `portN`),
+`port0=lightpen` (Amiga), `expansion=lightpen` (CPC): Der Mauszeiger über
+dem Bild zielt, die linke Maustaste ist der Knopf (kein Einfangen); ebenso
+Zapper (NES) und Super Scope (SNES).
 
 **Maus/Paddles:** Mit `--option port1=mouse1351` (oder `paddles`, beim
 Atari 2600 auch `driving`, jeweils auch `port2`) bzw. beim CPC
@@ -346,6 +367,125 @@ werden (`flush_media` im Debugger). Beim CPC 664/6128 werden Disketten an
 Laufwerk A und B angeboten; auf dem 464 gibt es nur Kassette. Auf dem
 664/6128 schaltet `|TAPE` (in BASIC) auf Kassette um.
 
+## 7a. Echte Hardware: Greaseweazle und ZoomFloppy
+
+Optional, nur in `mimic-headless` und nur mit Cargo-Features gebaut (ohne
+sie ändert sich am normalen Build nichts):
+
+```bash
+cargo build --release -p emu-headless --features greaseweazle   # Flux-Leser
+cargo build --release -p emu-headless --features opencbm        # echte 1541/1571/1581
+cargo build --release -p emu-headless --features real-hardware  # beides
+```
+
+**Greaseweazle** (USB, erscheint als serielle Schnittstelle: unter Windows
+ein COM-Port, im Geräte-Manager unter „Anschlüsse“; Linux `/dev/ttyACM0`,
+Benutzer in der Gruppe `dialout`). Kein Treiber nötig (USB-CDC); die
+Firmware muss Version 1.x sein (sonst mit den Greaseweazle-Tools `gw update`).
+Eine Diskette wird ganz gelesen und als Image geschrieben, das Format kommt
+aus der Dateiendung:
+
+```powershell
+mimic-headless --import-flux spiel.d64 --gw-port COM5           # 1541, 5,25"-Laufwerk
+mimic-headless --import-flux spiel.g64 --gw-port COM5           # 1541 mit Rohspuren (Kopierschutz, defekte Sektoren)
+mimic-headless --import-flux disk.d71 --gw-port COM5            # 1571, beide Seiten
+mimic-headless --import-flux disk.d81 --gw-port COM5            # 1581, 3,5"-DD-Laufwerk
+mimic-headless --import-flux workbench.adf --gw-port COM5       # Amiga DD (--gw-format amiga-hd für HD)
+mimic-headless --import-flux dos.img --gw-port COM5             # PC/Atari ST (IBM-MFM, DD oder HD erkannt)
+```
+
+| Option | Bedeutung |
+| --- | --- |
+| `--gw-port PORT` | COM-Port bzw. Gerätedatei; `auto` (Standard) nimmt den einzigen gefundenen Greaseweazle (USB 1209:4d69) |
+| `--gw-drive D` | `a` oder `b` am PC-Kabel mit Dreher (Standard `a`), `0`–`2` am Shugart-Bus |
+| `--gw-format F` | `1541`, `1571`, `1581`, `amiga`, `amiga-hd`, `ibm`, `ibm-dd`, `ibm-hd`, `ibm360` |
+| `--gw-tracks N` | Spuren (1541: 35/40/42) bzw. Zylinder (IBM) |
+| `--gw-step S` | `auto` (Standard), `1` oder `2`: eine 40-Spur-Diskette (1541/1571/360K) im 80-Spur-Laufwerk (1,2 MB) braucht Doppelschritte; `auto` liest Zylinder 1 und sieht nach, welche Spur dort liegt |
+| `--gw-revs N` | Umdrehungen pro Lesevorgang (Standard 2) |
+| `--gw-retries N` | weitere Versuche für Spuren mit fehlenden Sektoren (Standard 3) |
+
+Die Drehzahl wird aus den Indeximpulsen gemessen, also funktionieren 300-
+und 360-U/min-Laufwerke. Fehlende Sektoren werden gemeldet; ein D64 bekommt
+dann eine Fehlerbyte-Tabelle (20 = Header fehlt, 23 = Prüfsumme), ein G64
+behält die rohen Spuren. Die 1541-Seite ist Kopf 0 (Unterseite) des
+PC-Laufwerks.
+
+**ZoomFloppy / XUM1541 über OpenCBM**: OpenCBM (0.4.99.104 oder neuer, unter
+Windows die 64-Bit-Ausgabe passend zu mimic) muss installiert sein, der
+ZoomFloppy-Treiber eingerichtet und `cbmctrl detect` muss das Laufwerk
+finden. mimic lädt die Bibliothek erst zur Laufzeit: `opencbm.dll`
+(Windows; im `PATH` oder neben `mimic-headless.exe`), `libopencbm.so.0`
+(Linux), `libopencbm.dylib` (macOS) — oder den Pfad in `MIMIC_OPENCBM`.
+Die Sektoren laufen über die DOS-Befehle des Laufwerks (`U1`/`U2`, `B-P`),
+also ohne Schnelllader: eine 1541-Diskette braucht einige Minuten.
+
+```powershell
+mimic-headless --import-drive kopie.d64                 # Diskette in Laufwerk 8 als D64 (.d71/.d81 für 1571/1581)
+mimic-headless --import-drive kopie.d64 --cbm-tracks 40 # 40-Spur-Diskette
+mimic-headless --export-drive spiel.d64 --cbm-device 9  # Image auf die (formatierte) Diskette in Laufwerk 9 schreiben
+mimic-headless --machine c64 --rom-dir roms --real-drive 8 --frames 600 --snapshot c64.png   # echte Diskette im emulierten Laufwerk 8
+```
+
+| Option | Bedeutung |
+| --- | --- |
+| `--real-drive N` | das echte Laufwerk N als Diskette im ersten emulierten Laufwerk; gelesen wird spurweise beim ersten Zugriff, Schreibzugriffe bleiben im Speicher |
+| `--real-drive-write` | geänderte Sektoren werden auf die echte Diskette geschrieben |
+| `--cbm-device N` | Laufwerksnummer für `--import-drive`/`--export-drive` (Standard 8) |
+| `--cbm-adapter NAME` | OpenCBM-Adapter, z. B. `xum1541` (Standard: aus der OpenCBM-Konfiguration) |
+| `--cbm-type T` | `1541`, `1570`, `1571`, `1581`, falls die Erkennung (`cbm_identify`) versagt |
+| `--cbm-tracks N` | 35 oder 40 (D64) |
+
+## 7b. Netzwerk und Ordner: Ultimate Command Interface und WiC64 (C64)
+
+Zwei Erweiterungen bringen den C64 ins Netz. Sie greifen nie selbst auf den
+Rechner zu: Netzwerk und Ordner stellt das Frontend bereit (Goldene Regel 10).
+
+**Ultimate Command Interface (UCI)** – `--option uci=on`: die Register
+`$DF1C–$DF1F` des Ultimate 64 / 1541 Ultimate II+ (Steuerung/Status,
+Kommandodaten/Kennung `$C9`, Antwortdaten, Statustext wie `00,OK`).
+Unterstützt werden die DOS-Targets 1 und 2 (Datei öffnen/lesen/schreiben/
+suchen, FILE_INFO/FILE_STAT, löschen, umbenennen, kopieren, Verzeichnis
+wechseln/anlegen/lesen, GET_PATH, GET_TIME), das Network-Target 3
+(TCP/UDP-Sockets öffnen, lesen, schreiben, schließen, MAC/IP abfragen,
+TCP-Listener) und vom Control-Target 4 nur IDENTIFY und GET_HWINFO. Die
+Ultimate-Steuerbefehle (Mount, Reset, REU, Palette …) fehlen bewusst. Ein
+Steckmodul bleibt nutzbar; nur die vier UCI-Register gehören dann dem UCI.
+
+Die DOS-Targets arbeiten in einem Ordner des Rechners: `--uci-dir ORDNER`
+(Standard `./ultimate`, wird beim ersten Schreiben angelegt). Pfade können
+den Ordner nicht verlassen (`..`, absolute Pfade, Laufwerksbuchstaben und
+symbolische Links werden abgewiesen).
+
+**WiC64** – `--option userport=wic64`: der WLAN-Adapter am Userport
+(PB0–PB7, PA2 als Richtung, PC2/FLAG2 als Handshake), Firmware 2.x mit dem
+Legacy-Protokoll (`W`) und Protokoll 2 (`R`, `E`). Befehle: HTTP-GET (auch
+URL-kodiert), HTTP-POST, TCP öffnen/lesen/schreiben/schließen, IP, MAC,
+SSID, RSSI, Uhrzeit und Zeitzone, Server, Firmware-Version, Statusmeldung,
+Timeouts, Echo. `https:` meldet „nicht unterstützt“ (kein TLS im Build).
+Über den Debugger lässt sich der WiC64 auch nachträglich stecken
+(`connect_device` mit `wic64` am Port „user port“).
+
+**Netzwerk:** Standard ist das echte Netz des Rechners; `--net off` (oder
+`--option net=off`) schaltet es ab, dann melden beide Geräte „kein
+Netzwerk“. TCP-Listener des UCI lauschen nur auf `127.0.0.1`. Die Uhrzeit
+kommt vom Rechner (UTC; den Abstand zur Ortszeit setzt die
+Umgebungsvariable `EMU_UTC_OFFSET`, z. B. `+01:00`). Das Web-Frontend hat
+kein Netz (Browser erlauben keine Sockets); das UCI sieht dort die
+hochgeladenen Dateien als Ordner (Änderungen bleiben im Speicher).
+
+```powershell
+cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms --option userport=wic64
+cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --option uci=on --uci-dir C:\c64\ultimate --debug
+```
+
+**Aufnahme und Wiedergabe:** Läufe mit echtem Netz sind nicht
+deterministisch. Deshalb nimmt `record_start`/`record_stop` neben den
+Eingaben jede Antwort von Netz und Ordner auf (Feld `host` der Aufnahme);
+`replay_input` beantwortet sie daraus, ohne Netz – die Wiedergabe ist
+exakt. Offene Verbindungen und Dateien sind nicht Teil eines Savestates:
+nach dem Laden sieht das Programm Fehler (in einer Wiedergabe antwortet
+die Aufnahme).
+
 ## 8. Monitorprofile (CRT)
 
 Maschinen liefern immer das rohe Bild; Monitor- und Signaleffekte (Composite,
@@ -378,10 +518,36 @@ cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --preview
 | `GET /snapshot.png` | aktuelles Bild als PNG (Header `X-Beam-Frame/Line/Cycle`, `X-Paused`) |
 | `GET /preview` (WebSocket) | Bildstrom als PNG/QOI (auch mit CRT-Filter) |
 | `GET /stream` (WebSocket) | Rohstrom: Farbindizes, nur geänderte Zeilen, optional Ton |
+| `GET /overlays` | Debug-Overlays: `beam`, `grid` und die der Maschine (JSON) |
+| `GET /gfx` | Grafikdaten-Ansichten der Maschine (JSON) |
+| `GET /gfx/<view>.png` | eine Ansicht als Bild (`scale=1..8`, weitere Zahlen sind Optionen der Ansicht, z. B. `index=2&addr=$2000`) |
 
 Parameter (Query-String): `filter=raw|crt`, `profile=<name>`,
 `scale=1..4`, für den Strom `fps=1..50` (Standard 25), `format=png|qoi`,
 `delta=0|1`; der Snapshot zusätzlich `machine=<id>` und `screen=vic|vdc`.
+Snapshot und `/preview` nehmen `overlay=beam,grid,…`: Die Overlays werden
+auf das Rohbild des Hauptschirms gezeichnet (nie auf das CRT-Bild):
+`beam` markiert die Strahlposition (Zeile rot, Punkt gelb; bei angehaltener
+Maschine das Teilbild), `grid` zieht alle 8 Rasterzeilen eine Linie mit
+Zeilennummern. Maschinen-Overlays:
+
+| Maschine | Overlays |
+| --- | --- |
+| C64, C128 | `badlines` (Bad Lines), `sprites` (wo jedes Sprite tatsächlich erschien, auch gemultiplext) |
+| C16/Plus/4 | `badlines` (DMA-Zeilen des TED) |
+| Atari 8-bit | `dlist` (Modus je Display-List-Zeile, LMS/DLI/HS/VS), `players` (Player/Missiles), `dli` |
+| Atari 2600 | `objects` (RESPx/RESMx/RESBL/HMOVE-Strobes) |
+| Amiga | `dma` (DMA-Slot-Karte je Farbtakt und Zeile mit Legende), `sprites`, `copper` (jeder Copper-MOVE) |
+| CPC | `crtc` (CRTC- und Gate-Array-Schreibzugriffe im Bild), `vsync` |
+| ColecoVision | `sprites`, `limit` (Zeilen mit 5. Sprite) |
+| NES | `sprites`, `sprite0` (Sprite-0-Treffer), `irq` (NMI, Mapper-/APU-IRQ) |
+| SNES | `sprites`, `hdma` (HDMA-Schreibzugriffe je Zeile), `irq` |
+| Apple II | `modes` (Videomodus je Zeile) |
+
+Maschinen-Overlays zeichnen das letzte vollständige Bild auf, bei
+angehaltener Maschine das Bild bis zum Strahl; sie kosten nur Zeit,
+solange ein Viewer sie eingeschaltet hat. Der Viewer zeigt sie als
+Schalter in der Kopfzeile, die Grafikansichten unter „Graphics data“.
 
 Der **Rohstrom** `/stream` (nach dem Vorbild des Video-Streams des
 Ultimate 64) kodiert keine Bilder: Er schickt die Farbindizes der Maschine
@@ -400,6 +566,41 @@ Ton muss die Maschine in Echtzeit laufen; das ist der Standard, nur
 Der Viewer schickt Tastatur-, Gamepad- und Mauseingaben als JSON zurück
 (`{"type": "key", "code": "KeyA", "down": true}` usw.), dadurch ist das
 Vorschaubild bedienbar. Der Server läuft nur auf `127.0.0.1`.
+
+## 9a. Web-Frontend (alle Maschinen im Browser)
+
+Das Web-Frontend (`crates/emu-web`) ist derselbe Emulator als
+WebAssembly. Gebündelt wird nichts: ROMs, Disketten, Bänder und Module
+lädt man im Browser hoch (auf Wunsch bleiben sie in diesem Browser
+gespeichert, IndexedDB).
+
+```bash
+bash tools/build-web.sh                       # -> target/web (mimic.wasm, index.html, mimic.js)
+python -m http.server -b 127.0.0.1 -d target/web 8080
+# Browser: http://127.0.0.1:8080/
+node tools/web-smoke.mjs                      # alle Maschinen im WASM-Modul (Test-ROMs, ohne Browser)
+```
+
+- **Maschine** wählen, Modell und Optionen (`ram=8k drives=2`) eintragen,
+  **Start**. „built-in test ROMs“ startet mit den eingebauten Stub-ROMs.
+- **Files**: einzelne Dateien oder einen ROM-Ordner hochladen (wie
+  `--rom-dir`: Unterordner je Maschine, Dateinamen und Größen wie bei der
+  ROM-Suche). Auf das Bild gezogene Dateien kommen in das passende
+  Laufwerk.
+- **Drives and slots**: Medien einlegen/auswerfen.
+- **Cheats**: Liste der Freezes zum An- und Ausschalten, Import (POKE-Liste,
+  Adresse/Wert, VICE-Monitor, TOML), Export, Speichersuche mit
+  „Freeze“-Knopf. Cheat-Dateien `cheats/<maschine>/<crc32>.toml` im
+  hochgeladenen Ordner gelten automatisch für das passende Image.
+- **State**: Savestate herunterladen/laden; **Profiles…** startet ein
+  Profil aus einer `profiles.yaml`.
+- Eingabe: ins Bild klicken, dann gehen Tasten an die Maschine
+  (positionsgleich wie im Desktop); Gamepads (Standard-Mapping) spielen den
+  Joystick; Maus/Paddles fangen den Mauszeiger (Esc gibt ihn frei).
+- Direktstart per URL: `?machine=c64&options=roms=stub&start=1`
+  (Optionen mit Komma getrennt), `&model=`, `&crt=raw|default|lite`.
+- Monitor: `raw` (scharfe Pixel), das Profil der Maschine oder `lite`;
+  das CRT-Bild rechnet die CPU, `lite` ist für schwache Rechner.
 
 ## 10. Debug-Schnittstelle
 
@@ -440,7 +641,7 @@ cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --vice --pre
 ### 10.2 Protokoll (nativ, JSON-Zeilen)
 
 Ein JSON-Objekt pro Zeile in beide Richtungen, Protokollname
-`mimic-debug`, aktuelle Version **7**. Anfragen haben eine `id` und einen
+`mimic-debug`, aktuelle Version **9**. Anfragen haben eine `id` und einen
 `cmd`; jede bekommt genau eine Antwort, in Reihenfolge:
 
 ```json
@@ -476,6 +677,8 @@ print(f.readline())
 | `frame_ready` | nach jedem Bild, nur nach `subscribe` |
 | `media_changed`, `device_connected` | Medium/Gerät über das Protokoll gewechselt |
 | `freeze_blocked_write` | Schreibzugriff auf eine eingefrorene Adresse unterdrückt (nach `subscribe`) |
+| `stopped_frame` | nach `stopped`, nur nach `subscribe`: das (Teil-)Bild als PNG mit markiertem Strahl und den Overlays des Debuggers |
+| `cheats_loaded` | die Cheat-Datenbank hatte Cheats für ein eingelegtes Medium (`game`) |
 
 ### 10.3 Befehle
 
@@ -489,6 +692,26 @@ meldet ein `stopped`-Ereignis.
 max. 64 KB), `poke` (`bytes`), `disasm` (`addr`, `count`), `beam`
 (Bild/Zeile/Zyklus), `chips` (Registerdumps aller Chips, z. B. VIC-II, SID,
 CIA, ANTIC, CRTC, Gate Array, FDC).
+
+**Rückwärts.** `rewind_config` (`frames`: alle N Bilder einen Zustand
+merken, 0 = aus; `budget_mb`: Speicher, Standard 128), `rewind_info`,
+`rewind` (`count` Zustände zurück, die Maschine bleibt angehalten; neuere
+Zustände entfallen), `step_back` (`count` Befehle der Haupt-CPU zurück:
+mimic stellt den letzten früheren Zustand her und rechnet deterministisch
+bis zum gewünschten Befehl vor). Änderungen von außen (`poke`, `set_reg`,
+Eingaben, Medien, Freezes, `load_state`) stecken in keinem älteren
+Zustand; über sie springt `step_back` nicht zurück.
+
+**Bilder, Overlays, Grafikdaten.** `frame` liefert das aktuelle Bild (beim
+Anhalten das Teilbild) als PNG/QOI (`scale`, `screen`, `overlays`).
+`overlay_list`, `overlay_set` (`overlays`: die Overlays dieses Debuggers;
+Maschinen-Overlays werden ab dann aufgezeichnet), `overlay_get` (`overlay`:
+die Formen in Bildkoordinaten: Rechtecke, Bänder, Marken, Zellkarten mit
+Legende). `gfx_list` nennt die Grafikdaten-Ansichten der Maschine (Sprites,
+Zeichensätze, Bitmaps, Bildschirmspeicher, Kacheln, Paletten mit ihren
+Optionen), `gfx_get` (`view`, `format`: `png` | `qoi` | `indexed`, `scale`,
+`options`) dekodiert eine: Bild, Parameter (Basisadressen, Modus, Farben …)
+und die Rohbytes.
 
 **Haltepunkte.** `break_add` mit `kind`:
 
@@ -528,8 +751,16 @@ Symbole erscheinen in `disasm` und sind in `break_add`/`run_to` nutzbar.
 `label`), `freeze_list`, `freeze_toggle`, `freeze_remove`. Cheat-Suche:
 `search_start` (`size`, Bereich), `search_next` (`op`: `eq ne lt gt` gegen
 `value`, `increased decreased unchanged changed`, `increased_by
-decreased_by`), `search_results`. Cheat-Dateien (TOML): `cheats_load`,
-`cheats_save`.
+decreased_by`), `search_results`. Cheat-Dateien: `cheats_load` (`path`
+oder `text`, `format`: `toml` – Standard, `pokes` – BASIC-POKE-Listen auch
+mit `$`/`&`-Hex, `vice` – VICE-Monitorbefehle `>`/`f` als Code-Patches,
+`codes` – Adresse/Wert-Listen), `cheats_save` (TOML). Cheat-Dateien können
+neben Freezes auch Code-Patches (`[[patch]]`, Bytefolgen) enthalten.
+
+**Cheat-Datenbank.** Liegt unter `cheats/<maschine>/<crc32>.toml` (CRC-32
+des Images, acht Hex-Ziffern klein; Ordner: `--cheats DIR`,
+`EMU_CHEATS_DIR` oder `./cheats`), werden die Cheats beim Einlegen des
+Images automatisch geladen (`insert_media`, Kommandozeile, Web).
 
 **Geräte, Medien, Eingaben.** `list_ports`, `connect_device`,
 `disconnect_device`; `list_media_slots`, `insert_media` (Datei auf dem Host,
@@ -537,7 +768,8 @@ Copy-on-Write), `eject_media`, `flush_media`, `set_drive_mode`
 (`true`/`virtual`), `media_control` (z. B. Datasette `play`, `record`,
 `stop`, `rewind`, `forward`); `input` (zeitgestempelte Eingaben an Tastatur
 oder Port), `record_start`/`record_stop`/`replay_input` (Eingaben
-aufzeichnen und reproduzierbar abspielen).
+aufzeichnen und reproduzierbar abspielen; die Aufnahme enthält auch die
+Antworten von Netz und Ordner, Abschnitt 7b).
 
 ## 11. Python-Client `polydbg`
 
@@ -555,6 +787,13 @@ python tools/polydbg.py dlist                  # Atari: Display-List dekodieren
 python tools/polydbg.py symbols game.sym
 python tools/polydbg.py freeze '$0400' 9       # Adresse einfrieren
 python tools/polydbg.py search start           # Cheat-Suche
+python tools/polydbg.py gfx                    # Grafikansichten auflisten
+python tools/polydbg.py gfx sprites index=2 --scale 4 -o s.png
+python tools/polydbg.py overlay beam,grid,badlines
+python tools/polydbg.py picture --overlays beam -o now.png   # Teilbild
+python tools/polydbg.py rewind --on 1          # Rückspulpuffer an
+python tools/polydbg.py rewind 50              # 50 Bilder zurück
+python tools/polydbg.py back 3                 # 3 Befehle zurück
 python tools/polydbg.py save state.bin
 python tools/polydbg.py shell                  # interaktive Eingabe
 ```

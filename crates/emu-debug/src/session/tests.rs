@@ -586,3 +586,64 @@ fn reset_poke_and_step_counts() {
         false
     );
 }
+
+#[test]
+fn cheats_import_formats_and_the_database() {
+    let mut s = session();
+    let r = result(
+        &mut s,
+        Command::CheatsLoad {
+            path: None,
+            text: Some("10 POKE 5,7 : REM lives".into()),
+            format: Some("pokes".into()),
+        },
+    );
+    assert_eq!(r["freezes"].as_array().unwrap().len(), 1);
+    let r = result(
+        &mut s,
+        Command::CheatsLoad {
+            path: None,
+            text: Some("> 8 01 02".into()),
+            format: Some("vice".into()),
+        },
+    );
+    assert_eq!(r["patches"], 1);
+    let list = result(&mut s, Command::FreezeList);
+    assert_eq!(
+        (list[0]["addr"].clone(), list[0]["value"].clone()),
+        (json!(5), json!(7))
+    );
+    assert_eq!(list[0]["label"], "lives");
+    assert_eq!(list[0]["mode"], "reapply_per_frame");
+    let bad = call(
+        &mut s,
+        Command::CheatsLoad {
+            path: None,
+            text: Some("x".into()),
+            format: Some("gif".into()),
+        },
+    );
+    assert_eq!(bad["ok"], false);
+    // The database: cheats/<machine>/<crc>.toml for an image's bytes.
+    let dir = std::env::temp_dir().join(format!("mimic-session-cheats-{}", std::process::id()));
+    let image = b"image bytes";
+    let path = emu_cheats::db_path(&dir, "fake", &emu_cheats::media_key(image));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "game = \"Fake Game\"\n[[freeze]]\nspace = \"cpu\"\naddr = 2\nvalue = 9\n",
+    )
+    .unwrap();
+    assert_eq!(s.cheats_for_image(image).unwrap(), None, "no folder set");
+    s.set_cheats_dir(Some(dir.clone()));
+    assert_eq!(
+        s.cheats_for_image(image).unwrap().as_deref(),
+        Some("Fake Game")
+    );
+    assert_eq!(s.cheats_for_image(b"other").unwrap(), None);
+    assert!(s
+        .take_events()
+        .iter()
+        .any(|e| e["event"] == "cheats_loaded" && e["game"] == "Fake Game"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

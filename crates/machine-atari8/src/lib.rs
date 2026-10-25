@@ -12,8 +12,12 @@
 //! lines) or with "-ntsc" (1 789 773 Hz, 262 lines); 114 cycles per line.
 //!
 //! Options:
-//! - `port1`–`port4`: "joystick" (default port 1), "paddles" or "none"
-//!   (default elsewhere). Ports 3 and 4 exist on the 400/800 only (PIA port
+//! - `port1`–`port4`: "joystick" (default port 1), "paddles", "lightpen"
+//!   or "none" (default elsewhere). A light pen's pulse goes to the port's
+//!   trigger line, ANTIC's light-pen input: PENH/PENV latch where the beam
+//!   draws a bright pixel under its tip (`devices_input::lightpen`; its
+//!   button reads as the stick's up line). With pens in several ports the
+//!   first counts. Ports 3 and 4 exist on the 400/800 only (PIA port
 //!   B, TRIG2/3, POT4–7). Paddles turn POKEY's POT0/1 (port 1) … POT6/7
 //!   (port 4); their buttons are the stick's left/right lines.
 //! - `basic`: "on" (default) or "off" — XL/XE: holds OPTION while the OS
@@ -42,6 +46,7 @@
 pub mod keyboard;
 pub mod loader;
 pub mod memory;
+pub mod overlay;
 pub mod stub;
 
 use chips_atari::antic::{self, Antic, AnticMemory};
@@ -53,10 +58,12 @@ use emu_core::audio::Decimator;
 use emu_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
+use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::overlay::{Overlay, OverlayInfo};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
@@ -78,6 +85,10 @@ use memory::{Area, Kind, Memory, Roms, BASIC_SIZE, OS_AB_SIZE, OS_SIZE};
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The CPU's view of memory (banked by PORTB).
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
+/// ANTIC's view of memory (DMA reads): the same as the CPU's except on the
+/// 130XE, where PORTB banks extended RAM for ANTIC separately, and at
+/// `$D000–$D7FF`, which ANTIC reads as `$FF`. Read-only.
+pub const ANTIC_SPACE: MemSpaceId = MemSpaceId(1);
 
 /// Joystick ports 1–4 (3 and 4 on the 400/800 only).
 pub const PORT1: PortId = PortId(0);
@@ -371,9 +382,12 @@ fn port_option(
         "paddles" => Ok(Some(Box::new(devices_input::Paddles::for_port(
             PortKind::AtariJoy,
         )))),
+        "lightpen" => Ok(Some(Box::new(devices_input::LightPen::new(
+            devices_input::LightPenKind::Atari,
+        )))),
         "none" => Ok(None),
         other => Err(ConfigError::Invalid(format!(
-            "{key} option '{other}' (joystick, paddles or none)"
+            "{key} option '{other}' (joystick, paddles, lightpen or none)"
         ))),
     }
 }
@@ -409,6 +423,23 @@ pub struct Atari8 {
     recorder: Recorder,
     /// The cartridge as inserted; `mem.cart` is the working copy.
     cart: CartSlot<AtariCart>,
+    /// Debug overlay recording (not machine state); `None` while every
+    /// overlay is off.
+    overlay_rec: Option<Box<overlay::Recorder>>,
+    /// Where a light pen points (from its port's lines, so not saved
+    /// separately) and which palette entries light it.
+    pen: Option<PenTarget>,
+    pen_lit: Vec<bool>,
+}
+
+/// The beam position at which a light pen sees its pixel drawn: line,
+/// CPU cycle, colour clock, index in GTIA's picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PenTarget {
+    line: u16,
+    cycle: u16,
+    cc: u16,
+    index: usize,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -525,6 +556,9 @@ impl Atari8 {
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
             samples: Vec::new(),
             field_done_pending: false,
+            overlay_rec: None,
+            pen: None,
+            pen_lit: Vec::new(),
             option_until: if basic_off && !model.is_old() {
                 OPTION_HOLD_FIELDS
             } else {
@@ -614,6 +648,14 @@ impl Atari8 {
             self.io.antic.playfield(c * 2 + 1),
         ];
         self.io.gtia.render_cycle(line, c, pf);
+        if let Some(pen) = self.pen {
+            if pen.cycle == c && pen.line == line {
+                self.pen_sees(pen);
+            }
+        }
+        if let Some(rec) = &mut self.overlay_rec {
+            rec.cycle(&self.io.antic, &self.io.gtia, out.nmi);
+        }
         self.io.pokey.tick();
         // SIO: bytes POKEY sent, the COMMAND line (PIA CB2, low =
         // asserted), and what the devices send back.
@@ -649,6 +691,9 @@ impl Atari8 {
         self.sched.tick();
         if new_field {
             self.refresh_console();
+            if let Some(rec) = &mut self.overlay_rec {
+                rec.end_field();
+            }
         }
 
         if let Some(dbg) = dbg {
@@ -784,8 +829,45 @@ impl Atari8 {
         }
         self.io.porta = pins[0];
         self.io.portb_in = pins[1];
+        self.sync_light_pen();
         if !self.mem.banks_with_portb() {
             self.mem.portb = self.io.portb();
+        }
+    }
+
+    /// Where a light pen in a joystick port points (the first port with
+    /// one): its pixel's line, cycle and colour clock. The pen's pulse goes
+    /// to the trigger line (pin 6), ANTIC's light-pen input.
+    fn sync_light_pen(&mut self) {
+        let now = self.sched.now();
+        let aim = self
+            .ports
+            .iter()
+            .flatten()
+            .find_map(|d| devices_input::lightpen::aim(&d.read_lines(now)));
+        self.pen = aim.and_then(|a| {
+            if u32::from(a.x) >= gtia::WIDTH || u32::from(a.y) >= gtia::HEIGHT {
+                return None;
+            }
+            let cc = a.x / 2 + gtia::FIRST_CC;
+            Some(PenTarget {
+                line: a.y + chips_atari::antic::FIRST_LINE,
+                cycle: cc / 2,
+                cc,
+                index: usize::from(a.y) * gtia::WIDTH as usize + usize::from(a.x),
+            })
+        });
+        if self.pen.is_some() && self.pen_lit.is_empty() {
+            self.pen_lit = devices_input::lightpen::lit_colours(&self.palette);
+        }
+    }
+
+    /// GTIA drew the pen's pixel in this cycle: a bright one pulses ANTIC's
+    /// light-pen input.
+    fn pen_sees(&mut self, pen: PenTarget) {
+        let colour = self.io.gtia.pixels()[pen.index];
+        if self.pen_lit.get(usize::from(colour)) == Some(&true) {
+            self.io.antic.light_pen(pen.cc);
         }
     }
 
@@ -1002,13 +1084,61 @@ impl Machine for Atari8 {
     }
 
     fn memory_spaces(&self) -> Vec<MemSpace> {
-        vec![MemSpace {
-            id: CPU_SPACE,
-            name: "cpu",
-            device: CPU,
-            addr_bits: 16,
-            big_endian: false,
-        }]
+        vec![
+            MemSpace {
+                id: CPU_SPACE,
+                name: "cpu",
+                device: CPU,
+                addr_bits: 16,
+                big_endian: false,
+            },
+            MemSpace {
+                id: ANTIC_SPACE,
+                name: "antic",
+                device: CPU,
+                addr_bits: 16,
+                big_endian: false,
+            },
+        ]
+    }
+
+    fn overlays(&self) -> Vec<OverlayInfo> {
+        overlay::infos()
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.overlay_rec = overlay::Recorder::new(ids).map(Box::new);
+    }
+
+    fn overlay(&self, id: &str) -> Option<Overlay> {
+        let b = self.beam_pos();
+        let mid_field = b.line != 0 || b.cycle != 0;
+        self.overlay_rec.as_ref()?.overlay(id, mid_field)
+    }
+
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        overlay::frame_row(line)
+    }
+
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        antic::gfx::views()
+    }
+
+    /// ANTIC/GTIA views, decoded from what ANTIC's DMA sees (reported in
+    /// [`ANTIC_SPACE`]); `addr` options are ANTIC addresses.
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        let info = self.gfx_views().into_iter().find(|v| v.id == id)?;
+        let ctx = antic::gfx::GfxContext {
+            mem: &DmaView(&self.mem),
+            space: ANTIC_SPACE,
+            io_space: CPU_SPACE,
+            palette: &self.palette,
+        };
+        Some(
+            self.io
+                .antic
+                .gfx_view(&self.io.gtia, info.id, info.kind, info.name, &ctx, opts),
+        )
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -1418,6 +1548,9 @@ impl Machine for Atari8 {
         self.field_done_pending = field_done_pending;
         self.option_until = option_until;
         self.option_key = option_key;
+        if let Some(rec) = &mut self.overlay_rec {
+            rec.clear();
+        }
         self.refresh_ports();
         Ok(())
     }
@@ -1433,6 +1566,14 @@ impl DebugTarget for Atari8 {
     }
 
     fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
+        if space == ANTIC_SPACE {
+            let mut v = 0;
+            for i in 0..size.bytes() {
+                let a = (addr.wrapping_add(i) & 0xffff) as u16;
+                v |= u32::from(self.mem.read_dma(a)) << (8 * i);
+            }
+            return Some(v);
+        }
         if space != CPU_SPACE {
             return None;
         }

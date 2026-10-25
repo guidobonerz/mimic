@@ -14,12 +14,16 @@ pub mod cycle;
 pub mod debug;
 pub mod frame;
 pub mod freeze;
+pub mod gfx;
 pub mod hooked;
+pub mod host;
 pub mod input;
 pub mod machine;
 pub mod media;
+pub mod overlay;
 pub mod port;
 pub mod registry;
+pub mod rewind;
 pub mod savestate;
 pub mod scheduler;
 pub mod testing;
@@ -34,6 +38,7 @@ pub use cycle::Cycle;
 pub use debug::{BpId, Breakpoint, BreakpointKind, DebugHooks, FreezeId, InterruptKind};
 pub use frame::{FrameRef, ScreenId, ScreenInfo};
 pub use freeze::{Freeze, FreezeMode};
+pub use gfx::{GfxKind, GfxOptions, GfxView, GfxViewInfo};
 pub use hooked::HookedBus;
 pub use machine::{
     ChipInfo, DebugTarget, DeviceId, Machine, MemSpace, MemSpaceId, ResetKind, StopReason,

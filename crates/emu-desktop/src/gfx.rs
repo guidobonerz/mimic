@@ -2,6 +2,13 @@
 //! the CRT shader of `video-crt` into a letterboxed rectangle that keeps the
 //! monitor profile's aspect ratio. The status footer, when shown, is a
 //! second texture drawn 1:1 into a strip under the picture.
+//!
+//! Phosphor persistence needs the previous output: with a profile whose
+//! `persistence` is above 0 the shader draws into one of two offscreen
+//! targets the size of the picture rectangle, reading the other (the last
+//! output), and the result is copied 1:1 to the window. The pair swaps
+//! every frame and is rebuilt (history cleared) when the rectangle's size
+//! changes. Without persistence the shader draws straight to the window.
 
 use std::sync::Arc;
 
@@ -18,7 +25,12 @@ pub struct Gfx {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
-    texture: Option<(wgpu::Texture, wgpu::BindGroup, u32, u32)>,
+    /// The frame texture, its view and size.
+    texture: Option<(wgpu::Texture, wgpu::TextureView, u32, u32)>,
+    /// Stands in for the previous output when there is no persistence.
+    no_history: wgpu::TextureView,
+    /// Ping-pong targets for persistence.
+    history: Option<History>,
     profile: Profile,
     /// Output size of the last frame through the profile (aspect source).
     out_size: (u32, u32),
@@ -27,6 +39,17 @@ pub struct Gfx {
     footer_sampler: wgpu::Sampler,
     /// Footer texture, its bind group and size in window pixels.
     footer: Option<(wgpu::Texture, wgpu::BindGroup, u32, u32)>,
+}
+
+/// Two render targets of the picture rectangle's size: the shader draws into
+/// `views[current]` reading the other one, which holds the last output.
+struct History {
+    size: (u32, u32),
+    _targets: [wgpu::Texture; 2],
+    views: [wgpu::TextureView; 2],
+    /// Bind groups of the copy to the window (footer pipeline), per target.
+    blits: [wgpu::BindGroup; 2],
+    current: usize,
 }
 
 /// Draws a texture over the whole viewport, nearest-neighbour.
@@ -113,6 +136,17 @@ impl Gfx {
                     },
                     count: None,
                 },
+                // The previous output (persistence).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -147,7 +181,7 @@ impl Gfx {
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("crt params"),
-            size: 48,
+            size: video_crt::gpu::PARAMS_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -213,6 +247,22 @@ impl Gfx {
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
+        let no_history = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("no history"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
         Ok(Self {
             surface,
             device,
@@ -222,6 +272,8 @@ impl Gfx {
             layout,
             params,
             texture: None,
+            no_history,
+            history: None,
             profile,
             out_size: (4, 3),
             footer_pipeline,
@@ -349,21 +401,7 @@ impl Gfx {
                 view_formats: &[],
             });
             let view = texture.create_view(&Default::default());
-            let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("crt"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.params.as_entire_binding(),
-                    },
-                ],
-            });
-            self.texture = Some((texture, bind, frame.width, frame.height));
+            self.texture = Some((texture, view, frame.width, frame.height));
         }
         // Signal stage on the CPU, CRT stage in the shader.
         let decoded = video_crt::signal::process_rgba(
@@ -416,13 +454,113 @@ impl Gfx {
         ((sw - w) / 2, (sh - h) / 2, w.max(1), h.max(1))
     }
 
+    /// Switch the monitor profile (live editing); takes effect with the
+    /// next upload and draw.
+    pub fn set_profile(&mut self, profile: Profile) {
+        if profile.persistence <= 0.0 {
+            self.history = None;
+        }
+        self.profile = profile;
+    }
+
+    /// The persistence targets for a `w` × `h` picture, rebuilt (history
+    /// cleared: new textures start black) when the size changes.
+    fn ensure_history(&mut self, w: u32, h: u32) {
+        if self
+            .history
+            .as_ref()
+            .is_some_and(|hist| hist.size != (w, h))
+        {
+            self.history = None;
+        }
+        if self.history.is_some() {
+            return;
+        }
+        let target = || {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("crt history"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+        let targets = [target(), target()];
+        let views = [
+            targets[0].create_view(&Default::default()),
+            targets[1].create_view(&Default::default()),
+        ];
+        let blit = |view: &wgpu::TextureView| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("crt history"),
+                layout: &self.footer_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.footer_sampler),
+                    },
+                ],
+            })
+        };
+        let blits = [blit(&views[0]), blit(&views[1])];
+        self.history = Some(History {
+            size: (w, h),
+            _targets: targets,
+            views,
+            blits,
+            current: 0,
+        });
+    }
+
+    /// The CRT shader's bind group: the frame, the params and `previous`.
+    fn crt_bind_group(&self, previous: &wgpu::TextureView) -> Option<wgpu::BindGroup> {
+        let (_, view, ..) = self.texture.as_ref()?;
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("crt"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(previous),
+                },
+            ],
+        }))
+    }
+
     pub fn render(&mut self) {
-        let Some((_, bind, fw, fh)) = &self.texture else {
+        let Some((_, _, fw, fh)) = &self.texture else {
             return;
         };
+        let src = (*fw, *fh);
         let (x, y, w, h) = self.viewport();
-        let params = video_crt::gpu::params(&self.profile, (*fw, *fh), (w, h), (x, y));
-        let bytes: Vec<u8> = params.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let persistent = self.profile.persistence > 0.0;
+        if persistent {
+            self.ensure_history(w, h);
+        }
+        // With persistence the shader draws into a history target at
+        // (0, 0), otherwise straight into the window's rectangle.
+        let origin = if persistent { (0, 0) } else { (x, y) };
+        let bytes = video_crt::gpu::params_bytes(&self.profile, src, (w, h), origin);
         self.queue.write_buffer(&self.params, 0, &bytes);
 
         let target = match self.surface.get_current_texture() {
@@ -434,6 +572,33 @@ impl Gfx {
         };
         let view = target.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        let history = self.history.as_ref().filter(|_| persistent);
+        let direct = match history {
+            Some(hist) => {
+                let current = hist.current;
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("crt history"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &hist.views[current],
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                if let Some(bind) = self.crt_bind_group(&hist.views[1 - current]) {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &bind, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+                None
+            }
+            None => self.crt_bind_group(&self.no_history),
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("crt"),
@@ -449,10 +614,18 @@ impl Gfx {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, bind, &[]);
             pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
-            pass.draw(0..3, 0..1);
+            if let Some(bind) = &direct {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, bind, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            if let Some(hist) = history {
+                // The finished picture, 1:1 into its rectangle.
+                pass.set_pipeline(&self.footer_pipeline);
+                pass.set_bind_group(0, &hist.blits[hist.current], &[]);
+                pass.draw(0..3, 0..1);
+            }
             if let Some((_, footer, fw, _)) = &self.footer {
                 let fh = self.footer_height();
                 pass.set_pipeline(&self.footer_pipeline);
@@ -470,5 +643,8 @@ impl Gfx {
         }
         self.queue.submit([encoder.finish()]);
         target.present();
+        if let Some(hist) = self.history.as_mut().filter(|_| persistent) {
+            hist.current = 1 - hist.current;
+        }
     }
 }

@@ -706,3 +706,72 @@ fn aga_sprite_dma_fetches_wide_words() {
         "64 bits of sprite data"
     );
 }
+
+/// Colour 0 white, no planes, LPEN on: the whole picture lights a pen.
+fn pen_setup() -> (Custom, ChipRam) {
+    let (mut c, chip) = setup();
+    c.write(reg::BPLCON0, 0x0208);
+    c.write(reg::COLOR00, 0xfff);
+    c.set_light_pen(Some((200, 100)), 80);
+    (c, chip)
+}
+
+fn run_to_line(c: &mut Custom, chip: &mut ChipRam, v: u16) {
+    while c.v != v {
+        c.tick(chip, false);
+    }
+}
+
+#[test]
+fn light_pen_freezes_vposr_and_vhposr_until_line_20() {
+    let (mut c, mut chip) = pen_setup();
+    field(&mut c, &mut chip);
+    field(&mut c, &mut chip);
+    // Frame pixel (200, 100): Denise column 50 + $38 = 106 colour clocks,
+    // two behind Agnus (h = 108); row 100 is line 26 + 100.
+    assert_eq!(c.peek(reg::VHPOSR), 126 << 8 | 108);
+    assert_eq!(c.peek(reg::VPOSR) & 7, 0);
+    run_to_line(&mut c, &mut chip, 19);
+    assert_eq!(
+        c.peek(reg::VHPOSR),
+        126 << 8 | 108,
+        "frozen through blanking"
+    );
+    run_to_line(&mut c, &mut chip, 21);
+    assert_eq!(c.peek(reg::VHPOSR) >> 8, 21, "released at line 20");
+    run_to_line(&mut c, &mut chip, 127);
+    assert_eq!(c.peek(reg::VHPOSR), 126 << 8 | 108);
+
+    // State: the latch round-trips.
+    let mut w = StateWriter::new();
+    c.save(&mut w);
+    let data = w.into_bytes();
+    let mut d = Custom::new(Standard::Pal, 0x7fffe, Chipset::OCS);
+    d.load(&mut StateReader::new(&data)).unwrap();
+    assert_eq!(d.peek(reg::VHPOSR), 126 << 8 | 108);
+}
+
+#[test]
+fn light_pen_without_a_trigger_freezes_at_the_end_of_the_field() {
+    let (mut c, mut chip) = pen_setup();
+    c.write(reg::COLOR00, 0x000);
+    field(&mut c, &mut chip);
+    // Last colour clock of the long PAL field: line 312, h 226.
+    assert_eq!(c.peek(reg::VPOSR) & 7, 1);
+    assert_eq!(c.peek(reg::VHPOSR), (312 & 0xff) << 8 | 226);
+    // LPEN off: the running counters.
+    c.write(reg::BPLCON0, 0x0200);
+    assert_eq!(c.peek(reg::VHPOSR), 0);
+}
+
+#[test]
+fn ecs_lpendis_shows_the_running_counters() {
+    let (mut c, mut chip) = setup_ecs(Standard::Pal);
+    c.write(reg::BPLCON0, 0x0208);
+    c.write(reg::COLOR00, 0xfff);
+    c.set_light_pen(Some((200, 100)), 80);
+    field(&mut c, &mut chip);
+    assert_eq!(c.peek(reg::VHPOSR), 126 << 8 | 108);
+    c.write(0x1dc, beamcon0::PAL | beamcon0::LPENDIS);
+    assert_eq!(c.peek(reg::VHPOSR), 0);
+}

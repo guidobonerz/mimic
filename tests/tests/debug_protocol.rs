@@ -469,7 +469,7 @@ fn ports_devices_and_media() {
     assert_eq!(ports[1]["connected"], true, "default joystick");
     assert_eq!(
         ports[0]["devices"],
-        json!(["joystick", "paddles", "mouse1351"])
+        json!(["joystick", "paddles", "mouse1351", "lightpen"])
     );
     c.ok(json!({"cmd": "connect_device", "port": 0, "device": "mouse1351"}));
     assert_eq!(c.event("device_connected")["device"], "mouse1351");
@@ -734,5 +734,189 @@ fn console_panel_controls() {
     ] {
         assert_eq!(c.call(bad)["ok"], false);
     }
+    server.shutdown();
+}
+
+#[test]
+fn graphics_data_views() {
+    let server = c64_server();
+    let mut c = Client::connect(&server);
+    c.recv();
+    let caps = c.ok(json!({"cmd": "capabilities"}));
+    for cmd in ["gfx_list", "gfx_get"] {
+        assert!(caps["commands"].as_array().unwrap().contains(&json!(cmd)));
+    }
+    let views = c.ok(json!({"cmd": "gfx_list"}));
+    let ids: Vec<&str> = views
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["sprites", "charset", "bitmap", "screen", "palette"]);
+    assert_eq!(views[0]["kind"], "sprites");
+    assert_eq!(views[0]["name"], "VIC-II sprites");
+    assert!(views[0]["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|o| o["name"] == "index"));
+    // Screen memory: put a byte there and see it in the raw data.
+    c.ok(json!({"cmd": "step_frame"}));
+    let screen = c.ok(json!({"cmd": "gfx_get", "view": "screen"}));
+    let base = screen["addr"].as_u64().unwrap();
+    c.ok(json!({"cmd": "poke", "addr": base, "bytes": [0x42]}));
+    let screen = c.ok(json!({"cmd": "gfx_get", "view": "screen", "scale": 2}));
+    assert_eq!(
+        (screen["width"].as_u64(), screen["height"].as_u64()),
+        (Some(320), Some(200))
+    );
+    assert_eq!(screen["format"], "png");
+    let raw = emu_debug::protocol::base64_decode(screen["raw"].as_str().unwrap()).unwrap();
+    assert_eq!((raw.len(), raw[0]), (1000, 0x42));
+    let png = emu_debug::protocol::base64_decode(screen["image"].as_str().unwrap()).unwrap();
+    assert_eq!(&png[1..4], b"PNG");
+    // Indexed pixels with the palette; options select one sprite.
+    let s = c.ok(
+        json!({"cmd": "gfx_get", "view": "sprites", "format": "indexed",
+                        "options": {"index": 2}}),
+    );
+    assert_eq!(
+        (s["width"].as_u64(), s["height"].as_u64()),
+        (Some(24), Some(21))
+    );
+    let px = emu_debug::protocol::base64_decode(s["pixels"].as_str().unwrap()).unwrap();
+    assert_eq!(px.len(), 24 * 21);
+    assert_eq!(s["palette"].as_array().unwrap().len(), 17);
+    assert!(s["params"]["ptr2"].is_u64());
+    let q = c.ok(json!({"cmd": "gfx_get", "view": "palette", "format": "qoi"}));
+    let qoi = emu_debug::protocol::base64_decode(q["image"].as_str().unwrap()).unwrap();
+    assert_eq!(&qoi[..4], b"qoif");
+    for bad in [
+        json!({"cmd": "gfx_get", "view": "nothing"}),
+        json!({"cmd": "gfx_get", "view": "screen", "format": "gif"}),
+    ] {
+        assert_eq!(c.call(bad)["ok"], false);
+    }
+    server.shutdown();
+}
+
+#[test]
+fn rewind_and_step_back() {
+    let server = server_with(subroutines());
+    let mut c = Client::connect(&server);
+    c.recv();
+    // Step back by instructions: the PCs come back in reverse.
+    let mut pcs = vec![c.ok(json!({"cmd": "step_instr"}))["pc"].clone()];
+    for _ in 0..6 {
+        pcs.push(c.ok(json!({"cmd": "step_instr"}))["pc"].clone());
+    }
+    let regs_before = c.ok(json!({"cmd": "regs"}));
+    let r = c.ok(json!({"cmd": "step_back"}));
+    assert_eq!(r["pc"], pcs[5]);
+    let r = c.ok(json!({"cmd": "step_back", "count": 3}));
+    assert_eq!(r["pc"], pcs[2]);
+    // Forward again: the same path, the same registers.
+    c.ok(json!({"cmd": "step_instr", "count": 4}));
+    assert_eq!(c.ok(json!({"cmd": "regs"})), regs_before);
+    // A poke is not in any earlier state: no stepping back across it.
+    c.ok(json!({"cmd": "poke", "addr": 0x0400, "bytes": [5]}));
+    assert_eq!(c.call(json!({"cmd": "step_back"}))["ok"], false);
+    c.ok(json!({"cmd": "step_instr"}));
+    c.ok(json!({"cmd": "step_back"}));
+    let p = c.ok(json!({"cmd": "peek", "addr": 0x0400, "len": 1}));
+    assert_eq!(p["bytes"], json!([5]), "the poke stays");
+
+    // The ring: states while running, back by frames.
+    assert_eq!(c.ok(json!({"cmd": "rewind_info"}))["enabled"], false);
+    assert_eq!(c.call(json!({"cmd": "rewind"}))["ok"], false);
+    let info = c.ok(json!({"cmd": "rewind_config", "frames": 1, "budget_mb": 8}));
+    assert_eq!(
+        (info["enabled"].clone(), info["interval"].clone()),
+        (json!(true), json!(1))
+    );
+    c.ok(json!({"cmd": "resume"}));
+    std::thread::sleep(Duration::from_millis(300));
+    c.ok(json!({"cmd": "pause"}));
+    let info = c.ok(json!({"cmd": "rewind_info"}));
+    let entries = info["entries"].as_u64().unwrap();
+    assert!(entries >= 3, "{info}");
+    assert!(info["bytes"].as_u64().unwrap() <= 8 << 20);
+    let newest = info["newest"]["frame"].as_u64().unwrap();
+    // Two states back from now (the newest one counts if it is older than now).
+    let r = c.ok(json!({"cmd": "rewind", "count": 2}));
+    let frame = r["frame"].as_u64().unwrap();
+    assert!(
+        frame == newest - 1 || frame == newest - 2,
+        "{r} newest {newest}"
+    );
+    assert_eq!(
+        c.ok(json!({"cmd": "rewind_info"}))["entries"].as_u64(),
+        Some(entries - (newest - frame)),
+        "newer states dropped"
+    );
+    // Stepping back works from a rewound state too; a state from the end
+    // of a frame may lie inside an instruction, so the first boundary is
+    // the first one back to reach.
+    c.ok(json!({"cmd": "step_instr"}));
+    let at = c.ok(json!({"cmd": "regs"}));
+    c.ok(json!({"cmd": "step_instr", "count": 2}));
+    c.ok(json!({"cmd": "step_back", "count": 2}));
+    assert_eq!(c.ok(json!({"cmd": "regs"})), at);
+    assert_eq!(c.call(json!({"cmd": "step_back"}))["ok"], false);
+    let off = c.ok(json!({"cmd": "rewind_config", "frames": 0}));
+    assert_eq!(off["enabled"], false);
+    server.shutdown();
+}
+
+#[test]
+fn overlays_frames_and_the_stopped_frame_event() {
+    let server = server_with(subroutines());
+    let mut c = Client::connect(&server);
+    c.recv();
+    let list = c.ok(json!({"cmd": "overlay_list"}));
+    let ids: Vec<&str> = list["overlays"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(&ids[..2], ["beam", "grid"]);
+    assert_eq!(
+        c.call(json!({"cmd": "overlay_set", "overlays": ["nope"]}))["ok"],
+        false
+    );
+    let set = c.ok(json!({"cmd": "overlay_set", "overlays": ["beam", "grid"]}));
+    assert_eq!(set["active"], json!(["beam", "grid"]));
+    // Stop mid-frame: the partial picture with the beam marked.
+    c.ok(json!({"cmd": "step_frame"}));
+    c.ok(json!({"cmd": "step_line"}));
+    for _ in 0..50 {
+        c.ok(json!({"cmd": "step_line"}));
+    }
+    let beam = c.ok(json!({"cmd": "overlay_get", "overlay": "beam"}));
+    assert_eq!(beam["beam"]["row"], 51);
+    let grid = c.ok(json!({"cmd": "overlay_get", "overlay": "grid"}));
+    assert_eq!(grid["grid"][1], json!({"row": 8, "line": 8}));
+    let plain = c.ok(json!({"cmd": "frame"}));
+    assert_eq!(
+        (plain["width"].as_u64(), plain["partial"].clone()),
+        (Some(384), json!(true))
+    );
+    let marked = c.ok(json!({"cmd": "frame", "overlays": ["beam"], "scale": 2}));
+    assert_eq!(marked["width"].as_u64(), Some(768));
+    assert_ne!(
+        plain["image"],
+        c.ok(json!({"cmd": "frame", "overlays": ["beam"]}))["image"]
+    );
+    // stopped_frame follows stopped for subscribers.
+    c.ok(json!({"cmd": "subscribe", "events": ["stopped_frame"]}));
+    c.ok(json!({"cmd": "break_add", "addr": 0x0820}));
+    c.ok(json!({"cmd": "resume"}));
+    c.event("stopped");
+    let ev = c.event("stopped_frame");
+    let png = emu_debug::protocol::base64_decode(ev["image"].as_str().unwrap()).unwrap();
+    assert_eq!(&png[1..4], b"PNG");
+    assert_eq!(ev["partial"], true);
     server.shutdown();
 }

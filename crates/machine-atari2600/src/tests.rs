@@ -440,3 +440,88 @@ fn fe_switches_on_jsr_and_rts() {
     }
     assert_eq!((peek(&m, 0x81), peek(&m, 0x82)), (0x55, 0x66));
 }
+
+#[test]
+fn gfx_views_show_the_tia_registers() {
+    let mut m = stub("ntsc");
+    frame(&mut m);
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["objects", "palette"]);
+    m.board.tia.write(tia::COLUPF, 0x86);
+    m.board.tia.write(tia::PF1, 0x80); // playfield bit 4
+    let v = m.gfx_view("objects", &GfxOptions::new()).unwrap();
+    assert_eq!((v.width, v.height), (160, 9 * 9 - 1));
+    assert_eq!(v.space, CPU_SPACE);
+    assert_eq!(v.param("pf1"), Some(0x80));
+    assert_eq!(v.raw.len(), 0x2d + 3);
+    assert_eq!(v.raw[usize::from(tia::PF1)], 0x80);
+    let pf_strip = 7 * 9;
+    match &v.pixels {
+        emu_core::gfx::GfxPixels::Indexed { pixels, .. } => {
+            assert_eq!(pixels[(pf_strip * 160 + 16) as usize], 0x43);
+        }
+        _ => panic!("indexed"),
+    }
+    let p = m.gfx_view("palette", &GfxOptions::new()).unwrap();
+    assert_eq!(p.param("count"), Some(128));
+    assert!(m.gfx_view("nope", &GfxOptions::new()).is_none());
+}
+
+#[test]
+fn overlay_marks_position_strobes_and_hmove() {
+    let mut m = stub("ntsc");
+    assert_eq!(m.overlays().len(), 1);
+    assert!(m.overlay("objects").is_none(), "off by default");
+    m.set_overlays(&["objects"]);
+    frame(&mut m);
+    assert!(m.overlay("objects").unwrap().shapes.is_empty());
+    while m.board.tia.line() != 50 || m.board.tia.clock() < 120 {
+        m.step_cycle();
+    }
+    let clock = m.board.tia.clock();
+    m.board.write(u16::from(tia::RESP0), 0);
+    m.board.write(u16::from(tia::HMOVE), 0);
+    m.board.write(u16::from(tia::COLUBK), 0); // not a strobe
+    let so_far = m.overlay("objects").unwrap();
+    assert_eq!(so_far.shapes.len(), 2, "mid-field: the field so far");
+    frame(&mut m);
+    let o = m.overlay("objects").unwrap();
+    assert_eq!(
+        o.shapes[0],
+        emu_core::overlay::Shape::Mark {
+            x: i32::from(clock - tia::HBLANK),
+            y: 50,
+            color: emu_core::overlay::colors::RED,
+            label: Some("RESP0".into()),
+        }
+    );
+    assert!(matches!(&o.shapes[1],
+        emu_core::overlay::Shape::Mark { label: Some(l), .. } if l == "HMOVE"));
+    frame(&mut m);
+    assert!(m.overlay("objects").unwrap().shapes.is_empty());
+    m.set_overlays(&[]);
+    assert!(m.overlay("objects").is_none());
+    assert!(m.board.overlay.is_none());
+}
+
+#[test]
+fn frame_rows_and_savestates_ignore_the_overlay() {
+    let ntsc = stub("ntsc");
+    assert_eq!(ntsc.frame_row(0), Some(0));
+    assert_eq!(ntsc.frame_row(261), Some(261));
+    assert_eq!(ntsc.frame_row(262), None);
+    assert_eq!(stub("pal").frame_row(311), Some(311));
+    let mut a = stub("ntsc");
+    let mut b = stub("ntsc");
+    b.set_overlays(&["objects"]);
+    frame(&mut a);
+    frame(&mut b);
+    b.board.write(u16::from(tia::RESBL), 0);
+    a.board.write(u16::from(tia::RESBL), 0);
+    assert_eq!(a.save_state(), b.save_state());
+    b.load_state(&a.save_state()).unwrap();
+    assert!(
+        b.overlay("objects").unwrap().shapes.is_empty(),
+        "cleared on load"
+    );
+}

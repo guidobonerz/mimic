@@ -24,13 +24,13 @@ pub mod keymap;
 pub mod mapper;
 pub mod profile;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub use mapper::Mapper;
 pub use profile::{JoyKeys, Profile};
 
 /// Gamepad buttons in a layout-neutral naming (position, not label).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub enum Button {
     South,
     East,
@@ -108,6 +108,14 @@ pub enum HostEvent {
     Mouse {
         dx: i16,
         dy: i16,
+        buttons: u8,
+    },
+    /// The host pointer over the machine's picture, not captured: its
+    /// position in frame pixels of the main picture (border included;
+    /// `None` off the picture) and its buttons (bit 0 left, bit 1 right).
+    /// Aims a light pen or light gun (see [`profile::PointerMap`]).
+    Pointer {
+        pos: Option<(u16, u16)>,
         buttons: u8,
     },
 }

@@ -584,6 +584,60 @@ pub fn load(dir: &Path, machine: &str) -> io::Result<BTreeMap<String, Vec<u8>>> 
     Ok(roms)
 }
 
+/// [`load`] for files that did not come from a folder on this host (the
+/// browser): `files` are (path, bytes) with `/` between folders, e.g.
+/// `roms/c64/kernal.bin`. Files in a folder named after the machine come
+/// first, then `drives/`, then all others; the rest is as in [`load`].
+pub fn match_files(
+    files: &[(String, Vec<u8>)],
+    machine: &str,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let entry = |(path, data): &(String, Vec<u8>)| {
+        let mut parts = path.rsplit(['/', '\\']);
+        let name = normalize(parts.next().unwrap_or(""));
+        let folder = parts.next().map(str::to_lowercase).unwrap_or_default();
+        (folder, name, data.clone())
+    };
+    let all: Vec<(String, String, Vec<u8>)> = files.iter().map(entry).collect();
+    let mut groups: Vec<Vec<&(String, String, Vec<u8>)>> = Vec::new();
+    for sub in folders(machine).iter().chain(&["drives"]) {
+        groups.push(all.iter().filter(|(f, _, _)| f == sub).collect());
+    }
+    let mut rest: Vec<_> = all.iter().collect();
+    rest.sort_by(|a, b| a.1.cmp(&b.1));
+    groups.push(rest);
+    for g in &mut groups {
+        g.sort_by(|a, b| a.1.cmp(&b.1));
+    }
+    let mut roms = BTreeMap::new();
+    for spec in specs(machine) {
+        if roms.contains_key(spec.role) {
+            continue;
+        }
+        let found = groups.iter().find_map(|g| {
+            spec.prefixes.iter().find_map(|p| {
+                g.iter()
+                    .find(|(_, name, data)| data.len() == spec.size && name.starts_with(p))
+            })
+        });
+        match found {
+            Some((_, _, data)) => {
+                roms.insert(spec.role.to_string(), data.clone());
+            }
+            None if spec.optional => {}
+            None => {
+                return Err(format!(
+                    "no {} ROM ({} bytes, name starting with {})",
+                    spec.role,
+                    spec.size,
+                    spec.prefixes.join("/")
+                ))
+            }
+        }
+    }
+    Ok(roms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,6 +647,23 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn uploaded_files_match_like_a_folder() {
+        let files = vec![
+            ("roms/KERNAL-901227-03.BIN".to_string(), vec![1; 0x2000]),
+            ("roms/basic.bin".to_string(), vec![2; 0x2000]),
+            ("roms/characters.bin".to_string(), vec![3; 0x1000]),
+            ("roms/c64/kernal.bin".to_string(), vec![9; 0x2000]),
+            ("roms/char-wrong-size.bin".to_string(), vec![4; 10]),
+        ];
+        let roms = match_files(&files, "c64").unwrap();
+        assert_eq!(roms["kernal"][0], 9, "the machine's folder first");
+        assert_eq!(roms["basic"][0], 2);
+        assert_eq!(roms["chargen"][0], 3);
+        let err = match_files(&files[..1], "c64").unwrap_err();
+        assert!(err.contains("basic"), "{err}");
     }
 
     #[test]

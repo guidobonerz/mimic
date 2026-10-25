@@ -74,9 +74,11 @@ use devices_input::coleco::pin;
 use devices_input::{ColecoController, ColecoKind};
 use emu_core::audio::Decimator;
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::overlay::{Overlay, OverlayInfo};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::{
@@ -433,6 +435,11 @@ pub struct Coleco {
     sched: Scheduler,
     input: InputQueue,
     field_done_pending: bool,
+    /// Debug overlays switched on (kept over a power cycle) and whether
+    /// the beam is at the start of a field, where `overlay` shows the last
+    /// complete one. Not machine state.
+    overlay_ids: Vec<&'static str>,
+    overlay_fresh: bool,
 }
 
 impl Coleco {
@@ -496,6 +503,8 @@ impl Coleco {
             sched: Scheduler::new(),
             input: InputQueue::new(),
             field_done_pending: false,
+            overlay_ids: Vec::new(),
+            overlay_fresh: false,
         };
         m.cpu.reset();
         Ok(m)
@@ -511,7 +520,10 @@ impl Coleco {
             frame: v.fields,
             line: v.line,
             cycle: v.dot * 2 / 3,
-            hpos: v.dot,
+            // The frame column: pixel clock 0 is the left border's first
+            // column; the blanking after the right border clamps to the
+            // last column.
+            hpos: v.dot.min(vdp::WIDTH as u16 - 1),
         }
     }
 
@@ -563,6 +575,10 @@ impl Coleco {
             .set_int(self.board.spin_int[0] || self.board.spin_int[1]);
         let entered = self.cpu.take_interrupt();
         let field = std::mem::take(&mut self.board.field_done);
+        if field && self.board.vdp.overlays_on() {
+            self.board.vdp.overlay_end_frame();
+            self.overlay_fresh = true;
+        }
         if let Some(dbg) = dbg {
             if let Some(kind) = entered {
                 if dbg.interrupt_armed(kind) {
@@ -669,6 +685,7 @@ impl Machine for Coleco {
         if std::mem::take(&mut self.field_done_pending) {
             return StopReason::FrameDone;
         }
+        self.overlay_fresh = false;
         if self.board.vdp.line == 0 && self.board.vdp.dot < 3 {
             for f in dbg.per_frame_freezes() {
                 if f.space == CPU_SPACE && f.addr < IO_BASE {
@@ -687,6 +704,7 @@ impl Machine for Coleco {
     }
 
     fn step_cycle(&mut self) -> StopReason {
+        self.overlay_fresh = false;
         self.instruction(None);
         StopReason::StepDone
     }
@@ -700,6 +718,7 @@ impl Machine for Coleco {
         if kind == ResetKind::Hard {
             self.board.ram.fill(0);
             self.board.vdp = Tms9918::new(self.board.vdp.model);
+            self.board.vdp.set_overlays(&self.overlay_ids);
             self.board.psg = Sn76489::new();
             self.board.cart = self.cart.cart().cloned();
             if let Some(c) = &mut self.board.cart {
@@ -722,6 +741,42 @@ impl Machine for Coleco {
             luma_chroma: None,
             signal: self.signal(),
         }
+    }
+
+    /// The TMS9918A/TMS9929A's views (`tiles`, `sprites`, `screen`,
+    /// `palette`) from VRAM; option `addr` is a VRAM address.
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        vdp::gfx::views(self.board.vdp.model.chip_name())
+    }
+
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        self.board.vdp.gfx_view(id, VRAM_SPACE, opts)
+    }
+
+    /// `sprites` (a box per sprite where the VDP drew it, per line) and
+    /// `limit` (bands on lines with a fifth sprite).
+    fn overlays(&self) -> Vec<OverlayInfo> {
+        vdp::overlay::infos(self.board.vdp.model.chip_name())
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.overlay_ids = self
+            .overlays()
+            .into_iter()
+            .map(|o| o.id)
+            .filter(|id| ids.contains(id))
+            .collect();
+        self.board.vdp.set_overlays(ids);
+    }
+
+    fn overlay(&self, id: &str) -> Option<Overlay> {
+        self.board.vdp.overlay(id, self.overlay_fresh)
+    }
+
+    /// Line 0 is the first active line; the borders and the top border
+    /// of the next field are rows too.
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        self.board.vdp.line_row(line)
     }
 
     fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {

@@ -56,6 +56,13 @@ pub struct Io {
     pub port_analog: [[u16; 2]; 2],
     /// Serial bus levels after the last drive update.
     pub iec: IecLines,
+    /// User port pins pulled low by the device there (`PortLines`, see
+    /// `emu_core::port::user_port`), read at the start of each cycle; not
+    /// saved, the device drives them again in the next cycle.
+    pub user_lines: u32,
+    /// CIA2 PC2 pulsed in this cycle: the CPU accessed port B. Consumed
+    /// within the cycle.
+    pub pc2: bool,
 }
 
 /// The VIC-II's view of memory: one 16 KB bank of RAM, with the character
@@ -106,6 +113,8 @@ impl Io {
             port_lines: [0; 2],
             port_analog: [[u16::MAX; 2]; 2],
             iec: IecLines::default(),
+            user_lines: 0,
+            pc2: false,
         }
     }
 
@@ -164,10 +173,11 @@ impl Io {
     }
 
     /// External levels on CIA2 ports: PA6 CLK in and PA7 DATA in read the
-    /// serial bus line level (1 = released); the user port is open.
+    /// serial bus line level (1 = released); port B is the user port's
+    /// PB0–PB7 (open without a device).
     fn cia2_ext(&self) -> (u8, u8) {
         let pa = 0x3f | if self.iec.clk { 0 } else { 0x40 } | if self.iec.data { 0 } else { 0x80 };
-        (pa, 0xff)
+        (pa, emu_core::port::user_port::pb(self.user_lines))
     }
 
     pub fn read(&mut self, mem: &Memory, addr: u16) -> u8 {
@@ -179,6 +189,8 @@ impl Io {
                 self.cia1.read(reg, a, b)
             }
             0xdd00..=0xddff => {
+                // PC2 pulses after every access to port B (6526 data sheet).
+                self.pc2 |= reg == 1;
                 let (a, b) = self.cia2_ext();
                 self.cia2.read(reg, a, b)
             }
@@ -214,7 +226,10 @@ impl Io {
             0xd400..=0xd7ff => self.sid.write(addr as u8, v),
             0xd800..=0xdbff => mem.color[usize::from(addr & 0x3ff)] = v & 0x0f,
             0xdc00..=0xdcff => self.cia1.write(reg, v),
-            0xdd00..=0xddff => self.cia2.write(reg, v),
+            0xdd00..=0xddff => {
+                self.pc2 |= reg == 1;
+                self.cia2.write(reg, v)
+            }
             _ => {}
         }
     }

@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 emu-core.workspace = true
+emu-cheats.workspace = true
 emu-machines.workspace = true
 emu-debug.workspace = true
 emu-preview.workspace = true
@@ -21,3 +22,12 @@ video-crt.workspace = true
 media-backends.workspace = true
 emu-input.workspace = true
 emu-profile.workspace = true
+
+[features]
+default = []
+# Real hardware (see `--help`): Greaseweazle flux imports and real
+# Commodore drives through OpenCBM. Off by default; neither needs anything
+# at build time (OpenCBM is loaded at run time).
+greaseweazle = ["media-backends/greaseweazle"]
+opencbm = ["media-backends/opencbm"]
+real-hardware = ["greaseweazle", "opencbm"]

@@ -114,9 +114,19 @@ pub struct Session {
     last_stop: Option<StopReason>,
     symbols: SymbolTable,
     frame_hook: Option<FrameHook>,
+    idle_hook: Option<IdleHook>,
     host: Option<Box<dyn HostServices>>,
+    /// The journal of the machine's host services (network, folder), if
+    /// the frontend attached one: recordings carry it, replays install it.
+    journal: Option<emu_core::host::Journal>,
     recording: Option<devices::Recording>,
-    search: Option<freezer::Search>,
+    search: Option<emu_cheats::search::Search>,
+    cheats_dir: Option<std::path::PathBuf>,
+    rewind: rewind::Rewind,
+    /// Overlays the machine records (shared with the preview) and the ones
+    /// this debugger asked for.
+    overlay_wants: emu_core::overlay::OverlayWants,
+    dbg_overlays: Vec<String>,
 }
 
 /// Called with the machine whenever its picture may have changed: after
@@ -125,6 +135,11 @@ pub struct Session {
 /// frame copies from here; a frontend without its own audio output may also
 /// collect the machine's samples here.
 pub type FrameHook = Box<dyn FnMut(&mut dyn Machine, bool) + Send>;
+
+/// Called regularly (every few tens of milliseconds) while the machine is
+/// paused and nothing else happens: the preview answers its graphics view
+/// requests from here.
+pub type IdleHook = Box<dyn FnMut(&mut dyn Machine) + Send>;
 
 impl Session {
     pub fn new(machine: Box<dyn Machine>, machine_id: impl Into<String>) -> Self {
@@ -146,9 +161,15 @@ impl Session {
             last_stop: None,
             symbols: SymbolTable::default(),
             frame_hook: None,
+            idle_hook: None,
             host: None,
+            journal: None,
             recording: None,
             search: None,
+            cheats_dir: None,
+            rewind: rewind::Rewind::default(),
+            overlay_wants: emu_core::overlay::OverlayWants::default(),
+            dbg_overlays: Vec::new(),
         }
     }
 
@@ -170,6 +191,14 @@ impl Session {
         self.host = Some(host);
     }
 
+    /// The journal the frontend wrapped the machine's host services in
+    /// ([`emu_core::Machine::attach_host`]): `record_start`/`record_stop`
+    /// record it with the input, `replay_input` answers the host calls
+    /// from the recording.
+    pub fn set_host_journal(&mut self, journal: emu_core::host::Journal) {
+        self.journal = Some(journal);
+    }
+
     /// Queue an input event for the machine; recorded while
     /// `record_start` is active. Frontends route all input through here.
     pub fn input(&mut self, ev: emu_core::input::TimedInput) {
@@ -179,10 +208,24 @@ impl Session {
             }
         }
         self.machine.input(ev);
+        if !self.running {
+            self.mutated();
+        }
     }
 
     pub fn set_frame_hook(&mut self, hook: FrameHook) {
         self.frame_hook = Some(hook);
+    }
+
+    pub fn set_idle_hook(&mut self, hook: IdleHook) {
+        self.idle_hook = Some(hook);
+    }
+
+    /// Run the idle hook (the emulation loop calls this while paused).
+    pub fn idle(&mut self) {
+        if let Some(hook) = &mut self.idle_hook {
+            hook(self.machine.as_mut());
+        }
     }
 
     /// Run the frame hook now (adapters call this after commands that
@@ -266,6 +309,7 @@ impl Session {
         if !self.running {
             return;
         }
+        self.apply_overlays();
         let reason = match self.mode {
             RunMode::Free | RunMode::StepOver { .. } | RunMode::RunTo { .. } => self.run_filtered(),
             RunMode::Instr => {
@@ -285,6 +329,7 @@ impl Session {
         }
         match reason {
             StopReason::FrameDone => {
+                self.rewind_frame_done();
                 if self.wanted("frame_ready") {
                     self.events.push(json!({
                         "event": "frame_ready",
@@ -299,6 +344,9 @@ impl Session {
                 let mut ev = self.state_json(&reason);
                 ev["event"] = json!("stopped");
                 self.events.push(ev);
+                if self.wanted("stopped_frame") {
+                    self.events.extend(self.stopped_frame_event());
+                }
             }
         }
         self.notify_frame();
@@ -431,6 +479,60 @@ impl Session {
     }
 
     fn execute(&mut self, cmd: Command) -> Result<Value, String> {
+        // Changes from outside the emulation: older rewind states lack them.
+        let mutates = matches!(
+            cmd,
+            Command::Reset { .. }
+                | Command::SetReg { .. }
+                | Command::Poke { .. }
+                | Command::LoadState { .. }
+                | Command::FreezeAdd { .. }
+                | Command::FreezeRemove { .. }
+                | Command::FreezeToggle { .. }
+                | Command::CheatsLoad { .. }
+                | Command::ConnectDevice { .. }
+                | Command::DisconnectDevice { .. }
+                | Command::InsertMedia { .. }
+                | Command::EjectMedia { .. }
+                | Command::SetDriveMode { .. }
+                | Command::MediaControl { .. }
+                | Command::SetControl { .. }
+                | Command::Input { .. }
+                | Command::ReplayInput { .. }
+        );
+        let moves = matches!(
+            cmd,
+            Command::Resume
+                | Command::StepInstr { .. }
+                | Command::StepOver
+                | Command::StepOut
+                | Command::StepCycle
+                | Command::StepLine
+                | Command::StepFrame
+                | Command::RunTo { .. }
+                | Command::Reset { .. }
+                | Command::LoadState { .. }
+                | Command::Rewind { .. }
+        );
+        let instr = matches!(cmd, Command::StepInstr { .. });
+        if moves {
+            self.rewind.on_boundary = false;
+        }
+        let result = self.dispatch(cmd);
+        if instr
+            && result
+                .as_ref()
+                .is_ok_and(|r| r["reason"]["kind"] == "step_done")
+        {
+            self.rewind.on_boundary = true;
+        }
+        if mutates && result.is_ok() {
+            self.mutated();
+        }
+        result
+    }
+
+    fn dispatch(&mut self, cmd: Command) -> Result<Value, String> {
         match cmd {
             Command::Info => Ok(self.info()),
             Command::Capabilities => Ok(self.capabilities()),
@@ -470,6 +572,7 @@ impl Session {
                     return Err(format!("count must be 1–{MAX_STEP_COUNT}"));
                 }
                 self.stop_for_sync();
+                self.anchor_before_step();
                 let mut reason = StopReason::StepDone;
                 for _ in 0..count {
                     self.hooks.set_instr_step(true);
@@ -516,6 +619,7 @@ impl Session {
             }
             Command::StepCycle => {
                 self.stop_for_sync();
+                self.anchor_before_step();
                 let reason = self.machine.step_cycle();
                 Ok(self.state_json(&reason))
             }
@@ -524,6 +628,7 @@ impl Session {
                     return Err("machine has no video beam".into());
                 }
                 self.stop_for_sync();
+                self.anchor_before_step();
                 self.hooks.set_line_step(true);
                 let reason = self.run_until_stop();
                 self.hooks.set_line_step(false);
@@ -531,6 +636,7 @@ impl Session {
             }
             Command::StepFrame => {
                 self.stop_for_sync();
+                self.anchor_before_step();
                 let reason = self.run_filtered();
                 Ok(self.state_json(&reason))
             }
@@ -660,6 +766,28 @@ impl Session {
                     .collect();
                 Ok(json!(chips))
             }
+            Command::RewindConfig { frames, budget_mb } => {
+                Ok(self.rewind_config(frames, budget_mb))
+            }
+            Command::RewindInfo => Ok(self.rewind_info()),
+            Command::Rewind { count } => self.rewind_back(count.unwrap_or(1)),
+            Command::StepBack { count } => self.step_back(count.unwrap_or(1)),
+            Command::OverlayList => Ok(self.overlay_list()),
+            Command::OverlaySet { overlays } => self.overlay_set(overlays),
+            Command::OverlayGet { overlay } => self.overlay_get(&overlay),
+            Command::Frame {
+                screen,
+                format,
+                scale,
+                overlays,
+            } => self.frame_image(screen.as_deref(), format.as_deref(), scale, &overlays),
+            Command::GfxList => Ok(self.gfx_list()),
+            Command::GfxGet {
+                view,
+                format,
+                scale,
+                options,
+            } => self.gfx_get(&view, format.as_deref(), scale, &options),
             Command::BreakAdd(spec) => self.break_add(spec),
             Command::BreakRemove { bp } => {
                 let id = BpId(bp);
@@ -742,7 +870,9 @@ impl Session {
             } => self.search_start(space, size, addr, len),
             Command::SearchNext { op, value } => self.search_next(&op, value),
             Command::SearchResults { max } => self.search_results(max),
-            Command::CheatsLoad { path, text } => self.cheats_load(path.as_deref(), text),
+            Command::CheatsLoad { path, text, format } => {
+                self.cheats_load(path.as_deref(), text, format.as_deref())
+            }
             Command::CheatsSave { path } => self.cheats_save(path.as_deref()),
             Command::TraceStart {
                 instructions,
@@ -1147,6 +1277,11 @@ impl Session {
 
 mod devices;
 mod freezer;
+mod gfx;
+mod overlay;
+pub mod rewind;
+
+pub use rewind::DEFAULT_BUDGET_MB;
 
 #[cfg(test)]
 mod tests;

@@ -7,7 +7,8 @@
 //! A1200, are selected with [`custom::Chipset`] (see `custom` and `denise`
 //! for what they add).
 //!
-//! The 8520 CIAs are `chips_cbm::cia` with `CiaModel::Mos8520`.
+//! The 8520 CIAs are `chips_cbm::cia` with `CiaModel::Mos8520`. Graphics
+//! data views (sprites, bitplanes, palette) for debuggers: [`custom::gfx`].
 //!
 //! Sources: Commodore-Amiga, *Amiga Hardware Reference Manual*, 3rd edition
 //! (register summary, appendix A–C; chapters 2 "Coprocessor hardware",

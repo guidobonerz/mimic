@@ -41,10 +41,12 @@ use chips_cbm::ted::{self, Ted};
 use cpu_6502::{Config as CpuConfig, Cpu6502, IoPort, Variant};
 use drives_cbm::IecLines;
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
+use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::overlay::{Overlay, OverlayInfo};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
@@ -771,6 +773,44 @@ impl Machine for TedMachine {
             luma_chroma: None,
             signal: t.signal(),
         }
+    }
+
+    fn overlays(&self) -> Vec<OverlayInfo> {
+        ted::overlay::overlays()
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.io.ted.set_overlays(ids);
+    }
+
+    fn overlay(&self, id: &str) -> Option<Overlay> {
+        self.io.ted.overlay(id)
+    }
+
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        self.io.ted.frame_row(line)
+    }
+
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        ted::gfx::views("TED")
+    }
+
+    /// The TED's views, read as the TED fetches (RAM, or ROM for
+    /// character/bitmap data when `$FF12` bit 2 or option `rom` says so);
+    /// addresses are CPU addresses.
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        let info = self.gfx_views().into_iter().find(|v| v.id == id)?;
+        let view = TedView(&self.mem);
+        let ctx = ted::gfx::GfxContext {
+            mem: &view,
+            space: CPU_SPACE,
+            palette: &self.palette,
+        };
+        Some(
+            self.io
+                .ted
+                .gfx_view(info.id, info.kind, info.name, &ctx, opts),
+        )
     }
 
     fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {

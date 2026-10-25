@@ -7,7 +7,7 @@
 
 use emu_core::Size;
 
-use crate::{Res, TimedBus68, M68000};
+use crate::{timing020, Res, TimedBus68, M68000};
 
 /// Operand size of an instruction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,8 +167,10 @@ impl M68000 {
     pub(crate) fn indexed(&mut self, bus: &mut dyn TimedBus68, base: u32) -> Res<u32> {
         let ext = self.ext(bus)?;
         if self.is_020() && ext & 0x100 != 0 {
+            self.note_class(timing020::full_class(ext));
             return self.full_format(bus, base, ext);
         }
+        self.note_class(timing020::class::BRIEF);
         Ok(self.index(base, ext))
     }
 
@@ -182,6 +184,9 @@ impl M68000 {
         r: usize,
         sz: Sz,
     ) -> Res<Option<Ea>> {
+        if m != 6 && !(m == 7 && r == 3) {
+            self.note_mode(m, r, sz == Sz::L);
+        }
         Ok(Some(match m {
             0 => Ea::D(r),
             1 => Ea::A(r),

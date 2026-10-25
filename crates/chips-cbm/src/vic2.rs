@@ -42,6 +42,8 @@
 //! | $20–$2E   | border, background 0–3, sprite MC 0–1, sprite colours (4 bits)  |
 //! | $2F–$3F   | unused, read `$FF`                                              |
 
+pub mod gfx;
+pub mod overlay;
 pub mod palette;
 
 use emu_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
@@ -156,6 +158,15 @@ impl Timing {
     /// X coordinate of the first pixel of `cycle`.
     pub fn cycle_x(&self, cycle: u8) -> u16 {
         self.x_at((u16::from(cycle) - 1) * 8)
+    }
+
+    /// Frame column of the first pixel `cycle` draws, clamped to the
+    /// picture (the beam position's `hpos`).
+    #[inline]
+    pub fn cycle_column(&self, cycle: u8) -> u16 {
+        let p0 = (u16::from(cycle.max(1)) - 1) * 8;
+        p0.saturating_sub(self.visible_p0)
+            .min(self.width as u16 - 1)
     }
 
     /// First cycle (p-access) of sprite `n`'s fetch slot.
@@ -288,6 +299,31 @@ pub struct Vic2 {
     phi2_sprite: Option<usize>,
 
     pixels: Vec<u8>,
+
+    /// The light pen latched in this frame (the LP input works once a
+    /// frame, Bauer 3.11).
+    lp_done: bool,
+    /// The LP line is held low from outside (control port 1's fire button,
+    /// CIA 1 PB4): a pen's pulse makes no edge then.
+    lp_low: bool,
+    /// Where a light pen points (configuration from the port device, not
+    /// state: the machine sets it again after loading) and the colour
+    /// indices bright enough to light it (bit n = colour n).
+    pen: Option<PenTarget>,
+    pen_lit: u16,
+
+    /// Debug overlay record (not machine state; see `crate::overlay`).
+    rec: crate::overlay::Recorder<overlay::Record>,
+}
+
+/// The beam position at which a light pen sees its pixel drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PenTarget {
+    raster: u16,
+    cycle: u8,
+    /// Frame column and the pixel's index in [`Vic2::pixels`].
+    col: u16,
+    index: usize,
 }
 
 impl Default for Vic2 {
@@ -346,6 +382,11 @@ impl Vic2 {
             raster_irq_done: false,
             phi2_sprite: None,
             pixels: vec![0; (t.width * t.height) as usize],
+            lp_done: false,
+            lp_low: false,
+            pen: None,
+            pen_lit: 0,
+            rec: crate::overlay::Recorder(None),
         }
     }
 
@@ -357,12 +398,13 @@ impl Vic2 {
         self.model.timing()
     }
 
+    #[inline]
     pub fn beam(&self) -> BeamPos {
         BeamPos {
             frame: self.frame,
             line: self.raster,
             cycle: u16::from(self.cycle - 1),
-            hpos: self.timing().cycle_x(self.cycle),
+            hpos: self.timing().cycle_column(self.cycle),
         }
     }
 
@@ -643,9 +685,17 @@ impl Vic2 {
                 0xff | u16::from(mem.color(self.vc)) << 8
             };
             self.matrix[self.vmli] = v;
+            if let Some(r) = self.rec.0.as_deref_mut() {
+                r.mark_bad();
+            }
         }
 
         self.draw();
+        if let Some(pen) = self.pen {
+            if pen.cycle == c && pen.raster == self.raster {
+                self.pen_sees(pen);
+            }
+        }
 
         // Vertical border, cycle 63 rules (the last cycle of the line).
         if c == t.cycles {
@@ -658,11 +708,18 @@ impl Vic2 {
         }
 
         if c == t.cycles {
+            if let Some(r) = self.rec.0.as_deref_mut() {
+                r.end_line(self.raster);
+                if self.raster + 1 == t.lines {
+                    r.end_field();
+                }
+            }
             self.cycle = 1;
             self.raster += 1;
             if self.raster == t.lines {
                 self.raster = 0;
                 self.frame += 1;
+                self.lp_done = false;
                 self.vcbase = 0;
                 self.bad_lines_enabled = false;
                 return true;
@@ -844,6 +901,9 @@ impl Vic2 {
                 continue;
             }
             if s.bits_left == 0 && s.x == x {
+                if let Some(r) = self.rec.0.as_deref_mut() {
+                    r.sprite_shown(n, self.raster, x, self.sprite_xe & (1 << n) != 0);
+                }
                 s.shift = s.data;
                 s.bits_left = 24;
                 s.xexp_phase = false;
@@ -1002,21 +1062,75 @@ impl Vic2 {
     }
 
     /// Latch the beam position into the light-pen registers (LP input
-    /// falling edge; only the first per frame counts, Bauer 3.11).
+    /// falling edge now, at the first pixel of the current cycle).
     pub fn light_pen(&mut self) {
-        if self.irq_flags & irq::LIGHT_PEN != 0 {
+        let x = self.timing().cycle_x(self.cycle);
+        self.latch_light_pen(x);
+    }
+
+    /// LPX = X/2, LPY = the raster line (bits 0–7) and IRQ latch bit 3;
+    /// only the first trigger of a frame counts (Bauer 3.11).
+    fn latch_light_pen(&mut self, x: u16) {
+        if self.lp_done {
             return;
         }
-        let x = self.timing().cycle_x(self.cycle);
+        self.lp_done = true;
         self.lp_x = (x >> 1) as u8;
         self.lp_y = self.raster as u8;
         self.irq_flags |= irq::LIGHT_PEN;
     }
+
+    /// The LP input's level from the rest of the port (`low`: the fire
+    /// button of control port 1 or CIA 1 PB4 pulls it down). A falling
+    /// edge latches the beam position now.
+    pub fn set_lp_line(&mut self, low: bool) {
+        if low && !self.lp_low {
+            self.light_pen();
+        }
+        self.lp_low = low;
+    }
+
+    /// A light pen points at frame pixel (`x`, `y`) of [`Vic2::pixels`]
+    /// (`None`: no pen, or off the picture); it sees light where the beam
+    /// draws a colour whose bit is set in `lit`. In the cycle the beam
+    /// draws that pixel, a bright one sends a pulse on LP: the registers
+    /// latch the X coordinate of that pixel (2-pixel resolution) and the
+    /// raster line. The pen's own response delay is not modelled.
+    pub fn set_light_pen(&mut self, aim: Option<(u16, u16)>, lit: u16) {
+        let t = self.timing();
+        self.pen_lit = lit;
+        self.pen = aim.and_then(|(x, y)| {
+            if u32::from(x) >= t.width || u32::from(y) >= t.height {
+                return None;
+            }
+            let p = x + t.visible_p0;
+            let cycle = (p / 8 + 1) as u8;
+            (cycle <= t.cycles).then_some(PenTarget {
+                raster: (y + t.first_line) % t.lines,
+                cycle,
+                col: x,
+                index: usize::from(y) * t.width as usize + usize::from(x),
+            })
+        });
+    }
+
+    /// The beam drew the pen's pixel in this cycle.
+    #[cold]
+    #[inline(never)]
+    fn pen_sees(&mut self, pen: PenTarget) {
+        let colour = self.pixels[pen.index] & 0x0f;
+        if self.pen_lit & 1 << colour != 0 && !self.lp_low {
+            let t = self.timing();
+            let x = t.x_at(pen.col + t.visible_p0);
+            self.latch_light_pen(x);
+        }
+    }
 }
 
 const TAG: [u8; 4] = *b"6569";
-/// 2: VIC-II type byte first (version 1 states are 6569).
-const VERSION: u16 = 2;
+/// 2: VIC-II type byte first (version 1 states are 6569). 3: the light
+/// pen's once-a-frame flag and the LP line level.
+const VERSION: u16 = 3;
 
 fn save_sprite(w: &mut StateWriter, s: &Sprite) {
     w.u16(s.x);
@@ -1131,6 +1245,8 @@ impl Savestate for Vic2 {
             w.bool(self.raster_irq_done);
             w.u8(self.phi2_sprite.map_or(0xff, |n| n as u8));
             w.bytes(&self.pixels);
+            w.bool(self.lp_done);
+            w.bool(self.lp_low);
         });
     }
 
@@ -1218,6 +1334,27 @@ impl Savestate for Vic2 {
             return Err(StateError::Invalid("VIC-II pixels"));
         }
         v.pixels.copy_from_slice(pixels);
+        if version >= 3 {
+            v.lp_done = c.bool()?;
+            v.lp_low = c.bool()?;
+        } else {
+            v.lp_done = v.irq_flags & irq::LIGHT_PEN != 0;
+        }
+        // The pen's aim is configuration from the port: keep it.
+        v.pen = self.pen;
+        v.pen_lit = self.pen_lit;
+        // The overlay record is not state: keep what is switched on, start
+        // a fresh record.
+        if let Some(r) = &self.rec.0 {
+            let ids: Vec<&str> = [
+                (r.badlines(), overlay::BADLINES),
+                (r.sprites(), overlay::SPRITES),
+            ]
+            .into_iter()
+            .filter_map(|(on, id)| on.then_some(id))
+            .collect();
+            v.set_overlays(&ids);
+        }
         *self = v;
         Ok(())
     }

@@ -8,11 +8,18 @@
 //! | `GET /preview` (WS)    | stream of [`crate::stream_message`] binary messages     |
 //! | `GET /stream` (WS)     | raw stream: [`crate::raw`] video and audio messages     |
 //! | `GET /controls`        | the console's buttons and switches as JSON              |
+//! | `GET /overlays`        | the debug overlays (`beam`, `grid` and the machine's)   |
+//! | `GET /crt`             | monitor profile editor: sliders, live CRT picture, TOML download |
+//! | `GET /crt/profile`     | a preset (`name=`, default the machine's) as TOML (JSON) |
+//! | `GET /gfx`             | the machine's graphics data views as JSON               |
+//! | `GET /gfx/<view>.png`  | one view's picture (`scale=1..8`, other numbers are view options) |
 //!
 //! Parameters (query string): `filter=raw|crt` (default raw), `profile=`
-//! (CRT monitor profile, default the machine's), `scale=1..4` (raw: pixel
+//! (CRT monitor profile, default the machine's; `profile_toml=` a whole
+//! profile as TOML, from the editor), `scale=1..4` (raw: pixel
 //! factor, crt: rows per line), and for the stream `fps=1..50` (default
-//! 25), `format=png|qoi` (default png), `delta=0|1` (default 1). The raw
+//! 25), `format=png|qoi` (default png), `delta=0|1` (default 1); snapshot
+//! and stream take `overlay=beam,grid,…` (raw filter, main screen). The raw
 //! stream takes `screen=`, `fps=1..50` (default 50) and `audio=0|1`
 //! (default 0); it never renders or encodes images. The
 //! snapshot also takes `machine=<id>` (404 if it is not this machine) and
@@ -31,7 +38,10 @@
 //! a broadcast channel only while a raw stream listens. Each connection
 //! renders and encodes the newest frame on the blocking pool, at its own
 //! rate; frames that arrive meanwhile are skipped (backpressure drops
-//! frames, never the emulator's time).
+//! frames, never the emulator's time). Graphics views are decoded by the
+//! emulation thread on request: a connection queues its request in the
+//! tap, which answers it at the next [`FrameTap::publish`] or
+//! [`FrameTap::service`] (frontends call that while paused).
 
 use std::io;
 use std::net::SocketAddr;
@@ -42,21 +52,25 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, oneshot, watch};
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use video_crt::Profile;
 
-use emu_core::{AudioFormat, ControlInfo, ControlKind, Machine};
+use emu_core::overlay::{OverlayInfo, OverlayWants};
+use emu_core::{AudioFormat, ControlInfo, ControlKind, GfxOptions, GfxView, GfxViewInfo, Machine};
 
+use crate::overlay::OverlaySet;
 use crate::raw::{audio_message, RawEncoder};
 use crate::OwnedPixels;
 use crate::{dirty_rect, stream_message, Filter, Format, OwnedFrame, Rect, RgbImage};
 use video_crt::field::FieldStage;
 
 const VIEWER: &str = include_str!("viewer.html");
+/// The monitor profile editor (`/crt`).
+const CRT_EDITOR: &str = include_str!("crt_editor.html");
 /// Longest accepted request head.
 const MAX_HEAD: usize = 8 * 1024;
 /// A delta covering more than this share of the picture is sent as a key
@@ -69,9 +83,52 @@ const AUDIO_BACKLOG: usize = 32;
 /// Copies of every video output of one moment, by screen name; the first
 /// is the main output; and the console controls of that moment.
 #[derive(Debug)]
-pub struct Screens(Vec<(&'static str, OwnedFrame)>, Vec<ControlInfo>);
+pub struct Screens(
+    Vec<(&'static str, OwnedFrame)>,
+    Vec<ControlInfo>,
+    Vec<GfxViewInfo>,
+    /// Overlays of the main screen that viewers asked for, and the
+    /// machine's overlay list.
+    OverlaySet,
+    Vec<OverlayInfo>,
+    /// The overlay ids collected into field 3.
+    Vec<String>,
+);
+
+/// A viewer's wish for overlays, withdrawn when dropped.
+struct Wants {
+    tap: FrameTap,
+    ids: Vec<String>,
+}
+
+impl Wants {
+    fn new(tap: &FrameTap, ids: &[String]) -> Self {
+        tap.want(ids, true);
+        Self {
+            tap: tap.clone(),
+            ids: ids.to_vec(),
+        }
+    }
+}
+
+impl Drop for Wants {
+    fn drop(&mut self) {
+        self.tap.want(&self.ids, false);
+    }
+}
+
+/// A graphics view a connection waits for.
+struct GfxRequest {
+    id: String,
+    opts: GfxOptions,
+    reply: oneshot::Sender<Option<GfxView>>,
+}
 
 impl Screens {
+    fn is_main(&self, name: &str) -> bool {
+        self.0.first().is_some_and(|(n, _)| *n == name)
+    }
+
     /// The named output, or the main one for `None`.
     pub fn get(&self, name: Option<&str>) -> Option<&OwnedFrame> {
         match name {
@@ -89,6 +146,10 @@ pub struct FrameTap {
     /// Interlace weaving per output (Amiga LACE): viewers get whole
     /// frames, the field parity stays in the signal.
     fields: Arc<Mutex<Vec<(&'static str, FieldStage)>>>,
+    gfx: Arc<Mutex<Vec<GfxRequest>>>,
+    /// Overlays viewers want, with how many viewers want each; and the set
+    /// last switched on in the machine.
+    wanted: OverlayWants,
 }
 
 impl Default for FrameTap {
@@ -103,7 +164,65 @@ impl FrameTap {
             tx: Arc::new(watch::channel(None).0),
             audio: Arc::new(broadcast::channel(AUDIO_BACKLOG).0),
             fields: Arc::new(Mutex::new(Vec::new())),
+            gfx: Arc::new(Mutex::new(Vec::new())),
+            wanted: OverlayWants::default(),
         }
+    }
+
+    /// From the session's frame hook: switch the machine's overlay
+    /// recording to what viewers want, publish the frame, answer requests.
+    pub fn frame(&self, m: &mut dyn Machine, running: bool) {
+        self.apply_overlays(m);
+        self.publish(m, running);
+    }
+
+    /// The overlay wishes of the viewers; share them with the debug
+    /// session (`Session::set_overlay_wants`) so both ask the machine for
+    /// the same set.
+    pub fn overlay_wants(&self) -> OverlayWants {
+        self.wanted.clone()
+    }
+
+    fn wanted_ids(&self) -> Vec<String> {
+        self.wanted.ids()
+    }
+
+    /// Tell the machine which overlays to record; true if that changed.
+    fn apply_overlays(&self, m: &mut dyn Machine) -> bool {
+        self.wanted.apply(m)
+    }
+
+    fn want(&self, ids: &[String], add: bool) {
+        self.wanted.want(ids, add);
+    }
+
+    /// While the machine is paused (the session's idle hook): answer
+    /// graphics view requests, and publish again if viewers asked for
+    /// other overlays meanwhile.
+    pub fn idle(&self, m: &mut dyn Machine) {
+        if self.apply_overlays(m) {
+            self.publish(m, false);
+        } else {
+            self.service(m);
+        }
+    }
+
+    /// Answer the graphics views viewers asked for. [`FrameTap::publish`]
+    /// does this too.
+    pub fn service(&self, m: &dyn Machine) {
+        let pending = std::mem::take(&mut *self.gfx.lock().unwrap_or_else(|e| e.into_inner()));
+        for r in pending {
+            let _ = r.reply.send(m.gfx_view(&r.id, &r.opts));
+        }
+    }
+
+    fn request_gfx(&self, id: String, opts: GfxOptions) -> oneshot::Receiver<Option<GfxView>> {
+        let (reply, rx) = oneshot::channel();
+        self.gfx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(GfxRequest { id, opts, reply });
+        rx
     }
 
     /// Copy the machine's current frames (every output) for the preview;
@@ -131,8 +250,22 @@ impl FrameTap {
                 Some((s.name, frame))
             })
             .collect();
-        self.tx
-            .send_replace(Some(Arc::new(Screens(screens, m.controls()))));
+        drop(fields);
+        let wanted = self.wanted_ids();
+        let overlays = if wanted.is_empty() {
+            OverlaySet::default()
+        } else {
+            OverlaySet::collect(m, &wanted)
+        };
+        self.tx.send_replace(Some(Arc::new(Screens(
+            screens,
+            m.controls(),
+            m.gfx_views(),
+            overlays,
+            m.overlays(),
+            wanted,
+        ))));
+        self.service(m);
     }
 
     /// Hand the samples the machine produced since the last call to raw
@@ -314,6 +447,33 @@ impl Head {
     }
 }
 
+/// A query component with `%XX` escapes and `+` for space decoded
+/// (invalid escapes stay as they are).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => {
+                match u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16)
+                {
+                    Ok(v) => {
+                        out.push(v);
+                        i += 3;
+                        continue;
+                    }
+                    Err(_) => out.push(b'%'),
+                }
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn parse_head(text: &str) -> Option<Head> {
     let mut lines = text.split("\r\n");
     let mut first = lines.next()?.split(' ');
@@ -325,7 +485,7 @@ fn parse_head(text: &str) -> Option<Head> {
         .filter(|kv| !kv.is_empty())
         .map(|kv| {
             let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
-            (k.to_string(), v.to_string())
+            (percent_decode(k), percent_decode(v))
         })
         .collect();
     let mut upgrade = false;
@@ -400,6 +560,8 @@ struct Settings {
     fps: u32,
     format: Format,
     delta: bool,
+    /// `overlay=beam,grid,…`: debug overlays on the raw picture.
+    overlays: Vec<String>,
 }
 
 fn settings(head: &Head, machine: &str) -> Result<Settings, String> {
@@ -416,9 +578,13 @@ fn settings(head: &Head, machine: &str) -> Result<Settings, String> {
             scale: scale.max(1),
         },
         "crt" => {
-            let profile = match head.param("profile") {
-                Some(name) => Profile::preset(name).ok_or(format!("unknown profile '{name}'"))?,
-                None => Profile::default_for(machine),
+            let profile = match (head.param("profile_toml"), head.param("profile")) {
+                // The profile editor sends the whole profile.
+                (Some(text), _) => Profile::from_toml(text)?,
+                (None, Some(name)) => {
+                    Profile::preset(name).ok_or(format!("unknown profile '{name}'"))?
+                }
+                (None, None) => Profile::default_for(machine),
             };
             Filter::Crt {
                 profile,
@@ -445,7 +611,17 @@ fn settings(head: &Head, machine: &str) -> Result<Settings, String> {
         "0" => false,
         other => return Err(format!("delta must be 0 or 1, not '{other}'")),
     };
+    let overlays: Vec<String> = head
+        .param("overlay")
+        .map(|v| {
+            v.split(',')
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(Settings {
+        overlays,
         screen: head.param("screen").map(str::to_string),
         filter,
         fps,
@@ -462,6 +638,9 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
     if head.method != "GET" {
         return error(&mut stream, "405 Method Not Allowed", "GET only\n").await;
     }
+    if head.path == "/gfx" || head.path.starts_with("/gfx/") {
+        return gfx(&mut stream, &head, &ctx).await;
+    }
     let settings = match settings(&head, &ctx.machine) {
         Ok(s) => s,
         Err(msg) => return error(&mut stream, "400 Bad Request", &format!("{msg}\n")).await,
@@ -470,6 +649,42 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
         "/" => {
             let headers = [("Content-Type", "text/html; charset=utf-8".to_string())];
             respond(&mut stream, "200 OK", &headers, VIEWER.as_bytes()).await;
+        }
+        "/crt" => {
+            let headers = [("Content-Type", "text/html; charset=utf-8".to_string())];
+            respond(&mut stream, "200 OK", &headers, CRT_EDITOR.as_bytes()).await;
+        }
+        // A preset (or the machine's monitor) as a full TOML profile.
+        "/crt/profile" => {
+            let profile = match head.param("name") {
+                Some(n) => match Profile::preset(n) {
+                    Some(p) => p,
+                    None => return error(&mut stream, "404 Not Found", "unknown profile\n").await,
+                },
+                None => Profile::default_for(&ctx.machine),
+            };
+            let body = serde_json::json!({
+                "toml": profile.to_toml(),
+                "presets": Profile::PRESETS,
+            })
+            .to_string();
+            let headers = [("Content-Type", "application/json".to_string())];
+            respond(&mut stream, "200 OK", &headers, body.as_bytes()).await;
+        }
+        "/overlays" => {
+            let mut list = vec![
+                serde_json::json!({"id": "beam", "name": "beam position"}),
+                serde_json::json!({"id": "grid", "name": "raster grid (every 8 lines)"}),
+            ];
+            if let Some(sc) = ctx.tap.latest() {
+                list.extend(
+                    sc.4.iter()
+                        .map(|o| serde_json::json!({"id": o.id, "name": o.name})),
+                );
+            }
+            let body = serde_json::Value::from(list).to_string();
+            let headers = [("Content-Type", "application/json".to_string())];
+            respond(&mut stream, "200 OK", &headers, body.as_bytes()).await;
         }
         "/controls" => {
             let controls = ctx.tap.latest().map(|s| controls_json(&s.1));
@@ -481,16 +696,53 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
             if head.param("machine").is_some_and(|m| m != ctx.machine) {
                 return error(&mut stream, "404 Not Found", "no such machine\n").await;
             }
-            let Some(screens) = ctx.tap.latest() else {
-                return error(&mut stream, "503 Service Unavailable", "no frame yet\n").await;
+            // Overlays: wait (briefly) for a frame that has them.
+            let _wants = Wants::new(&ctx.tap, &settings.overlays);
+            let mut rx = ctx.tap.tx.subscribe();
+            let deadline = tokio::time::Instant::now() + GFX_TIMEOUT;
+            let screens = loop {
+                let latest = rx.borrow_and_update().clone();
+                let ready = latest
+                    .as_ref()
+                    .is_some_and(|l| settings.overlays.iter().all(|id| l.5.contains(id)));
+                if ready {
+                    break latest;
+                }
+                match tokio::time::timeout_at(deadline, rx.changed()).await {
+                    Ok(Ok(())) => continue,
+                    _ => break latest,
+                }
+            };
+            let Some(screens) = screens else {
+                return error(
+                    &mut stream,
+                    "503 Service Unavailable",
+                    "no frame yet
+",
+                )
+                .await;
             };
             let Some(frame) = screens.get(settings.screen.as_deref()).cloned() else {
-                return error(&mut stream, "404 Not Found", "no such screen\n").await;
+                return error(
+                    &mut stream,
+                    "404 Not Found",
+                    "no such screen
+",
+                )
+                .await;
             };
             let filter = settings.filter;
             let f = frame.clone();
-            let Ok(png) =
-                tokio::task::spawn_blocking(move || Format::Png.encode(&filter.render(&f))).await
+            let main = settings
+                .screen
+                .as_deref()
+                .is_none_or(|n| screens.is_main(n));
+            let overlays = (main && !settings.overlays.is_empty())
+                .then(|| screens.3.subset(&settings.overlays));
+            let Ok(png) = tokio::task::spawn_blocking(move || {
+                Format::Png.encode(&filter.render_with(&f, overlays.as_ref()))
+            })
+            .await
             else {
                 return;
             };
@@ -540,6 +792,98 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
         },
         _ => error(&mut stream, "404 Not Found", "not found\n").await,
     }
+}
+
+/// How long a graphics request waits for the emulation thread.
+const GFX_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// `GET /gfx` (the views as JSON, as the debug protocol's `gfx_list`) and
+/// `GET /gfx/<view>.png`.
+async fn gfx(stream: &mut TcpStream, head: &Head, ctx: &Context) {
+    let json = [("Content-Type", "application/json".to_string())];
+    if head.path == "/gfx" {
+        let list: Vec<serde_json::Value> = ctx
+            .tap
+            .latest()
+            .map(|s| {
+                s.2.iter()
+                    .map(|v| {
+                        let options: Vec<&str> = v.options.iter().map(|o| o.name).collect();
+                        serde_json::json!({"id": v.id, "kind": v.kind.name(), "name": v.name,
+                                           "options": options})
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let body = serde_json::Value::from(list).to_string();
+        return respond(stream, "200 OK", &json, body.as_bytes()).await;
+    }
+    let Some(id) = head
+        .path
+        .strip_prefix("/gfx/")
+        .and_then(|p| p.strip_suffix(".png"))
+    else {
+        return error(
+            stream,
+            "404 Not Found",
+            "use /gfx/<view>.png
+",
+        )
+        .await;
+    };
+    let mut scale = 1;
+    let mut opts = GfxOptions::new();
+    for (k, v) in &head.query {
+        let n = if let Some(hex) = v.strip_prefix('$').or_else(|| v.strip_prefix("0x")) {
+            u32::from_str_radix(hex, 16).ok()
+        } else {
+            v.parse().ok()
+        };
+        let Some(n) = n else {
+            let msg = format!(
+                "option {k} must be a number
+"
+            );
+            return error(stream, "400 Bad Request", &msg).await;
+        };
+        if k == "scale" {
+            scale = n.clamp(1, 8);
+        } else {
+            opts.set(k, n);
+        }
+    }
+    let rx = ctx.tap.request_gfx(id.to_string(), opts);
+    let view = match tokio::time::timeout(GFX_TIMEOUT, rx).await {
+        Ok(Ok(Some(v))) => v,
+        Ok(Ok(None)) => {
+            return error(
+                stream,
+                "404 Not Found",
+                "no such view
+",
+            )
+            .await
+        }
+        _ => {
+            return error(
+                stream,
+                "503 Service Unavailable",
+                "emulation busy
+",
+            )
+            .await
+        }
+    };
+    let Ok(png) =
+        tokio::task::spawn_blocking(move || crate::encode_gfx(&view, Format::Png, scale)).await
+    else {
+        return;
+    };
+    let headers = [
+        ("Content-Type", "image/png".to_string()),
+        ("X-Machine", ctx.machine.clone()),
+    ];
+    respond(stream, "200 OK", &headers, &png).await;
 }
 
 /// `[{"id", "name", "kind": "button" | "switch", "positions", "value"}]`,
@@ -653,7 +997,10 @@ async fn stream_raw(
 
 /// Send the newest frame whenever one arrives, at most `fps` times a second.
 async fn stream_frames(mut ws: WebSocketStream<TcpStream>, ctx: &Context, s: Settings) {
+    let _wants = Wants::new(&ctx.tap, &s.overlays);
     let mut rx = ctx.tap.tx.subscribe();
+    // Phosphor persistence: this stream's own history.
+    let mut crt = Some(video_crt::Crt::new());
     let period = Duration::from_secs(1) / s.fps;
     let mut prev: Option<RgbImage> = None;
     let mut last_sent: Option<Arc<Screens>> = None;
@@ -666,12 +1013,18 @@ async fn stream_frames(mut ws: WebSocketStream<TcpStream>, ctx: &Context, s: Set
                     return;
                 };
                 let filter = s.filter.clone();
+                let main = s.screen.as_deref().is_none_or(|n| screens.is_main(n));
+                let overlays =
+                    (main && !s.overlays.is_empty()).then(|| screens.3.subset(&s.overlays));
                 let (format, delta, old) = (s.format, s.delta, prev.take());
+                let Some(mut history) = crt.take() else {
+                    return;
+                };
                 let before = last_sent
                     .as_ref()
                     .and_then(|l| l.get(s.screen.as_deref()).map(|b| b.running));
                 let job = tokio::task::spawn_blocking(move || {
-                    let img = filter.render(&f);
+                    let img = filter.render_stream(&f, overlays.as_ref(), &mut history);
                     let full = Rect {
                         x: 0,
                         y: 0,
@@ -701,9 +1054,12 @@ async fn stream_frames(mut ws: WebSocketStream<TcpStream>, ctx: &Context, s: Set
                             None => None,
                         },
                     };
-                    (img, msg)
+                    (img, msg, history)
                 });
-                let Ok((img, msg)) = job.await else { return };
+                let Ok((img, msg, history)) = job.await else {
+                    return;
+                };
+                crt = Some(history);
                 prev = Some(img);
                 last_sent = Some(screens);
                 if let Some(msg) = msg {
@@ -790,6 +1146,17 @@ mod tests {
         ] {
             assert_eq!(parse_remote_input(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn query_values_are_percent_decoded() {
+        assert_eq!(
+            percent_decode("a%20b+c%3D%0A"),
+            "a b c=
+"
+        );
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
     }
 
     #[test]

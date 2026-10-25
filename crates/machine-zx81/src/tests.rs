@@ -207,3 +207,19 @@ fn load_and_save_traps_move_the_program_area() {
     m.step_cycle();
     assert_ne!(m.cpu.pc, ROM_SLOW_FAST);
 }
+
+#[test]
+fn frame_rows_and_beam_columns_match_the_picture_window() {
+    let mut m = stub("16k");
+    assert_eq!(m.frame_row(ula::V_OFFSET as u16), Some(0));
+    assert_eq!(m.frame_row(ula::V_OFFSET as u16 - 1), None);
+    assert_eq!(
+        m.frame_row((ula::V_OFFSET + ula::HEIGHT - 1) as u16),
+        Some(ula::HEIGHT - 1)
+    );
+    assert_eq!(m.frame_row((ula::V_OFFSET + ula::HEIGHT) as u16), None);
+    m.ula.hcount = ula::H_OFFSET + 3;
+    m.ula.line = ula::V_OFFSET + 7;
+    let b = m.beam().unwrap();
+    assert_eq!((b.hpos, m.frame_row(b.line)), (6, Some(7)));
+}

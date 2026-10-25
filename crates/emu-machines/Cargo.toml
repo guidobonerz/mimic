@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 emu-core.workspace = true
 devices-input.workspace = true
+devices-net.workspace = true
 machine-pet.workspace = true
 machine-vic20.workspace = true
 machine-c64.workspace = true

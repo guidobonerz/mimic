@@ -115,7 +115,12 @@ impl Session {
         self.events.push(json!({
             "event": "media_changed", "slot": slot, "name": name, "media": label,
         }));
-        Ok(json!({"media": label}))
+        // The cheat database, keyed by the image's bytes.
+        let game = match std::fs::read(path) {
+            Ok(data) => self.cheats_for_image(&data)?,
+            Err(_) => None,
+        };
+        Ok(json!({"media": label, "cheats": game}))
     }
 
     pub(super) fn eject_media(&mut self, slot: u8) -> Result<Value, String> {
@@ -248,6 +253,9 @@ impl Session {
             freezes: self.freeze_state(),
             events: Vec::new(),
         });
+        if let Some(j) = &self.journal {
+            j.start_recording();
+        }
         json!({"now": self.machine.now().0})
     }
 
@@ -259,6 +267,11 @@ impl Session {
             freezes: rec.freezes,
             events: rec.events,
             end: self.machine.now(),
+            host: self
+                .journal
+                .as_ref()
+                .map(|j| j.stop_recording())
+                .unwrap_or_default(),
         };
         Ok(replay.to_json())
     }
@@ -279,6 +292,15 @@ impl Session {
             .map_err(|e| format!("replay state rejected: {e:?}"))?;
         if !replay.freezes.is_empty() {
             self.load_freeze_state(&replay.freezes)?;
+        }
+        // The host's answers come from the recording from now on (an
+        // empty record: live). Installed after the state, whose load
+        // closes the host handles open before.
+        if let Some(j) = &self.journal {
+            j.start_replay(&replay.host)
+                .map_err(|e| format!("replay host journal rejected: {e}"))?;
+        } else if !replay.host.is_empty() {
+            return Err("replay has host calls, but this frontend lends no host services".into());
         }
         for ev in &replay.events {
             self.machine.input(*ev);

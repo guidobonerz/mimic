@@ -5,6 +5,7 @@
 pub mod cia;
 pub mod crtc;
 pub mod mmu;
+mod overlay;
 pub mod pia;
 pub mod pla;
 pub mod sid;

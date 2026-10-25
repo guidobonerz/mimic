@@ -1,4 +1,4 @@
-//! Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM; extended ADF, DMS), ATR, XEX, CAS, DSK, CDT, DMK/JV1/JV3,
+//! Image formats: PRG, D64/D71/D81, G64, T64/TAP, CRT, ADF(→MFM; extended ADF, DMS), ATR, XEX, CAS, DSK, CDT, DMK/JV1/JV3,
 //! Apple II DSK/DO/PO (→GCR 6-and-2) and WOZ, WAV recordings.
 //!
 //! Pure parsing and encoding: no files, no host access (golden rule 10).
@@ -18,6 +18,7 @@ pub mod d64;
 pub mod dmk;
 pub mod dms;
 pub mod dsk;
+pub mod g64;
 pub mod gcr;
 pub mod macdisk;
 pub mod mfm;

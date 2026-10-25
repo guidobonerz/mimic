@@ -411,6 +411,15 @@ table(["Option", "Meaning"], [
     ["`--joyport N`", "which joystick port the keys and the gamepad play (1-based)"],
     ["`--footer`", "start with the status footer shown"],
     ["`--no-panel`", "start with the console panel hidden"],
+    ["`--rewind-mb N`", "memory for rewinding with Ctrl+R (default 128 MB; 0 switches it off)"],
+    ["`--cheats DIR`", "cheat database: `DIR/<machine>/<crc32>.toml` applies to the images you insert"],
+    ["`--cheat FILE`", "a cheat file: `.toml`, a POKE list (`.pokes`), VICE monitor commands "
+     "(`.mon`) or address/value codes (`.txt`)"],
+    ["`--input FILE`", "a joystick mapping (default: the one saved with SAVE MAPPING)"],
+    ["`--net on|off`", "the host network for the C64's WiC64 and Ultimate command interface "
+     "(default on; off: they report no network)"],
+    ["`--uci-dir DIR`", "the folder of the Ultimate command interface's DOS targets "
+     "(default `./ultimate`, created on the first write)"],
     ["`--debug [ADDR]`", "serve the debug protocol (default 127.0.0.1:6510)"],
     ["`--preview [ADDR]`", "serve the live preview (default 127.0.0.1:6580)"],
     ["`--vice [ADDR]`", "serve the VICE binary monitor (default 127.0.0.1:6502)"],
@@ -422,6 +431,8 @@ table(["Key", "Action"], [
     ["Ctrl+Space", "show or hide the status footer"],
     ["Ctrl+D", "put the next disk of the `--disk` list into the first drive"],
     ["Ctrl+I", "Amiga: switch the deinterlacing between weave and bob"],
+    ["Ctrl+R (held)", "run backwards at twice real speed through the last frames; "
+     "on release the machine runs on from there"],
     ["F12", "switch between the machine's screens (C128: 40-column VIC and 80-column VDC)"],
     ["F9 / Shift+F9", "datasette or cassette: PLAY / RECORD"],
     ["F10 / F11", "datasette or cassette: STOP / REWIND"],
@@ -445,6 +456,11 @@ bullets(
     "only).",
     "**JOY PORT** (machines with several joystick ports) moves the keyboard "
     "joystick and the gamepad to another port.",
+    "**PAD FIRE** chooses the gamepad button that fires (SOUTH is A on an Xbox "
+    "pad); **SAVE MAPPING** keeps JOY KEYS, JOY PORT and PAD FIRE for the "
+    "machine, so the next start uses them (`--input FILE.toml` loads another).",
+    "**Cheats** (from `--cheat`, the cheat database or the debugger) appear as "
+    "OFF/ON switches.",
 )
 
 h2("Start profiles")
@@ -574,12 +590,40 @@ table(["Option", "Values"], [
      "KERNAL load/save only), `none`"],
     ["`port1`, `port2`", "`joystick`, `paddles`, `mouse1351`, `none`"],
     ["`autostart`", "`on`: load and run the disk's first program"],
+    ["`uci`", "`on`: the Ultimate 64 command interface at $DF1C-$DF1F (see below)"],
+    ["`userport`", "`wic64`: a WiC64 WLAN adapter in the user port; `none` (default)"],
+    ["`net`", "`off`: no network for the UCI and the WiC64, even if the frontend has one"],
 ], [0.22, 0.78])
 p("""Keys: Esc = RUN/STOP, Tab = CTRL, left Ctrl = C=, Insert = £, Delete =
 ↑, Page Up = RESTORE, Home = CLR/HOME, F2/F4/F6/F8 = shifted F1/F3/F5/F7.
 The joystick is in port 2.""")
 p("""A **folder** can be used as a disk with the virtual drive:
 `--option drive8=virtual --disk ./myprograms`.""")
+h3("Network: Ultimate command interface and WiC64")
+p("""**Ultimate command interface** (`--option uci=on`): the four registers
+of the Ultimate 64 / 1541 Ultimate II+ command interface at $DF1C-$DF1F.
+The DOS targets 1 and 2 work on a folder of your computer (`--uci-dir`,
+default `./ultimate`): open, read, write, seek, file info, delete, rename,
+copy, change, create and list directories, the time. Paths can never
+leave the folder. The network target 3 opens TCP and UDP sockets (and a
+TCP listener on 127.0.0.1); the control target 4 answers IDENTIFY. The
+Ultimate's own control commands (mounting, reset, REU, palette) are not
+offered. A cartridge can stay plugged in; the interface takes only its four
+registers.""")
+p("""**WiC64** (`--option userport=wic64`): the WLAN adapter on the user port
+with firmware 2.x commands in the legacy and the protocol-2 format: HTTP
+GET (plain and URL-encoded), HTTP POST, TCP open/read/write/close, IP, MAC,
+SSID, signal strength, time and time zone, server, version, status
+message, time-outs and echo. `https:` addresses are reported as
+unsupported.""")
+p("""Both use your computer's network by default; `--net off` switches it
+off and the devices report "no network". The clock is UTC unless the
+environment variable `EMU_UTC_OFFSET` (e.g. `+01:00`) gives the offset.
+The web version has no network (browsers allow no sockets); there the
+command interface sees the uploaded files as its folder. A debugger
+recording (`record_start`/`record_stop`) also records every answer from
+the network and the folder, so `replay_input` repeats a run exactly
+without the network.""")
 
 h2("Commodore VIC-20, C16/Plus/4, PET and C128")
 table(["Machine", "Options"], [
@@ -819,9 +863,21 @@ table(["Profile", "Use"], [
     ["`ctm644`", "Amstrad colour monitor (CPC)"],
     ["`gt65`", "Amstrad green monitor"],
     ["`mac`", "the compact Macintosh's built-in black-and-white monitor"],
+    ["`lite`", "aspect correction and light scanlines only, for slow computers and the web version"],
 ], [0.30, 0.70])
+p("""Besides the signal (composite, S-Video, RGB, monochrome) a profile sets
+scanlines, the phosphor mask (`shadow`, `aperture` or `slot` with strength
+and pitch), bloom (bright areas glow), the curvature of the glass, a
+vignette and the persistence of the phosphor (a trail behind moving
+objects, as on the green PET and GT65 monitors). The same picture comes out
+of the graphics card in the desktop program and of the processor in
+snapshots, the preview and the web version.""")
 p("""Own profiles are TOML files that start from a preset and change single
-values (`base = "1084s"` …), loaded with `--crt myprofile.toml`.""")
+values (`base = "1084s"` …), loaded with `--crt myprofile.toml`. The desktop
+program re-reads such a file when it changes, so a profile can be tuned
+while the machine runs. The live preview has a **monitor editor** at
+`http://127.0.0.1:6580/crt`: sliders for every value, the machine's picture
+through the profile, and a button that saves the TOML file.""")
 
 # ---- 8 headless -----------------------------------------------------------------
 
@@ -845,6 +901,9 @@ table(["Option", "Meaning"], [
     ["`--wav FILE.wav`", "the sound of the run as 16-bit PCM"],
     ["`--load-state F`, `--save-state F`", "restore a savestate before, write one after the run"],
     ["`--rom ROLE=FILE`", "a single ROM image"],
+    ["`--cheats DIR`", "cheat database: `DIR/<machine>/<crc32>.toml` applies to the images given"],
+    ["`--cheat FILE`", "a cheat file: `.toml`, a POKE list (`.pokes`), VICE monitor commands "
+     "(`.mon`) or address/value codes (`.txt`)"],
     ["`--debug [ADDR]`", "serve the debugger instead of running frames"],
     ["`--preview [ADDR]`", "serve the live preview (implies `--debug` and `--run`)"],
     ["`--vice [ADDR]`", "also serve the VICE binary monitor"],
@@ -870,10 +929,23 @@ table(["Address", "Content"], [
     ["`/preview` (WebSocket)", "a picture stream as PNG or QOI, also through a monitor profile"],
     ["`/stream` (WebSocket)", "a raw stream: colour indices, changed lines only, optional sound"],
     ["`/controls`", "the console's buttons and switches"],
+    ["`/gfx`, `/gfx/VIEW.png`", "the graphics the video chip works from: sprites, character sets, "
+     "bitmaps, screen memory, tiles, palettes"],
+    ["`/overlays`", "the debug overlays the machine offers"],
+    ["`/crt`", "the monitor profile editor"],
 ], [0.30, 0.70])
 p("""Parameters: `filter=raw|crt`, `profile=NAME`, `scale=1..4`, for the
 streams `fps=1..50`, `format=png|qoi`, `delta=0|1`, `audio=0|1`. The server
 listens on 127.0.0.1 only.""")
+p("""**Overlays** (`overlay=beam,grid,…`, switches in the viewer's header)
+draw debugging information over the raw picture: the beam position (also in
+a picture stopped half way), a raster grid with line numbers, and what the
+video chip did where — the C64's bad lines and where each sprite really
+appeared, the Atari display list's mode lines, the Amiga's DMA slot map and
+Copper writes, CPC CRTC changes, NES and SNES sprites, interrupts and HDMA.
+The **Graphics data** panel under the picture shows the sprites, character
+sets, bitmaps and other graphics in memory; its options browse other
+addresses (`index=2 addr=$2000`).""")
 
 # ---- 10 debugger --------------------------------------------------------------
 
@@ -900,6 +972,11 @@ python tools/polydbg.py chips vic2           # chip registers
 python tools/polydbg.py freeze '$0400' 9     # freeze a memory value (cheat)
 python tools/polydbg.py search start         # cheat search
 python tools/polydbg.py save state.bin       # savestate
+python tools/polydbg.py gfx sprites index=2 --scale 4 -o s.png   # graphics in memory
+python tools/polydbg.py picture --overlays beam,badlines -o now.png
+python tools/polydbg.py rewind --on 1        # keep a state every frame
+python tools/polydbg.py rewind 50            # 50 frames back
+python tools/polydbg.py back 3               # 3 instructions back
 python tools/polydbg.py shell                # interactive prompt""")
 p("""`--host`/`--port` choose the server, `--json` prints raw answers;
 `python tools/polydbg.py --help` lists all commands.""")
@@ -913,8 +990,14 @@ bullets(
     "**Inspection:** registers, memory, disassembly, chip registers, beam "
     "position; symbols from VICE label files and KickAssembler.",
     "**State:** savestates, a raster trace of instructions and memory accesses.",
+    "**Backwards:** rewind by frames, and step back instruction by instruction "
+    "(the emulator replays from the last saved moment, exactly).",
+    "**Pictures:** the current picture, also half drawn, with the beam marked and "
+    "overlays; the graphics data the video chip works from.",
     "**Cheats:** freeze values in memory, narrowing search for unknown "
-    "addresses (lives, energy), cheat files.",
+    "addresses (lives, energy), cheat files with code patches, imports of POKE "
+    "lists, VICE monitor commands and address/value codes, and a cheat "
+    "database that applies by the image's CRC-32.",
     "**Devices and media:** plug devices into ports, insert and eject media, "
     "inject and record input.",
 )
@@ -926,7 +1009,32 @@ code("""{ "type": "vice", "request": "attach", "name": "mimic",
   "hostname": "127.0.0.1", "port": 6502 }""")
 note("Use `127.0.0.1`, not `localhost`: the servers listen on IPv4 only.")
 
-# ---- 11 troubleshooting ---------------------------------------------------------
+# ---- 11 web ---------------------------------------------------------------------
+
+h1("The web version")
+p("""Every machine also runs in the browser, compiled to WebAssembly. Nothing
+is bundled: the ROMs and images come from your own files, which the page
+can keep in the browser for the next visit.""")
+code("""bash tools/build-web.sh                                  # builds target/web
+python -m http.server -b 127.0.0.1 -d target/web 8080   # then open http://127.0.0.1:8080/""")
+bullets(
+    "**Machine:** choose the machine, model and options, then Start. "
+    "\"built-in test ROMs\" runs without ROM files.",
+    "**Files:** add single files or a whole ROM folder (the same names and "
+    "folders as `--rom-dir`). Files dropped onto the picture go into the "
+    "matching drive.",
+    "**Drives and slots:** insert and eject disks, tapes and cartridges.",
+    "**Cheats:** switch freezes on and off, import POKE lists and codes, search "
+    "memory and freeze what you found; cheat files `cheats/<machine>/<crc32>.toml` "
+    "in an added folder apply automatically.",
+    "**State:** download and load savestates; start a profile from a "
+    "`profiles.yaml`.",
+    "Click the picture to type into the machine; gamepads play the joystick; "
+    "a mouse in a port captures the pointer (Esc releases it).",
+    "A link such as `?machine=c64&options=roms=stub&start=1` starts a machine at once.",
+)
+
+# ---- 12 troubleshooting ---------------------------------------------------------
 
 h1("Troubleshooting")
 table(["Problem", "Solution"], [

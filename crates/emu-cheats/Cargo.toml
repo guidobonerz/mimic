@@ -1,0 +1,14 @@
+[package]
+name = "emu-cheats"
+description = "Cheat files, imports (POKE lists, VICE monitor, address/value codes), the per-game cheat database and the cheat search"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+serde.workspace = true
+toml.workspace = true

@@ -75,7 +75,7 @@ mod tests {
         assert!(FrontendHost.open_media("missing.d64").is_err());
         assert_eq!(
             FrontendHost.device_names(PortKind::CbmControl),
-            ["joystick", "paddles", "mouse1351"]
+            ["joystick", "paddles", "mouse1351", "lightpen"]
         );
     }
 }

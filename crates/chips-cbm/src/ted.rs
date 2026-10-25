@@ -41,6 +41,8 @@
 //! pixel (no fetch pipeline); refresh cycles do not slow the CPU; light pen
 //! and the `$1A/$1B` character position reload are not modelled.
 
+pub mod gfx;
+pub mod overlay;
 pub mod palette;
 
 use emu_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
@@ -175,6 +177,8 @@ pub struct Ted {
     /// Audio produced but not yet taken (output, not machine state).
     pub samples: Vec<i16>,
     pixels: Vec<u8>,
+    /// Debug overlay record (not machine state; see `crate::overlay`).
+    rec: crate::overlay::Recorder<overlay::Record>,
 }
 
 impl Ted {
@@ -196,6 +200,7 @@ impl Ted {
             resampler: Decimator::new(t.double_hz(), SAMPLE_RATE).expect("valid rates"),
             samples: Vec::new(),
             pixels: vec![0; (WIDTH * t.height) as usize],
+            rec: crate::overlay::Recorder(None),
         }
     }
 
@@ -211,12 +216,17 @@ impl Ted {
         &self.pixels
     }
 
+    #[inline]
     pub fn beam(&self) -> BeamPos {
         BeamPos {
             frame: self.frame,
             line: self.line,
             cycle: self.tick,
-            hpos: (self.tick * 4 + LINE_PIXELS - FRAME_LEFT) % LINE_PIXELS,
+            // Frame column of this double clock's first pixel, clamped to
+            // the picture.
+            hpos: (self.tick * 4)
+                .saturating_sub(FRAME_LEFT)
+                .min(WIDTH as u16 - 1),
         }
     }
 
@@ -361,6 +371,9 @@ impl Ted {
         self.tick += 1;
         let mut frame_end = false;
         if self.tick == TICKS_PER_LINE {
+            if self.rec.0.is_some() {
+                self.record_line();
+            }
             self.tick = 0;
             self.line += 1;
             if self.line == self.timing().lines {
@@ -370,6 +383,22 @@ impl Ted {
             }
         }
         TickOut { cpu, frame_end }
+    }
+
+    /// Overlay record at the end of a line: was it a DMA line?
+    #[cold]
+    #[inline(never)]
+    fn record_line(&mut self) {
+        let dma = self.den() && self.char_row().is_some() && self.char_line() == 0;
+        let (line, last) = (self.line, self.line + 1 == self.timing().lines);
+        if let Some(r) = self.rec.0.as_deref_mut() {
+            if dma {
+                r.lines.set(line);
+            }
+            if last {
+                r.end_field();
+            }
+        }
     }
 
     fn clock_timers(&mut self) {
@@ -626,6 +655,10 @@ impl Savestate for Ted {
             *p &= 0x7f;
         }
         t.samples = std::mem::take(&mut self.samples);
+        // The overlay record is not state: keep it switched on, fresh.
+        if self.rec.0.is_some() {
+            t.set_overlays(&[overlay::BADLINES]);
+        }
         *self = t;
         Ok(())
     }

@@ -43,6 +43,64 @@ pub fn joy_port_control(ports: u8, value: u8) -> ControlInfo {
     ControlInfo::switch(JOY_PORT, "JOY PORT", &PORT_NAMES[..n], value)
 }
 
+/// The frontend's switch for the gamepad button that fires the joystick
+/// (positions in the order of [`PAD_FIRE_BUTTONS`]).
+pub const PAD_FIRE: u16 = 0xfffc;
+
+/// Gamepad buttons the fire switch offers, by position (layout-neutral:
+/// South is A on an Xbox pad, X on a PlayStation pad).
+pub const PAD_FIRE_BUTTONS: [emu_input::Button; 4] = [
+    emu_input::Button::South,
+    emu_input::Button::East,
+    emu_input::Button::West,
+    emu_input::Button::North,
+];
+
+/// The panel entry for the gamepad fire button at position `value`.
+pub fn pad_fire_control(value: u8) -> ControlInfo {
+    ControlInfo::switch(
+        PAD_FIRE,
+        "PAD FIRE",
+        &["SOUTH", "EAST", "WEST", "NORTH"],
+        value,
+    )
+}
+
+/// The frontend's SAVE MAPPING button: keeps JOY KEYS, JOY PORT and PAD
+/// FIRE for this machine (`<user folder>/input/<machine>.toml`).
+pub const SAVE_MAPPING: u16 = 0xfffb;
+
+pub fn save_mapping_control() -> ControlInfo {
+    ControlInfo::button(SAVE_MAPPING, "SAVE MAPPING", false)
+}
+
+/// Cheats are shown as switches with ids from here on (the index into the
+/// list the emulation thread published).
+pub const CHEAT_BASE: u16 = 0xe000;
+
+/// A panel entry with its own texts: a button (no positions) or a switch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Item {
+    pub id: u16,
+    pub name: String,
+    pub positions: Vec<String>,
+    pub value: u8,
+}
+
+impl From<&ControlInfo> for Item {
+    fn from(c: &ControlInfo) -> Self {
+        Item {
+            id: c.id.0,
+            name: c.name.to_string(),
+            positions: match c.kind {
+                ControlKind::Button => Vec::new(),
+                ControlKind::Switch(p) => p.iter().map(|s| s.to_string()).collect(),
+            },
+            value: c.value,
+        }
+    }
+}
+
 /// Face of a button or switch position, and of the active one.
 const FACE: Rgb = [0x38, 0x38, 0x38];
 const ACTIVE: Rgb = [0x2E, 0x6B, 0x3A];
@@ -67,11 +125,22 @@ pub fn hit(hits: &[Hit], row: usize, x: usize) -> Option<Hit> {
         .find(|h| h.row == row && (h.x0..h.x1).contains(&x))
 }
 
+#[cfg(test)]
 /// Draw the controls into rows `width` pixels wide, starting a new row
 /// where a control would not fit; returns the pixels (rows one under the
 /// other), the clickable areas and the number of rows.
 pub fn render(
     controls: &[ControlInfo],
+    width: u32,
+    size: RasterHeight,
+) -> (Vec<u8>, Vec<Hit>, usize) {
+    let items: Vec<Item> = controls.iter().map(Item::from).collect();
+    render_items(&items, width, size)
+}
+
+/// [`render`] for entries with their own texts (cheats).
+pub fn render_items(
+    controls: &[Item],
     width: u32,
     size: RasterHeight,
 ) -> (Vec<u8>, Vec<Hit>, usize) {
@@ -93,15 +162,14 @@ pub fn render(
     }
     for c in controls {
         let strip = &rows[0];
-        let need = match c.kind {
-            ControlKind::Button => strip.text_width(&format!(" {} ", c.name)),
-            ControlKind::Switch(positions) => {
-                strip.text_width(&format!("{} ", c.name))
-                    + positions
-                        .iter()
-                        .map(|p| strip.text_width(&format!(" {p} ")))
-                        .sum::<usize>()
-            }
+        let need = if c.positions.is_empty() {
+            strip.text_width(&format!(" {} ", c.name))
+        } else {
+            strip.text_width(&format!("{} ", c.name))
+                + c.positions
+                    .iter()
+                    .map(|p| strip.text_width(&format!(" {p} ")))
+                    .sum::<usize>()
         };
         if x > margin && x + need > width as usize {
             rows.push(Strip::new(width, size));
@@ -109,29 +177,26 @@ pub fn render(
         }
         let row = rows.len() - 1;
         let strip = &mut rows[row];
-        match c.kind {
-            ControlKind::Button => {
-                let (x0, x1) = boxed(strip, &mut x, c.name, c.value != 0);
+        if c.positions.is_empty() {
+            let (x0, x1) = boxed(strip, &mut x, &c.name, c.value != 0);
+            hits.push(Hit {
+                row,
+                x0,
+                x1,
+                id: c.id,
+                position: None,
+            });
+        } else {
+            x = strip.text(x, &format!("{} ", c.name), DIM);
+            for (i, p) in c.positions.iter().enumerate() {
+                let (x0, x1) = boxed(strip, &mut x, p, usize::from(c.value) == i);
                 hits.push(Hit {
                     row,
                     x0,
                     x1,
-                    id: c.id.0,
-                    position: None,
+                    id: c.id,
+                    position: Some(i as u8),
                 });
-            }
-            ControlKind::Switch(positions) => {
-                x = strip.text(x, &format!("{} ", c.name), DIM);
-                for (i, p) in positions.iter().enumerate() {
-                    let (x0, x1) = boxed(strip, &mut x, p, usize::from(c.value) == i);
-                    hits.push(Hit {
-                        row,
-                        x0,
-                        x1,
-                        id: c.id.0,
-                        position: Some(i as u8),
-                    });
-                }
             }
         }
         x = strip.text(x, GAP, DIM);

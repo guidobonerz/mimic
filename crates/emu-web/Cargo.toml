@@ -5,8 +5,13 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-[lints]
-workspace = true
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Not the workspace's `forbid`: the WebAssembly exports need
+# `#[no_mangle]` (src/abi.rs only, no `unsafe` blocks).
+[lints.rust]
+unsafe_code = "deny"
 
 [dependencies]
 emu-core.workspace = true
@@ -15,3 +20,6 @@ emu-preview.workspace = true
 video-crt.workspace = true
 emu-input.workspace = true
 emu-profile.workspace = true
+media-backends.workspace = true
+emu-cheats.workspace = true
+serde_json.workspace = true

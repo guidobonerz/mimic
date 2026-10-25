@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mimic</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f4f4f2; --fg: #1d1d1b; --muted: #6b6b66; --panel: #e6e6e2; --line: #cfcfca; --accent: #2e6b3a; --warn: #b42318; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #161615; --fg: #ecebe6; --muted: #9b9a94; --panel: #242422; --line: #3a3a37; --accent: #4f9a5d; --warn: #f97066; } }
+  :root[data-theme="dark"] { --bg: #161615; --fg: #ecebe6; --muted: #9b9a94; --panel: #242422; --line: #3a3a37; --accent: #4f9a5d; --warn: #f97066; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header strong { margin-right: auto; font-size: 15px; }
+  label { color: var(--muted); }
+  select, input, button { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; }
+  button { cursor: pointer; background: var(--panel); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  input[type=text] { min-width: 0; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  main { display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; }
+  #screen { max-width: 100%; image-rendering: pixelated; background: #000; outline: none; }
+  #screen:focus { box-shadow: 0 0 0 2px var(--accent); }
+  #status { color: var(--muted); font-variant-numeric: tabular-nums; text-align: center; min-height: 1.4em; }
+  #status.error { color: var(--warn); }
+  aside { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+  section h2 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin: 4px 0; }
+  .row > select, .row > input[type=text] { flex: 1 1 8em; width: 0; min-width: 0; }
+  select { max-width: 100%; }
+  ul { list-style: none; margin: 0; padding: 0; max-height: 14em; overflow: auto; }
+  li select { width: 0; flex: 1 1 6em; min-width: 0; }
+  li { display: flex; gap: 6px; align-items: center; padding: 2px 0; border-bottom: 1px solid var(--line); word-break: break-all; }
+  li span { flex: 1; }
+  li small { color: var(--muted); white-space: nowrap; }
+  #panel { display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: center; align-items: center; }
+  .hint { color: var(--muted); font-size: 12px; }
+  #drop { border: 1px dashed var(--line); border-radius: 6px; padding: 8px; text-align: center; color: var(--muted); font-size: 12px; }
+  #drop.over { border-color: var(--accent); color: var(--fg); }
+  textarea { width: 100%; font: 12px/1.4 ui-monospace, monospace; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px; resize: vertical; }
+  .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>mimic</strong>
+  <button id="pause" disabled title="Stop or continue the machine">Pause</button>
+  <button id="reset" disabled title="Reset (Shift: power cycle)">Reset</button>
+  <label title="Sound (starts on the first click)"><input type="checkbox" id="sound" checked> Sound</label>
+  <label>Monitor <select id="crt"><option value="raw">raw pixels</option><option value="default">machine's monitor</option><option value="lite">lite</option></select></label>
+  <label>Scale <select id="scale"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+</header>
+<div class="layout">
+  <main>
+    <canvas id="screen" width="384" height="272" tabindex="0" aria-label="Machine screen: click to type into the machine"></canvas>
+    <div id="panel" aria-label="Console controls"></div>
+    <div id="status">loading…</div>
+    <div class="hint">Click the picture to type into the machine. With a mouse or paddles in a port, the click captures the host mouse (Esc releases it). Gamepads work as joysticks.</div>
+  </main>
+  <aside>
+    <section>
+      <h2>Machine</h2>
+      <div class="row"><select id="machine" aria-label="Machine"></select><select id="model" aria-label="Model"></select></div>
+      <div class="row"><input type="text" id="options" placeholder="options: ram=8k drives=2" aria-label="Machine options (key=value)"></div>
+      <div class="row"><label><input type="checkbox" id="stub"> built-in test ROMs (roms=stub)</label></div>
+      <div class="row"><button id="start" class="primary">Start</button><button id="stop" disabled>Stop</button></div>
+      <div class="hint" id="romneeds"></div>
+    </section>
+    <section>
+      <h2>Files</h2>
+      <div class="row">
+        <button id="addfiles">Add files…</button>
+        <button id="addfolder" title="A folder of ROMs, like --rom-dir">Add ROM folder…</button>
+        <input type="file" id="fileinput" multiple hidden>
+        <input type="file" id="folderinput" webkitdirectory multiple hidden>
+      </div>
+      <div id="drop">Drop ROMs, disks, tapes or cartridges here (or on the picture: they go into the matching drive)</div>
+      <label class="row"><input type="checkbox" id="keep" checked> keep files in this browser</label>
+      <ul id="files"></ul>
+    </section>
+    <section id="mediabox" hidden>
+      <h2>Drives and slots</h2>
+      <ul id="slots"></ul>
+    </section>
+    <section id="cheatbox" hidden>
+      <h2>Cheats</h2>
+      <ul id="cheats"></ul>
+      <details>
+        <summary>Import</summary>
+        <div class="row"><select id="cheatformat" aria-label="Cheat format"><option value="pokes">POKE list</option><option value="codes">address value</option><option value="vice">VICE monitor</option><option value="toml">cheat file (TOML)</option></select><button id="cheatimport">Import</button><button id="cheatexport" title="Download the cheats as a cheat file">Export</button></div>
+        <textarea id="cheattext" rows="4" placeholder="POKE 2048,9 : REM lives"></textarea>
+        <div class="hint">For automatic cheats, add a ROM folder with cheats/&lt;machine&gt;/&lt;crc32&gt;.toml files.</div>
+      </details>
+      <details>
+        <summary>Search (find a value in memory)</summary>
+        <div class="row"><select id="searchsize" aria-label="Value size"><option value="1">byte</option><option value="2">word</option><option value="4">long</option></select><button id="searchstart">New search</button><span id="searchcount" class="hint"></span></div>
+        <div class="row"><select id="searchop" aria-label="Condition"><option value="eq">equals</option><option value="ne">differs from</option><option value="lt">less than</option><option value="gt">greater than</option><option value="decreased">decreased</option><option value="increased">increased</option><option value="unchanged">unchanged</option><option value="changed">changed</option><option value="decreased_by">decreased by</option><option value="increased_by">increased by</option></select><input type="text" id="searchvalue" placeholder="value" aria-label="Value"><button id="searchnext">Narrow</button></div>
+        <ul id="searchresults" class="mono"></ul>
+      </details>
+    </section>
+    <section>
+      <h2>State</h2>
+      <div class="row"><button id="save" disabled>Save state</button><button id="load" disabled>Load state…</button><input type="file" id="stateinput" hidden></div>
+      <div class="row"><button id="profiles" title="Start a profile from a profiles.yaml">Profiles…</button><input type="file" id="profileinput" accept=".yaml,.yml" hidden><select id="profile" hidden aria-label="Profile"></select></div>
+    </section>
+  </aside>
+</div>
+<script src="mimic.js"></script>
+</body>
+</html>

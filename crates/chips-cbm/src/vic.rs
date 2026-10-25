@@ -36,6 +36,7 @@
 //! fetched in one go at its first cycle; light pen and paddles read fixed
 //! values (no device connected).
 
+pub mod gfx;
 pub mod palette;
 
 use emu_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
@@ -225,6 +226,14 @@ impl Vic {
 
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
+    }
+
+    /// Frame-buffer row showing raster line `line`, if it is visible
+    /// (rows start at `first_line`).
+    pub fn frame_row(&self, line: u16) -> Option<u32> {
+        let t = self.timing();
+        let y = u32::from(line.checked_sub(t.first_line)?);
+        (line < t.lines && y < t.height).then_some(y)
     }
 
     /// Screen memory start as a VIC address (VM13–VM9).

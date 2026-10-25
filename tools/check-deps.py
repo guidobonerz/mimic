@@ -15,7 +15,7 @@ import tomllib
 # Crate-name pattern -> internal crates it may depend on (patterns allowed).
 # First matching rule wins; a workspace crate with no rule is an error.
 FRONTEND_DEPS = ["emu-core", "emu-machines", "emu-debug", "emu-preview", "video-crt",
-                 "emu-input", "media-backends", "emu-profile"]
+                 "emu-input", "media-backends", "emu-profile", "emu-cheats"]
 RULES = [
     ("emu-core", []),
     ("cpu-*", ["emu-core"]),
@@ -23,15 +23,17 @@ RULES = [
     ("media", ["emu-core"]),
     ("devices-input", ["emu-core"]),
     ("devices-cartridge", ["emu-core", "media"]),
+    ("devices-net", ["emu-core"]),                # UCI, WiC64: host only via emu-core::host
     ("video-crt", ["emu-core"]),
     ("emu-input", ["emu-core"]),
-    ("emu-profile", []),                           # start profiles: frontends only
+    ("emu-profile", []),
+    ("emu-cheats", ["emu-core"]),                 # cheat files, imports, search                           # start profiles: frontends only
     ("media-backends", ["emu-core", "media"]),  # host folders as D64 images
     ("drives-*", ["emu-core", "cpu-*", "chips-*", "media"]),
     ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media"]),
     # Also the catalogue of pluggable port devices for the frontends.
-    ("emu-machines", ["emu-core", "machine-*", "devices-input"]),
-    ("emu-debug", ["emu-core"]),                   # golden rule 1
+    ("emu-machines", ["emu-core", "machine-*", "devices-input", "devices-net"]),
+    ("emu-debug", ["emu-core", "emu-preview", "video-crt", "emu-cheats"]),  # golden rule 1; preview encoders for gfx_get
     ("emu-preview", ["emu-core", "video-crt"]),    # golden rule 1
     ("emu-desktop", FRONTEND_DEPS),
     ("emu-web", FRONTEND_DEPS),

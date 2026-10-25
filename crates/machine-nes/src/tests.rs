@@ -321,3 +321,158 @@ fn debugger_views() {
     assert!(m.chips().iter().any(|c| c.name == "mapper"));
     assert_eq!(m.disassemble(0xc000).mnemonic, "BIT");
 }
+
+#[test]
+fn gfx_views_read_the_ppu_space_through_the_cartridge() {
+    let mut m = machine(&[], "ntsc");
+    with_cart(&mut m, nmi_rom());
+    frames(&mut m, 3);
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["tiles", "screen", "sprites", "palette"]);
+    // Tile 1 of table 0, row 0, colour 1; name 1 in the top-left cell.
+    assert!(m.poke(PPU_SPACE, 0x0010, Size::Byte, 0x80));
+    assert!(m.poke(PPU_SPACE, 0x2000, Size::Byte, 1));
+    assert!(m.poke(PPU_SPACE, 0x3f01, Size::Byte, 0x16));
+    m.board.ppu.ctrl &= !0x10;
+    let state = m.save_state();
+    let t = m
+        .gfx_view("tiles", &GfxOptions::new().with("palette", 0))
+        .unwrap();
+    assert_eq!(t.space, PPU_SPACE);
+    assert_eq!(t.raw[0x10], 0x80);
+    let red = m
+        .board
+        .ppu
+        .gfx_view(
+            "palette",
+            &ppu::gfx::GfxContext {
+                peek: &|_| 0,
+                space: PPU_SPACE,
+                oam_space: OAM_SPACE,
+            },
+            &GfxOptions::new(),
+        )
+        .unwrap()
+        .frame()
+        .rgb_at(17, 0);
+    assert_eq!(t.frame().rgb_at(8, 0), red);
+    let s = m.gfx_view("screen", &GfxOptions::new()).unwrap();
+    assert_eq!(s.frame().rgb_at(0, 0), red);
+    assert_eq!(s.raw[0x400], 1, "horizontal mirroring: $2400 = $2000");
+    assert_eq!(s.frame().rgb_at(256, 0), red);
+    let o = m.gfx_view("sprites", &GfxOptions::new()).unwrap();
+    assert_eq!((o.space, o.raw.len()), (OAM_SPACE, 256));
+    assert_eq!(m.save_state(), state, "views leave the machine as it was");
+}
+
+#[test]
+fn overlays_show_sprites_the_hit_and_interrupts() {
+    use emu_core::overlay::{colors, Shape};
+    let mut m = machine(&[], "ntsc");
+    with_cart(&mut m, nmi_rom());
+    frames(&mut m, 3);
+    let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
+    assert_eq!(ids, ["sprites", "sprite0", "irq"]);
+    // Tile 0 solid colour 1 (background everywhere), sprite 0 at
+    // Y = 49, X = 100 (lines 50–57), the others off screen.
+    for a in 0..8 {
+        assert!(m.poke(PPU_SPACE, a, Size::Byte, 0xff));
+    }
+    for a in 0..256 {
+        let v = if a < 4 {
+            [49, 0, 0, 100][a as usize]
+        } else {
+            0xff
+        };
+        assert!(m.poke(OAM_SPACE, a, Size::Byte, v));
+    }
+    m.board.ppu.mask = 0x1e;
+    let state = m.save_state();
+    frames(&mut m, 2);
+    assert!(m.overlay("sprites").is_none(), "switched off");
+    m.set_overlays(&["sprites", "sprite0", "irq"]);
+    assert_eq!(
+        m.overlay("sprites").unwrap().shapes,
+        [],
+        "nothing recorded yet"
+    );
+    frames(&mut m, 2);
+    let rect = Shape::Rect {
+        x: ppu::BORDER as i32 + 100,
+        y: 50,
+        w: 8,
+        h: 8,
+        color: colors::SERIES[0],
+        label: Some("0".into()),
+    };
+    assert_eq!(m.overlay("sprites").unwrap().shapes, [rect]);
+    let hit = m.overlay("sprite0").unwrap().shapes;
+    assert!(
+        matches!(&hit[..], [Shape::Mark { x, y: 50, .. }] if *x == ppu::BORDER as i32 + 100),
+        "{hit:?}"
+    );
+    let irq = m.overlay("irq").unwrap().shapes;
+    assert!(
+        matches!(&irq[..], [Shape::Mark { y: 239, label: Some(l), .. }] if l.starts_with("NMI 241:")),
+        "{irq:?}"
+    );
+    // Halted mid-frame: the frame so far.
+    while m.board.ppu.line != 100 {
+        m.step_cycle();
+    }
+    assert_eq!(m.overlay("sprites").unwrap().shapes.len(), 1);
+    assert!(m.overlay("irq").unwrap().shapes.is_empty(), "no NMI yet");
+    assert_eq!(m.frame_row(239), Some(239));
+    assert_eq!(m.frame_row(240), None);
+    // Recording changes nothing in the emulation or the savestate.
+    let mut run = |ids: &[&str]| {
+        m.load_state(&state).unwrap();
+        m.set_overlays(ids);
+        frames(&mut m, 4);
+        (m.save_state(), ppu(&m).frame().to_vec())
+    };
+    let on = run(&["sprites", "sprite0", "irq"]);
+    assert_eq!(on, run(&[]));
+}
+
+#[test]
+fn beam_hpos_is_the_column_of_the_next_pixel() {
+    let mut m = machine(&[], "ntsc");
+    with_cart(&mut m, nmi_rom());
+    frames(&mut m, 3);
+    // Sprite 0 (tile 0 solid) at X = 100 on lines 50–57.
+    for a in 0..8 {
+        assert!(m.poke(PPU_SPACE, a, Size::Byte, 0xff));
+    }
+    for a in 0..256 {
+        let v = if a < 4 {
+            [49, 0, 0, 100][a as usize]
+        } else {
+            0xff
+        };
+        assert!(m.poke(OAM_SPACE, a, Size::Byte, v));
+    }
+    m.board.ppu.mask = 0x1e;
+    frames(&mut m, 1);
+    // A new sprite colour: watch the pixel at (BORDER + 100, 50) change.
+    m.board.ppu.palette[0x11] = 0x2a;
+    let col = ppu::BORDER as u32 + 100;
+    let old = m.framebuffer().rgb_at(col, 50);
+    loop {
+        let before = m.beam().unwrap();
+        m.step_cycle();
+        let after = m.beam().unwrap();
+        if m.framebuffer().rgb_at(col, 50) != old {
+            assert_eq!((before.line, after.line), (50, 50));
+            assert!(
+                u32::from(before.hpos) <= col && col < u32::from(after.hpos),
+                "{before:?} {after:?}"
+            );
+            break;
+        }
+    }
+    m.board.ppu.dot = 0;
+    assert_eq!(m.beam().unwrap().hpos, ppu::BORDER as u16 - 1);
+    m.board.ppu.dot = 300;
+    assert_eq!(usize::from(m.beam().unwrap().hpos), ppu::WIDTH - 1);
+}

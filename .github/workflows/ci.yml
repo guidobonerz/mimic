@@ -77,3 +77,7 @@ jobs:
       - run: >
           cargo build --target wasm32-unknown-unknown --workspace
           --exclude emu-desktop --exclude emu-headless --exclude emu-debug
+      # The web frontend: every machine runs as WebAssembly (stub ROMs, Node).
+      - name: Web frontend smoke test
+        shell: bash
+        run: bash tools/build-web.sh && node tools/web-smoke.mjs

@@ -23,6 +23,28 @@
 //! CIA revision: options["cia"] = "6526" (default, original C64) or
 //! "6526a" (C64C).
 //!
+//! Control ports (`options["port1"]`, `["port2"]`): "joystick", "paddles",
+//! "mouse1351", "none"; port 1 also "lightpen". Control port 1 pin 6 is
+//! the VIC-II's LP input (C64 Programmer's Reference Guide, appendix I):
+//! its fire button latches $D013/$D014, and a light pen there latches them
+//! when the beam draws a bright pixel under its tip (see
+//! `devices_input::lightpen`; the pen's button reads as joystick left).
+//! CIA 1 PB4, the same wire, driving LP from the keyboard side is not
+//! modelled.
+//!
+//! Network and folder devices (host services from
+//! [`Machine::attach_host`], `devices_net`):
+//! - `options["uci"] = "on"`: the Ultimate 64 command interface at
+//!   `$DF1C–$DF1F` (DOS targets on the frontend's folder, network target,
+//!   control identify). It wins its four I/O2 registers over a cartridge,
+//!   as on the Ultimate, where the interface sits in the cartridge logic;
+//!   the cartridge keeps the rest of I/O1/I/O2.
+//! - `options["userport"] = "wic64"`: a WiC64 in the user port
+//!   (`PortId(2)`, [`PortKind::CbmUserPort`]: CIA2 port B, PA2, PC2 and
+//!   FLAG2); "none" by default.
+//! - `options["net"] = "off"`: the devices see no network even if the
+//!   frontend offers one.
+//!
 //! ROMs come from `MachineConfig::roms` ("kernal", "basic", "chargen";
 //! user-supplied, never in the repo). With `options["roms"] = "stub"` a
 //! tiny built-in KERNAL replacement is used instead, for tests without ROMs.
@@ -42,9 +64,11 @@ use chips_cbm::sid::SidModel;
 use chips_cbm::vic2;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
+use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
 use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use emu_core::overlay::{Overlay, OverlayInfo};
 use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::Cycle;
@@ -56,9 +80,12 @@ use emu_core::{
 
 use devices_cartridge::slot::ExpansionSlot;
 use devices_cartridge::{CartLines, ExpansionCart};
+use devices_net::uci::{is_uci, Uci};
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms};
 use drives_other::Datasette;
+use emu_core::host::HostServices;
+use emu_core::port::{user_port, PortLines};
 use io::{Io, VicView};
 use loader::{Autostart, ProgramSlot, BOOT_FRAMES};
 use media::tap::TapMachine;
@@ -134,7 +161,18 @@ fn is_cart_io(addr: u16) -> bool {
 }
 
 /// Side-effect-free CPU-view read.
-fn cpu_peek(mem: &Memory, io: &Io, cart: Option<&dyn ExpansionCart>, addr: u16) -> u8 {
+fn cpu_peek(
+    mem: &Memory,
+    io: &Io,
+    cart: Option<&dyn ExpansionCart>,
+    uci: Option<&Uci>,
+    addr: u16,
+) -> u8 {
+    if let Some(u) = uci {
+        if is_uci(addr) && mem.bank(addr) == Bank::Io {
+            return u.peek(addr);
+        }
+    }
     let from_cart = match mem.bank(addr) {
         Bank::RomL => cart.and_then(|c| c.peek_roml(addr)),
         Bank::RomH => cart.and_then(|c| c.peek_romh(addr)),
@@ -155,6 +193,8 @@ struct C64Bus<'a> {
     mem: &'a mut Memory,
     io: &'a mut Io,
     cart: Option<&'a mut (dyn ExpansionCart + 'static)>,
+    /// The Ultimate command interface, if enabled: it wins `$DF1C–$DF1F`.
+    uci: Option<&'a mut Uci>,
 }
 
 impl Bus for C64Bus<'_> {
@@ -164,6 +204,11 @@ impl Bus for C64Bus<'_> {
             return u32::from(v);
         }
         let bank = self.mem.bank(a);
+        if let (Some(u), Bank::Io) = (&mut self.uci, bank) {
+            if is_uci(a) {
+                return u32::from(u.read(a));
+            }
+        }
         let from_cart = match (&mut self.cart, bank) {
             (Some(c), Bank::RomL) => c.read_roml(a),
             (Some(c), Bank::RomH) => c.read_romh(a),
@@ -181,6 +226,7 @@ impl Bus for C64Bus<'_> {
             self.mem,
             self.io,
             self.cart.as_deref(),
+            self.uci.as_deref(),
             addr as u16,
         ))
     }
@@ -188,6 +234,11 @@ impl Bus for C64Bus<'_> {
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
         let (a, v) = (addr as u16, v as u8);
         let bank = self.mem.bank(a);
+        if let (Some(u), Bank::Io) = (&mut self.uci, bank) {
+            if is_uci(a) {
+                return u.write(a, v);
+            }
+        }
         if let Some(c) = &mut self.cart {
             match bank {
                 Bank::RomL => c.write_roml(a, v),
@@ -303,7 +354,12 @@ impl Bus for HookedC64Bus<'_, '_> {
 }
 
 /// Read-only view for disassembly and debugger peeks.
-struct PeekBus<'a>(&'a Memory, &'a Io, Option<&'a dyn ExpansionCart>);
+struct PeekBus<'a>(
+    &'a Memory,
+    &'a Io,
+    Option<&'a dyn ExpansionCart>,
+    Option<&'a Uci>,
+);
 
 impl Bus for PeekBus<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
@@ -311,7 +367,7 @@ impl Bus for PeekBus<'_> {
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(cpu_peek(self.0, self.1, self.2, addr as u16))
+        u32::from(cpu_peek(self.0, self.1, self.2, self.3, addr as u16))
     }
 
     fn write(&mut self, _addr: u32, _size: Size, _v: u32) {}
@@ -351,6 +407,8 @@ fn load_roms(config: &MachineConfig) -> Result<Roms, ConfigError> {
 /// Control port 1 and 2 (`PortId(0)`, `PortId(1)`).
 pub const CONTROL_PORT_1: PortId = PortId(0);
 pub const CONTROL_PORT_2: PortId = PortId(1);
+/// The user port (WiC64).
+pub const USER_PORT: PortId = PortId(2);
 const PORT_NAMES: [&str; 2] = ["control port 1", "control port 2"];
 
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
@@ -373,6 +431,14 @@ pub struct C64 {
     tape: Datasette,
     /// The expansion port.
     cart: ExpansionSlot,
+    /// The Ultimate command interface (`options["uci"]`).
+    uci: Option<Uci>,
+    /// The device in the user port.
+    user_port: Option<Box<dyn PortDevice>>,
+    /// `options["net"] = "off"`: no network for the devices.
+    net_off: bool,
+    /// What the frontend lent (see [`Machine::attach_host`]); not state.
+    host: HostServices,
     autostart: Autostart,
     palette: [Rgb8; 16],
     field_done_pending: bool,
@@ -410,9 +476,10 @@ impl C64 {
             Some(other) => return Err(ConfigError::Invalid(format!("cia option '{other}'"))),
         };
         // Devices: `options["port1"]`/`["port2"]` = "joystick", "paddles",
-        // "mouse1351" or "none"; by default a joystick in control port 2.
+        // "mouse1351" or "none" (port 1 also "lightpen"); by default a
+        // joystick in control port 2.
         let option = |name: &str| config.options.get(name).map(String::as_str);
-        let port1 = devices_input::control_port_option("port1", option("port1"), "none", true)?;
+        let port1 = devices_input::cbm_port_option("port1", option("port1"), "none", true, true)?;
         let port2 = devices_input::control_port_option("port2", option("port2"), "joystick", true)?;
         let sid = match config.options.get("sid").map(String::as_str) {
             None | Some("6581") => SidModel::Mos6581,
@@ -440,6 +507,21 @@ impl C64 {
             )?;
             d.set_crystal_ppm(ppm, cpu_hz);
         }
+        let uci = match option("uci") {
+            None | Some("off") => None,
+            Some("on") => Some(Uci::new()),
+            Some(other) => return Err(ConfigError::Invalid(format!("uci option '{other}'"))),
+        };
+        let user_port: Option<Box<dyn PortDevice>> = match option("userport") {
+            None | Some("none") => None,
+            Some("wic64") => Some(Box::new(devices_net::Wic64::new())),
+            Some(other) => return Err(ConfigError::Invalid(format!("userport option '{other}'"))),
+        };
+        let net_off = match option("net") {
+            None | Some("on") => false,
+            Some("off") => true,
+            Some(other) => return Err(ConfigError::Invalid(format!("net option '{other}'"))),
+        };
         let autostart = match config.options.get("autostart").map(String::as_str) {
             None | Some("off") => Autostart::Off,
             Some("on") => Autostart::Armed,
@@ -457,6 +539,10 @@ impl C64 {
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C64, cpu_hz),
             cart: devices_cartridge::slot::expansion_slot(),
+            uci,
+            user_port,
+            net_off,
+            host: HostServices::default(),
             autostart,
             palette: vic2::palette::palette(),
             field_done_pending: false,
@@ -470,6 +556,39 @@ impl C64 {
 
     pub fn interrupts_mut(&mut self) -> &mut Interrupts {
         &mut self.ints
+    }
+
+    /// The C64's side of the user port after the CPU access: CIA2 port B
+    /// outputs, PA2 and the PC2 pulse go to the device.
+    fn user_port_cycle(&mut self) {
+        let pc2 = std::mem::take(&mut self.io.pc2);
+        let Some(dev) = &mut self.user_port else {
+            return;
+        };
+        let mut low = user_port::pb_lines(self.io.cia2.port_b_out());
+        if self.io.cia2.port_a_out() & 0x04 == 0 {
+            low |= user_port::PA2;
+        }
+        if pc2 {
+            low |= user_port::PC2;
+        }
+        dev.write_lines(
+            PortLines {
+                pulled_low: low,
+                analog: [u16::MAX; 2],
+            },
+            self.sched.now(),
+        );
+    }
+
+    /// The host services as the devices get them (`net=off` removes the
+    /// network).
+    fn device_host(&self) -> HostServices {
+        let mut host = self.host.clone();
+        if self.net_off {
+            host.net = None;
+        }
+        host
     }
 
     fn beam_pos(&self) -> BeamPos {
@@ -511,6 +630,12 @@ impl C64 {
             cart: self.cart.cart().map(|c| c.as_ref()),
         });
         self.cpu.set_rdy(self.io.vic.ba());
+        // The user port device's lines for this cycle: PB0–PB7 and FLAG2.
+        if let Some(dev) = &self.user_port {
+            let lines = dev.read_lines(self.sched.now()).pulled_low;
+            self.io.user_lines = lines;
+            self.io.cia2.set_flag(lines & user_port::FLAG2 == 0);
+        }
         // CIAs clock before the CPU access: a read sees this cycle's state.
         self.io.tick_cias();
         self.io.tick_sid();
@@ -528,6 +653,7 @@ impl C64 {
                 mem: &mut self.mem,
                 io: &mut self.io,
                 cart: self.cart.cart_mut().map(|c| c.as_mut()),
+                uci: self.uci.as_mut(),
             };
             let mut hooked = HookedC64Bus {
                 bus: &mut bus,
@@ -537,6 +663,10 @@ impl C64 {
             self.cpu.tick(&mut hooked)
         };
         let entered = self.cpu.take_interrupt();
+        self.user_port_cycle();
+        if let Some(u) = &mut self.uci {
+            u.tick();
+        }
         // φ2: VIC-II's own phi2 accesses, pixel output, beam advance.
         let bank = self.io.vic_bank();
         let new_field = self.io.vic.phi2(&VicView {
@@ -652,6 +782,29 @@ impl C64 {
             self.io.port_lines[i] = lines.map_or(0, |l| l.pulled_low);
             self.io.port_analog[i] = lines.map_or([u16::MAX; 2], |l| l.analog);
         }
+        if i == 0 {
+            // Control port 1 pin 6 is the VIC-II's LP input: the fire
+            // button latches the beam position (C64 PRG, appendix I).
+            let fire = self.io.port_lines[0] & devices_input::joystick::pin::FIRE != 0;
+            self.io.vic.set_lp_line(fire);
+            self.sync_light_pen();
+        }
+    }
+
+    /// Tell the VIC-II where a light pen in control port 1 points (frame
+    /// pixels) and which colours light it; no pen: `None`.
+    fn sync_light_pen(&mut self) {
+        let lines = self.ports[0]
+            .as_ref()
+            .map(|d| d.read_lines(self.sched.now()));
+        let aim = lines.as_ref().and_then(devices_input::lightpen::aim);
+        let lit = self
+            .palette
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| devices_input::lightpen::lit(c))
+            .fold(0u16, |m, (n, _)| m | 1 << n);
+        self.io.vic.set_light_pen(aim.map(|a| (a.x, a.y)), lit);
     }
 
     /// Program injection and autostart, once BASIC has booted.
@@ -721,6 +874,7 @@ impl C64 {
                         mem: &mut self.mem,
                         io: &mut self.io,
                         cart: self.cart.cart_mut().map(|c| c.as_mut()),
+                        uci: self.uci.as_mut(),
                     }
                     .write(addr & 0xffff, Size::Byte, u32::from(v)),
                     RAM_SPACE => self.mem.ram[(addr & 0xffff) as usize] = v,
@@ -769,6 +923,9 @@ impl Machine for C64 {
         if let Some(c) = self.cart.cart_mut() {
             c.reset();
         }
+        if let Some(u) = &mut self.uci {
+            u.reset();
+        }
         self.cartridge_cycle();
         self.input.clear();
         if self.autostart == Autostart::Loading {
@@ -776,6 +933,7 @@ impl Machine for C64 {
         }
         self.field_done_pending = false;
         self.boot_frame = self.io.vic.beam().frame;
+        self.sync_light_pen();
     }
 
     fn framebuffer(&self) -> FrameRef<'_> {
@@ -798,6 +956,56 @@ impl Machine for C64 {
             sample_rate: emu_core::SAMPLE_RATE,
             channels: 1,
         }
+    }
+
+    fn overlays(&self) -> Vec<OverlayInfo> {
+        vic2::overlay::overlays()
+    }
+
+    fn set_overlays(&mut self, ids: &[&str]) {
+        self.io.vic.set_overlays(ids);
+    }
+
+    fn overlay(&self, id: &str) -> Option<Overlay> {
+        self.io.vic.overlay(id)
+    }
+
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        self.io.vic.frame_row(line)
+    }
+
+    fn gfx_views(&self) -> Vec<GfxViewInfo> {
+        vic2::gfx::views(
+            "VIC-II",
+            ["sprites", "charset", "bitmap", "screen", "palette"],
+        )
+    }
+
+    /// The VIC-II's views; option `bank` (or the bank of `addr`) selects
+    /// one of the four 16 KB banks instead of CIA2's.
+    fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
+        let info = self.gfx_views().into_iter().find(|v| v.id == id)?;
+        let bank = match (opts.get("bank"), opts.get("addr")) {
+            (Some(b), _) => (b as u16 & 3) << 14,
+            (None, Some(a)) => a as u16 & 0xc000,
+            (None, None) => self.io.vic_bank(),
+        };
+        let view = VicView {
+            mem: &self.mem,
+            bank,
+            cart: self.cart.cart().map(|c| c.as_ref()),
+        };
+        let ctx = vic2::gfx::GfxContext {
+            mem: &view,
+            bank_base: bank,
+            space: RAM_SPACE,
+            palette: &self.palette,
+        };
+        Some(
+            self.io
+                .vic
+                .gfx_view(info.id, info.kind, info.name, &ctx, opts),
+        )
     }
 
     fn beam(&self) -> Option<BeamPos> {
@@ -865,7 +1073,16 @@ impl Machine for C64 {
                 ],
             }
         };
-        vec![
+        let uci = self.uci.as_ref().map(|u| ChipInfo {
+            name: "uci",
+            regs: vec![
+                reg("STATUS", Some(0xdf1c), u.peek(0xdf1c), 8),
+                reg("IDENT", Some(0xdf1d), u.peek(0xdf1d), 8),
+                reg("RESP", Some(0xdf1e), u.peek(0xdf1e), 8),
+                reg("STAT", Some(0xdf1f), u.peek(0xdf1f), 8),
+            ],
+        });
+        let mut chips = vec![
             ChipInfo {
                 name: "pla",
                 regs: vec![
@@ -889,7 +1106,9 @@ impl Machine for C64 {
                     })
                     .collect(),
             },
-        ]
+        ];
+        chips.extend(uci);
+        chips
     }
 
     fn devices(&self) -> Vec<DeviceId> {
@@ -928,17 +1147,38 @@ impl Machine for C64 {
     }
 
     fn ports(&self) -> Vec<PortInfo> {
-        (0..2)
+        let mut ports: Vec<PortInfo> = (0..2)
             .map(|i| PortInfo {
                 id: PortId(i as u8),
                 kind: PortKind::CbmControl,
                 name: PORT_NAMES[i],
                 connected: self.ports[i].is_some(),
             })
-            .collect()
+            .collect();
+        ports.push(PortInfo {
+            id: USER_PORT,
+            kind: PortKind::CbmUserPort,
+            name: "user port",
+            connected: self.user_port.is_some(),
+        });
+        ports
     }
 
-    fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError> {
+    fn connect(&mut self, port: PortId, mut dev: Box<dyn PortDevice>) -> Result<(), PortError> {
+        if port == USER_PORT {
+            if dev.kind() != PortKind::CbmUserPort {
+                return Err(PortError::Incompatible {
+                    port: PortKind::CbmUserPort,
+                    device: dev.kind(),
+                });
+            }
+            if self.user_port.is_some() {
+                return Err(PortError::Occupied(port));
+            }
+            dev.attach_host(&self.device_host());
+            self.user_port = Some(dev);
+            return Ok(());
+        }
         let slot = self
             .ports
             .get_mut(usize::from(port.0))
@@ -958,6 +1198,11 @@ impl Machine for C64 {
     }
 
     fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>> {
+        if port == USER_PORT {
+            self.io.user_lines = 0;
+            self.io.cia2.set_flag(true);
+            return self.user_port.take();
+        }
         let dev = self.ports.get_mut(usize::from(port.0))?.take();
         self.refresh_port(port);
         dev
@@ -1004,6 +1249,19 @@ impl Machine for C64 {
         }
     }
 
+    /// The UCI and the user port device get the services (without the
+    /// network if `options["net"] = "off"`).
+    fn attach_host(&mut self, host: HostServices) {
+        self.host = host;
+        let host = self.device_host();
+        if let Some(u) = &mut self.uci {
+            u.attach_host(host.clone());
+        }
+        if let Some(d) = &mut self.user_port {
+            d.attach_host(&host);
+        }
+    }
+
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         w.chunk(*b"C64S", 6, |w| {
@@ -1031,6 +1289,21 @@ impl Machine for C64 {
             for p in &self.ports {
                 w.bytes(&p.as_ref().map(|d| d.save_state()).unwrap_or_default());
             }
+        });
+        // The UCI and the user port device (empty: none).
+        w.chunk(*b"C64X", 1, |w| {
+            let mut uci = StateWriter::new();
+            if let Some(u) = &self.uci {
+                u.save(&mut uci);
+            }
+            w.bytes(&uci.into_bytes());
+            w.bytes(
+                &self
+                    .user_port
+                    .as_ref()
+                    .map(|d| d.save_state())
+                    .unwrap_or_default(),
+            );
         });
         w.into_bytes()
     }
@@ -1143,6 +1416,45 @@ impl Machine for C64 {
                 return Err(e);
             }
         };
+        // The UCI and the user port (states before C64X have neither).
+        let extra = match r.chunk(*b"C64X", 1) {
+            Ok((_, mut c)) => match (c.bytes(), c.bytes()) {
+                (Ok(u), Ok(d)) => Some((u.to_vec(), d.to_vec())),
+                (Err(e), _) | (_, Err(e)) => {
+                    restore_drive(&mut self.drive);
+                    restore_tape(&mut self.tape, &mut self.cart);
+                    return Err(e);
+                }
+            },
+            Err(StateError::Missing(_)) => None,
+            Err(e) => {
+                restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape, &mut self.cart);
+                return Err(e);
+            }
+        };
+        let (uci_state, user_state) = extra.unwrap_or_default();
+        let next_uci = match (&self.uci, uci_state.is_empty()) {
+            (None, true) => Ok(None),
+            (Some(u), false) => {
+                let mut u = u.clone();
+                u.load(&mut StateReader::new(&uci_state)).map(|()| Some(u))
+            }
+            _ => Err(StateError::Invalid("UCI configuration differs")),
+        };
+        let next_uci = match next_uci {
+            Ok(u) => u,
+            Err(e) => {
+                restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape, &mut self.cart);
+                return Err(e);
+            }
+        };
+        if user_state.is_empty() != self.user_port.is_none() {
+            restore_drive(&mut self.drive);
+            restore_tape(&mut self.tape, &mut self.cart);
+            return Err(StateError::Invalid("user port device differs"));
+        }
         let backups: Vec<Vec<u8>> = self
             .ports
             .iter()
@@ -1168,6 +1480,21 @@ impl Machine for C64 {
             restore_tape(&mut self.tape, &mut self.cart);
             return Err(e);
         }
+        if let Some(d) = &mut self.user_port {
+            if let Err(e) = d.load_state(&user_state) {
+                for (dev, backup) in self.ports.iter_mut().zip(&backups) {
+                    if let Some(d) = dev {
+                        let _ = d.load_state(backup);
+                    }
+                }
+                restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape, &mut self.cart);
+                return Err(e);
+            }
+        }
+        if let Some(u) = next_uci {
+            self.uci = Some(u);
+        }
         self.cpu = next.cpu;
         self.mem = next.mem;
         self.mem.cassette_sense = self.tape.sense();
@@ -1178,6 +1505,7 @@ impl Machine for C64 {
         self.field_done_pending = next.field_done_pending;
         self.autostart = autostart;
         self.boot_frame = boot_frame;
+        self.sync_light_pen();
         Ok(())
     }
 }
@@ -1195,8 +1523,13 @@ impl DebugTarget for C64 {
         let byte = |a: u32| -> Option<u32> {
             match space {
                 CPU_SPACE => Some(
-                    PeekBus(&self.mem, &self.io, self.cart.cart().map(|c| c.as_ref()))
-                        .peek(a & 0xffff, Size::Byte),
+                    PeekBus(
+                        &self.mem,
+                        &self.io,
+                        self.cart.cart().map(|c| c.as_ref()),
+                        self.uci.as_ref(),
+                    )
+                    .peek(a & 0xffff, Size::Byte),
                 ),
                 RAM_SPACE => Some(u32::from(self.mem.ram[(a & 0xffff) as usize])),
                 COLOR_SPACE => Some(u32::from(self.mem.color[(a & 0x3ff) as usize])),
@@ -1225,6 +1558,7 @@ impl DebugTarget for C64 {
                             mem: &mut self.mem,
                             io: &mut self.io,
                             cart: self.cart.cart_mut().map(|c| c.as_mut()),
+                            uci: self.uci.as_mut(),
                         }
                         .write(u32::from(a), Size::Byte, u32::from(b)),
                     }
@@ -1239,7 +1573,12 @@ impl DebugTarget for C64 {
 
     fn disassemble(&self, addr: u32) -> Instr {
         self.cpu.disassemble(
-            &PeekBus(&self.mem, &self.io, self.cart.cart().map(|c| c.as_ref())),
+            &PeekBus(
+                &self.mem,
+                &self.io,
+                self.cart.cart().map(|c| c.as_ref()),
+                self.uci.as_ref(),
+            ),
             addr,
         )
     }
@@ -1247,3 +1586,5 @@ impl DebugTarget for C64 {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_net;

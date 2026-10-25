@@ -130,6 +130,8 @@ pub struct SPpu {
     ppu1_bus: u8,
     ppu2_bus: u8,
     frame: Vec<Rgb8>,
+    /// Debug overlay records (not machine state, not in savestates).
+    ov: overlay::SPpuOverlays,
 }
 
 fn rgb(c: u16, bright: u8) -> Rgb8 {
@@ -245,6 +247,7 @@ impl SPpu {
             ppu1_bus: 0,
             ppu2_bus: 0,
             frame: vec![Rgb8::default(); WIDTH * HEIGHT],
+            ov: overlay::SPpuOverlays::default(),
         }
     }
 
@@ -908,6 +911,12 @@ impl SPpu {
                 found.push((i, x, w, h, row));
             }
         }
+        if self.ov.sprites {
+            let rows = (self.interlace(), self.field);
+            for &(i, x, w, _, _) in &found {
+                self.ov.record_sprite(i, y, x, w, rows);
+            }
+        }
         let mut slivers = 0;
         for &(i, x, w, h, row) in found.iter().rev() {
             let tile = u16::from(self.oam[i * 4 + 2]);
@@ -1309,6 +1318,9 @@ impl Savestate for SPpu {
         Ok(())
     }
 }
+
+pub mod gfx;
+pub mod overlay;
 
 #[cfg(test)]
 mod tests;

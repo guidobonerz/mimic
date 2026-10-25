@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 emu-core.workspace = true
 emu-machines.workspace = true
+emu-cheats.workspace = true
 machine-c64.workspace = true
 machine-vic20.workspace = true
 machine-pet.workspace = true
@@ -25,6 +26,7 @@ machine-mac.workspace = true
 
 [dev-dependencies]
 emu-debug.workspace = true
+devices-net.workspace = true
 emu-preview.workspace = true
 media.workspace = true
 drives-other.workspace = true

@@ -26,13 +26,16 @@
 //! [[paddles]]                      # gamepad stick X/Y turns paddle X/Y,
 //! port = 0                         # South/East are their buttons
 //! pad = 0
+//!
+//! [[pointer]]                      # host pointer over the picture aims a
+//! port = 0                         # light pen / gun, left button = its button
 //! ```
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Button;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyboardMode {
     #[default]
@@ -40,7 +43,7 @@ pub enum KeyboardMode {
     None,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "source", rename_all = "lowercase")]
 pub enum JoystickSource {
     Keys {
@@ -142,7 +145,7 @@ impl JoyKeys {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct JoystickMap {
     /// Target port (`PortId`) of the machine.
     pub port: u8,
@@ -152,20 +155,29 @@ pub struct JoystickMap {
 
 /// The captured host mouse drives the device in a port (a mouse, or the
 /// paddles: horizontal motion turns paddle X).
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct MouseMap {
     pub port: u8,
 }
 
+/// The host pointer over the picture (not captured) aims the light pen or
+/// light gun in a port: [`crate::HostEvent::Pointer`] becomes
+/// [`emu_core::input::InputEvent::LightPen`] with the frame position and
+/// the left button as its trigger.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PointerMap {
+    pub port: u8,
+}
+
 /// A gamepad's left stick turns a pair of paddles.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PaddleMap {
     pub port: u8,
     #[serde(default)]
     pub pad: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub machine: String,
@@ -177,6 +189,8 @@ pub struct Profile {
     pub mouse: Vec<MouseMap>,
     #[serde(default)]
     pub paddles: Vec<PaddleMap>,
+    #[serde(default)]
+    pub pointer: Vec<PointerMap>,
 }
 
 impl Profile {
@@ -184,9 +198,48 @@ impl Profile {
         toml::from_str(text).map_err(|e| e.to_string())
     }
 
+    /// The profile as TOML, as the desktop saves a mapping.
+    pub fn to_toml(&self) -> String {
+        toml::to_string(self).unwrap_or_default()
+    }
+
     /// Built-in default: positional keyboard; a joystick (for the C64 in
     /// control port 2) on the first gamepad and on the keys of
     /// [`JoyKeys::default_for`].
+    /// [`Profile::default_for`] plus the host mouse and pointer for the
+    /// devices the machine options plug in: a 1351 mouse, paddles, the AMX
+    /// mouse or a driving controller take the captured mouse; a light pen
+    /// or light gun (`lightpen`, `zapper`, `superscope`) the pointer over
+    /// the picture (no capture; a mouse on the same port gives way).
+    pub fn for_options(
+        machine: &str,
+        options: &std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        let mut p = Self::default_for(machine);
+        let get = |o: &str| options.get(o).map(String::as_str);
+        for (option, port) in [("port1", 0u8), ("port2", 1), ("joy1", 0)] {
+            if matches!(
+                get(option),
+                Some("mouse1351" | "paddles" | "amx" | "driving")
+            ) {
+                p.mouse.push(MouseMap { port });
+            }
+        }
+        let pointer_options: &[(&str, u8)] = match machine {
+            "amiga" => &[("port0", 0), ("port1", 1)],
+            "cpc" => &[("expansion", 2)],
+            _ => &[("port1", 0), ("port2", 1), ("port3", 2), ("port4", 3)],
+        };
+        for &(option, port) in pointer_options {
+            if matches!(get(option), Some("lightpen" | "zapper" | "superscope")) {
+                p.pointer.push(PointerMap { port });
+            }
+        }
+        let pointer_ports: Vec<u8> = p.pointer.iter().map(|m| m.port).collect();
+        p.mouse.retain(|m| !pointer_ports.contains(&m.port));
+        p
+    }
+
     pub fn default_for(machine: &str) -> Self {
         // The C64's game port is control port 2; the VIC-20 has one port; the
         // C16/Plus/4 joystick comes plugged into port 1, as do most Atari
@@ -227,6 +280,7 @@ impl Profile {
                 Vec::new()
             },
             paddles: Vec::new(),
+            pointer: Vec::new(),
         }
     }
 }
@@ -255,10 +309,14 @@ mod tests {
             port = 0
             source = "gamepad"
             pad = 1
+
+            [[pointer]]
+            port = 0
             "#,
         )
         .unwrap();
         assert_eq!(p.joystick.len(), 2);
+        assert_eq!(p.pointer, [PointerMap { port: 0 }]);
         assert_eq!(
             p.joystick[1].source,
             JoystickSource::Gamepad {
@@ -274,5 +332,44 @@ mod tests {
     fn rejects_typos() {
         assert!(Profile::from_toml("machine = \"c64\"\nkeybord = \"none\"").is_err());
         assert!(Profile::from_toml("machine = \"c64\"\nkeyboard = \"symbolic\"").is_err());
+    }
+}
+
+#[cfg(test)]
+mod for_options_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn devices_from_options_take_the_mouse_or_the_pointer() {
+        let opts = |kv: &[(&str, &str)]| -> BTreeMap<String, String> {
+            kv.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let p = Profile::for_options("c64", &opts(&[("port1", "mouse1351")]));
+        assert_eq!(p.mouse, [MouseMap { port: 0 }]);
+        assert!(p.pointer.is_empty());
+        let p = Profile::for_options("c64", &opts(&[("port1", "lightpen")]));
+        assert_eq!(p.pointer, [PointerMap { port: 0 }]);
+        let p = Profile::for_options("cpc", &opts(&[("expansion", "lightpen")]));
+        assert_eq!(p.pointer, [PointerMap { port: 2 }]);
+        let p = Profile::for_options("amiga", &opts(&[("port0", "lightpen")]));
+        assert_eq!(p.pointer, [PointerMap { port: 0 }]);
+        assert!(Profile::for_options("nes", &opts(&[])).pointer.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod toml_tests {
+    use super::*;
+
+    #[test]
+    fn profiles_round_trip_through_toml() {
+        for machine in ["c64", "amiga", "nes", "cpc"] {
+            let p = Profile::default_for(machine);
+            let text = p.to_toml();
+            assert_eq!(Profile::from_toml(&text).unwrap(), p, "{machine}:\n{text}");
+        }
     }
 }

@@ -22,6 +22,18 @@ class Parsing(unittest.TestCase):
             with self.assertRaises(ValueError):
                 polydbg.parse_number(bad)
 
+    def test_gfx_options(self):
+        self.assertEqual(polydbg.gfx_options(["index=2", "addr=$2000"]),
+                         {"index": 2, "addr": 0x2000})
+        with self.assertRaises(ValueError):
+            polydbg.gfx_options(["index"])
+        args = polydbg.build_parser().parse_args(["gfx", "sprites", "index=1", "--scale", "3"])
+        self.assertEqual((args.view, args.options, args.scale), ("sprites", ["index=1"], 3))
+        args = polydbg.build_parser().parse_args(["rewind", "3"])
+        self.assertEqual((args.count, args.on), (3, None))
+        args = polydbg.build_parser().parse_args(["picture", "--overlays", "beam,grid"])
+        self.assertEqual(args.overlays, "beam,grid")
+
     def test_addresses_or_symbols(self):
         self.assertEqual(polydbg.address_args("$0810"), {"addr": 0x0810})
         self.assertEqual(polydbg.address_args("sprites.init"), {"symbol": "sprites.init"})

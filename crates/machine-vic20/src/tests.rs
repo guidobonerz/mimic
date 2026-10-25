@@ -336,3 +336,46 @@ fn paddles_turn_the_vic_pots() {
     })
     .is_err());
 }
+
+#[test]
+fn graphics_views_follow_the_vic() {
+    let mut m = stub();
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["charset", "screen", "palette"]);
+    // The KERNAL's unexpanded layout: 22 × 23 at $1E00, characters $8000.
+    for (reg, v) in [(2u16, 0x96u8), (3, 0x2e), (5, 0xf0), (15, 0x1b)] {
+        assert!(m.poke(CPU_SPACE, 0x9000 + u32::from(reg), Size::Byte, u32::from(v)));
+    }
+    assert!(m.poke(CPU_SPACE, 0x1e00, Size::Byte, 0x41));
+    assert!(m.poke(CPU_SPACE, 0x9600, Size::Byte, 2));
+    m.mem.roms.chargen[0x41 * 8] = 0x80;
+    let sc = m.gfx_view("screen", &GfxOptions::new()).unwrap();
+    assert_eq!(sc.addr, 0x1e00);
+    assert_eq!((sc.width, sc.height), (22 * 8, 23 * 8));
+    assert_eq!(sc.param("charbase"), Some(0x8000));
+    assert_eq!(sc.raw.len(), 2 * 22 * 23);
+    assert_eq!(sc.frame().rgb_at(0, 0), Some(m.palette[2]));
+    assert_eq!(sc.frame().rgb_at(1, 0), Some(m.palette[1]));
+    let cs = m.gfx_view("charset", &GfxOptions::new()).unwrap();
+    assert_eq!(cs.addr, 0x8000);
+    assert_eq!(cs.raw[0x41 * 8], 0x80);
+    let ram = m
+        .gfx_view("charset", &GfxOptions::new().with("addr", 0x1000))
+        .unwrap();
+    assert_eq!((ram.addr, ram.param("charbase")), (0x1000, Some(0x1000)));
+    assert_eq!(
+        m.gfx_view("palette", &GfxOptions::new()).unwrap().raw.len(),
+        16
+    );
+    assert!(m.gfx_view("sprites", &GfxOptions::new()).is_none());
+}
+
+#[test]
+fn frame_rows_follow_the_vic() {
+    let m = stub();
+    let t = m.io.vic.timing();
+    assert_eq!(m.frame_row(t.first_line), Some(0));
+    assert_eq!(m.frame_row(t.first_line - 1), None);
+    assert_eq!(m.frame_row(t.lines), None);
+    assert!(m.overlays().is_empty());
+}

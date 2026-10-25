@@ -37,6 +37,9 @@ pub enum PortKind {
     /// Macintosh 128K/512K/Plus mouse port: 9-pin, quadrature X1/X2 and
     /// Y1/Y2 and one button (the SE's ADB mouse uses the same device).
     MacMouse,
+    /// C64/C128/VIC-20 user port: CIA port B (PB0–PB7), PA2, the PC2
+    /// handshake out and FLAG2 in, the serial lines (see
+    /// [`user_port`] for the pin numbering in [`PortLines`]).
     CbmUserPort,
     Iec,
     Sio,
@@ -69,6 +72,13 @@ pub trait PortDevice: Send {
 
     /// Host-neutral input from the host layer.
     fn input(&mut self, ev: &InputEvent);
+
+    /// Host services for devices that reach outside the machine (the
+    /// WiC64's network); passed on by [`crate::Machine::attach_host`].
+    /// Pin-level devices ignore them (the default).
+    fn attach_host(&mut self, host: &crate::host::HostServices) {
+        let _ = host;
+    }
 
     fn save_state(&self) -> Vec<u8>;
 
@@ -108,3 +118,28 @@ impl fmt::Display for PortError {
 }
 
 impl std::error::Error for PortError {}
+
+/// The Commodore user port's pins in [`PortLines::pulled_low`]: bit `n`
+/// is pin `n + 1` on the top row (1–12); the bottom row A–N (no G, I)
+/// follows as pins 13–24. Source: C64 Programmer's Reference Guide,
+/// appendix I (user port pinout).
+pub mod user_port {
+    /// Pin 8: CIA2 PC2, low for one cycle after each access to port B.
+    pub const PC2: u32 = 1 << 7;
+    /// Pin B: CIA2 /FLAG input (negative edge sets ICR bit 4).
+    pub const FLAG2: u32 = 1 << 13;
+    /// Pins C–L: CIA2 PB0–PB7, shifted by this many bits.
+    pub const PB_SHIFT: u32 = 14;
+    /// Pin M: CIA2 PA2.
+    pub const PA2: u32 = 1 << 22;
+
+    /// The port B byte from lines (a bit pulled low reads 0).
+    pub fn pb(pulled_low: u32) -> u8 {
+        !((pulled_low >> PB_SHIFT) as u8)
+    }
+
+    /// Lines pulling the port B bits that are 0 in `v` low.
+    pub fn pb_lines(v: u8) -> u32 {
+        u32::from(!v) << PB_SHIFT
+    }
+}

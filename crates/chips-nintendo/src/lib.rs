@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod apu;
+pub mod overlay;
 pub mod palette;
 pub mod ppu;
 pub mod sdsp;

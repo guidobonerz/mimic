@@ -190,3 +190,54 @@ fn display_offsets_stay_inside_the_line() {
         assert!(t.x_offset < t.width());
     }
 }
+
+#[test]
+fn frame_rows_follow_the_visible_lines() {
+    let mem = Mem::new();
+    for model in [Model::Mos6561, Model::Mos6560] {
+        let mut v = Vic::new(model);
+        let t = v.timing();
+        assert_eq!(v.frame_row(t.first_line - 1), None);
+        assert_eq!(v.frame_row(t.first_line), Some(0));
+        assert_eq!(
+            v.frame_row(t.first_line + t.height as u16 - 1),
+            Some(t.height - 1)
+        );
+        assert_eq!(v.frame_row(t.first_line + t.height as u16), None);
+        // Border colour 5 on line 100 only: that row of the frame.
+        while v.line != 100 {
+            v.tick(&mem);
+        }
+        v.write(15, 5);
+        while v.line != 101 {
+            v.tick(&mem);
+        }
+        v.write(15, 0);
+        while !v.tick(&mem) {}
+        let row = v.frame_row(100).unwrap();
+        let px = |r: u32| v.pixels()[(r * t.width()) as usize];
+        assert_eq!((px(row - 1), px(row), px(row + 1)), (0, 5, 0));
+    }
+}
+
+#[test]
+fn hpos_is_the_frame_column_of_the_cycle() {
+    let mem = Mem::new();
+    for model in [Model::Mos6561, Model::Mos6560] {
+        let mut v = Vic::new(model);
+        let t = v.timing();
+        while !(v.line == 100 && v.cycle == 20) {
+            v.tick(&mem);
+        }
+        let x = u32::from(v.beam().hpos);
+        v.write(15, 5);
+        while v.line != 101 {
+            v.tick(&mem);
+        }
+        v.write(15, 0);
+        while !v.tick(&mem) {}
+        let at = v.frame_row(100).unwrap() * t.width();
+        let px = |c: u32| v.pixels()[(at + c) as usize];
+        assert_eq!((px(x - 1), px(x)), (0, 5));
+    }
+}

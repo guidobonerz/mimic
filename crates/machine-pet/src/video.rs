@@ -74,6 +74,14 @@ impl Video {
         &self.pixels
     }
 
+    /// Frame-buffer row showing CRTC scan line `line` (counted from the
+    /// first display line, [`Crtc::line`]): the window starts below the
+    /// top margin; lines past the frame's last row are not shown.
+    pub fn frame_row(&self, line: u16) -> Option<u32> {
+        let y = MARGIN_Y + u32::from(line);
+        (y < self.height()).then_some(y)
+    }
+
     pub fn signal(&self) -> SignalInfo {
         SignalInfo {
             pixel_clock_hz: 8_000_000 * self.cpc,
@@ -92,7 +100,9 @@ impl Video {
             frame: self.frame,
             line: self.crtc.line(),
             cycle: col as u16,
-            hpos: (MARGIN_X * self.cpc + col * 8 * self.cpc) as u16,
+            // Frame column of this clock's first pixel, clamped to the
+            // picture.
+            hpos: ((MARGIN_X + col * 8) * self.cpc).min(self.width() - 1) as u16,
         }
     }
 
@@ -171,5 +181,33 @@ impl Savestate for Video {
         self.drawn_to = drawn_to;
         self.pixels = pixels;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hpos_is_the_frame_column_of_the_clock() {
+        for (cpc, regs) in [(1, CRTC_40_50HZ), (2, CRTC_80_50HZ)] {
+            let mut v = Video::new(regs, cpc, 10, VideoStandard::Pal);
+            let mut vram = vec![0u8; 1024 * cpc as usize];
+            vram[5 * cpc as usize] = 1; // MA 5 (first character of the clock)
+            let mut chargen = vec![0u8; 2048];
+            chargen[8] = 0x80;
+            while v.crtc.column() != 5 {
+                v.tick(&vram, &chargen, false);
+            }
+            assert_eq!(v.crtc.line(), 0);
+            let x = u32::from(v.beam().hpos);
+            v.tick(&vram, &chargen, false);
+            let at = (v.frame_row(0).unwrap() * v.width()) as usize;
+            assert_eq!(
+                (v.pixels()[at + x as usize - 1], v.pixels()[at + x as usize]),
+                (0, 1)
+            );
+            assert_eq!(x, (MARGIN_X + 5 * 8) * cpc);
+        }
     }
 }

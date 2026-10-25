@@ -954,5 +954,7 @@ impl Savestate for Tia {
     }
 }
 
+pub mod gfx;
+
 #[cfg(test)]
 mod tests;

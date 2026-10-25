@@ -16,4 +16,5 @@ drives-cbm.workspace = true
 drives-other.workspace = true
 devices-input.workspace = true
 devices-cartridge.workspace = true
+devices-net.workspace = true
 media.workspace = true

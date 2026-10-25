@@ -283,3 +283,65 @@ fn debugger_view() {
     assert_eq!(m.disassemble(0xf000).mnemonic, "SEI");
     assert_eq!(m.layout(), Layout::Graphics);
 }
+
+#[test]
+fn graphics_views_of_the_character_rom_and_the_screen() {
+    let mut m = stub_with("8032", &[]);
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["charset", "screen"]);
+    m.mem.roms.chargen[8] = 0x80; // graphics set, character 1, line 0
+    m.mem.roms.chargen[0x400 + 16] = 0x01; // text set, character 2
+    assert_eq!(m.peek(CHARGEN_SPACE, 0x408 + 8, Size::Byte), Some(0x01));
+    assert!(!m.poke(CHARGEN_SPACE, 0, Size::Byte, 1));
+    let cs = m.gfx_view("charset", &GfxOptions::new()).unwrap();
+    assert_eq!((cs.width, cs.height), (32 * 9 - 1, 8 * 9 - 1));
+    assert_eq!((cs.space, cs.raw.len()), (CHARGEN_SPACE, 2048));
+    let f = cs.frame();
+    assert_eq!(f.rgb_at(9, 0), Some(PALETTE[1]));
+    assert_eq!(f.rgb_at(10, 0), Some(PALETTE[0]));
+    let text = m
+        .gfx_view("charset", &GfxOptions::new().with("index", 1))
+        .unwrap();
+    assert_eq!((text.addr, text.raw.len()), (0x400, 1024));
+    assert_eq!(text.frame().rgb_at(2 * 9 + 7, 0), Some(PALETTE[1]));
+
+    // 80 columns, 25 rows of 10 lines (R9 = 9); MA12 high (not inverted).
+    assert!(m.poke(CPU_SPACE, 0xe880, Size::Byte, 9));
+    assert!(m.poke(CPU_SPACE, 0xe881, Size::Byte, 9));
+    assert!(m.poke(CPU_SPACE, 0x8000, Size::Byte, 1));
+    assert!(m.poke(CPU_SPACE, 0x8001, Size::Byte, 0x81));
+    let opts = GfxOptions::new().with("index", 0);
+    let sc = m.gfx_view("screen", &opts).unwrap();
+    assert_eq!(sc.param("columns"), Some(80));
+    assert_eq!((sc.width, sc.height), (640, 25 * 10));
+    assert_eq!(sc.raw.len(), 80 * 25);
+    assert_eq!((sc.addr, sc.raw[1]), (0x8000, 0x81));
+    let f = sc.frame();
+    assert_eq!(f.rgb_at(0, 0), Some(PALETTE[1]));
+    assert_eq!(f.rgb_at(1, 0), Some(PALETTE[0]));
+    assert_eq!(f.rgb_at(8, 0), Some(PALETTE[0]), "code bit 7 inverts");
+    assert_eq!(f.rgb_at(9, 0), Some(PALETTE[1]));
+    assert_eq!(f.rgb_at(0, 8), Some(PALETTE[0]), "lines 8 and 9 blank");
+    let names: Vec<_> = m.memory_spaces().iter().map(|s| s.name).collect();
+    assert_eq!(names, ["cpu", "chargen"]);
+
+    let m40 = stub_with("2001", &[]);
+    let sc = m40.gfx_view("screen", &GfxOptions::new()).unwrap();
+    assert_eq!((sc.width, sc.height), (320, 200));
+}
+
+#[test]
+fn frame_rows_follow_the_crtc_window() {
+    let mut m = stub_with("4032", &[]);
+    m.mem.roms.chargen[8] = 0x80; // character 1, line 0
+    m.mem.roms.chargen[0x400 + 8] = 0x80;
+    let mut dbg = DebugHooks::new();
+    while m.run_frame(&mut dbg) != StopReason::FrameDone {}
+    m.mem.vram[0] = 1;
+    while m.run_frame(&mut dbg) != StopReason::FrameDone {}
+    let row = m.frame_row(0).unwrap();
+    let f = m.framebuffer();
+    assert_eq!(f.rgb_at(32, row), Some(PALETTE[1]), "line 0 of row 0");
+    assert_eq!(f.rgb_at(32, row - 1), Some(PALETTE[0]));
+    assert_eq!(m.frame_row(10_000), None);
+}

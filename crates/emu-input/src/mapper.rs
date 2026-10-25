@@ -14,6 +14,9 @@ use crate::keymap::{self, Keymap};
 use crate::profile::{JoyKeys, JoystickMap, JoystickSource, KeyboardMode, Profile};
 use crate::{Axis, Button, HostEvent};
 
+/// Light-pen position for "off the picture".
+const NO_AIM: u16 = 0xffff;
+
 #[derive(Debug, Default)]
 struct JoyState {
     key_dirs: Dirs,
@@ -52,6 +55,9 @@ pub struct Mapper {
     sticks: BTreeMap<u8, (f32, f32)>,
     /// Paddle buttons held per pad (bit 0 South, bit 1 East).
     paddle_fire: BTreeMap<u8, u8>,
+    /// The light-pen event last sent for the host pointer (only changes
+    /// are sent).
+    pointer_sent: Option<InputEvent>,
 }
 
 fn set(d: &mut Dirs, dir: Dirs, on: bool) {
@@ -81,6 +87,7 @@ impl Mapper {
             host_down: BTreeSet::new(),
             sticks: BTreeMap::new(),
             paddle_fire: BTreeMap::new(),
+            pointer_sent: None,
         }
     }
 
@@ -160,6 +167,29 @@ impl Mapper {
                 .joystick
                 .insert(0, JoystickMap { port, source });
             self.joys.insert(0, JoyState::default());
+        }
+        self.flush_joysticks(now, &mut out);
+        out
+    }
+
+    /// The gamepad button that fires the joystick (the first gamepad's
+    /// first fire button); `None` without a gamepad joystick.
+    pub fn pad_fire(&self) -> Option<Button> {
+        self.profile.joystick.iter().find_map(|j| match &j.source {
+            JoystickSource::Gamepad { fire, .. } => fire.first().copied(),
+            JoystickSource::Keys { .. } => None,
+        })
+    }
+
+    /// Let `button` fire every gamepad joystick. A fire held on the old
+    /// button is released; returns the events for that, at `now`.
+    pub fn set_pad_fire(&mut self, button: Button, now: Cycle) -> Vec<TimedInput> {
+        let mut out = Vec::new();
+        for (map, joy) in self.profile.joystick.iter_mut().zip(&mut self.joys) {
+            if let JoystickSource::Gamepad { fire, .. } = &mut map.source {
+                *fire = vec![button];
+                joy.pad_fire = false;
+            }
         }
         self.flush_joysticks(now, &mut out);
         out
@@ -272,6 +302,24 @@ impl Mapper {
                     }
                 }
                 self.paddle_axes(*pad, now, &mut out);
+            }
+            HostEvent::Pointer { pos, buttons } => {
+                let (x, y) = pos.unwrap_or((NO_AIM, NO_AIM));
+                let event = InputEvent::LightPen {
+                    x,
+                    y,
+                    trigger: buttons & 1 != 0,
+                };
+                if self.pointer_sent != Some(event) {
+                    self.pointer_sent = Some(event);
+                    for map in &self.profile.pointer {
+                        out.push(TimedInput {
+                            at: now,
+                            target: InputTarget::Port(PortId(map.port)),
+                            event,
+                        });
+                    }
+                }
             }
             HostEvent::Mouse { dx, dy, buttons } => {
                 for map in &self.profile.mouse {
@@ -781,5 +829,54 @@ mod tests {
                 dirs: Dirs::NONE,
                 buttons: 2
             }));
+    }
+
+    #[test]
+    fn host_pointer_aims_a_light_pen() {
+        let mut p = Profile::default_for("c64");
+        p.pointer.push(crate::profile::PointerMap { port: 0 });
+        let mut m = Mapper::new(p);
+        let pen = |x, y, trigger| TimedInput {
+            at: Cycle(5),
+            target: InputTarget::Port(PortId(0)),
+            event: InputEvent::LightPen { x, y, trigger },
+        };
+        let point = |pos, buttons| HostEvent::Pointer { pos, buttons };
+        let out = m.handle(&point(Some((120, 80)), 0), Cycle(5));
+        assert_eq!(out, [pen(120, 80, false)]);
+        // Unchanged: nothing new to send.
+        assert!(m.handle(&point(Some((120, 80)), 2), Cycle(5)).is_empty());
+        let out = m.handle(&point(Some((120, 80)), 1), Cycle(5));
+        assert_eq!(out, [pen(120, 80, true)]);
+        let out = m.handle(&point(None, 0), Cycle(5));
+        assert_eq!(out, [pen(0xffff, 0xffff, false)]);
+        // Without a pointer map the pointer drives nothing.
+        let mut plain = Mapper::new(Profile::default_for("c64"));
+        assert!(plain.handle(&point(Some((1, 1)), 1), Cycle(0)).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod pad_fire_tests {
+    use super::*;
+    use crate::Profile;
+
+    #[test]
+    fn the_fire_button_can_change() {
+        let mut m = Mapper::new(Profile::default_for("c64"));
+        assert_eq!(m.pad_fire(), Some(Button::South));
+        m.set_pad_fire(Button::East, Cycle(0));
+        assert_eq!(m.pad_fire(), Some(Button::East));
+        let fired = m.handle(
+            &HostEvent::Button {
+                pad: 0,
+                button: Button::East,
+                down: true,
+            },
+            Cycle(1),
+        );
+        assert!(fired
+            .iter()
+            .any(|e| matches!(e.event, InputEvent::Digital { buttons, .. } if buttons & 1 != 0)));
     }
 }

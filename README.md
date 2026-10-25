@@ -19,7 +19,6 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | WDC 65C816 (5A22) | `cpu-65816` | SNES | Tom Harte, all 5 080 400 tests | 95 % |
 | Sony SPC700 | `cpu-spc700` | SNES sound module | Tom Harte, all 256 000 tests | 98 % |
 | Motorola 6809 (68A09) | `cpu-6809` | Vectrex | own per-instruction tests (cycle counts from the datasheet); the Vectrex executive and Scramble run; no external test suite | 75 % |
-| GI CP1610 | – | Intellivision (Phase 13) | – | 0 % |
 
 ### Machines
 
@@ -43,7 +42,6 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | Vectrex | `machine-vectrex` | – | executive and Scramble run; light pen and 3D Imager modelled; overlays and phosphor persistence open; Mine Storm and 3-D Mine Storm need the 8 KB system ROM | 55 % |
 | Test machine (6502 + RAM + raster chip) | `machine-sim6502` | – | reference for debugger tests | 100 % |
 | Tandy TRS-80 Model I/III | – | Phase 10 | – | 0 % |
-| Mattel Intellivision | – | Phase 13 | – | 0 % |
 | Sinclair ZX Spectrum 48K/128K | – | Phase 15 | – | 0 % |
 | Apple II / II+ / IIe | `machine-apple2` | II, II+, IIe, enhanced IIe | all four boot with real ROMs; Zork I boots from DSK; a disk built by the tests boots through the Disk II PROMs; cassette save/load through the monitor; colours checked through the composite stage; DOS 3.3/ProDOS disks, Mockingboard software and WOZ copy protections not yet tried | 70 % |
 | Apple Macintosh 128K–SE | `machine-mac` | 128K, 512K, Plus, SE | all four reach the disk icon with real ROMs (startup sound, RTC, memory test); a disk built by the tests boots through the IWM (400K with the 128K's speed control, 800K); SCSI disks, ADB, SCC and keyboard only unit-tested; System 6 not yet tried | 55 % |
@@ -138,6 +136,14 @@ The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/
 | NES mappers 0–4 (iNES/NES 2.0) | `devices-cartridge` | 60 % (further mappers missing) |
 | SNES LoROM/HiROM/ExHiROM, SRAM | `devices-cartridge` | 60 % (no coprocessors, SRAM not saved to file) |
 | Vectrex (32 KB, 64 KB with PB6 banking) | `devices-cartridge` | 90 % |
+
+### Network devices
+
+| Device | Crate | Completeness |
+| --- | --- | --- |
+| Ultimate 64 command interface (C64 `uci=on`): DOS targets on a host folder, network target (TCP/UDP sockets), control identify | `devices-net` | 70 % (Ultimate control commands not offered; error texts and timing partly unverified) |
+| WiC64 on the user port (C64 `userport=wic64`): legacy and protocol 2, HTTP GET/POST, TCP, info, time | `devices-net` | 70 % (no https; handshake timing and some answers unverified) |
+| Host network and folder (`media-backends`), journalled for exact replays | `emu-core::host` | 80 % (no TLS; the web frontend has no network) |
 
 ### Debugger, preview and frontends
 

@@ -147,6 +147,8 @@ pub struct Ppu {
     /// The dot of this line at which the sprite overflow flag rises.
     overflow_at: Option<u16>,
     frame: Vec<Rgb8>,
+    /// Debug overlay records (not machine state, not in savestates).
+    ov: overlay::PpuOverlays,
 }
 
 impl Ppu {
@@ -192,6 +194,7 @@ impl Ppu {
             sec_zero: false,
             overflow_at: None,
             frame: vec![Rgb8::default(); WIDTH * HEIGHT],
+            ov: overlay::PpuOverlays::default(),
         }
     }
 
@@ -589,6 +592,9 @@ impl Ppu {
                 if n == 0 {
                     self.sec_zero = true;
                 }
+                if self.ov.sprites {
+                    self.ov.record_sprite(n, self.line + 1, self.oam[n * 4 + 3]);
+                }
                 self.sec_count += 1;
                 dot += 6;
             }
@@ -667,6 +673,9 @@ impl Ppu {
         }
     }
 
+    // Per dot; the graphics views call it too, which made LLVM keep it
+    // out of line.
+    #[inline(always)]
     fn colour(&self, index: u8) -> Rgb8 {
         let mut emphasis = usize::from(self.mask >> 5);
         if self.model == PpuModel::Pal {
@@ -709,6 +718,9 @@ impl Ppu {
                             spr = 0x10 | (attr & 3) << 2 | p;
                             front = attr & 0x20 == 0;
                             if i == 0 && self.spr_zero && bg != 0 && x != 255 {
+                                if self.ov.sprite0 && self.status & 0x40 == 0 {
+                                    self.ov.record_hit(x, self.line);
+                                }
                                 self.status |= 0x40;
                             }
                             break;
@@ -849,6 +861,9 @@ impl Savestate for Ppu {
         Ok(())
     }
 }
+
+pub mod gfx;
+pub mod overlay;
 
 #[cfg(test)]
 mod tests;

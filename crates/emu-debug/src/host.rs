@@ -5,9 +5,12 @@
 //! lent by the frontend through [`HostServices`].
 //!
 //! Recordings ([`Replay`]) hold a savestate taken when recording started
-//! and every input event queued since, with its exact cycle. Loading the
-//! state and queueing the events reproduces the run bit-exactly (golden
-//! rule 3); `tests/replays/` drives regression tests with them.
+//! and every input event queued since, with its exact cycle, and the
+//! journal of the machine's host services (network and folder answers,
+//! [`emu_core::host::Journal`]). Loading the state, installing the journal
+//! and queueing the events reproduces the run bit-exactly (golden rule 3)
+//! even with a live network; `tests/replays/` drives regression tests with
+//! them.
 
 use serde_json::{json, Value};
 
@@ -46,6 +49,10 @@ pub struct Replay {
     pub events: Vec<TimedInput>,
     /// Machine time when recording stopped.
     pub end: Cycle,
+    /// The host-service journal ([`emu_core::host::Journal`] record;
+    /// empty: no host calls, or none recorded). Optional in the JSON
+    /// (`"host"`), so recordings without it stay valid.
+    pub host: Vec<u8>,
 }
 
 const DIR_NAMES: [(&str, Dirs); 4] = [
@@ -187,6 +194,7 @@ impl Replay {
             "freezes": crate::protocol::base64_encode(&self.freezes),
             "end": self.end.0,
             "events": events,
+            "host": crate::protocol::base64_encode(&self.host),
         })
     }
 
@@ -216,6 +224,7 @@ impl Replay {
             freezes: crate::protocol::base64_decode(v["freezes"].as_str().unwrap_or(""))?,
             events,
             end: Cycle(v["end"].as_u64().ok_or("end missing")?),
+            host: crate::protocol::base64_decode(v["host"].as_str().unwrap_or(""))?,
         })
     }
 }
@@ -290,8 +299,13 @@ mod tests {
                 },
             }],
             end: Cycle(5000),
+            host: vec![7, 8, 9],
         };
         assert_eq!(Replay::from_json(&r.to_json()).unwrap(), r);
+        // Recordings from before the journal have no "host".
+        let mut old = r.to_json();
+        old.as_object_mut().unwrap().remove("host");
+        assert_eq!(Replay::from_json(&old).unwrap().host, Vec::<u8>::new());
         assert!(Replay::from_json(&json!({"format": "x"})).is_err());
         assert_eq!(
             parse_target(&json!("keyboard")).unwrap(),

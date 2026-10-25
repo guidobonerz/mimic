@@ -420,3 +420,91 @@ fn savestate_keeps_the_vic_type() {
     assert!(pal.load(&mut StateReader::new(&data)).is_err());
     assert_eq!(pal, Vic2::new(Model::Mos6569));
 }
+
+/// Border only (DEN off) in colour `border`, a light pen at frame pixel
+/// (100, 50) that sees white.
+fn pen_setup(border: u8) -> (Vic2, Mem) {
+    let (mut v, m) = text_setup();
+    v.write(0x11, 0x0b);
+    v.write(0x20, border);
+    v.write(0x1a, irq::LIGHT_PEN);
+    v.set_light_pen(Some((100, 50)), 1 << 1);
+    (v, m)
+}
+
+#[test]
+fn light_pen_latches_x_half_and_the_raster_line_with_an_irq() {
+    let (mut v, m) = pen_setup(1);
+    // Frame column 100 is pixel 192 of the line: X = $194 + 192 - 504 = 92;
+    // frame row 50 is raster line 16 + 50; the beam draws it in cycle 25.
+    run_to(&mut v, &m, 66, 25);
+    assert_eq!(v.peek(0x19) & irq::LIGHT_PEN, 0, "not before the beam");
+    run_to(&mut v, &m, 66, 26);
+    assert_eq!((v.peek(0x13), v.peek(0x14)), (92 / 2, 66));
+    assert_ne!(v.peek(0x19) & irq::LIGHT_PEN, 0);
+    assert!(v.irq());
+}
+
+#[test]
+fn light_pen_latches_once_a_frame() {
+    let (mut v, m) = pen_setup(1);
+    run_to(&mut v, &m, 67, 1);
+    v.write(0x19, irq::LIGHT_PEN);
+    assert!(!v.irq());
+    // Further down in the same frame: no second latch.
+    v.set_light_pen(Some((100, 60)), 1 << 1);
+    run_to(&mut v, &m, 100, 1);
+    assert_eq!(v.peek(0x14), 66);
+    assert_eq!(v.peek(0x19) & irq::LIGHT_PEN, 0);
+    // The next frame latches again.
+    frame(&mut v, &m);
+    run_to(&mut v, &m, 100, 1);
+    assert_eq!(v.peek(0x14), 76);
+    assert_ne!(v.peek(0x19) & irq::LIGHT_PEN, 0);
+}
+
+#[test]
+fn light_pen_needs_light() {
+    let (mut v, m) = pen_setup(0);
+    frame(&mut v, &m);
+    frame(&mut v, &m);
+    assert_eq!(v.peek(0x19) & irq::LIGHT_PEN, 0);
+    assert_eq!((v.peek(0x13), v.peek(0x14)), (0, 0));
+}
+
+#[test]
+fn lp_line_edge_latches_and_a_held_line_masks_the_pen() {
+    let (mut v, m) = pen_setup(1);
+    run_to(&mut v, &m, 20, 14);
+    // Fire on control port 1: a falling edge latches now (cycle 14
+    // starts at X = $194 + 104 - 504 = 4).
+    v.set_lp_line(true);
+    assert_eq!((v.peek(0x13), v.peek(0x14)), (4 / 2, 20));
+    // Held low into the next frame: the pen's pulse makes no edge.
+    frame(&mut v, &m);
+    v.write(0x19, irq::LIGHT_PEN);
+    run_to(&mut v, &m, 100, 1);
+    assert_eq!(v.peek(0x19) & irq::LIGHT_PEN, 0);
+    v.set_lp_line(false);
+    frame(&mut v, &m);
+    run_to(&mut v, &m, 100, 1);
+    assert_eq!(v.peek(0x14), 66);
+}
+
+#[test]
+fn light_pen_state_round_trips() {
+    let (mut v, m) = pen_setup(1);
+    run_to(&mut v, &m, 70, 1);
+    let mut w = StateWriter::new();
+    v.save(&mut w);
+    let bytes = w.into_bytes();
+    let mut n = Vic2::new(Model::Mos6569);
+    n.set_light_pen(Some((100, 60)), 1 << 1);
+    n.load(&mut StateReader::new(&bytes)).unwrap();
+    // Latched this frame: the pen at row 60 (line 76) does not latch again.
+    run_to(&mut n, &m, 80, 1);
+    assert_eq!(n.peek(0x14), 66);
+    frame(&mut n, &m);
+    run_to(&mut n, &m, 80, 1);
+    assert_eq!(n.peek(0x14), 76);
+}

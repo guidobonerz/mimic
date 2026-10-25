@@ -17,4 +17,4 @@ pub mod symbols;
 pub mod vice;
 
 pub use server::{Control, DebugServer, Endpoint, ServerConfig, Service};
-pub use session::{FrameHook, Session};
+pub use session::{FrameHook, IdleHook, Session};

@@ -1,6 +1,7 @@
 use super::*;
 use emu_core::input::Dirs;
 use emu_core::media::{Media, MediaBackend, MediaError};
+use emu_core::overlay::{colors, Shape};
 
 fn stub_with(model: Option<&str>, options: &[(&str, &str)]) -> Coleco {
     let mut config = MachineConfig {
@@ -329,5 +330,97 @@ fn options_and_models_are_checked() {
     assert!(
         matches!(Coleco::new(&config), Err(ConfigError::MissingRom(r)) if r == "coleco"),
         "the BIOS is needed without roms=stub"
+    );
+}
+
+#[test]
+fn gfx_views_show_the_vdp_tables() {
+    let mut m = stub_with(None, &[]);
+    frames(&mut m, 2);
+    let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["tiles", "sprites", "screen", "palette"]);
+    let state = m.save_state();
+    for id in ids {
+        let v = m.gfx_view(id, &GfxOptions::new()).unwrap();
+        assert_eq!(v.space, VRAM_SPACE);
+        assert!(v.width > 0 && v.height > 0);
+        assert!(!v.raw.is_empty());
+        if id == "screen" {
+            let names = v.param("names").unwrap();
+            assert_eq!(v.addr, names);
+            assert_eq!(v.raw[0], m.board.vdp.vram[names as usize]);
+        }
+    }
+    assert_eq!(m.save_state(), state, "views leave the machine as it was");
+    assert!(m.gfx_view("bitmap", &GfxOptions::new()).is_none());
+}
+
+#[test]
+fn overlays_record_sprites_only_while_switched_on() {
+    let mut m = stub_with(None, &[]);
+    frames(&mut m, 2);
+    let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
+    assert_eq!(ids, ["sprites", "limit"]);
+    // Sprites 1–5 at Y = 49 (lines 50–57) from X = 100: five on the line
+    // (the stub BIOS moves sprite 0).
+    let v = &mut m.board.vdp;
+    let attrs = usize::from(v.regs[5] & 0x7f) << 7;
+    for n in 1..6 {
+        v.vram[attrs + n * 4..attrs + n * 4 + 4].copy_from_slice(&[49, 91 + n as u8 * 9, 0, 15]);
+    }
+    v.vram[attrs + 24] = 0xd0;
+    let state = m.save_state();
+    frames(&mut m, 1);
+    assert!(m.overlay("sprites").is_none(), "switched off");
+    m.set_overlays(&["sprites", "limit"]);
+    frames(&mut m, 2);
+    let o = m.overlay("sprites").unwrap();
+    let big = m.board.vdp.regs[1] & 2 != 0;
+    let mag = m.board.vdp.regs[1] & 1 != 0;
+    let size = if big { 16 } else { 8 } * if mag { 2 } else { 1 };
+    let top = m.frame_row(50).unwrap() as i32;
+    assert_eq!(top, 50 + 27);
+    assert!(o.shapes.contains(&Shape::Rect {
+        x: 13 + 100,
+        y: top,
+        w: size,
+        h: size,
+        color: colors::SERIES[1],
+        label: Some("1".into()),
+    }));
+    assert_eq!(m.overlay("limit").unwrap().shapes.len(), 1);
+    assert_eq!(m.frame_row(192 + 24), None);
+    // The record is not machine state.
+    let mut fresh = stub_with(None, &[]);
+    fresh.load_state(&state).unwrap();
+    assert_eq!(m.save_state().len(), fresh.save_state().len());
+    m.set_overlays(&[]);
+    assert!(m.overlay("limit").is_none());
+}
+
+#[test]
+fn beam_hpos_is_the_frame_column() {
+    let mut m = stub_with(None, &[]);
+    frames(&mut m, 2);
+    // Sprite 1 (solid pattern 1, white) at X = 100, lines 50–57.
+    let v = &mut m.board.vdp;
+    let attrs = usize::from(v.regs[5] & 0x7f) << 7;
+    let pats = usize::from(v.regs[6] & 7) << 11;
+    v.vram[attrs + 4..attrs + 8].copy_from_slice(&[49, 100, 1, 15]);
+    v.vram[attrs + 8] = 0xd0;
+    v.vram[pats + 8..pats + 40].fill(0xff);
+    frames(&mut m, 1);
+    let row = m.frame_row(50).unwrap();
+    let f = m.framebuffer();
+    assert_eq!(f.rgb_at(113, row), Some(vdp::PALETTE[15]));
+    assert_ne!(f.rgb_at(112, row), Some(vdp::PALETTE[15]));
+    // The pixel clock that shows sprite pixel X = 100 reports column 113.
+    m.board.vdp.dot = 13 + 100;
+    assert_eq!(m.beam().unwrap().hpos, 113);
+    m.board.vdp.dot = 330;
+    assert_eq!(
+        u32::from(m.beam().unwrap().hpos),
+        vdp::WIDTH - 1,
+        "blanking clamps"
     );
 }

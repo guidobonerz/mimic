@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+mod hardware;
 mod host;
 
 use std::fs;
@@ -47,15 +48,29 @@ usage: mimic-headless [options]
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
   --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR)
   --option KEY=VALUE    machine option (repeatable)
+  --net on|off          the host network for devices that use it (C64 WiC64:
+                        --option userport=wic64, Ultimate command interface:
+                        --option uci=on); default on, off: they report \"no
+                        network\"
+  --uci-dir DIR         the folder the Ultimate command interface's DOS
+                        targets work in (default ./ultimate, created on the
+                        first write; paths cannot leave it)
   --frames N            frames to run (default: 1)
   --snapshot FILE.png   write the last frame as PNG
   --snapshot-every N    with --snapshot: also write FILE-<frame>.png every N frames
   --wav FILE.wav        write the audio of the run (16-bit PCM)
   --screen NAME         snapshot this screen (C128: vic or vdc; default: main)
-  --crt PROFILE[:N]     snapshot through a monitor profile (raw, 1702, 1084s,
-                        1084s-rgb, tv, pal-tv, ntsc-tv, pet-white, pet-green,
-                        ctm644, gt65, mac or a .toml file) at N rows per line
+  --crt PROFILE[:N]     snapshot through a monitor profile (raw, lite, 1702,
+                        1084s, 1084s-rgb, tv, pal-tv, ntsc-tv, pet-white,
+                        pet-green, ctm644, gt65, mac or a .toml file, e.g.
+                        one saved by the preview's /crt editor) at N rows per line
                         (default 2)
+  --cheats DIR          per-game cheat database: DIR/<machine>/<crc32>.toml
+                        applies to the images given (default: $EMU_CHEATS_DIR,
+                        else ./cheats if it exists)
+  --cheat FILE          load a cheat file: .toml, or POKE list (.pokes/.bas),
+                        VICE monitor commands (.mon/.vice), address/value
+                        codes (.txt/.codes) (repeatable)
   --load-state FILE     restore a savestate before running
   --save-state FILE     write a savestate after running
   --debug [ADDR]        serve the debug protocol instead of running frames
@@ -88,6 +103,8 @@ struct Args {
     screen: Option<String>,
     load_state: Option<String>,
     save_state: Option<String>,
+    cheats_dir: Option<String>,
+    cheat: Vec<String>,
     debug: Option<SocketAddr>,
     vice: Option<SocketAddr>,
     preview: Option<SocketAddr>,
@@ -95,6 +112,11 @@ struct Args {
     realtime: bool,
     list: bool,
     help: bool,
+    /// Greaseweazle and OpenCBM (see `hardware`).
+    hw: hardware::HardwareArgs,
+    /// `--net off`.
+    net_off: bool,
+    uci_dir: Option<String>,
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
@@ -163,6 +185,8 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 args.crt = Some((name, scale));
             }
             "--load-state" => args.load_state = Some(value("--load-state")?),
+            "--cheats" => args.cheats_dir = Some(value("--cheats")?),
+            "--cheat" => args.cheat.push(value("--cheat")?),
             "--save-state" => args.save_state = Some(value("--save-state")?),
             flag @ ("--debug" | "--vice" | "--preview") => {
                 let default = match flag {
@@ -185,8 +209,21 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             }
             "--run" => args.run = true,
             "--no-realtime" => args.realtime = false,
+            "--net" => {
+                args.net_off = match value("--net")?.as_str() {
+                    "on" => false,
+                    "off" => true,
+                    other => return Err(format!("--net on|off, got '{other}'")),
+                }
+            }
+            "--uci-dir" => args.uci_dir = Some(value("--uci-dir")?),
             "--list" => args.list = true,
             "--help" | "-h" => args.help = true,
+            other if hardware::takes_value(other) => {
+                let v = value(other)?;
+                args.hw.set(other, v)?;
+            }
+            other if hardware::is_switch(other) => args.hw.switch(other),
             other => return Err(format!("unknown option '{other}'")),
         }
     }
@@ -272,12 +309,60 @@ fn insert(m: &mut dyn Machine, slot: SlotId, path: &str) -> Result<(), String> {
         .map_err(|e| format!("{path}: {e}"))
 }
 
+/// The images given on the command line (cheat database keys).
+fn images(args: &Args) -> Vec<&str> {
+    let mut list: Vec<&str> = args.disk.iter().map(String::as_str).collect();
+    list.extend(
+        [&args.prg, &args.tape, &args.cart]
+            .into_iter()
+            .flatten()
+            .map(String::as_str),
+    );
+    list
+}
+
+/// The cheats for this run: files from --cheat and the database entries
+/// of the images.
+fn cheat_files(args: &Args, main_space: &str) -> Result<Vec<emu_cheats::CheatFile>, String> {
+    let mut files = Vec::new();
+    for path in &args.cheat {
+        let text = fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        let file = emu_cheats::import::import(emu_cheats::format_for_path(path), &text, main_space)
+            .map_err(|e| format!("{path}: {e}"))?;
+        files.push(file);
+    }
+    let dir = args
+        .cheats_dir
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .or_else(emu_cheats::default_dir);
+    if let Some(dir) = dir {
+        for image in images(args) {
+            let Ok(data) = fs::read(image) else { continue };
+            if let Some(file) = emu_cheats::lookup(&dir, &args.machine, &data)? {
+                eprintln!(
+                    "cheats for {}: {}",
+                    image,
+                    file.game.as_deref().unwrap_or("(unnamed)")
+                );
+                files.push(file);
+            }
+        }
+    }
+    Ok(files)
+}
+
 fn run(args: Args) -> Result<ExitCode, String> {
     let registry = emu_machines::registry();
     if args.list {
         for e in registry.entries() {
             println!("{:<10} {} (models: {})", e.id, e.name, e.models.join(", "));
         }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if args.hw.tool_requested() {
+        args.hw.run_tool()?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -304,13 +389,15 @@ fn run(args: Args) -> Result<ExitCode, String> {
         .filter(|s| s.kind == MediaKind::Disk)
         .map(|s| s.id)
         .collect();
-    if args.disk.len() > drives.len() {
+    let real_drive = args.hw.real_drive_media()?;
+    let wanted = args.disk.len() + usize::from(real_drive.is_some());
+    if wanted > drives.len() {
         return Err(if drives.is_empty() {
             format!("{} has no disk drive (DOS ROM missing?)", args.machine)
         } else {
             format!(
                 "{} disks for {} drive(s) of {} (more drives: e.g. --option drives=N)",
-                args.disk.len(),
+                wanted,
                 drives.len(),
                 args.machine
             )
@@ -319,6 +406,15 @@ fn run(args: Args) -> Result<ExitCode, String> {
     // A drive that refuses an image's format (a Mac floppy drive and a
     // hard disk image) passes it on to the next free one.
     let mut free = drives;
+    // A real drive (OpenCBM) goes into the first one.
+    if let Some(media) = real_drive {
+        let slot = free.remove(0);
+        machine
+            .media_slot(slot)
+            .ok_or("no such slot")?
+            .insert(media)
+            .map_err(|e| format!("real drive: {e}"))?;
+    }
     for path in &args.disk {
         let mut first_err = None;
         let mut used = None;
@@ -362,23 +458,50 @@ fn run(args: Args) -> Result<ExitCode, String> {
             .insert(media)
             .map_err(|e| format!("{path}: {e}"))?;
     }
+    // Network and folder for the devices that reach outside (UCI, WiC64),
+    // through a journal so debugger recordings replay exactly.
+    let journal = media_backends::host_journal(
+        !args.net_off,
+        Some(args.uci_dir.as_deref().unwrap_or("ultimate").into()),
+    );
+    machine.attach_host(journal.services());
     if let Some(path) = &args.load_state {
         machine
             .load_state(&read(path)?)
             .map_err(|e| format!("{path}: {e}"))?;
     }
 
+    let main_space = machine
+        .memory_spaces()
+        .first()
+        .map_or("cpu", |s| s.name)
+        .to_string();
+    let cheats = cheat_files(&args, &main_space)?;
+
     if let Some(bind) = args.debug {
         let mut session = Session::new(machine, args.machine.clone());
+        session.set_cheats_dir(
+            args.cheats_dir
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .or_else(emu_cheats::default_dir),
+        );
+        for file in &cheats {
+            session.apply_cheat_file(file)?;
+        }
         session.set_host(Box::new(host::FrontendHost));
+        session.set_host_journal(journal.clone());
         let tap = args.preview.map(|_| {
             let tap = FrameTap::new();
             tap.publish(session.machine(), args.run);
             let hook_tap = tap.clone();
+            let idle_tap = tap.clone();
+            session.set_overlay_wants(tap.overlay_wants());
+            session.set_idle_hook(Box::new(move |m| idle_tap.idle(m)));
             // No audio device here: the samples go to raw streams only.
             let mut samples = Vec::new();
             session.set_frame_hook(Box::new(move |m, running| {
-                hook_tap.publish(m, running);
+                hook_tap.frame(m, running);
                 samples.clear();
                 let format = m.audio(&mut samples);
                 hook_tap.publish_audio(&samples, format);
@@ -457,6 +580,9 @@ fn run(args: Args) -> Result<ExitCode, String> {
     }
 
     let mut dbg = DebugHooks::new();
+    for file in &cheats {
+        emu_cheats::apply(file, machine.as_mut(), &mut dbg)?;
+    }
     let mut code = ExitCode::SUCCESS;
     let mut frames = 0;
     let mut audio = Vec::new();
@@ -560,7 +686,12 @@ fn main() -> ExitCode {
         }
     };
     if args.help {
-        println!("{USAGE}");
+        println!(
+            "{USAGE}
+
+{}",
+            hardware::USAGE
+        );
         return ExitCode::SUCCESS;
     }
     run(args).unwrap_or_else(|e| {

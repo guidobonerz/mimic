@@ -151,6 +151,52 @@ pub trait Machine: Send {
         None
     }
 
+    /// The graphics data views this machine offers (sprites, character
+    /// sets, bitmaps, screen memory, tiles, palettes; see [`crate::gfx`]).
+    /// Default: none.
+    fn gfx_views(&self) -> Vec<crate::gfx::GfxViewInfo> {
+        Vec::new()
+    }
+
+    /// Decode view `id` of [`Machine::gfx_views`] with `opts`, from
+    /// side-effect-free reads; `None` for an unknown id.
+    fn gfx_view(&self, id: &str, opts: &crate::gfx::GfxOptions) -> Option<crate::gfx::GfxView> {
+        let _ = (id, opts);
+        None
+    }
+
+    /// The debug overlays this machine offers (see [`crate::overlay`]).
+    /// Default: none.
+    fn overlays(&self) -> Vec<crate::overlay::OverlayInfo> {
+        Vec::new()
+    }
+
+    /// Switch recording on for the overlays in `ids` (and off for the
+    /// others). Overlays that need a record of the frame (DMA slots,
+    /// register changes per line) only collect it while switched on, so
+    /// the emulation pays nothing otherwise. The record is not machine
+    /// state (not in savestates). Default: nothing to record.
+    fn set_overlays(&mut self, ids: &[&str]) {
+        let _ = ids;
+    }
+
+    /// Overlay `id` for the current frame (recorded ones: the last complete
+    /// frame, or the frame so far while halted); `None` for an unknown id
+    /// or one that is not switched on.
+    fn overlay(&self, id: &str) -> Option<crate::overlay::Overlay> {
+        let _ = id;
+        None
+    }
+
+    /// The row of the main [`FrameRef`] that shows raster line `line`
+    /// ([`BeamPos::line`]), `None` outside the picture or for machines
+    /// without a beam. With it the preview draws the beam marker and the
+    /// raster grid ([`BeamPos::hpos`] already is the frame column).
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        let _ = line;
+        None
+    }
+
     /// Append the audio samples produced since the last call to `out`.
     /// Machines without sound append nothing.
     fn audio(&mut self, out: &mut Vec<i16>) -> AudioFormat;
@@ -200,6 +246,16 @@ pub trait Machine: Send {
 
     /// `None` for an unknown slot id.
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot>;
+
+    /// Lend the machine the frontend's host services (network, a
+    /// sandboxed folder; see [`crate::host`]) for devices that reach
+    /// outside: the C64's Ultimate command interface and WiC64. The
+    /// frontend passes them wrapped in a [`crate::host::Journal`], so
+    /// recordings replay exactly. Attaching again replaces the services.
+    /// Machines without such devices ignore them (the default).
+    fn attach_host(&mut self, host: crate::host::HostServices) {
+        let _ = host;
+    }
 
     fn save_state(&self) -> Vec<u8>;
 
