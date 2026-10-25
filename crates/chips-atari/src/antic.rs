@@ -34,18 +34,33 @@
 //! from cycle 25 every 4 cycles, each waiting for a cycle the playfield
 //! leaves free.
 //!
-//! Playfield DMA (fitted to Acid800 `antic_dmapattern`, `antic_pfstarttiming`
-//! and `antic_pfstoptiming`): a window opens when the cycle reaches the
-//! left fetch edge of the current width (plus HSCROL) and closes at its
-//! right edge, both compared live, so DMACTL and HSCROL writes during the
-//! line move them. Byte k of the window starts 6 cycles before it shows,
-//! every 2, 4 or 8 cycles: a character mode fetches the name then (first
-//! line of the mode line only) and the character data 3 cycles later, a
-//! bitmap mode its data 2 cycles later. The bytes go into a 48-byte line
-//! buffer at the byte's index in the window; later lines of a bitmap mode
-//! line replay the buffer through the same window without DMA, and a line
-//! with the playfield width set to 0 keeps the window and index running
-//! but fetches nothing (Acid800 `antic_linebuffering`).
+//! Playfield DMA follows ANTIC's DMA clock (Altirra Hardware Reference
+//! Manual, 4.12 "Abnormal playfield DMA"; timing fitted to Acid800
+//! `antic_dmapattern`, `antic_pfstarttiming`, `antic_pfstoptiming`): a ring
+//! of 2, 4 or 8 cycles (the mode's fetch rate) in which each set bit starts
+//! a playfield byte when it comes round. The playfield start injects a bit
+//! a cycle ahead when the cycle reaches the left fetch edge of the current
+//! width (plus HSCROL); the stop clears the bit of its own phase at the
+//! right edge, and at the wide right edge, which is always active. Both
+//! edges are compared live, so DMACTL and HSCROL writes during the line
+//! move them. A write that shifts the stop to another phase leaves the bit
+//! running: playfield DMA goes on through horizontal blank into the next
+//! line (Acid800 `antic_hscrolbug`), with the bus cycles suppressed in
+//! cycles 105–111 and 0 while the memory scan counter and the line buffer
+//! address still count. Blank and jump lines and vertical blank clear the
+//! clock.
+//!
+//! Each byte start advances the memory scan counter (first line of the mode
+//! line) and the line buffer address; a character mode fetches the name then
+//! (first line only) and the character data 3 cycles later, a bitmap mode
+//! its data 2 cycles later. The 48-byte line buffer address restarts in
+//! cycle 6 (this project's reading of `antic_hscrolbug`, where the bytes of
+//! a runaway clock before the start move the picture by their number);
+//! the playfield shows the buffer from the address of the byte that
+//! started at the left edge. Later lines of a bitmap mode line replay the
+//! buffer without DMA, and a line with the playfield width set to 0 keeps
+//! the clock and addresses running but fetches nothing (Acid800
+//! `antic_linebuffering`).
 
 use emu_core::frame::VideoStandard;
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
@@ -63,12 +78,22 @@ const VSCROL_LATCH: u16 = 6;
 /// Cycles from a playfield byte's start to its first colour clock.
 const PF_LEAD: u16 = 6;
 
-/// Playfield DMA window of the current line.
-const PF_OFF: u8 = 0;
-const PF_IDLE: u8 = 1;
-const PF_OPEN: u8 = 2;
-/// Closed; data of bytes already started still comes.
-const PF_DRAIN: u8 = 3;
+/// Cycle in which the line buffer address restarts.
+const LBA_RESET: u16 = 6;
+/// Playfield bus cycles in these cycles are suppressed (virtual DMA): the
+/// clock still counts.
+fn pf_suppressed(cycle: u16) -> bool {
+    cycle == 0 || (105..=111).contains(&cycle)
+}
+
+/// A playfield data fetch waiting for its cycle: cycles to go, line buffer
+/// index, address (bitmap modes).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PendingFetch {
+    left: u8,
+    buf: u8,
+    addr: u16,
+}
 
 /// Memory as ANTIC's DMA sees it (no side effects).
 pub trait AnticMemory {
@@ -210,6 +235,11 @@ pub struct Antic {
     rnmi: bool,
     /// Waiting for vertical blank after a JVB.
     jvb_wait: bool,
+    /// The last display line (247) was a hires mode line (2, 3, F): ANTIC
+    /// stays in hires through vertical blank, so GTIA goes on showing
+    /// players and detecting their collisions there (the "hires bug",
+    /// Acid800 `antic_hiresbug`). Cleared when display starts again.
+    vbl_hires: bool,
     /// Current display-list instruction (`None`: none fetched since power-on;
     /// it survives vertical blank).
     ir: Option<u8>,
@@ -232,14 +262,32 @@ pub struct Antic {
     /// of byte 0, display window.
     mode: u8,
     fetched: u16,
-    /// Playfield DMA window (`PF_*`), the cycle byte 0 started, whether
-    /// this is the first line of the mode line, whether it only replays
-    /// the line buffer, and the next byte's index in the window.
-    pf_state: u8,
-    pf_base: u16,
+    /// The DMA clock: set bits are the phases (positions of `ring_pos`
+    /// modulo `clk_len`) at which a playfield byte starts.
+    dclk: u8,
+    /// Free-running cycle position modulo 8 (114 mod 8 = 2: the ring moves
+    /// two places against the line each line).
+    ring_pos: u8,
+    /// Ring length of the clock: 2, 4 or 8 cycles, and the mode it runs
+    /// for (it runs on into a line before that line's instruction).
+    clk_len: u8,
+    clk_mode: u8,
+    /// Line buffer address of the next byte, and of the byte that started
+    /// at the playfield's left edge (shown first).
+    lba: u8,
+    disp_base: u8,
+    /// Data fetches of started bytes.
+    pending: [PendingFetch; 4],
+    pending_n: u8,
+    /// Address of this cycle's playfield fetch.
+    pf_addr: u16,
+    /// The line repeats the last instruction as a new mode line (no
+    /// display-list DMA): plan it as a first line.
+    repeat_first: bool,
+    /// Whether this is the first line of the mode line, and whether the
+    /// line only replays the line buffer.
     pf_first: bool,
     pf_replay: bool,
-    pf_index: u16,
     /// A refresh request waits for a free cycle.
     refresh_pending: bool,
     origin: u16,
@@ -262,6 +310,7 @@ impl Antic {
             chactl: 0,
             dlist: 0,
             dlist_start: 0,
+            vbl_hires: false,
             hscrol: 0,
             vscrol: 0,
             pmbase: 0,
@@ -288,11 +337,18 @@ impl Antic {
             addr_lo: 0,
             mode: 0,
             fetched: 0,
-            pf_state: PF_OFF,
-            pf_base: 0,
+            dclk: 0,
+            ring_pos: 0,
+            clk_len: 2,
+            clk_mode: 0,
+            lba: 0,
+            disp_base: 0,
+            pending: [PendingFetch::default(); 4],
+            pending_n: 0,
+            pf_addr: 0,
+            repeat_first: false,
             pf_first: false,
             pf_replay: false,
-            pf_index: 0,
             refresh_pending: false,
             origin: 0,
             window: (0, 0),
@@ -349,6 +405,13 @@ impl Antic {
     /// The display-list instruction fetched in this cycle (cycle 1 of a
     /// line, between [`Antic::tick`] and [`Antic::end_cycle`]); `None`
     /// otherwise. For debug overlays, not used by the emulation.
+    /// Vertical blank after a hires last display line: GTIA keeps players
+    /// and their collisions going (see `vbl_hires`).
+    #[inline]
+    pub fn hires_in_vblank(&self) -> bool {
+        self.vbl_hires && !self.display_line()
+    }
+
     pub fn fetched_instr(&self) -> Option<u8> {
         (self.cycle == 1 && self.slots[1] == Slot::Instr)
             .then_some(self.ir)
@@ -413,9 +476,11 @@ impl Antic {
     fn plan_line(&mut self) {
         self.slots = [Slot::Free; CYCLES_PER_LINE as usize];
         self.mode = 0;
-        self.pf_state = PF_OFF;
         self.window = (0, 0);
+        self.origin = 0;
         if !self.display_line() {
+            // Vertical blank clears the DMA clock.
+            self.clear_dma_clock();
             return;
         }
         if self.dmactl & 0x0c != 0 {
@@ -431,10 +496,13 @@ impl Antic {
                 self.slots[1] = Slot::Instr;
             } else if let Some(ir) = self.ir {
                 // Without display-list DMA the last instruction repeats,
-                // DLI included (Acid800 `antic_dlistwrap`).
+                // DLI included (Acid800 `antic_dlistwrap`), as a new mode
+                // line: its first line fetches (Acid800 `antic_hscrolbug`
+                // test 2 reuses a mode E instruction this way).
                 self.start_mode_line(ir);
                 self.slots[6] = Slot::Free;
                 self.slots[7] = Slot::Free;
+                self.repeat_first = true;
             }
         }
     }
@@ -497,16 +565,33 @@ impl Antic {
         let Some(ir) = self.ir else { return };
         let mode = ir & 0x0f;
         if mode < 2 || self.jvb_wait {
+            // Blank and jump lines clear the DMA clock.
+            self.clear_dma_clock();
             return;
         }
         self.mode = mode;
         self.pf_first = first;
         self.pf_replay = !MODES[usize::from(mode)].chars && !first;
-        self.pf_index = 0;
         if !self.pf_replay {
             self.fetched = 0;
         }
-        self.pf_state = PF_IDLE;
+        self.clk_mode = mode;
+        let len = (80 / u16::from(MODES[usize::from(mode)].bytes)) as u8;
+        if len != self.clk_len {
+            // A slower ring keeps the bits it had; a faster one folds them.
+            let old = std::mem::replace(&mut self.dclk, 0);
+            for p in 0..8 {
+                if old & (1 << p) != 0 {
+                    self.dclk |= 1 << (p % len);
+                }
+            }
+            self.clk_len = len;
+        }
+    }
+
+    fn clear_dma_clock(&mut self) {
+        self.dclk = 0;
+        self.pending_n = 0;
     }
 
     /// Playfield fetch edges (colour clocks) for the current DMACTL and
@@ -524,56 +609,102 @@ impl Antic {
         Some((lo + h, hi + h))
     }
 
-    /// The playfield DMA of this cycle, if any: opens and closes the
-    /// window and starts the bytes in it.
+    /// The playfield DMA of this cycle, if any: runs the DMA clock (byte
+    /// starts, their data fetches), then compares the start and stop edges
+    /// for the next cycle.
     fn playfield_dma(&mut self) -> Slot {
-        if self.pf_state == PF_OFF {
-            return Slot::Free;
-        }
         let c = self.cycle;
-        let edges = self.fetch_edges();
-        if self.pf_state == PF_IDLE {
-            // Like the right edge, the left one is compared a cycle ahead.
-            if let Some((lo, _)) = edges {
-                if c + 1 + PF_LEAD == lo / 2 {
-                    self.pf_state = PF_OPEN;
-                    self.pf_base = c + 1;
-                    self.origin = lo;
-                    self.window = width_edges(self.dmactl & 3);
-                }
-            }
+        let pos = self.ring_pos;
+        self.ring_pos = (pos + 1) & 7;
+        if c == LBA_RESET {
+            self.lba = 0;
+        }
+        if self.dclk == 0 && self.pending_n == 0 && self.mode < 2 {
             return Slot::Free;
         }
-        let info = MODES[usize::from(self.mode)];
-        let stride = 80 / u16::from(info.bytes);
-        let off = c - self.pf_base;
-        let dma = !self.pf_replay && self.dmactl & 3 != 0 && self.dl_dma();
+        let suppressed = pf_suppressed(c);
+        let info = MODES[usize::from(self.clk_mode.max(2))];
+        let dma = self.mode >= 2 && !self.pf_replay && self.dmactl & 3 != 0 && self.dl_dma();
         let mut slot = Slot::Free;
-        let data_lead = if info.chars { 3 } else { 2 };
-        if let Some(d) = off.checked_sub(data_lead) {
-            if dma && d.is_multiple_of(stride) && d / stride < self.pf_index {
-                slot = Slot::Data((d / stride) as u8);
+        // Data of bytes started earlier.
+        let mut i = 0;
+        while i < usize::from(self.pending_n) {
+            let f = &mut self.pending[i];
+            f.left -= 1;
+            if f.left == 0 {
+                let f = *f;
+                self.pending
+                    .copy_within(i + 1..usize::from(self.pending_n), i);
+                self.pending_n -= 1;
+                if dma && !suppressed && slot == Slot::Free {
+                    self.pf_addr = f.addr;
+                    slot = Slot::Data(f.buf);
+                }
+            } else {
+                i += 1;
             }
         }
-        if self.pf_state == PF_OPEN {
-            if off.is_multiple_of(stride) && off / stride == self.pf_index && self.pf_index < 48 {
-                if dma && info.chars && self.pf_first {
-                    slot = Slot::Name(self.pf_index as u8);
-                }
-                self.pf_index += 1;
-                if !self.pf_replay {
-                    self.fetched = self.pf_index;
-                }
+        // A byte starts when a clock bit comes round.
+        // The ring length is 2, 4 or 8: a mask instead of a division.
+        let mask = self.clk_len.max(1) - 1;
+        if self.dclk & (1 << (pos & mask)) != 0 {
+            let buf = self.lba;
+            self.lba = if self.lba == 47 { 0 } else { self.lba + 1 };
+            let addr = self.memscan;
+            // The memory scan counter moves on in the mode line's first
+            // line only (later lines reuse the names or the line buffer).
+            if self.pf_first {
+                self.memscan = (self.memscan & 0xf000) | (self.memscan.wrapping_add(1) & 0x0fff);
+                self.fetched = self.fetched.wrapping_add(1);
             }
-            // The right edge closes the window a cycle ahead (with the
-            // width at 0 there is no edge: the window stays open).
-            if let Some((_, hi)) = edges {
-                if c + 1 + PF_LEAD == hi / 2 {
-                    self.pf_state = PF_DRAIN;
-                }
+            if dma && info.chars && self.pf_first && !suppressed && slot == Slot::Free {
+                self.pf_addr = addr;
+                slot = Slot::Name(buf);
             }
+            if usize::from(self.pending_n) < self.pending.len() {
+                self.pending[usize::from(self.pending_n)] = PendingFetch {
+                    left: if info.chars { 3 } else { 2 },
+                    buf,
+                    addr,
+                };
+                self.pending_n += 1;
+            }
+        }
+        // Start and stop edges, a cycle ahead. The start edges (colour
+        // clocks 32–79) can only match in cycles 9–32, the stops (192–239)
+        // in 89–112: skip the comparisons elsewhere.
+        if !(9..=32).contains(&c) && !(89..=112).contains(&c) {
+            return slot;
+        }
+        let next = (pos + 1) & 7;
+        let bit = 1 << (next & mask);
+        if let Some((lo, hi)) = self.fetch_edges() {
+            if c + 1 + PF_LEAD == lo / 2 {
+                self.dclk |= bit;
+                self.origin = lo;
+                self.window = width_edges(self.dmactl & 3);
+                self.disp_base = self.lba;
+            }
+            if c + 1 + PF_LEAD == hi / 2 {
+                self.dclk &= !bit;
+            }
+        }
+        // The wide stop is always active, also with the playfield width at
+        // 0 (Acid800 `antic_linebuffering`), but not without display-list
+        // DMA (`antic_hscrolbug` test 2 keeps the clock running then).
+        if self.mode >= 2 && self.dl_dma() && c + 1 + PF_LEAD == self.wide_stop() / 2 {
+            self.dclk &= !bit;
         }
         slot
+    }
+
+    /// The wide playfield's stop edge (always active), with HSCROL.
+    fn wide_stop(&self) -> u16 {
+        let h = match self.ir {
+            Some(ir) if ir & 0x10 != 0 => u16::from(self.hscrol),
+            _ => 0,
+        };
+        width_edges(3).1 + h
     }
 
     /// Run the DMA of the current cycle. Call before the CPU's access.
@@ -584,7 +715,8 @@ impl Antic {
             // Without a new instruction (continuing mode line, JVB wait, no
             // display) the line is known now; otherwise after cycle 1.
             if self.slots[1] != Slot::Instr && self.display_line() && !self.jvb_wait {
-                self.plan_playfield(false);
+                let first = std::mem::take(&mut self.repeat_first);
+                self.plan_playfield(first);
             }
         }
         // The end of a scrolled region compares the row with VSCROL on every
@@ -631,7 +763,7 @@ impl Antic {
             }
             Slot::Refresh => {}
             Slot::Name(i) => {
-                self.names[usize::from(i)] = mem.dma_read(self.scan_addr(u16::from(i)));
+                self.names[usize::from(i)] = mem.dma_read(self.pf_addr);
             }
             Slot::Data(i) => {
                 let v = self.fetch_data(mem, i);
@@ -696,13 +828,7 @@ impl Antic {
     fn end_line(&mut self) -> bool {
         if self.display_line() && self.ir.is_some() && !self.jvb_wait {
             if self.row == self.last_row {
-                // Mode line done: move the memory scan counter on.
-                if let Some(ir) = self.ir {
-                    if ir & 0x0f >= 2 && self.fetched > 0 {
-                        self.memscan = (self.memscan & 0xf000)
-                            | (self.memscan.wrapping_add(self.fetched) & 0x0fff);
-                    }
-                }
+                // Mode line done (the memory scan counter counted live).
                 self.fetched = 0;
                 self.need_instr = true;
             } else {
@@ -712,8 +838,10 @@ impl Antic {
         self.line += 1;
         if self.line == FIRST_LINE {
             self.dlist_start = self.dlist;
+            self.vbl_hires = false;
         }
         if self.line == VBLANK_LINE {
+            self.vbl_hires = matches!(self.mode, 2 | 3 | 0x0f);
             // Display ends; the next field starts with a new instruction
             // (or, without display-list DMA, repeats the last one).
             self.need_instr = true;
@@ -773,16 +901,11 @@ impl Antic {
             base + off + line / 2
         }
     }
-
-    fn scan_addr(&self, i: u16) -> u16 {
-        (self.memscan & 0xf000) | (self.memscan.wrapping_add(i) & 0x0fff)
-    }
-
     /// A graphics byte: bitmap data, or character data for this row.
     fn fetch_data(&self, mem: &dyn AnticMemory, i: u8) -> u8 {
         let mode = self.mode;
         if !MODES[usize::from(mode)].chars {
-            return mem.dma_read(self.scan_addr(u16::from(i)));
+            return mem.dma_read(self.pf_addr);
         }
         char_data(
             mem,
@@ -807,12 +930,12 @@ impl Antic {
             return Playfield::Background;
         }
         let sub = rel % cc_per_byte;
-        pixel(
-            self.mode,
-            self.data[usize::from(i)],
-            self.names[usize::from(i)],
-            sub,
-        )
+        // Both below 48: one subtraction instead of a division (per pixel).
+        let mut b = usize::from(self.disp_base) + usize::from(i);
+        if b >= 48 {
+            b -= 48;
+        }
+        pixel(self.mode, self.data[b], self.names[b], sub)
     }
 }
 
@@ -952,7 +1075,7 @@ const TAG: [u8; 4] = *b"ANTC";
 /// Version 3: the pending RESET-key NMI.
 /// Version 4: the display list's start of the field.
 /// Version 5: PENH / PENV.
-const VERSION: u16 = 5;
+const VERSION: u16 = 7;
 
 impl Savestate for Antic {
     fn save(&self, w: &mut StateWriter) {
@@ -995,11 +1118,8 @@ impl Savestate for Antic {
             w.bool(self.jvb_wait);
             w.bool(self.prev_vscrol);
             w.bool(self.scroll_end);
-            w.u8(self.pf_state);
-            w.u16(self.pf_base);
             w.bool(self.pf_first);
             w.bool(self.pf_replay);
-            w.u16(self.pf_index);
             w.bool(self.refresh_pending);
             w.bool(self.need_instr);
             w.bool(self.ir.is_some());
@@ -1014,6 +1134,24 @@ impl Savestate for Antic {
             w.u16(self.dlist_start);
             w.u8(self.penh);
             w.u8(self.penv);
+            w.bool(self.vbl_hires);
+            for v in [
+                self.dclk,
+                self.ring_pos,
+                self.clk_len,
+                self.clk_mode,
+                self.lba,
+                self.disp_base,
+                self.pending_n,
+            ] {
+                w.u8(v);
+            }
+            for f in self.pending {
+                w.u8(f.left);
+                w.u8(f.buf);
+                w.u16(f.addr);
+            }
+            w.u16(self.pf_addr);
         });
     }
 
@@ -1054,11 +1192,16 @@ impl Savestate for Antic {
         n.prev_vscrol = c.bool()?;
         if version >= 2 {
             n.scroll_end = c.bool()?;
-            n.pf_state = c.u8()?;
-            n.pf_base = c.u16()?;
+            if version < 7 {
+                // The window model of versions 2–6: state, base, index.
+                let _ = c.u8()?;
+                let _ = c.u16()?;
+            }
             n.pf_first = c.bool()?;
             n.pf_replay = c.bool()?;
-            n.pf_index = c.u16()?;
+            if version < 7 {
+                let _ = c.u16()?;
+            }
             n.refresh_pending = c.bool()?;
         }
         n.need_instr = c.bool()?;
@@ -1078,13 +1221,36 @@ impl Savestate for Antic {
         } else {
             (0, 0)
         };
+        n.vbl_hires = version >= 6 && c.bool()?;
+        if version >= 7 {
+            n.dclk = c.u8()?;
+            n.ring_pos = c.u8()?;
+            n.clk_len = c.u8()?;
+            n.clk_mode = c.u8()?;
+            n.lba = c.u8()?;
+            n.disp_base = c.u8()?;
+            n.pending_n = c.u8()?;
+            for f in n.pending.iter_mut() {
+                f.left = c.u8()?;
+                f.buf = c.u8()?;
+                f.addr = c.u16()?;
+            }
+            n.pf_addr = c.u16()?;
+        } else {
+            // Older states: the clock starts afresh with the next line.
+            n.dclk = 0;
+            n.pending_n = 0;
+        }
         if n.line >= lines(n.standard)
             || n.cycle >= CYCLES_PER_LINE
             || n.mode > 15
-            || n.fetched > 48
-            || n.pf_state > PF_DRAIN
-            || n.pf_base >= CYCLES_PER_LINE
-            || n.pf_index > 48
+            || !matches!(n.clk_len, 2 | 4 | 8)
+            || n.clk_mode > 15
+            || n.ring_pos > 7
+            || n.lba >= 48
+            || n.disp_base >= 48
+            || usize::from(n.pending_n) > n.pending.len()
+            || n.pending.iter().any(|f| f.buf >= 48 || f.left > 3)
         {
             return Err(StateError::Invalid("ANTIC beam"));
         }

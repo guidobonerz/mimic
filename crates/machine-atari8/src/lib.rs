@@ -647,7 +647,11 @@ impl Atari8 {
             self.io.antic.playfield(c * 2),
             self.io.antic.playfield(c * 2 + 1),
         ];
-        self.io.gtia.render_cycle(line, c, pf);
+        if self.io.antic.hires_in_vblank() {
+            self.io.gtia.render_cycle_vblank(c);
+        } else {
+            self.io.gtia.render_cycle(line, c, pf);
+        }
         if let Some(pen) = self.pen {
             if pen.cycle == c && pen.line == line {
                 self.pen_sees(pen);

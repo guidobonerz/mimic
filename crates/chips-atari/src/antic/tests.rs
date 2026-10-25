@@ -203,3 +203,52 @@ fn savestate_round_trip() {
     }
     assert!(b.load(&mut StateReader::new(&bytes[..10])).is_err());
 }
+
+/// Run to (line, cycle) within the current field.
+fn run_on(a: &mut Antic, mem: &Mem, line: u16, cycle: u16) {
+    while (a.line(), a.cycle()) != (line, cycle) {
+        a.tick(mem);
+        a.end_cycle();
+    }
+}
+
+#[test]
+fn a_missed_playfield_stop_runs_the_dma_clock_into_the_next_line() {
+    let (mut a, mut mem) = setup(0x42);
+    // The mode F line scrolls horizontally (fetches the wide width).
+    mem.0[usize::from(DL) + 6] = 0x1f;
+    run_to(&mut a, &mem, 40, 0);
+    run_on(&mut a, &mem, 40, 80);
+    assert_ne!(a.dclk, 0, "playfield running");
+    // HSCROL 0 -> 2 moves the stop a cycle later, to the other phase: the
+    // stop clears an empty bit and the clock runs on.
+    a.write(0x04, 2);
+    run_on(&mut a, &mem, 40, 105);
+    let scan = a.memscan;
+    run_on(&mut a, &mem, 40, 113);
+    assert_ne!(a.dclk, 0, "not stopped at the end of the line");
+    // A state in the middle of it round-trips.
+    let mut w = StateWriter::new();
+    a.save(&mut w);
+    let bytes = w.into_bytes();
+    let mut b = Antic::new(VideoStandard::Pal);
+    b.load(&mut StateReader::new(&bytes)).unwrap();
+    assert_eq!(a, b);
+    run_on(&mut a, &mem, 41, 0);
+    assert_ne!(a.dclk, 0, "running into the next line");
+    assert_ne!(
+        a.memscan, scan,
+        "the scan counter counts in horizontal blank"
+    );
+    // The next line is a JVB: a jump line clears the clock.
+    run_on(&mut a, &mem, 41, 3);
+    assert_eq!(a.dclk, 0);
+}
+
+#[test]
+fn a_stop_on_the_same_phase_ends_the_playfield() {
+    let (mut a, mem) = setup(0x42);
+    run_to(&mut a, &mem, 40, 0);
+    run_on(&mut a, &mem, 40, 113);
+    assert_eq!(a.dclk, 0, "normal mode F line stops");
+}

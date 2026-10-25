@@ -1,4 +1,5 @@
 use super::*;
+use crate::antic::CYCLES_PER_LINE;
 
 const LINE: u16 = 50;
 /// A colour clock inside the output.
@@ -152,4 +153,28 @@ fn savestate_round_trip() {
     let mut h = Gtia::new(VideoStandard::Pal);
     h.load(&mut StateReader::new(&bytes)).unwrap();
     assert_eq!(g, h);
+}
+
+#[test]
+fn players_collide_in_vertical_blank_only_after_a_hires_line() {
+    let mut g = gtia();
+    g.write(0x01, CC as u8); // HPOSP1 over player 0
+    g.write(0x0e, 0x80); // GRAFP1
+    render_line(&mut g);
+    g.write(0x1e, 0); // HITCLR
+                      // A normal vertical-blank line: nothing collides.
+    for c in 0..CYCLES_PER_LINE {
+        g.render_cycle(VBLANK_LINE, c, [Playfield::Background; 2]);
+    }
+    assert_eq!(g.peek(0x0c) & 0x02, 0, "P0PL: no P0/P1 collision");
+    // ANTIC's hires bug: players go on colliding.
+    for c in 0..CYCLES_PER_LINE {
+        g.render_cycle_vblank(c);
+    }
+    assert_eq!(g.peek(0x0c) & 0x02, 0x02, "P0PL: P0 met P1");
+    assert_eq!(
+        g.peek(0x04) & 0x0f,
+        0,
+        "P0PF: hires background hits no playfield"
+    );
 }

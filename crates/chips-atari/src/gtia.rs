@@ -373,6 +373,26 @@ impl Gtia {
         }
     }
 
+    /// One cycle of vertical blank after a hires last display line (ANTIC's
+    /// hires bug, `Antic::hires_in_vblank`): nothing is drawn (the lines
+    /// are outside the picture), but players and missiles go on and
+    /// collide with each other; the playfield is hires background, which
+    /// collides with nothing (Acid800 `antic_hiresbug`: P0/P1 overlap is
+    /// seen on lines 248–249 only after a mode F last line).
+    pub fn render_cycle_vblank(&mut self, cycle: u16) {
+        for k in 0..2 {
+            let cc = cycle * 2 + k;
+            self.step_players(cc);
+            if !(VISIBLE_CC.0..=VISIBLE_CC.1).contains(&cc) {
+                continue;
+            }
+            let (p, m) = self.objects(cc);
+            if p | m != 0 {
+                self.collide(p, m, 0);
+            }
+        }
+    }
+
     /// Objects at a colour clock: players and missiles as bit masks.
     fn objects(&self, cc: u16) -> (u8, u8) {
         let mut p = 0;
