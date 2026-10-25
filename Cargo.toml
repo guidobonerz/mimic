@@ -82,3 +82,12 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 # Real-hardware media backends (optional features of media-backends).
 libloading = "0.8"
 serialport = { version = "4", default-features = false }
+
+# Thin LTO: measured 2026-10-25 against the default profile and against
+# codegen-units = 1 and fat LTO (six machines, interleaved best-of-4 CPU
+# time): every machine within +1.1 % of the pre-Phase-8 speed and most
+# faster, with build time about the same (fat LTO: faster on average but
+# twice the build time and the C64 4.6 % slower). Also steadies the code
+# layout that made unrelated changes move the timings by 2-3 %.
+[profile.release]
+lto = "thin"
