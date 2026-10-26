@@ -69,6 +69,20 @@ pub trait TimedBus: Bus {
     /// the wait states to insert there; the access itself follows on
     /// T-state `t + waits`.
     fn wait_states(&mut self, access: Access, t: u32) -> u32;
+
+    /// [`TimedBus::wait_states`] with the address the M-cycle puts on the
+    /// bus (the port for I/O, PC for an interrupt acknowledge), for
+    /// machines whose wait states depend on it (the ZX Spectrum's ULA).
+    fn wait_states_at(&mut self, access: Access, t: u32, _addr: u16) -> u32 {
+        self.wait_states(access, t)
+    }
+
+    /// One internal T-state (no access) on T-state `t` of the instruction
+    /// with `addr` on the address bus; returns wait states to insert
+    /// before it. Called only while [`Z80::idle_cycles`] is on.
+    fn idle(&mut self, _t: u32, _addr: u16) -> u32 {
+        0
+    }
 }
 
 /// A plain [`Bus`] that never waits.
@@ -143,6 +157,12 @@ pub struct Z80 {
     /// The last instruction was EI: interrupts wait one more instruction.
     pub ei: bool,
     pub halted: bool,
+    /// Report every internal T-state with its address to
+    /// [`TimedBus::idle`] (configuration, off by default: the ZX
+    /// Spectrum's ULA stretches them when the address is contended).
+    /// The addresses follow the Harte bus traces: IR after an opcode
+    /// fetch, otherwise the address of the last or the next access.
+    pub idle_cycles: bool,
     /// The last instruction was a prefix acting alone (DD/FD before another
     /// prefix): no interrupt may follow.
     prefix_only: bool,
@@ -270,6 +290,10 @@ impl Z80 {
         let t = self.step_inner(bus);
         // Internal T-states after the last access.
         debug_assert!(self.t - self.waits <= t, "accesses beyond the instruction");
+        debug_assert!(
+            !self.idle_cycles || self.t - self.waits == t,
+            "internal T-states not all reported"
+        );
         let total = t + self.waits;
         self.t = 0;
         self.waits = 0;
@@ -292,7 +316,7 @@ impl Z80 {
         }
         if self.halted {
             // HALT executes NOPs (refresh continues) until an interrupt.
-            self.m_cycle(bus, Access::Fetch, 4, 1);
+            self.m_cycle(bus, Access::Fetch, 4, 1, self.pc);
             self.inc_r();
             self.q = 0;
             self.p = false;
@@ -321,9 +345,9 @@ impl Z80 {
         self.halted = false;
         self.iff1 = false;
         // An opcode fetch whose byte is ignored, one T-state longer.
-        self.m_cycle(bus, Access::Fetch, 4, 1);
-        self.internal(1);
+        self.m_cycle(bus, Access::Fetch, 4, 1, self.pc);
         self.inc_r();
+        self.internal(bus, self.ir(), 1);
         let pc = self.pc;
         self.push(bus, pc);
         self.pc = 0x66;
@@ -341,7 +365,7 @@ impl Z80 {
         self.iff2 = false;
         // Acknowledge: M1 with two automatic wait states (7 T-states), the
         // vector byte read after them.
-        self.m_cycle(bus, Access::IntAck, 7, 3);
+        self.m_cycle(bus, Access::IntAck, 7, 3, self.pc);
         self.inc_r();
         self.q = 0;
         self.p = false;
@@ -387,24 +411,40 @@ impl Z80 {
         access: Access,
         len: u32,
         strobe: u32,
+        addr: u16,
     ) {
-        let w = bus.wait_states(access, self.t + strobe);
+        let w = bus.wait_states_at(access, self.t + strobe, addr);
         self.waits += w;
         self.t += len + w;
     }
 
-    /// T-states without a bus access between two M-cycles.
-    pub(crate) fn internal(&mut self, n: u32) {
-        self.t += n;
+    /// `n` T-states without a bus access, `addr` on the address bus.
+    pub(crate) fn internal(&mut self, bus: &mut dyn TimedBus, addr: u16, n: u32) {
+        if !self.idle_cycles {
+            self.t += n;
+            return;
+        }
+        for _ in 0..n {
+            let w = bus.idle(self.t, addr);
+            self.waits += w;
+            self.t += 1 + w;
+        }
+    }
+
+    /// The refresh address I·R on the bus after an opcode fetch: R as it
+    /// was in the fetch, before its increment.
+    pub(crate) fn ir(&self) -> u16 {
+        let r = (self.r & 0x80) | (self.r.wrapping_sub(1) & 0x7f);
+        u16::from_be_bytes([self.i, r])
     }
 
     pub(crate) fn read(&mut self, bus: &mut dyn TimedBus, addr: u16) -> u8 {
-        self.m_cycle(bus, Access::Read, 3, 1);
+        self.m_cycle(bus, Access::Read, 3, 1, addr);
         bus.read(u32::from(addr), Size::Byte) as u8
     }
 
     pub(crate) fn write(&mut self, bus: &mut dyn TimedBus, addr: u16, v: u8) {
-        self.m_cycle(bus, Access::Write, 3, 1);
+        self.m_cycle(bus, Access::Write, 3, 1, addr);
         bus.write(u32::from(addr), Size::Byte, u32::from(v));
     }
 

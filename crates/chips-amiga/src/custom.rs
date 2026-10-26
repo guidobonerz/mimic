@@ -533,7 +533,13 @@ impl Custom {
     /// Groups start at DDFSTRT + 8n up to DDFSTOP; in high resolution the
     /// stop counts half a group later, so the usual hires DDFSTOP $D0 and
     /// $D4 both fetch 40 words (Workbench 1.3 uses $3C/$D0 for 640 pixels).
-    /// With wider AGA fetches the window runs in whole fetch units.
+    /// With wider AGA fetches the window runs in whole fetch units: the
+    /// unit in progress when DDFSTOP is reached completes and one more
+    /// follows, so a DDFSTOP between units rounds up (BigTime's hires
+    /// FMODE 3 picture: DDFSTRT $68, DDFSTOP $90 fetch four 16-clock
+    /// units, 32 bytes a plane, as its modulo of 32 for interlace needs;
+    /// the aligned values — lores FMODE 3 $38/$B8 for 320 pixels — are
+    /// unchanged).
     fn fetch_window(&self) -> (u16, u16) {
         let start = (self.ddfstrt & 0xfc).max(0x18);
         let stop_raw = (self.ddfstop & 0xfc).min(0xd8);
@@ -542,7 +548,8 @@ impl Custom {
             if stop_raw < start {
                 return (start, start);
             }
-            return (start, start + ((stop_raw - start) / unit + 1) * unit);
+            let units = (stop_raw - start).div_ceil(unit) + 1;
+            return (start, start + units * unit);
         }
         let stop = stop_raw
             + if self.denise.hires() || self.denise.shres() {

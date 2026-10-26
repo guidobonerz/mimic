@@ -22,6 +22,7 @@ machine-atari8.workspace = true
 machine-atari2600.workspace = true
 machine-cpc.workspace = true
 machine-zx81.workspace = true
+machine-spectrum.workspace = true
 machine-coleco.workspace = true
 machine-nes.workspace = true
 machine-snes.workspace = true

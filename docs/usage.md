@@ -95,6 +95,7 @@ Größe** erkannt.
 | `cpc/` (`amstrad/`) | Amstrad CPC | `os464`/`basic1-0`, `os664`/`basic664`, `os6128`/`basic1-1` (je 16 KB) oder 32-KB-Kombidateien `cpc464`/`cpc664`/`cpc6128`; `amsdos`, optional `parados` |
 | `amiga/` | Amiga 500/1000/2000/500+/1200 | Kickstart als 256 KB oder 512 KB, Name z. B. `Kickstart 1.3.rom`, `kick13.rom`, `kick34005.rom`; je Version eine Datei (1.2, 1.3, 2.0, 3.0, 3.1), Auswahl mit `--option kickstart=`; für den A1200 passt das 3.1-Image 40.063 (A500/600/2000) oder ein A1200-Image (3.0 39.106, 3.1 40.068), nicht das 3.0 des A4000 (39.106 mit CRC 9E6AC152: sucht 32-Bit-RAM bei $08000000); optional das A1000-Bootstrap-ROM (8 KB, `a1000boot.rom`) für `--option wcs=disk` |
 | `zx81/` (`sinclair/`) | Sinclair ZX81 | `zx81.rom` (8 KB; `zx81.edition3.rom` wird bevorzugt) |
+| `spectrum/` (`zxspectrum/`, `sinclair/`) | ZX Spectrum | `Spec48.rom` (48K, 16 KB), `spec128.rom` (128K, 32 KB: Editor-ROM, dann 48 BASIC), `specp2.rom` (+2, 32 KB); optional `mf128.rom` (Multiface 128, 8 KB) und `specif1.edition2.rom` bzw. `specif1.rom` (Interface 1, 8 KB) |
 | `snes/` (`sfc/`) | SNES | optional die 64 Byte IPL-ROM des Sound-Prozessors, `spc700.rom`; ohne sie lädt ein eigener Bootlader mit demselben Protokoll |
 | `coleco/` (`colecovision/`) | ColecoVision | das BIOS, `coleco.rom` (8 KB); ohne BIOS läuft mit `--option roms=stub` ein eigenes Mini-BIOS, das Module mit dem Header $55AA/$AA55 direkt startet (Spiele, die BIOS-Routinen aufrufen, brauchen das echte BIOS) |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
@@ -124,6 +125,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `cpc` | Amstrad CPC | `6128` (Standard), `664`, `464` |
 | `amiga` | Commodore Amiga 500/1000/2000 (OCS), 500+ (ECS), 1200 (AGA) | `500` (Standard), `500-ntsc`, `1000`, `1000-ntsc`, `2000`, `2000-ntsc`, `500plus` (ECS-Chipsatz, 1 MB Chip-RAM, Kickstart 2.0), `500plus-ntsc`, `1200` (68EC020 mit 14 MHz, AGA, 2 MB Chip-RAM, Gayle ohne IDE, Kickstart 3.1), `1200-ntsc` |
 | `zx81` | Sinclair ZX81 / Timex Sinclair 1000 | `zx81` (Standard, PAL), `ts1000` (NTSC, 60 Hz) |
+| `spectrum` | Sinclair ZX Spectrum | `48k` (Standard), `128k`, `plus2` (der Amstrad-+2: 128K-Hardware mit eigenen ROMs) |
 | `coleco` | ColecoVision | `ntsc` (Standard, TMS9918A), `pal` (TMS9929A) |
 | `nes` | Nintendo Entertainment System / Famicom | `ntsc` (Standard, 2C02), `pal` (2C07) |
 | `snes` | Super Nintendo / Super Famicom | `ntsc` (Standard), `pal` |
@@ -144,6 +146,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | ColecoVision | `port1`/`port2=controller\|superaction\|driving\|roller\|none` (Standard `controller`: Joystick, zwei Feuerknöpfe, Keypad; `superaction` = Super Action Controller mit vier Knöpfen und Speed Roller; `driving` = Expansion Module #2 mit Lenkrad und Gaspedal; `roller` = Roller Controller (Trackball, belegt mit seinem zweiten Kabel auch Port 2)), `roms=stub` |
 | Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`, `dpc`) |
 | ZX81 | `ram=16k\|1k\|2k` (Standard 16k), `traps=on\|off` (LOAD/SAVE der .P-Datei im Bandschacht über ROM-Traps) |
+| ZX Spectrum | `traps=on\|off` (Standard on: `LOAD ""` kopiert Standardblöcke direkt aus TAP/TZX; off spielt das Band in Echtzeit), `autostart=on` (mit Band: tippt `LOAD ""` bzw. wählt im 128K-Menü den Tape Loader), `joystick=kempston\|sinclair1\|sinclair2\|cursor\|none` (Standard kempston), `mouse=kempston\|none`, `issue=3\|2` (Platinen-Ausgabe: EAR-Rückkopplung in Port $FE Bit 6), `multiface=on` (Multiface 128; roter Knopf = Bedienfeld-Taste MULTIFACE), `if1=on` (Interface 1 mit `microdrives=1..8`, Standard 2; Cartridges als MDR), `roms=stub` |
 | CPC | `crtc=0\|1\|2` (Standard 464: 0, sonst 1), `dos=amsdos\|parados\|none`, `joy1=joystick\|amx\|none`, `joy2=joystick\|none` |
 | Amiga | `kickstart=1.3\|1.2\|2.0\|3.0\|3.1` (Standard 1.3, A500+ 2.0, A1200 3.1), `chip=256k\|512k\|1m\|2m` (Chip-RAM; Standard A500 512k, A1000 256k, A2000 und A500+ 1m; 2m braucht den ECS-Agnus), `chipset=ocs\|ecs\|aga` (Standard je Modell; `agnus=ocs\|ecs` und `denise=ocs\|ecs` wählen die Chips einzeln, z. B. A500 Rev 6A mit ECS-Agnus und OCS-Denise: `agnus=ecs`), `slow=512k\|0` (Trapdoor-Erweiterung, Standard A500 512 KB, sonst 0), `fast=0\|512k\|1m\|2m\|4m\|8m` (Zorro-II-Fast-RAM per Autoconfig, Standard 0), `drives=1..4` (DF0:–DF3:, Standard 1), `drivetype=dd\|hd` (HD-Laufwerke für 1,76-MB-ADFs), `port0=mouse\|joystick\|none` (Standard Maus), `port1=joystick\|mouse\|none` (Standard Joystick), `serial=none\|loopback` (TXD mit RXD verbunden), `wcs=rom\|disk` (A1000: Kickstart vorgeladen oder per Bootstrap-ROM von der Kickstart-Diskette laden) |
 
@@ -171,6 +174,9 @@ cargo run --release -p emu-desktop -- --machine atari2600 --model pal --cart spi
 cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
 cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
 cargo run --release -p emu-desktop -- --machine zx81 --rom-dir roms --tape programm.p
+cargo run --release -p emu-desktop -- --machine spectrum --rom-dir roms --tape spiel.tzx --autostart
+cargo run --release -p emu-desktop -- --machine spectrum --model 128k --rom-dir roms --prg spiel.z80
+cargo run --release -p emu-desktop -- --machine spectrum --rom-dir roms --option if1=on --option multiface=on --disk cartridge.mdr
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk workbench13.adf
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk demo-a.adf --disk demo-b.adf
 cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --option drives=2 --disk demo-a.adf --disk demo-b.adf
@@ -357,7 +363,9 @@ cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
 | Art | Formate | Frontend-Option |
 | --- | --- | --- |
 | Diskette (mehrfach: weitere Laufwerke, Rest per Strg+D) | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga: DD 880 KB, HD 1,76 MB mit `--option drivetype=hd`; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF), extended ADF (`UAE-1ADF`/`UAE--ADF` mit Rohspuren, die bitgenau erhalten und zurückgeschrieben werden), DMS (DISK-Masher-Archiv, wird beim Einlegen entpackt, nur lesen); ein **Ordner** als virtuelle Diskette | `--disk` |
-| Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81: der Programmspeicher ab $4009, geladen und gesichert über ROM-Traps mit `LOAD ""`/`SAVE "NAME"`); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
+| Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81: der Programmspeicher ab $4009, geladen und gesichert über ROM-Traps mit `LOAD ""`/`SAVE "NAME"`), TAP/TZX (ZX Spectrum: `LOAD ""` drückt PLAY; mit `traps=on` werden Standardblöcke direkt kopiert, Turbo- und Sonderblöcke laufen in Echtzeit; TZX-Stoppblöcke halten das Band an); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
+| Snapshot | ZX Spectrum: SNA (48K, 128K) und Z80 (Version 1–3; 48K/128K/+2) — wird beim nächsten Befehl geladen | `--prg` |
+| Microdrive | ZX Spectrum mit Interface 1: MDR-Cartridges (254 Sektoren, Schreibschutzbyte), Schacht „microdrive 1“ … | `--disk` |
 | Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt, auch DPC von Pitfall II mit 10 240 oder 10 495 Bytes), `.col`/`.rom`/`.bin` bis 32 KB oder MegaCart 64 KB–1 MB (ColecoVision), iNES/NES 2.0 `.nes` mit Mapper 0–4 (NROM, MMC1, UxROM, CNROM, MMC3), SNES `.sfc`/`.smc` (LoROM, HiROM, ExHiROM, mit oder ohne Kopierer-Header; noch ohne Koprozessoren) | `--cart` |
 | Programm | PRG, T64, XEX | `--prg` |
 

@@ -272,6 +272,7 @@ table(["Machine id", "Machine", "Models (--model)"], [
     ["`amiga`", "Commodore Amiga 500/1000/2000 (OCS), 500+ (ECS), 1200 (AGA)",
      "`500` (default), `1000`, `2000`, `500plus`, `1200`; each also `-ntsc`"],
     ["`zx81`", "Sinclair ZX81 / Timex Sinclair 1000", "`zx81` (default, PAL), `ts1000` (NTSC)"],
+    ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (default), `128k`, `plus2`"],
     ["`coleco`", "ColecoVision", "`ntsc` (default), `pal`"],
     ["`nes`", "Nintendo Entertainment System / Famicom", "`ntsc` (default), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "`ntsc` (default), `pal`"],
@@ -369,6 +370,8 @@ table(["Folder", "Machine", "ROMs (example names and sizes)"], [
      "`kick13.rom`; one per version (1.2, 1.3, 2.0, 3.0, 3.1), chosen with "
      "`--option kickstart=`; optional A1000 bootstrap ROM (8 KB)"],
     ["`zx81/`", "ZX81", "`zx81.rom` (8 KB)"],
+    ["`spectrum/`", "ZX Spectrum", "`Spec48.rom` (16 KB), `spec128.rom`, `specp2.rom` (32 KB each); "
+     "optional `mf128.rom` (Multiface 128), `specif1.rom` (Interface 1)"],
     ["`coleco/`", "ColecoVision", "`coleco.rom` (8 KB BIOS)"],
     ["`snes/`", "SNES", "optional: the 64-byte sound boot ROM `spc700.rom`"],
     ["`vectrex/`", "Vectrex", "the 8 KB system ROM (executive and Mine Storm); a 4 KB "
@@ -399,7 +402,7 @@ table(["Option", "Meaning"], [
     ["`--option KEY=VALUE`", "machine option, repeatable (section 5)"],
     ["`--prg FILE`", "a program (PRG, T64, Atari XEX) to load and run"],
     ["`--disk FILE`", "a disk image; repeat for further drives, extra disks form a swap list"],
-    ["`--tape FILE`", "a tape image (TAP, CAS, CDT/TZX, ZX81 P)"],
+    ["`--tape FILE`", "a tape image (TAP, CAS, CDT/TZX, ZX81 P, Spectrum TAP/TZX)"],
     ["`--cart FILE`", "a cartridge or console ROM"],
     ["`--autostart`", "load and run the first program on the disk after boot"],
     ["`--crt PROFILE`", "monitor look (section 7; default: the machine's own monitor)"],
@@ -697,6 +700,23 @@ p("""Options: `ram=16k|1k|2k` (default 16k), `traps=on|off`. Programs are
 `.p` files given with `--tape`: `LOAD ""` loads the program from the tape
 slot and `SAVE "NAME"` writes it, through traps in the ROM.""")
 
+h2("Sinclair ZX Spectrum")
+p("""Models `48k`, `128k` and `plus2`. Options: `traps=on|off` (default on:
+`LOAD ""` copies standard tape blocks at once; off plays the tape in real
+time), `autostart=on` (with a tape: types `LOAD ""`, or picks the 128K
+menu's Tape Loader), `joystick=kempston|sinclair1|sinclair2|cursor|none`,
+`mouse=kempston`, `issue=3|2`, `multiface=on`, `if1=on` with
+`microdrives=1..8`, `roms=stub`.""")
+p("""Tapes are TAP or TZX files (`--tape`); `LOAD ""` presses PLAY, and
+the tape stops at TZX "stop" blocks. Snapshots (SNA, Z80) go in with
+`--prg` and take over at once. Keys: Shift = CAPS SHIFT, Ctrl or AltGr =
+SYMBOL SHIFT, Backspace = DELETE, the cursor keys = CAPS SHIFT + 5–8,
+Escape = BREAK, `.` and `,` as on the keys. The Multiface 128's red
+button is the panel's MULTIFACE; the Interface 1's Microdrives take MDR
+cartridges (`--disk`, `FORMAT "m";1;"name"`, `SAVE *"m";1;"file"`,
+`CAT 1`, `LOAD *"m";1;"file"`). The RS-232 port has no host device
+yet.""")
+
 h2("ColecoVision")
 p("""Options: `port1`, `port2` = `controller` (default: joystick, two fire
 buttons, keypad), `superaction`, `driving`, `roller`, `none`;
@@ -831,7 +851,7 @@ table(["Kind", "Formats", "Option"], [
      "400K/800K DSK and DiskCopy 4.2, SCSI hard disk images (Macintosh); "
      "a folder as a virtual disk",
      "`--disk`"],
-    ["Tape", "TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81), WAV (Apple II); a PRG is "
+    ["Tape", "TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81), TAP/TZX (ZX Spectrum), WAV (Apple II); a PRG is "
      "recorded in the machine's tape format", "`--tape`"],
     ["Cartridge", "CRT (C64/C128), raw VIC-20 and C16/Plus/4 dumps, CAR or 8/16 KB ROM "
      "(Atari), .a26/.bin (Atari 2600), .col/.rom (ColecoVision, MegaCart), .nes (NES), "
@@ -858,7 +878,7 @@ table(["Profile", "Use"], [
     ["`raw`", "sharp pixels, no effects (default for the NES, ColecoVision and Vectrex)"],
     ["`1702`, `1084s`", "Commodore monitors over S-Video (C64, VIC-20, C16/Plus/4, C128)"],
     ["`1084s-rgb`", "the 1084S on its RGB input (Amiga, SNES, C128 VDC)"],
-    ["`tv`, `pal-tv`, `ntsc-tv`", "a television over composite (Atari, ZX81, Apple II)"],
+    ["`tv`, `pal-tv`, `ntsc-tv`", "a television over composite (Atari, ZX81, ZX Spectrum, Apple II)"],
     ["`pet-white`, `pet-green`", "the PET's built-in monitors"],
     ["`ctm644`", "Amstrad colour monitor (CPC)"],
     ["`gt65`", "Amstrad green monitor"],

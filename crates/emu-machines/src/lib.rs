@@ -20,6 +20,7 @@ fn joystick_port(kind: PortKind) -> bool {
             | PortKind::SnesControl
             | PortKind::VectrexControl
             | PortKind::AppleGame
+            | PortKind::SpectrumJoy
     )
 }
 
@@ -43,6 +44,7 @@ pub fn device_names(kind: PortKind) -> Vec<&'static str> {
         PortKind::VectrexControl => vec!["controller", "lightpen"],
         PortKind::AppleGame => vec!["joystick", "paddles"],
         PortKind::MacMouse => vec!["mouse"],
+        PortKind::KempstonMouse => vec!["mouse"],
         PortKind::CbmUserPort => vec!["wic64"],
         k if joystick_port(k) => vec!["joystick"],
         _ => Vec::new(),
@@ -128,6 +130,9 @@ pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> 
         "mouse" if kind == PortKind::MacMouse => {
             Some(Box::new(devices_input::AmigaMouse::mac(1000)))
         }
+        "mouse" if kind == PortKind::KempstonMouse => {
+            Some(Box::new(devices_input::KempstonMouse::new()))
+        }
         // One step of motion per millisecond of the CPC's 4 MHz clock.
         "amx" if kind == PortKind::CpcJoy => Some(Box::new(devices_input::AmxMouse::new(4000))),
         // Its network comes from the machine's host services on connect.
@@ -152,6 +157,7 @@ pub fn registry() -> Registry {
     r.register(machine_cpc::entry());
     r.register(machine_amiga::entry());
     r.register(machine_zx81::entry());
+    r.register(machine_spectrum::entry());
     r.register(machine_coleco::entry());
     r.register(machine_nes::entry());
     r.register(machine_snes::entry());

@@ -191,7 +191,10 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
         // disk images.
         "do" | "po" | "nib" | "woz" | "img" | "image" | "dc42" | "diskcopy42" | "hda" | "hdv"
         | "hfv" => Some(MediaKind::Disk),
-        "prg" | "p00" | "t64" | "xex" | "com" | "exe" => Some(MediaKind::Program),
+        // ZX Microdrive cartridges.
+        "mdr" => Some(MediaKind::Disk),
+        // ZX Spectrum snapshots.
+        "prg" | "p00" | "t64" | "xex" | "com" | "exe" | "sna" | "z80" => Some(MediaKind::Program),
         "tap" | "cas" | "cdt" | "tzx" | "p" | "81" => Some(MediaKind::Tape),
         "crt" | "car" | "a26" | "vec" => Some(MediaKind::Cartridge),
         _ => None,

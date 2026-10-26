@@ -351,6 +351,45 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ],
         0x2000,
     )];
+    // ZX Spectrum: one ROM per model (the 128K and +2 files hold both
+    // 16 KB ROMs, the 128 editor first).
+    const SPECTRUM: &[RomSpec] = &[
+        optional(
+            "spectrum48",
+            &["spec48", "spectrum48", "zx48", "48k", "48-rom", "48"],
+            0x4000,
+        ),
+        optional(
+            "spectrum128",
+            &[
+                "spec128-rom",
+                "spec128",
+                "spectrum128",
+                "zx128",
+                "128k",
+                "128",
+            ],
+            0x8000,
+        ),
+        optional(
+            "spectrumplus2",
+            &["specp2-rom", "specp2", "spectrumplus2", "plus2", "+2"],
+            0x8000,
+        ),
+        // Multiface 128 and Interface 1 (8 KB each).
+        optional("mf128", &["mf128", "multiface128", "multiface-128"], 0x2000),
+        optional(
+            "if1",
+            &[
+                "specif1-edition2",
+                "specif1",
+                "if1-",
+                "interface1",
+                "interface-1",
+            ],
+            0x2000,
+        ),
+    ];
     // ColecoVision: the 8 KB BIOS.
     const COLECO: &[RomSpec] = &[rom(
         "coleco",
@@ -464,6 +503,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "mac" => MAC,
         "apple2" => APPLE2,
         "zx81" => ZX81,
+        "spectrum" => SPECTRUM,
         "vectrex" => VECTREX,
         "coleco" => COLECO,
         "snes" => SNES,
@@ -493,6 +533,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "cpc" => &["cpc", "amstrad"],
         "amiga" => &["amiga"],
         "zx81" => &["zx81", "sinclair"],
+        "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
         "snes" => &["snes", "sfc", "superfamicom"],
         "vectrex" => &["vectrex"],

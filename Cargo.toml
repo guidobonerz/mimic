@@ -47,6 +47,7 @@ machine-atari8 = { path = "crates/machine-atari8" }
 machine-atari2600 = { path = "crates/machine-atari2600" }
 machine-cpc = { path = "crates/machine-cpc" }
 machine-zx81 = { path = "crates/machine-zx81" }
+machine-spectrum = { path = "crates/machine-spectrum" }
 machine-coleco = { path = "crates/machine-coleco" }
 machine-nes = { path = "crates/machine-nes" }
 machine-snes = { path = "crates/machine-snes" }

@@ -1,7 +1,7 @@
 //! Emulated input peripherals: joysticks, paddles, mice, light pens (C64/C128,
 //! Atari 8-bit, Amiga, CPC), keypads,
 //! the ColecoVision controllers, the NES and SNES controllers, the Apple II
-//! joystick and paddles.
+//! joystick and paddles, the ZX Spectrum's Kempston mouse.
 
 #![forbid(unsafe_code)]
 
@@ -11,6 +11,7 @@ pub mod apple;
 pub mod coleco;
 pub mod driving;
 pub mod joystick;
+pub mod kempston_mouse;
 pub mod keypad;
 pub mod lightpen;
 pub mod mouse1351;
@@ -25,6 +26,7 @@ pub use apple::{AppleJoystick, AppleKind};
 pub use coleco::{ColecoController, ColecoKind};
 pub use driving::Driving;
 pub use joystick::Joystick;
+pub use kempston_mouse::KempstonMouse;
 pub use keypad::Keypad;
 pub use lightpen::{LightPen, LightPenKind};
 pub use mouse1351::Mouse1351;

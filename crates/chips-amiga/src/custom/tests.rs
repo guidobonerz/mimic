@@ -670,9 +670,11 @@ fn aga_ids_and_eight_planes_with_wide_fetches() {
         "64 pixels wide"
     );
     assert_eq!(pixel(&c, x + 128, y), Rgb8::default());
-    // 5 units of 32 clocks from $38: 40 bytes per plane per line (320 px).
-    assert_eq!(c.bplpt[0], 0x1_0000 + 256 * 40);
-    assert_eq!(c.bplpt[7], 0x1_7000 + 256 * 40);
+    // Units of 32 clocks from $38: the one in progress at the OCS DDFSTOP
+    // $D0 ($B8–$D7) completes and one more follows, 6 units = 48 bytes
+    // per plane per line (an FMODE 3 screen of 320 pixels uses $B8).
+    assert_eq!(c.bplpt[0], 0x1_0000 + 256 * 48);
+    assert_eq!(c.bplpt[7], 0x1_7000 + 256 * 48);
     // An OCS Agnus ignores FMODE and the extra planes.
     let (mut c, _) = setup();
     c.write(reg::FMODE, 3);

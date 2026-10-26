@@ -41,7 +41,7 @@ impl Z80 {
 
     /// M1: opcode fetch, refresh counter.
     fn fetch_opcode(&mut self, bus: &mut dyn TimedBus) -> u8 {
-        self.m_cycle(bus, Access::Fetch, 4, 1);
+        self.m_cycle(bus, Access::Fetch, 4, 1, self.pc);
         let op = bus.read(u32::from(self.pc), Size::Byte) as u8;
         self.pc = self.pc.wrapping_add(1);
         self.inc_r();
@@ -73,12 +73,12 @@ impl Z80 {
     }
 
     fn port_in(&mut self, bus: &mut dyn TimedBus, port: u16) -> u8 {
-        self.m_cycle(bus, Access::IoRead, 4, 2);
+        self.m_cycle(bus, Access::IoRead, 4, 2, port);
         bus.read(IO_BASE + u32::from(port), Size::Byte) as u8
     }
 
     fn port_out(&mut self, bus: &mut dyn TimedBus, port: u16, v: u8) {
-        self.m_cycle(bus, Access::IoWrite, 4, 2);
+        self.m_cycle(bus, Access::IoWrite, 4, 2, port);
         bus.write(IO_BASE + u32::from(port), Size::Byte, u32::from(v));
     }
 
@@ -187,7 +187,7 @@ impl Z80 {
             return self.hl();
         }
         let d = self.imm8(bus) as i8;
-        self.internal(5);
+        self.internal(bus, self.pc.wrapping_sub(1), 5);
         let a = self.idx_reg(idx).wrapping_add(d as u16);
         self.wz = a;
         a
@@ -235,10 +235,11 @@ impl Z80 {
                         4 + pre
                     }
                     2 => {
-                        self.internal(1);
+                        self.internal(bus, self.ir(), 1);
                         let d = self.imm8(bus) as i8;
                         self.b = self.b.wrapping_sub(1);
                         if self.b != 0 {
+                            self.internal(bus, self.pc.wrapping_sub(1), 5);
                             self.jump_relative(d);
                             13 + pre
                         } else {
@@ -247,12 +248,14 @@ impl Z80 {
                     }
                     3 => {
                         let d = self.imm8(bus) as i8;
+                        self.internal(bus, self.pc.wrapping_sub(1), 5);
                         self.jump_relative(d);
                         12 + pre
                     }
                     _ => {
                         let d = self.imm8(bus) as i8;
                         if self.cond(y - 4) {
+                            self.internal(bus, self.pc.wrapping_sub(1), 5);
                             self.jump_relative(d);
                             12 + pre
                         } else {
@@ -266,6 +269,7 @@ impl Z80 {
                         self.set_rp(p, idx, nn);
                         10 + pre
                     } else {
+                        self.internal(bus, self.ir(), 7);
                         let a = self.idx_reg(idx);
                         let b = self.get_rp(p, idx);
                         self.wz = a.wrapping_add(1);
@@ -315,6 +319,7 @@ impl Z80 {
                     }
                 },
                 3 => {
+                    self.internal(bus, self.ir(), 2);
                     let v = self.get_rp(p, idx);
                     let v = if q == 0 {
                         v.wrapping_add(1)
@@ -329,7 +334,7 @@ impl Z80 {
                     if y == 6 {
                         let a = self.mem_addr(bus, idx);
                         let v = self.read(bus, a);
-                        self.internal(1);
+                        self.internal(bus, a, 1);
                         let r = step(self, v);
                         self.write(bus, a, r);
                         if indexed {
@@ -356,7 +361,7 @@ impl Z80 {
                         };
                         let n = self.imm8(bus);
                         if indexed {
-                            self.internal(2);
+                            self.internal(bus, self.pc.wrapping_sub(1), 2);
                         }
                         self.write(bus, a, n);
                         if indexed {
@@ -422,7 +427,7 @@ impl Z80 {
             }
             _ => match z {
                 0 => {
-                    self.internal(1);
+                    self.internal(bus, self.ir(), 1);
                     if self.cond(y) {
                         self.pc = self.pop(bus);
                         self.wz = self.pc;
@@ -456,6 +461,7 @@ impl Z80 {
                             4 + pre
                         }
                         _ => {
+                            self.internal(bus, self.ir(), 2);
                             self.sp = self.idx_reg(idx);
                             6 + pre
                         }
@@ -501,13 +507,14 @@ impl Z80 {
                     4 => {
                         let lo = self.read(bus, self.sp);
                         let hi = self.read(bus, self.sp.wrapping_add(1));
-                        self.internal(1);
+                        self.internal(bus, self.sp.wrapping_add(1), 1);
                         let v = u16::from_le_bytes([lo, hi]);
                         let r = self.idx_reg(idx);
                         // High byte first on the write-back.
                         let [lo, hi] = r.to_le_bytes();
                         self.write(bus, self.sp.wrapping_add(1), hi);
                         self.write(bus, self.sp, lo);
+                        self.internal(bus, self.sp, 2);
                         self.set_idx_reg(idx, v);
                         self.wz = v;
                         19 + pre
@@ -534,7 +541,7 @@ impl Z80 {
                     let nn = self.imm16(bus);
                     self.wz = nn;
                     if self.cond(y) {
-                        self.internal(1);
+                        self.internal(bus, self.pc.wrapping_sub(1), 1);
                         let pc = self.pc;
                         self.push(bus, pc);
                         self.pc = nn;
@@ -545,7 +552,7 @@ impl Z80 {
                 }
                 5 => {
                     if q == 0 {
-                        self.internal(1);
+                        self.internal(bus, self.ir(), 1);
                         let v = self.get_rp2(p, idx);
                         self.push(bus, v);
                         return 11 + pre;
@@ -553,7 +560,7 @@ impl Z80 {
                     match p {
                         0 => {
                             let nn = self.imm16(bus);
-                            self.internal(1);
+                            self.internal(bus, self.pc.wrapping_sub(1), 1);
                             self.wz = nn;
                             let pc = self.pc;
                             self.push(bus, pc);
@@ -574,7 +581,7 @@ impl Z80 {
                     7 + pre
                 }
                 _ => {
-                    self.internal(1);
+                    self.internal(bus, self.ir(), 1);
                     let pc = self.pc;
                     self.push(bus, pc);
                     self.pc = u16::from(y) * 8;
@@ -808,14 +815,18 @@ impl Z80 {
             1 => {
                 let xy = if mem { (self.wz >> 8) as u8 } else { v };
                 self.bit(y, v, xy);
+                if mem {
+                    let hl = self.hl();
+                    self.internal(bus, hl, 1);
+                }
                 return if mem { 12 } else { 8 };
             }
             2 => v & !(1 << y),
             _ => v | (1 << y),
         };
         if mem {
-            self.internal(1);
             let hl = self.hl();
+            self.internal(bus, hl, 1);
             self.write(bus, hl, r);
             15
         } else {
@@ -829,7 +840,7 @@ impl Z80 {
     fn exec_index_cb(&mut self, bus: &mut dyn TimedBus, idx: Idx) -> u32 {
         let d = self.imm8(bus) as i8;
         let op = self.imm8(bus);
-        self.internal(2);
+        self.internal(bus, self.pc.wrapping_sub(1), 2);
         let a = self.idx_reg(idx).wrapping_add(d as u16);
         self.wz = a;
         let (x, y, z) = (op >> 6, (op >> 3) & 7, op & 7);
@@ -838,12 +849,13 @@ impl Z80 {
             0 => self.rotate(y, v),
             1 => {
                 self.bit(y, v, (a >> 8) as u8);
+                self.internal(bus, a, 1);
                 return 20;
             }
             2 => v & !(1 << y),
             _ => v | (1 << y),
         };
-        self.internal(1);
+        self.internal(bus, a, 1);
         self.write(bus, a, r);
         if z != 6 {
             self.set_r(z, Idx::Hl, r);
@@ -881,6 +893,7 @@ impl Z80 {
                 12
             }
             2 => {
+                self.internal(bus, self.ir(), 7);
                 let hl = self.hl();
                 let rp = self.get_rp(p, Idx::Hl);
                 self.wz = hl.wrapping_add(1);
@@ -923,14 +936,17 @@ impl Z80 {
             }
             _ => match y {
                 0 => {
+                    self.internal(bus, self.ir(), 1);
                     self.i = self.a;
                     9
                 }
                 1 => {
+                    self.internal(bus, self.ir(), 1);
                     self.r = self.a;
                     9
                 }
                 2 | 3 => {
+                    self.internal(bus, self.ir(), 1);
                     self.a = if y == 2 { self.i } else { self.r };
                     let pv = if self.iff2 { PV } else { 0 };
                     self.set_f(sz53(self.a) | pv | (self.f & C));
@@ -940,7 +956,7 @@ impl Z80 {
                 4 | 5 => {
                     let hl = self.hl();
                     let v = self.read(bus, hl);
-                    self.internal(4);
+                    self.internal(bus, hl, 4);
                     let a = self.a;
                     let (new_v, new_a) = if y == 4 {
                         ((a << 4) | (v >> 4), (a & 0xf0) | (v & 0x0f))
@@ -982,6 +998,7 @@ impl Z80 {
                 let v = self.read(bus, hl);
                 let de = self.de();
                 self.write(bus, de, v);
+                self.internal(bus, de, 2);
                 self.set_hl(step(hl));
                 self.set_de(step(de));
                 let bc = self.bc().wrapping_sub(1);
@@ -992,6 +1009,7 @@ impl Z80 {
                     | (n & X)
                     | ((n << 4) & Y);
                 let t = if repeat && bc != 0 {
+                    self.internal(bus, de, 5);
                     f = (f & !(X | Y)) | rewind(self);
                     self.wz = self.pc.wrapping_add(1);
                     21
@@ -1004,6 +1022,7 @@ impl Z80 {
             1 => {
                 let hl = self.hl();
                 let v = self.read(bus, hl);
+                self.internal(bus, hl, 5);
                 let r = self.a.wrapping_sub(v);
                 let half = (self.a ^ v ^ r) & H;
                 self.set_hl(step(hl));
@@ -1020,6 +1039,7 @@ impl Z80 {
                     | (n & X)
                     | ((n << 4) & Y);
                 let t = if repeat && bc != 0 && r != 0 {
+                    self.internal(bus, hl, 5);
                     f = (f & !(X | Y)) | rewind(self);
                     self.wz = self.pc.wrapping_add(1);
                     21
@@ -1030,11 +1050,14 @@ impl Z80 {
                 t
             }
             2 => {
-                self.internal(1);
+                self.internal(bus, self.ir(), 1);
                 let bc = self.bc();
                 let v = self.port_in(bus, bc);
                 let hl = self.hl();
                 self.write(bus, hl, v);
+                if repeat && self.b != 1 {
+                    self.internal(bus, hl, 5);
+                }
                 self.wz = step(bc);
                 self.b = self.b.wrapping_sub(1);
                 self.set_hl(step(hl));
@@ -1047,12 +1070,15 @@ impl Z80 {
                 self.block_io_end(v, k, repeat, rewind)
             }
             _ => {
-                self.internal(1);
+                self.internal(bus, self.ir(), 1);
                 let hl = self.hl();
                 let v = self.read(bus, hl);
                 self.b = self.b.wrapping_sub(1);
                 let bc = self.bc();
                 self.port_out(bus, bc, v);
+                if repeat && self.b != 0 {
+                    self.internal(bus, bc, 5);
+                }
                 self.set_hl(step(hl));
                 self.wz = step(bc);
                 let k = u16::from(v) + u16::from(self.l);

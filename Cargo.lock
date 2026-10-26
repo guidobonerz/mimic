@@ -894,6 +894,7 @@ dependencies = [
  "machine-pet",
  "machine-sim6502",
  "machine-snes",
+ "machine-spectrum",
  "machine-ted",
  "machine-vectrex",
  "machine-vic20",
@@ -943,6 +944,7 @@ dependencies = [
  "machine-cpc",
  "machine-mac",
  "machine-pet",
+ "machine-spectrum",
  "machine-ted",
  "machine-vic20",
  "machine-zx81",
@@ -1724,6 +1726,19 @@ dependencies = [
  "devices-cartridge",
  "devices-input",
  "emu-core",
+]
+
+[[package]]
+name = "machine-spectrum"
+version = "0.1.0"
+dependencies = [
+ "chips-amstrad",
+ "chips-sinclair",
+ "cpu-z80",
+ "devices-input",
+ "drives-other",
+ "emu-core",
+ "media",
 ]
 
 [[package]]

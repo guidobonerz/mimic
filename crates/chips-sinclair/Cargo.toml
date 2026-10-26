@@ -1,6 +1,6 @@
 [package]
 name = "chips-sinclair"
-description = "Sinclair ZX81 ULA (video timing, display shift register, NMI generator, port $FE)"
+description = "Sinclair ULAs: ZX81 (video timing, display shift register, NMI generator) and ZX Spectrum (display, contention, port $FE)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

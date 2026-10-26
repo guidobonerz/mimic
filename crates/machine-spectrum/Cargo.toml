@@ -1,0 +1,18 @@
+[package]
+name = "machine-spectrum"
+description = "Sinclair ZX Spectrum 48K, 128K and +2"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-z80.workspace = true
+chips-sinclair.workspace = true
+chips-amstrad.workspace = true
+drives-other.workspace = true
+devices-input.workspace = true
+media.workspace = true

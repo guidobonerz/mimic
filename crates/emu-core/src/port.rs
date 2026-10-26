@@ -37,6 +37,12 @@ pub enum PortKind {
     /// Macintosh 128K/512K/Plus mouse port: 9-pin, quadrature X1/X2 and
     /// Y1/Y2 and one button (the SE's ADB mouse uses the same device).
     MacMouse,
+    /// ZX Spectrum joystick interfaces (Kempston, the Interface 2's two
+    /// Sinclair ports, cursor): 9-pin Atari-style digital joystick.
+    SpectrumJoy,
+    /// Kempston mouse interface on the ZX Spectrum: the mouse's X and Y
+    /// counters and buttons, read through ports $FBDF, $FFDF, $FADF.
+    KempstonMouse,
     /// C64/C128/VIC-20 user port: CIA port B (PB0–PB7), PA2, the PC2
     /// handshake out and FLAG2 in, the serial lines (see
     /// [`user_port`] for the pin numbering in [`PortLines`]).

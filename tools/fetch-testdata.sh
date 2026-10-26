@@ -302,4 +302,19 @@ if [ ! -e "$DEST/nes-test-roms/COMMIT" ]; then
   echo "$NESROMS_COMMIT" > "$DEST/nes-test-roms/COMMIT"
 fi
 
+# Fuse Test 2008-03-28 (Philip Kendall, GPL): ZX Spectrum timing tests —
+# frame length, contended memory and I/O, floating bus, LDIR at the
+# contended boundary, $7FFD reads; Phase 15. Run only, never committed.
+FUSETEST_URL="https://zxe.io/depot/software/ZX%20Spectrum/Fuse%20Test%20%282008-03-28%29%28Kendall,%20Philip%29%5B%21%5D.zip"
+FUSETEST_SHA256=2044f70b77411a9656f58a85047ed18548f0b18dfb93efa8a79a338483efd5f0
+if [ ! -s "$DEST/spectrum/fusetest.tap" ]; then
+  echo "Fuse Test -> $DEST/spectrum"
+  mkdir -p "$DEST/spectrum"
+  fetch "$FUSETEST_URL" "$DEST/spectrum/fusetest.zip"
+  [ "$(sha256 "$DEST/spectrum/fusetest.zip")" = "$FUSETEST_SHA256" ] || {
+    echo "error: Fuse Test archive checksum mismatch" >&2; exit 1; }
+  python3 -c "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); open(sys.argv[2], 'wb').write(z.read('fusetest/fusetest.tap'))"     "$DEST/spectrum/fusetest.zip" "$DEST/spectrum/fusetest.tap" 2>/dev/null     || python -c "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); open(sys.argv[2], 'wb').write(z.read('fusetest/fusetest.tap'))"     "$DEST/spectrum/fusetest.zip" "$DEST/spectrum/fusetest.tap"
+  rm "$DEST/spectrum/fusetest.zip"
+fi
+
 echo "done. export EMU_TESTDATA_DIR=$DEST"

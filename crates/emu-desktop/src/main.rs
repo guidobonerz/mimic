@@ -96,7 +96,7 @@ usage: mimic-desktop [options]
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
                         raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
                         SNES .sfc/.smc; Vectrex .vec/.bin
-  --autostart           load and run the disk after boot
+  --autostart           load and run the disk (C64) or tape (Spectrum) after boot
   --rom-dir DIR         ROM folder (default: settings.roms of profiles.yaml,
                         then $EMU_ROM_DIR)
   --rom ROLE=FILE       a single ROM image for a role (repeatable)

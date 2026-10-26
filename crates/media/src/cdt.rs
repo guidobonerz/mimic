@@ -22,12 +22,20 @@
 //!
 //! A data bit is two pulses of the zero or one length, bytes MSB first;
 //! the last byte has only its "used bits". The pause after a data block
-//! (and block 0x20) holds the current level for 1 ms, then low for the
-//! rest. Blocks 0x18 (CSW) and 0x19 (generalized data) are not supported.
+//! (and block 0x20) begins with an edge — the opposite of the last
+//! pulse's level, held for 1 ms if high — then stays low. Blocks 0x18 (CSW) and 0x19 (generalized data) are not supported.
 //!
 //! Writing: the whole tape is stored as pulse sequences — exact to the
 //! T-state — with 0x2B before each run, padded to the file's size with a
 //! 0x35 custom-info block (so blank tapes have room to record).
+//!
+//! For the ZX Spectrum the tape also lists its standard-speed data blocks
+//! ([`Tape::blocks`], which a ROM loading trap can copy directly) and the
+//! places where it stops ([`Tape::stops`]: block 0x20 with pause 0, and
+//! 0x2A "stop the tape if in 48K mode" in [`Tape::stops_48k`]).
+//! [`Tape::from_tap`] reads a Spectrum `.tap` file (blocks of a 16-bit
+//! length and the bytes from the flag to the checksum) as standard-speed
+//! blocks with a second's pause each.
 
 use emu_core::media::MediaError;
 
@@ -49,10 +57,29 @@ pub struct Segment {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tape {
     pub segments: Vec<Segment>,
+    /// Standard-speed data blocks (0x10) in tape order.
+    pub blocks: Vec<DataBlock>,
+    /// Segment indices where the tape stops (0x20 with pause 0).
+    pub stops: Vec<usize>,
+    /// Segment indices where a 48K machine stops the tape (0x2A).
+    pub stops_48k: Vec<usize>,
+}
+
+/// A standard-speed data block: its bytes (flag, data, checksum) and the
+/// segments it covers, pilot to pause.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DataBlock {
+    pub start: usize,
+    pub end: usize,
+    pub data: Vec<u8>,
 }
 
 fn fmt(msg: &str) -> MediaError {
     MediaError::Format(format!("CDT: {msg}"))
+}
+
+fn tap(msg: &str) -> MediaError {
+    MediaError::Format(format!("TAP: {msg}"))
 }
 
 struct Reader<'a> {
@@ -127,12 +154,35 @@ impl Player {
         }
     }
 
+    /// A block at the Spectrum ROM's timings: pilot (8063 pulses before a
+    /// header, flag < $80, 3223 before data) of 2168, syncs 667/735, bits
+    /// 855/1710.
+    fn standard_block(&mut self, data: &[u8], pause: u16) {
+        let pilot = if data.first().is_some_and(|&f| f < 0x80) {
+            8063
+        } else {
+            3223
+        };
+        for _ in 0..pilot {
+            self.pulse(2168);
+        }
+        self.pulse(667);
+        self.pulse(735);
+        self.data(855, 1710, 8, data);
+        self.pause(pause);
+    }
+
+    /// The end of the last pulse is an edge: the pause starts with the
+    /// opposite level, held for 1 ms if that is high, then low (TZX 1.20,
+    /// "pause"). Without that edge the last half-pulse would run into the
+    /// pause and its bit read as a one.
     fn pause(&mut self, ms: u16) {
         if ms == 0 {
             return;
         }
         let total = u32::from(ms) * MS;
-        if self.level {
+        let after = !self.level && !self.segments.is_empty();
+        if after {
             self.hold(true, MS.min(total));
             self.hold(false, total.saturating_sub(MS));
         } else {
@@ -152,6 +202,9 @@ impl Tape {
             segments: Vec::new(),
             level: false,
         };
+        let mut blocks = Vec::new();
+        let mut stops = Vec::new();
+        let mut stops_48k = Vec::new();
         // Loop start: segment index and repetitions left.
         let mut repeat: Option<(usize, u16)> = None;
         while r.i < bytes.len() {
@@ -161,18 +214,13 @@ impl Tape {
                     let pause = r.u16()?;
                     let len = usize::from(r.u16()?);
                     let data = r.take(len)?.to_vec();
-                    let pilot = if data.first().is_some_and(|&f| f < 0x80) {
-                        8063
-                    } else {
-                        3223
-                    };
-                    for _ in 0..pilot {
-                        p.pulse(2168);
-                    }
-                    p.pulse(667);
-                    p.pulse(735);
-                    p.data(855, 1710, 8, &data);
-                    p.pause(pause);
+                    let start = p.segments.len();
+                    p.standard_block(&data, pause);
+                    blocks.push(DataBlock {
+                        start,
+                        end: p.segments.len(),
+                        data,
+                    });
                 }
                 0x11 => {
                     let pilot = u32::from(r.u16()?);
@@ -238,6 +286,9 @@ impl Tape {
                 0x18 | 0x19 => return Err(fmt(&format!("block {id:#04x} not supported"))),
                 0x20 => {
                     let ms = r.u16()?;
+                    if ms == 0 {
+                        stops.push(p.segments.len());
+                    }
                     p.pause(ms);
                 }
                 0x21 | 0x30 => {
@@ -273,6 +324,7 @@ impl Tape {
                 }
                 0x2a => {
                     r.u32()?;
+                    stops_48k.push(p.segments.len());
                 }
                 0x2b => {
                     let n = r.u32()?;
@@ -301,7 +353,50 @@ impl Tape {
         }
         Ok(Self {
             segments: p.segments,
+            blocks,
+            stops,
+            stops_48k,
         })
+    }
+
+    /// A Spectrum `.tap` file: each block a 16-bit length and that many
+    /// bytes, played at standard speed with a 1000 ms pause.
+    pub fn from_tap(bytes: &[u8]) -> Result<Self, MediaError> {
+        let mut p = Player {
+            segments: Vec::new(),
+            level: false,
+        };
+        let mut blocks = Vec::new();
+        let mut r = Reader { b: bytes, i: 0 };
+        while r.i < bytes.len() {
+            let len = usize::from(r.u16().map_err(|_| tap("block length truncated"))?);
+            let data = r.take(len).map_err(|_| tap("block truncated"))?.to_vec();
+            if data.is_empty() {
+                continue;
+            }
+            let start = p.segments.len();
+            p.standard_block(&data, 1000);
+            blocks.push(DataBlock {
+                start,
+                end: p.segments.len(),
+                data,
+            });
+        }
+        Ok(Self {
+            segments: p.segments,
+            blocks,
+            stops: Vec::new(),
+            stops_48k: Vec::new(),
+        })
+    }
+
+    /// A TZX image (by its header) or else a Spectrum `.tap` file.
+    pub fn parse_spectrum(bytes: &[u8]) -> Result<Self, MediaError> {
+        if bytes.starts_with(HEADER) {
+            Self::parse(bytes)
+        } else {
+            Self::from_tap(bytes)
+        }
     }
 
     /// The tape as a TZX file of exactly `capacity` bytes (padded), or an
@@ -396,24 +491,47 @@ mod tests {
     }
 
     #[test]
-    fn pause_goes_low_after_a_millisecond() {
+    fn tap_blocks_and_stops() {
+        let tap = [2u8, 0, 0x00, 0x00, 3, 0, 0xff, 0x12, 0xed];
+        let t = Tape::parse_spectrum(&tap).unwrap();
+        assert_eq!(t.blocks.len(), 2);
+        assert_eq!(t.blocks[1].data, [0xff, 0x12, 0xed]);
+        assert_eq!(t.blocks[0].start, 0);
+        assert_eq!(t.blocks[0].end, t.blocks[1].start);
+        assert_eq!(t.blocks[1].end, t.segments.len());
+        // Header pilot: 8063 pulses of 2168.
+        assert!(t.segments[..8063].iter().all(|s| s.len == 2168));
+        assert!(Tape::parse_spectrum(&[5, 0, 1]).is_err());
+        // TZX: a standard block, stop, stop-if-48K.
+        let mut b = vec![0x10, 0, 0, 2, 0, 0xff, 0xff, 0x20, 0, 0, 0x2a, 0, 0, 0, 0];
+        b.extend_from_slice(&[0x10, 0xe8, 0x03, 1, 0, 0x00]);
+        let t = Tape::parse(&file(&b)).unwrap();
+        assert_eq!(t.blocks.len(), 2);
+        assert_eq!(t.stops, [t.blocks[0].end]);
+        assert_eq!(t.stops_48k, [t.blocks[0].end]);
+    }
+
+    #[test]
+    fn pause_starts_with_an_edge() {
+        let seg = |level, len| Segment { level, len };
+        // One pulse (high): the pause's edge goes low at once.
         let mut b = vec![0x12];
         b.extend_from_slice(&700u16.to_le_bytes());
-        b.extend_from_slice(&1u16.to_le_bytes()); // one pulse: high
+        b.extend_from_slice(&1u16.to_le_bytes());
         b.push(0x20);
         b.extend_from_slice(&5u16.to_le_bytes());
+        let t = Tape::parse(&file(&b)).unwrap();
+        assert_eq!(t.segments, vec![seg(true, 700), seg(false, 5 * MS)]);
+        // Two pulses (high, low): the edge goes high for 1 ms, then low.
+        b[3] = 2;
         let t = Tape::parse(&file(&b)).unwrap();
         assert_eq!(
             t.segments,
             vec![
-                Segment {
-                    level: true,
-                    len: 700 + MS
-                },
-                Segment {
-                    level: false,
-                    len: 4 * MS
-                },
+                seg(true, 700),
+                seg(false, 700),
+                seg(true, MS),
+                seg(false, 4 * MS)
             ]
         );
     }
@@ -449,6 +567,7 @@ mod tests {
                     len: 70_000,
                 },
             ],
+            ..Tape::default()
         };
         let bytes = t.to_bytes(4096).unwrap();
         assert_eq!(bytes.len(), 4096);

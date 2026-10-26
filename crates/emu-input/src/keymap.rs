@@ -972,6 +972,71 @@ pub static ZX81: Keymap = Keymap {
     entries: ZX81_POSITIONAL,
 };
 
+/// ZX Spectrum: row · 5 + column of its 8 × 5 matrix (see
+/// `machine-spectrum::keyboard`). Shift is CAPS SHIFT, Ctrl and AltGr are
+/// SYMBOL SHIFT; for convenience `.` and `,` are SYMBOL SHIFT + M / N,
+/// Backspace is DELETE (CAPS SHIFT + 0), the arrows CAPS SHIFT + 5–8 and
+/// Escape BREAK (CAPS SHIFT + SPACE).
+const SPECTRUM_POSITIONAL: &[(&str, &[u16])] = &[
+    ("ShiftLeft", &[0]),
+    ("ShiftRight", &[0]),
+    ("ControlLeft", &[36]),
+    ("ControlRight", &[36]),
+    ("AltRight", &[36]),
+    ("KeyZ", &[1]),
+    ("KeyX", &[2]),
+    ("KeyC", &[3]),
+    ("KeyV", &[4]),
+    ("KeyA", &[5]),
+    ("KeyS", &[6]),
+    ("KeyD", &[7]),
+    ("KeyF", &[8]),
+    ("KeyG", &[9]),
+    ("KeyQ", &[10]),
+    ("KeyW", &[11]),
+    ("KeyE", &[12]),
+    ("KeyR", &[13]),
+    ("KeyT", &[14]),
+    ("Digit1", &[15]),
+    ("Digit2", &[16]),
+    ("Digit3", &[17]),
+    ("Digit4", &[18]),
+    ("Digit5", &[19]),
+    ("Digit0", &[20]),
+    ("Digit9", &[21]),
+    ("Digit8", &[22]),
+    ("Digit7", &[23]),
+    ("Digit6", &[24]),
+    ("KeyP", &[25]),
+    ("KeyO", &[26]),
+    ("KeyI", &[27]),
+    ("KeyU", &[28]),
+    ("KeyY", &[29]),
+    ("Enter", &[30]),
+    ("NumpadEnter", &[30]),
+    ("KeyL", &[31]),
+    ("KeyK", &[32]),
+    ("KeyJ", &[33]),
+    ("KeyH", &[34]),
+    ("Space", &[35]),
+    ("KeyM", &[37]),
+    ("KeyN", &[38]),
+    ("KeyB", &[39]),
+    ("Period", &[36, 37]),
+    ("Comma", &[36, 38]),
+    ("Backspace", &[0, 20]),
+    ("ArrowLeft", &[0, 19]),
+    ("ArrowDown", &[0, 24]),
+    ("ArrowUp", &[0, 23]),
+    ("ArrowRight", &[0, 22]),
+    ("Escape", &[0, 35]),
+];
+
+pub static SPECTRUM: Keymap = Keymap {
+    machine: "spectrum",
+    entries: SPECTRUM_POSITIONAL,
+};
+
 /// Apple II: machine keys are what a key sends unshifted on the IIe's US
 /// keyboard (see `machine-apple2::keyboard`), so the PC's keys map by
 /// their legends. Backspace is ← (the Apple's backspace), Delete is
@@ -1164,6 +1229,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
         "zx81" => Some(&ZX81),
+        "spectrum" => Some(&SPECTRUM),
         "apple2" => Some(&APPLE2),
         "mac" => Some(&MAC),
         _ => None,

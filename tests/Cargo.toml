@@ -20,6 +20,7 @@ machine-c128.workspace = true
 machine-atari8.workspace = true
 machine-cpc.workspace = true
 machine-zx81.workspace = true
+machine-spectrum.workspace = true
 machine-amiga.workspace = true
 machine-apple2.workspace = true
 machine-mac.workspace = true
