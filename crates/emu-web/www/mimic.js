@@ -590,6 +590,7 @@ function wire() {
     return;
   }
   wire();
+  try { $("version").textContent = `mimic ${call("version")}`; } catch (e) { /* older wasm */ }
   await restoreFiles();
   showMachines();
   showFiles();

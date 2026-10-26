@@ -139,6 +139,7 @@ usage: mimic-desktop [options]
   --joyport N           the port the joysticks (keys and gamepad) play,
                         1-based (default: the machine's game port); also a
                         switch on the panel when there are several ports
+  --version             print the version and exit
   --help
 
 C64 keys by position on a PC keyboard: Esc = RUN/STOP, Tab = CTRL,
@@ -357,6 +358,10 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
                 }
             }
             "--help" | "-h" => return Ok(None),
+            "--version" | "-V" => {
+                println!("{}", emu_core::version::banner());
+                std::process::exit(0);
+            }
             other => return Err(format!("unknown option '{other}'")),
         }
     }
@@ -1690,7 +1695,11 @@ fn start_from(raw: &[String]) -> Result<Option<Started>, String> {
         eprintln!("{n}");
     }
     let Some(args) = parse_args(argv)? else {
-        println!("{USAGE}");
+        println!(
+            "{}
+{USAGE}",
+            emu_core::version::banner()
+        );
         return Ok(None);
     };
     start(args, &settings).map(Some)

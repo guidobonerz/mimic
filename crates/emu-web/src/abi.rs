@@ -82,6 +82,7 @@ fn dispatch(a: &mut Abi, req: &Value) -> Result<Value, String> {
     let s = |k: &str| req[k].as_str().unwrap_or_default().to_string();
     let n = |k: &str| req[k].as_u64().unwrap_or(0);
     match req["cmd"].as_str().unwrap_or_default() {
+        "version" => Ok(json!(emu_core::version::VERSION)),
         "machines" => Ok(a.emu.machines()),
         "files" => Ok(a.emu.files()),
         "add_file" => {

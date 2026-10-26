@@ -255,6 +255,7 @@ pub fn segments(f: &Footer, mouse: Mouse) -> Vec<(String, Rgb)> {
     if let Some(n) = &f.note {
         out.push((n.clone(), BUSY));
     }
+    out.push((emu_core::version::banner(), DIM));
     out
 }
 
@@ -478,7 +479,8 @@ mod tests {
                 "drive 8: busy T18",
                 "drive 9: ERROR",
                 "tape: empty",
-                "saved c64-001.png"
+                "saved c64-001.png",
+                emu_core::version::banner().as_str(),
             ]
         );
         assert_eq!(s[3].1, BUSY);

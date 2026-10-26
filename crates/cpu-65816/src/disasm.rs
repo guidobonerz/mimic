@@ -85,6 +85,9 @@ fn mode(op: u8) -> Am {
         0x44 | 0x54 => Am::Move,
         0xf4 => Am::Abs,
         0xd4 => Am::DpInd,
+        // the exceptions of the low bits: TRB dp, TRB abs, STZ abs
+        0x14 => Am::Dp,
+        0x1c | 0x9c => Am::Abs,
         0x0a | 0x1a | 0x2a | 0x3a | 0x4a | 0x6a => Am::Acc,
         0xa0 | 0xa2 | 0xc0 | 0xe0 => Am::ImmX,
         0x89 => Am::ImmM,

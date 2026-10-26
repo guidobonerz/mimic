@@ -26,6 +26,7 @@
   #status { color: var(--muted); font-variant-numeric: tabular-nums; text-align: center; min-height: 1.4em; }
   #status.error { color: var(--warn); }
   aside { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  footer { padding: 8px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
   section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
   section h2 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
   .row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin: 4px 0; }
@@ -108,6 +109,7 @@
     </section>
   </aside>
 </div>
+<footer><span id="version">mimic</span></footer>
 <script src="mimic.js"></script>
 </body>
 </html>

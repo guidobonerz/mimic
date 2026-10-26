@@ -84,6 +84,7 @@ usage: mimic-headless [options]
   --run                 with --debug: start running instead of paused
   --no-realtime         with --debug: run as fast as possible
   --list                list machines and exit
+  --version             print the version and exit
   --help                show this help";
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -112,6 +113,7 @@ struct Args {
     realtime: bool,
     list: bool,
     help: bool,
+    version: bool,
     /// Greaseweazle and OpenCBM (see `hardware`).
     hw: hardware::HardwareArgs,
     /// `--net off`.
@@ -219,6 +221,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--uci-dir" => args.uci_dir = Some(value("--uci-dir")?),
             "--list" => args.list = true,
             "--help" | "-h" => args.help = true,
+            "--version" | "-V" => args.version = true,
             other if hardware::takes_value(other) => {
                 let v = value(other)?;
                 args.hw.set(other, v)?;
@@ -685,11 +688,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if args.version {
+        println!("{}", emu_core::version::banner());
+        return ExitCode::SUCCESS;
+    }
     if args.help {
         println!(
-            "{USAGE}
+            "{}
+{USAGE}
 
 {}",
+            emu_core::version::banner(),
             hardware::USAGE
         );
         return ExitCode::SUCCESS;
