@@ -447,12 +447,18 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
                 .map_err(|e| format!("--rom {role}={path}: {e}"))
         })
         .collect::<Result<_, _>>()?;
-    if !specs.is_empty() && !args.config.options.contains_key("roms") {
+    // the ROMs given one by one (--rom) first: the folder is only read for the roles still missing, so a
+    // machine whose ROM the folder names otherwise starts with --rom alone (as with emu-headless)
+    args.config.roms.extend(explicit.iter().cloned());
+    let missing = specs.iter().any(|s| !args.config.roms.contains_key(s.role));
+    if missing && !args.config.options.contains_key("roms") {
         let dir = args.rom_dir.clone().or_else(media_backends::roms::env_dir);
         match dir {
             Some(dir) => {
-                args.config.roms =
-                    media_backends::roms::load(&dir, &args.machine).map_err(|e| e.to_string())?;
+                let found = media_backends::roms::load(&dir, &args.machine).map_err(|e| e.to_string())?;
+                for (role, data) in found {
+                    args.config.roms.entry(role).or_insert(data);
+                }
             }
             // Machines whose ROMs are all optional (the SNES's sound boot
             // ROM) run without a ROM folder.
@@ -465,7 +471,6 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             }
         }
     }
-    args.config.roms.extend(explicit);
     let mut m = emu_machines::registry()
         .create(&args.machine, &args.config)
         .map_err(|e| e.to_string())?;
