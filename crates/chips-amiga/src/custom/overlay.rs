@@ -253,6 +253,8 @@ impl Custom {
         };
         let top = i32::from(self.standard.top());
         let first = FIRST_CCK as i32;
+        // Columns per high-resolution pixel: 2 in 35 ns output.
+        let k = (self.width() / WIDTH) as i32;
         let info = Self::overlays().into_iter().find(|o| o.id == id)?;
         let (shapes, legend) = match id {
             "dma" if rec.dma => {
@@ -266,7 +268,7 @@ impl Custom {
                 let shape = Shape::Cells {
                     x: 0,
                     y: 0,
-                    cell_w: 4,
+                    cell_w: 4 * k as u32,
                     cell_h: 1,
                     cols,
                     rows,
@@ -286,9 +288,9 @@ impl Custom {
                     .sprites
                     .iter()
                     .map(|b| Shape::Rect {
-                        x: b.x0 as i32 - 4 * first,
+                        x: k * (b.x0 as i32 - 4 * first),
                         y: i32::from(b.y0) - top,
-                        w: b.x1 - b.x0 + 1,
+                        w: k as u32 * (b.x1 - b.x0 + 1),
                         h: u32::from(b.y1 - b.y0) + 1,
                         color: colors::SERIES[usize::from(b.sprite & 7)],
                         label: Some(b.sprite.to_string()),
@@ -307,7 +309,7 @@ impl Custom {
                     .moves
                     .iter()
                     .map(|m| Shape::Mark {
-                        x: 4 * (i32::from(m.h) - first),
+                        x: 4 * k * (i32::from(m.h) - first),
                         y: i32::from(m.v) - top,
                         color: colors::GREEN,
                         label: Some(format!("{}={:04X}", regnames::name(m.reg), m.value)),

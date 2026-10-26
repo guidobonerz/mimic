@@ -28,8 +28,15 @@
 //! and stop (a DIWSTRT/DIWSTOP write restores start 0, stop 1). BPLCON0
 //! bit 6 SHRES is super-hires: 35 ns pixels, at most two planes, two
 //! significant bits per colour gun (HRM appendix C; which two is this
-//! project's reading: the upper ones). The picture keeps its 70 ns
-//! columns, so every second super-hires pixel is dropped.
+//! project's reading: the upper ones).
+//!
+//! **35 ns output** ([`Denise::fine`]): the picture normally has 70 ns
+//! (high-resolution) columns, four a colour clock. Where something needs
+//! 35 ns — super-hires, the AGA's 35 ns scroll bits, sprites placed or
+//! drawn in 35 ns — `custom` switches the field to eight columns a colour
+//! clock ([`Denise::needs_fine`]); without it every second super-hires
+//! pixel is dropped and the 35 ns bits round down to 70 ns (the 35 ns
+//! scroll bits: Randy of Comax's AGA notes, see `docs/sources.md`).
 //!
 //! **AGA Lisa** ([`Denise::aga`], implies the ECS features): DENISEID $F8;
 //! eight bitplanes (BPLCON0 bit 4 BPU3; the index of up to eight bits,
@@ -49,7 +56,7 @@
 //! index of even and odd sprites (power-on $11: colours 16–31 as on the
 //! OCS); SPRxCTL bits 4–3 add 35 ns position bits, bit 6 and 5 are bit 9
 //! of VSTART and VSTOP; BPLCON3 bits 7–6 SPRES pick the sprite pixel
-//! width (0 and 1: 140 ns, 2: 70 ns, 3: 35 ns, shown at 70 ns here); FMODE
+//! width (0 and 1: 140 ns, 2: 70 ns, 3: 35 ns); FMODE
 //! ($1FC) bits 3–2 make sprites 32 or 64 pixels wide, bits 1–0 let Alice
 //! deliver 32 or 64 bits per bitplane fetch ([`Denise::write_bpldat`]
 //! takes the data left-aligned in 64 bits). CLXCON2 ($10E) bits 7–6 and
@@ -114,7 +121,7 @@ const QUEUE: usize = 8;
 /// A pending parallel load into the odd or even plane shifters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Load {
-    /// High-resolution pixel position (Denise line coordinates).
+    /// Super-hires (35 ns) pixel position (Denise line coordinates).
     at: u32,
     /// Planes 1/3/5/7 or 2/4/6/8, left-aligned.
     data: [u64; 4],
@@ -152,9 +159,12 @@ pub struct Denise {
     /// scroll 13–15, Desert Dream's moon; high resolution: from scroll 5,
     /// its end scroller uses 15). See [`QUEUE`].
     pending: [[Option<Load>; QUEUE]; 2],
-    /// High-resolution pixels since each group's load (low-resolution
-    /// shifting moves on every second one).
+    /// Output pixels since each group's load (low-resolution shifting
+    /// moves on every second one, every fourth in 35 ns output).
     phase: [u8; 2],
+    /// The output has 35 ns columns, eight a colour clock (set by
+    /// `custom` for the whole field, see the module doc).
+    pub(crate) fine: bool,
     /// BPL1DAT was written on this line.
     armed: bool,
     /// HAM: the colour of the previous pixel.
@@ -184,9 +194,10 @@ pub struct Sprite {
     pub armed: bool,
     a: u64,
     b: u64,
-    /// Output (70 ns) pixels left in the shifter.
+    /// Output pixels left in the shifter.
     count: u16,
-    /// Output pixels per sprite pixel (2 low resolution, 1 high).
+    /// Output pixels per sprite pixel (70 ns output: 2 low resolution,
+    /// 1 high; 35 ns output: 4, 2, 1).
     step: u8,
 }
 
@@ -271,6 +282,7 @@ impl Denise {
             shift: [0; 8],
             pending: [[None; QUEUE]; 2],
             phase: [0; 2],
+            fine: false,
             armed: false,
             ham: 0,
             sprites: [Sprite::default(); 8],
@@ -384,20 +396,85 @@ impl Denise {
     }
 
     /// Output pixels per sprite pixel (BPLCON3 SPRES on the AGA).
-    fn sprite_step(&self) -> u8 {
-        if self.aga && (self.bplcon3 >> 6) & 3 >= 2 {
-            1
-        } else {
-            2
+    fn sprite_step<const FINE: bool>(&self) -> u8 {
+        let spres = if self.aga { (self.bplcon3 >> 6) & 3 } else { 0 };
+        match (FINE, spres) {
+            (false, 2 | 3) => 1,
+            (false, _) => 2,
+            (true, 3) => 1,
+            (true, 2) => 2,
+            (true, _) => 4,
+        }
+    }
+
+    /// The output pixel a sprite's first pixel shows in.
+    #[inline(always)]
+    fn sprite_start<const FINE: bool>(s: &Sprite, aga: bool) -> u32 {
+        match (FINE, aga) {
+            (true, true) => s.hstart_shres() + 4,
+            (true, false) => 4 * (s.hstart() + 1),
+            (false, true) => s.hstart_shres() / 2 + 2,
+            (false, false) => 2 * (s.hstart() + 1),
+        }
+    }
+
+    /// Is a sprite drawing, or does one start, in the `n` output pixels
+    /// from `x` on? Otherwise the sprite logic leaves them alone (it is
+    /// checked once a colour clock instead of for every pixel).
+    #[inline(always)]
+    fn sprites_due<const FINE: bool>(&self, x: u32, n: u32) -> bool {
+        self.sprites.iter().any(|s| {
+            s.count > 0
+                || (s.armed && (x..x + n).contains(&Self::sprite_start::<FINE>(s, self.aga)))
+        })
+    }
+
+    /// Does the picture need 35 ns columns now: super-hires, the AGA's
+    /// 35 ns scroll bits (BPLCON1 PF1H0/PF2H0), or a sprite in use drawn
+    /// (SPRES 3) or placed (SPRxCTL bit 3) in 35 ns?
+    pub fn needs_fine(&self) -> bool {
+        if self.shres() {
+            return true;
+        }
+        if !self.aga {
+            return false;
+        }
+        if self.bplcon1 & 0x1100 != 0 {
+            return true;
+        }
+        let spres35 = (self.bplcon3 >> 6) & 3 == 3;
+        self.sprites
+            .iter()
+            .any(|s| (s.armed || s.count > 0) && (spres35 || s.ctl & 8 != 0))
+    }
+
+    /// Switch the output between 70 ns and 35 ns columns; the shifters'
+    /// pixel counts follow (the load times are kept in 35 ns already).
+    pub fn set_fine(&mut self, fine: bool) {
+        if fine == self.fine {
+            return;
+        }
+        self.fine = fine;
+        for p in &mut self.phase {
+            *p = if fine { p.wrapping_mul(2) } else { *p / 2 };
+        }
+        for s in &mut self.sprites {
+            if fine {
+                s.count *= 2;
+                s.step = s.step.saturating_mul(2);
+            } else {
+                s.count = s.count.div_ceil(2);
+                s.step = (s.step / 2).max(1);
+            }
         }
     }
 
     /// The frontmost sprite colour at this pixel (pair, colour register)
     /// and every sprite's value.
     #[inline(always)]
-    fn sprite_pixel(&mut self, x: u32) -> (Option<(u8, u8)>, [u8; 8]) {
+    fn sprite_pixel<const FINE: bool>(&mut self, x: u32) -> (Option<(u8, u8)>, [u8; 8]) {
         let width = self.sprite_width();
-        let step = self.sprite_step();
+        let step = self.sprite_step::<FINE>();
         let aga = self.aga;
         let mut vals = [0u8; 8];
         for (n, s) in self.sprites.iter_mut().enumerate() {
@@ -405,11 +482,7 @@ impl Denise {
             // HSTART (WinUAE screenshot of Interference's tunnel frame,
             // `docs/sources.md`: HSTART $84 shows one pixel inside a window
             // starting at 148, HSTART $1AE one pixel inside one ending at 432).
-            let start = if aga {
-                s.hstart_shres() / 2 + 2
-            } else {
-                2 * (s.hstart() + 1)
-            };
+            let start = Self::sprite_start::<FINE>(s, aga);
             if s.armed && x == start {
                 s.a = s.data;
                 s.b = s.datb;
@@ -495,18 +568,19 @@ impl Denise {
         )
     }
 
-    /// The scroll delays of the odd and even planes in high-resolution
-    /// pixels (BPLCON1; the AGA's extra bits).
+    /// The scroll delays of the odd and even planes in super-hires (35 ns)
+    /// pixels (BPLCON1; the AGA's extra bits: PF1H0–1 in 9–8, PF1H6–7 in
+    /// 11–10, the same for PF2H in 13–12 and 15–14).
     fn scroll(&self) -> (u32, u32) {
         let c = u32::from(self.bplcon1);
-        let odd = (c & 15) << 1;
-        let even = (c >> 4 & 15) << 1;
+        let odd = (c & 15) << 2;
+        let even = (c >> 4 & 15) << 2;
         if !self.aga {
             return (odd, even);
         }
         (
-            odd | (c >> 9 & 1) | (c >> 10 & 3) << 5,
-            even | (c >> 13 & 1) | (c >> 14 & 3) << 5,
+            odd | (c >> 8 & 3) | (c >> 10 & 3) << 6,
+            even | (c >> 12 & 3) | (c >> 14 & 3) << 6,
         )
     }
 
@@ -515,7 +589,7 @@ impl Denise {
     pub fn write_bpldat(&mut self, plane: usize, v: u64, h: u32) {
         self.bpldat[plane] = v;
         if plane == 0 {
-            let base = 2 * (2 * h + LOAD_DELAY);
+            let base = 4 * (2 * h + LOAD_DELAY);
             let (odd, even) = self.scroll();
             let d = self.bpldat;
             self.queue(
@@ -561,29 +635,103 @@ impl Denise {
         self.ham = self.colors[0];
     }
 
-    /// The four high-resolution pixels of colour clock `h` (Denise line
-    /// coordinates) as 24-bit colours.
-    pub fn output(&mut self, h: u32, out: &mut [u32; 4]) {
+    /// The pixels of colour clock `h` (Denise line coordinates) as 24-bit
+    /// colours: four high-resolution ones, or eight super-hires ones in
+    /// 35 ns output ([`Denise::fine`]). Returns how many.
+    pub fn output(&mut self, h: u32, out: &mut [u32; 8]) -> usize {
         // The `sprites` overlay's record takes its own copy of the loop:
         // its check in the pixel loop cost the A500 ~6 % (measured
         // 2026-10-25). `color` and `sprite_pixel` are `inline(always)`: with
         // two copies (and the graphics views calling `color`) LLVM kept
         // them out of line.
-        if self.rec_sprites {
-            return self.output_recording(h, out);
+        if self.rec_sprites || self.fine {
+            return self.output_rare(h, out);
         }
-        self.output_with::<false>(h, out);
+        let (out4, _) = out.split_first_chunk_mut::<4>().unwrap();
+        if self.idle(h) {
+            self.output_idle(out4);
+        } else {
+            self.output_with::<false, false, 4>(h, out4);
+        }
+        4
     }
 
+    /// No bitplane data on show or due and no sprite drawing or starting
+    /// in the four pixels of colour clock `h` (borders, blanking, lines
+    /// without planes): only COLOR00 (or the blanked border) shows. Most
+    /// colour clocks of a field are such (profile of the A1200, 2026-10-26).
+    #[inline(always)]
+    fn idle(&self, h: u32) -> bool {
+        if self.armed || self.pending[0][0].is_some() || self.pending[1][0].is_some() {
+            return false;
+        }
+        !self.sprites_due::<false>(4 * h, 4)
+    }
+
+    /// [`Denise::output`] for an idle colour clock (see [`Denise::idle`]):
+    /// the shifters move on as the pixel loop would move them.
+    #[inline(always)]
+    fn output_idle(&mut self, out: &mut [u32; 4]) {
+        let shres = self.shres();
+        let hires = self.hires();
+        for g in 0..2 {
+            let shifts = if shres {
+                8
+            } else if hires {
+                4
+            } else {
+                // Every second pixel after the phase's increment.
+                let p = u32::from(self.phase[g]);
+                (p + 4) / 2 - p / 2
+            };
+            self.phase[g] = self.phase[g].wrapping_add(4);
+            for p in (g..8).step_by(2) {
+                self.shift[p] <<= shifts;
+            }
+        }
+        let c = if self.con3() & 0x20 != 0 {
+            0
+        } else {
+            self.colors[0]
+        };
+        let c = if shres && !self.aga {
+            let hi = c & 0xc0c0c0;
+            hi | hi >> 2 | hi >> 4 | hi >> 6
+        } else {
+            c
+        };
+        *out = [c; 4];
+    }
+
+    /// The `sprites` record or 35 ns output.
     #[cold]
     #[inline(never)]
-    fn output_recording(&mut self, h: u32, out: &mut [u32; 4]) {
-        self.output_with::<true>(h, out);
+    fn output_rare(&mut self, h: u32, out: &mut [u32; 8]) -> usize {
+        match (self.rec_sprites, self.fine) {
+            (false, true) => {
+                self.output_with::<false, true, 8>(h, out);
+                8
+            }
+            (true, true) => {
+                self.output_with::<true, true, 8>(h, out);
+                8
+            }
+            _ => {
+                let (out4, _) = out.split_first_chunk_mut::<4>().unwrap();
+                self.output_with::<true, false, 4>(h, out4);
+                4
+            }
+        }
     }
 
-    /// [`Denise::output`] with (`REC`) or without the `sprites` record.
+    /// [`Denise::output`] with (`REC`) or without the `sprites` record, in
+    /// 35 ns (`FINE`, `N` = 8) or 70 ns (`N` = 4) columns.
     #[inline(always)]
-    fn output_with<const REC: bool>(&mut self, h: u32, out: &mut [u32; 4]) {
+    fn output_with<const REC: bool, const FINE: bool, const N: usize>(
+        &mut self,
+        h: u32,
+        out: &mut [u32; N],
+    ) {
         let (start, stop) = self.window();
         let hires = self.hires();
         let shres = self.shres();
@@ -591,17 +739,20 @@ impl Denise {
         let con3 = self.con3();
         let border_blank = con3 & 0x20 != 0;
         let border_sprites = con3 & 0x02 != 0;
-        let sprites_live = self.sprites.iter().any(|s| s.armed || s.count > 0);
+        let sprites_live = self.sprites_due::<FINE>(N as u32 * h, N as u32);
+        let plane_mask = ((1u16 << planes) - 1) as u8;
         let xor = if self.aga {
             (self.bplcon4 >> 8) as u8
         } else {
             0
         };
         for (i, px) in out.iter_mut().enumerate() {
-            let x = 4 * h + i as u32;
+            let x = N as u32 * h + i as u32;
+            // Load times are 35 ns pixels; a 70 ns column covers two.
+            let x35 = if FINE { x } else { (2 * x) | 1 };
             for g in 0..2 {
                 if let Some(l) = self.pending[g][0] {
-                    if x >= l.at {
+                    if x35 >= l.at {
                         for (k, &w) in l.data.iter().enumerate() {
                             self.shift[g + 2 * k] = w;
                         }
@@ -612,14 +763,26 @@ impl Denise {
                 }
             }
             let mut index = 0u8;
-            for p in 0..planes {
-                if self.shift[p] & (1 << 63) != 0 {
-                    index |= 1 << p;
-                }
+            for (p, v) in self.shift.iter().enumerate() {
+                index |= ((v >> 63) as u8) << p;
             }
+            index &= plane_mask;
             for g in 0..2 {
                 self.phase[g] = self.phase[g].wrapping_add(1);
-                if shres {
+                if FINE {
+                    let every: u8 = if shres {
+                        1
+                    } else if hires {
+                        2
+                    } else {
+                        4
+                    };
+                    if self.phase[g].is_multiple_of(every) {
+                        for p in (g..8).step_by(2) {
+                            self.shift[p] <<= 1;
+                        }
+                    }
+                } else if shres {
                     // Two 35 ns pixels per column; the second is dropped.
                     for p in (g..8).step_by(2) {
                         self.shift[p] <<= 2;
@@ -630,7 +793,7 @@ impl Denise {
                     }
                 }
             }
-            let lx = x / 2;
+            let lx = if FINE { x / 4 } else { x / 2 };
             if lx >= stop && self.armed {
                 self.armed = false;
             }
@@ -643,7 +806,7 @@ impl Denise {
                 (self.colors[0], None)
             };
             let (sprite, vals) = if sprites_live {
-                self.sprite_pixel(x)
+                self.sprite_pixel::<FINE>(x)
             } else {
                 (None, [0; 8])
             };
@@ -658,7 +821,7 @@ impl Denise {
             let shown = (inside && self.armed) || border_sprites;
             let sprite = sprite.filter(|_| shown);
             if REC && sprites_live && shown {
-                self.record_sprites_seen(x, vals);
+                self.record_sprites_seen(if FINE { x / 2 } else { x }, vals);
             }
             if inside && self.armed {
                 if vals != [0; 8] {
@@ -820,16 +983,31 @@ impl Denise {
             w.u16(s.count);
             w.u8(s.step);
         }
+        w.bool(self.fine);
     }
 
     /// `version` is the OCS chunk's: version 2 saved one pending load per
     /// group, version 3 two, 4–7 four 16-bit loads for six planes with
     /// 32 colours of 12 bits; 7 added BPLCON3 and DIWHIGH; 8 is the AGA
-    /// layout (256 colours of 24 bits, eight planes of 64 bits).
+    /// layout (256 colours of 24 bits, eight planes of 64 bits); 10 keeps
+    /// the load times in 35 ns pixels (before: 70 ns) and the output mode.
     pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
-        if version >= 8 {
-            return Self::load_v8(r);
+        let mut d = if version >= 8 {
+            Self::load_v8(r)?
+        } else {
+            Self::load_v7(r, version)?
+        };
+        if version >= 10 {
+            d.fine = r.bool()?;
+        } else {
+            for l in d.pending.iter_mut().flatten().flatten() {
+                l.at = l.at.saturating_mul(2);
+            }
         }
+        Ok(d)
+    }
+
+    fn load_v7(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let mut d = Self::new();
         for c in &mut d.colors[..32] {
             *c = expand12(r.u16()? & 0x0fff);
@@ -950,8 +1128,8 @@ impl Denise {
                 *v = r.u64()?;
             }
             s.armed = r.bool()?;
-            s.count = r.u16()?.min(128);
-            s.step = r.u8()?.min(2);
+            s.count = r.u16()?.min(256);
+            s.step = r.u8()?.min(4);
         }
         Ok(d)
     }
@@ -964,9 +1142,9 @@ mod tests {
     fn line(d: &mut Denise, from: u32, to: u32) -> Vec<u32> {
         let mut px = Vec::new();
         for h in from..to {
-            let mut out = [0; 4];
-            d.output(h, &mut out);
-            px.extend(out);
+            let mut out = [0; 8];
+            let n = d.output(h, &mut out);
+            px.extend(&out[..n]);
         }
         px
     }
@@ -1008,6 +1186,75 @@ mod tests {
         d.write_bpldat(0, w(0x8000), 0x3f);
         let px = line(&mut d, 0x3f, 0x44);
         assert_eq!(&px[6..10], &[0, 0, RED, RED]);
+    }
+
+    #[test]
+    fn super_hires_shows_every_pixel_in_35_ns_output() {
+        let mut d = Denise::new();
+        d.ecs = true;
+        d.write_color(1, 0xfff);
+        d.bplcon0 = 0x1240;
+        d.diwstrt = 0x2c81;
+        d.diwstop = 0x2cc1;
+        d.start_line();
+        d.write_bpldat(0, w(0xaaaa), 0x3f);
+        let narrow = line(&mut d.clone(), 0x3f, 0x44);
+        assert_eq!(&narrow[6..10], &[WHITE; 4], "70 ns: every second dropped");
+        assert!(d.needs_fine());
+        d.set_fine(true);
+        let px = line(&mut d, 0x3f, 0x44);
+        assert_eq!(px.len(), 40);
+        // 35 ns column 4·$81 = $204 is index $204 − 8·$3F = 12.
+        assert_eq!(&px[..12], &[0; 12]);
+        assert_eq!(&px[12..18], &[WHITE, 0, WHITE, 0, WHITE, 0]);
+    }
+
+    #[test]
+    fn aga_35_ns_scroll_bit_moves_one_column() {
+        let mut d = Denise::new();
+        d.set_aga(true);
+        d.write_color(1, 0xf00);
+        d.bplcon0 = 0x9200;
+        d.diwstrt = 0x2c81;
+        d.diwstop = 0x2cc1;
+        d.start_line();
+        d.set_fine(true);
+        let mut e = d.clone();
+        e.bplcon1 = 0x0100; // PF1H0
+        assert!(e.needs_fine() && !d.needs_fine());
+        d.write_bpldat(0, w(0x8000), 0x3f);
+        e.write_bpldat(0, w(0x8000), 0x3f);
+        let a = line(&mut d, 0x3f, 0x44);
+        let b = line(&mut e, 0x3f, 0x44);
+        // A high-resolution pixel is two 35 ns columns.
+        assert_eq!(&a[12..15], &[RED, RED, 0]);
+        assert_eq!(&b[12..16], &[0, RED, RED, 0]);
+    }
+
+    #[test]
+    fn aga_sprite_35_ns_position_bit() {
+        let mut d = Denise::new();
+        d.set_aga(true);
+        d.write_color(17, 0xf00);
+        d.bplcon0 = 0x0200;
+        d.bplcon3 |= 0x0002; // BRDSPRT: sprites in the border
+        d.bplcon0 |= 1; // ECSENA
+        d.set_fine(true);
+        let run = |ctl: u16| {
+            let mut d = d.clone();
+            d.write_sprite(0, 0, 0x2c40); // HSTART $80
+            d.write_sprite(0, 1, 0x3000 | ctl);
+            d.write_sprite(0, 3, 0);
+            d.write_sprite(0, 2, 0x8000);
+            assert_eq!(d.needs_fine(), ctl & 8 != 0);
+            line(&mut d, 0x3f, 0x44)
+        };
+        let a = run(0);
+        let b = run(0x0008); // SH0: one 35 ns column right
+        let first = |px: &[u32]| px.iter().position(|&c| c == RED).unwrap();
+        assert_eq!(first(&b), first(&a) + 1);
+        // A low-resolution sprite pixel is four 35 ns columns.
+        assert_eq!(a.iter().filter(|&&c| c == RED).count(), 4);
     }
 
     #[test]

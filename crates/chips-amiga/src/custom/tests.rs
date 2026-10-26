@@ -777,3 +777,101 @@ fn ecs_lpendis_shows_the_running_counters() {
     c.write(0x1dc, beamcon0::PAL | beamcon0::LPENDIS);
     assert_eq!(c.peek(reg::VHPOSR), 0);
 }
+
+#[test]
+fn super_hires_widens_the_field_and_it_narrows_again() {
+    let (mut c, mut chip) = setup_ecs(Standard::Pal);
+    screen(&mut c, &mut chip);
+    // Every word $8000, however many words a line fetches.
+    for i in 0..0x4_0000 {
+        chip.set_word(0x1_0000 + 2 * i, 0x8000);
+    }
+    field(&mut c, &mut chip);
+    field(&mut c, &mut chip);
+    assert_eq!(c.width(), WIDTH);
+    let row = |c: &Custom| {
+        let w = c.width() as usize;
+        let y = 100;
+        c.frame()[y * w..(y + 1) * w].to_vec()
+    };
+    let narrow = row(&c);
+    let at = narrow.iter().position(|&p| p == WHITE).unwrap();
+    assert_eq!(narrow[at + 1], WHITE, "a low-resolution pixel: two columns");
+    c.write(reg::BPLCON0, 0x1240); // super-hires, one plane
+    field(&mut c, &mut chip);
+    field(&mut c, &mut chip);
+    assert_eq!((c.width(), c.pixels_per_cck()), (WIDE, 8));
+    assert_eq!(c.frame().len(), (WIDE * Standard::Pal.height()) as usize);
+    let wide = row(&c);
+    let at = wide.iter().position(|&p| p == WHITE).unwrap();
+    assert_ne!(wide[at + 1], WHITE, "a super-hires pixel: one 35 ns column");
+    // A savestate keeps the width.
+    let mut w = StateWriter::new();
+    c.save(&mut w);
+    let data = w.into_bytes();
+    let mut d = Custom::new(Standard::Pal, 0x1f_fffe, Chipset::ECS);
+    d.load(&mut StateReader::new(&data)).unwrap();
+    assert_eq!(d.width(), WIDE);
+    assert_eq!(&d.denise, &c.denise);
+    // Without 35 ns content the picture narrows after FINE_HOLD fields.
+    c.write(reg::BPLCON0, 0x1200);
+    for _ in 0..FINE_HOLD - 1 {
+        field(&mut c, &mut chip);
+    }
+    assert_eq!(c.width(), WIDE, "held");
+    field(&mut c, &mut chip);
+    assert_eq!(c.width(), WIDTH);
+    assert_eq!(c.frame().len(), (WIDTH * Standard::Pal.height()) as usize);
+}
+
+#[test]
+fn the_frame_reports_the_field_it_holds() {
+    // LOF turns at the end of an interlaced field: the picture still holds
+    // the field before, which a frontend weaves by its LOF.
+    let (mut c, mut chip) = setup();
+    c.write(reg::BPLCON0, 0x0204);
+    field(&mut c, &mut chip);
+    for _ in 0..4 {
+        let drawn = c.lof;
+        field(&mut c, &mut chip);
+        assert_ne!(c.lof, drawn);
+        assert_eq!(c.frame_long(), drawn);
+    }
+}
+
+#[test]
+fn aga_wide_fetch_runs_in_aligned_blocks_and_sprites_end_at_ddfstrt() {
+    // WinUAE A1200 with `tools/amiga_agatest.py` (2026-10-26): hires
+    // FMODE 3 fetches in 16-clock blocks, the planes in the last eight
+    // clocks; sprites whose first slot is at or after DDFSTRT get no DMA.
+    let (mut c, _chip) = setup_aga();
+    for (r, v) in [
+        (reg::BPLCON0, 0x8211),
+        (reg::DIWSTRT, 0x2c81),
+        (reg::DIWSTOP, 0x2cc1),
+        (reg::DDFSTOP, 0xd0),
+        (reg::FMODE, 0x000f),
+        (reg::DMACON, 0x8000 | dma::DMAEN | dma::BPLEN | dma::SPREN),
+    ] {
+        c.write(r, v);
+    }
+    for ddf in [0x40, 0x44, 0x48] {
+        c.write(reg::DDFSTRT, ddf);
+        assert_eq!(c.fetch_window().0, 0x40, "DDFSTRT {ddf:#x}");
+    }
+    c.write(reg::DDFSTRT, 0x38);
+    assert_eq!(c.fetch_window(), (0x30, 0x30 + 11 * 16));
+    c.v = 0x40;
+    c.bpl_vertical = true;
+    assert!((0x30..0x38).all(|h| c.plane_at(h).is_none()));
+    assert_eq!(c.plane_at(0x38), Some(7), "plane 8 first");
+    assert_eq!(c.plane_at(0x3f), Some(0), "plane 1 last");
+    let lost = |c: &Custom| (0..8).filter(|&n| c.sprite_blocked(n)).collect::<Vec<_>>();
+    assert_eq!(lost(&c), Vec::<usize>::new());
+    c.write(reg::DDFSTRT, 0x30);
+    assert_eq!(lost(&c), vec![7]);
+    c.write(reg::DDFSTRT, 0x24);
+    assert_eq!(lost(&c), vec![4, 5, 6, 7]);
+    c.write(reg::DDFSTRT, 0x18);
+    assert_eq!(lost(&c), (1..8).collect::<Vec<_>>());
+}

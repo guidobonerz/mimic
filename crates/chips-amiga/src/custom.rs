@@ -78,6 +78,8 @@
 //! high-resolution pixels wide from colour clock $38 (low-resolution pixel
 //! $70) and, PAL, 286 lines from line 26 (NTSC: 241 from line 21).
 
+use std::cell::Cell;
+
 use emu_core::frame::Rgb8;
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -178,6 +180,13 @@ impl Standard {
 
 /// Picture width in high-resolution pixels.
 pub const WIDTH: u32 = 720;
+/// Picture width in 35 ns output (super-hires pixels; see
+/// [`Custom::width`]).
+pub const WIDE: u32 = 2 * WIDTH;
+/// Fields without any 35 ns content before the picture returns to
+/// [`WIDTH`] (one second: a program switching super-hires on and off does
+/// not make the window's picture size flap).
+const FINE_HOLD: u16 = 50;
 /// Colour clock of the first picture column.
 pub const FIRST_CCK: u32 = 0x38;
 /// Colour clocks Denise's pixel counter runs behind Agnus' horizontal
@@ -236,6 +245,25 @@ enum SprDma {
     Data,
 }
 
+/// [`Custom::fetch_window`] and [`Custom::fetch_unit`] for the register
+/// values they were computed from (DDFSTRT, DDFSTOP, FMODE, BPLCON0's
+/// resolution bits): they were worked out again in every colour clock,
+/// which cost ~3 % of the A1200's time (profile, 2026-10-26). Not machine
+/// state: equal whatever it holds.
+#[derive(Clone, Debug, Default)]
+struct FetchCache(Cell<Option<FetchGeometry>>);
+
+/// The registers' key, the fetch window and the fetch unit.
+type FetchGeometry = (u64, (u16, u16), u16);
+
+impl PartialEq for FetchCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for FetchCache {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Custom {
     /// The beam's standard: the chip's strap, or on the ECS Agnus what
@@ -254,6 +282,9 @@ pub struct Custom {
     pub v: u16,
     pub h: u16,
     pub lof: bool,
+    /// LOF of the last complete field: [`Custom::lof`] already belongs to
+    /// the next field once one ends (see [`Custom::frame_long`]).
+    last_lof: bool,
     /// NTSC: this line is a long one (228 colour clocks).
     pub lol: bool,
     /// Fields since power-on.
@@ -286,7 +317,15 @@ pub struct Custom {
     /// cannot take data yet; see [`Custom::cpu_request`]).
     cpu_pending: bool,
     spr_dma: [SprDma; 8],
+    fetch_cache: FetchCache,
     frame: Vec<Rgb8>,
+    /// The field has 35 ns columns ([`WIDE`] wide; Denise's
+    /// [`Denise::fine`] follows).
+    wide: bool,
+    /// Something on this field needed 35 ns.
+    fine_seen: bool,
+    /// Fields in a row without 35 ns content while wide.
+    fine_idle: u16,
     /// Light pen: the beam counters frozen by a trigger (or at the end of
     /// a field without one) while BPLCON0 LPEN is set, until line 20.
     lpen_latch: Option<(u16, u16)>,
@@ -319,6 +358,7 @@ impl Custom {
             v: 0,
             h: 0,
             lof: true,
+            last_lof: true,
             lol: false,
             fields: 0,
             diwstrt: 0,
@@ -345,7 +385,11 @@ impl Custom {
             cpu_starved: 0,
             cpu_pending: false,
             spr_dma: [SprDma::Off; 8],
+            fetch_cache: FetchCache::default(),
             frame: vec![Rgb8::default(); (WIDTH * standard.height()) as usize],
+            wide: false,
+            fine_seen: false,
+            fine_idle: 0,
             lpen_latch: None,
             pen: None,
             pen_luma: 0,
@@ -361,11 +405,15 @@ impl Custom {
         n.v = self.v;
         n.h = self.h;
         n.lof = self.lof;
+        n.last_lof = self.last_lof;
         n.lol = self.lol;
         n.fields = self.fields;
+        n.wide = self.wide;
+        n.fine_idle = self.fine_idle;
+        n.denise.set_fine(self.wide);
         n.frame = std::mem::take(&mut self.frame);
         n.frame
-            .resize((WIDTH * n.standard.height()) as usize, Rgb8::default());
+            .resize((n.width() * n.standard.height()) as usize, Rgb8::default());
         n.rec = self.rec.take();
         n.denise.rec_sprites = self.denise.rec_sprites;
         n.pen = self.pen;
@@ -433,7 +481,7 @@ impl Custom {
     fn set_standard(&mut self, standard: Standard) {
         if standard != self.standard {
             self.standard = standard;
-            self.frame = vec![Rgb8::default(); (WIDTH * standard.height()) as usize];
+            self.frame = vec![Rgb8::default(); (self.width() * standard.height()) as usize];
         }
     }
 
@@ -451,6 +499,61 @@ impl Custom {
 
     pub fn frame(&self) -> &[Rgb8] {
         &self.frame
+    }
+
+    /// Is the field in [`Custom::frame`] a long one (LOF; with interlace
+    /// the even output lines)? Before the picture's first row it is the
+    /// field that just ended — LOF has already turned for the next one,
+    /// and a frontend weaving by the new value put the fields in the
+    /// wrong order (BigTime's interlaced pictures looked combed,
+    /// 2026-10-26); from the first row on, the field being drawn.
+    pub fn frame_long(&self) -> bool {
+        if self.v < self.standard.top() {
+            self.last_lof
+        } else {
+            self.lof
+        }
+    }
+
+    /// Width of [`Custom::frame`]: [`WIDTH`] high-resolution columns, or
+    /// [`WIDE`] while the field has 35 ns columns (super-hires, the AGA's
+    /// 35 ns scroll and sprite bits; see `denise`).
+    pub fn width(&self) -> u32 {
+        if self.wide {
+            WIDE
+        } else {
+            WIDTH
+        }
+    }
+
+    /// Picture columns per colour clock (4, or 8 in 35 ns output).
+    pub fn pixels_per_cck(&self) -> u32 {
+        self.width() / (WIDTH / 4)
+    }
+
+    /// Something needs 35 ns now: the field turns wide, the rows drawn so
+    /// far doubled.
+    #[cold]
+    #[inline(never)]
+    fn go_wide(&mut self) {
+        let mut wide = Vec::with_capacity(self.frame.len() * 2);
+        for c in &self.frame {
+            wide.push(*c);
+            wide.push(*c);
+        }
+        self.frame = wide;
+        self.wide = true;
+        self.fine_idle = 0;
+        self.denise.set_fine(true);
+    }
+
+    /// Back to 70 ns columns (at a field start), every second column kept.
+    #[cold]
+    #[inline(never)]
+    fn go_narrow(&mut self) {
+        self.frame = self.frame.iter().step_by(2).copied().collect();
+        self.wide = false;
+        self.denise.set_fine(false);
     }
 
     pub fn interlaced(&self) -> bool {
@@ -485,16 +588,44 @@ impl Custom {
                 return Slot::Audio(n);
             }
         }
+        if self.chipset.aga && (0x17..=0x35).contains(&h) && h & 1 == 1 && self.dma_on(dma::SPREN) {
+            // A sprite DMA still has (see `sprite_blocked`) keeps its slot
+            // against a wide fetch whose block starts before DDFSTRT; the
+            // plane misses its word (WinUAE shows garbage for DDFSTRT $1C,
+            // $2C, $3C there, the sprites intact).
+            let n = usize::from((h - 0x17) / 4);
+            if !self.sprite_blocked(n) && matches!(self.spr_dma[n], SprDma::Control | SprDma::Data)
+            {
+                return Slot::Sprite(n, (h - 0x17).is_multiple_of(4));
+            }
+        }
         if let Some(p) = self.plane_at(h) {
             return Slot::Plane(p);
         }
         if (0x17..=0x35).contains(&h) && h & 1 == 1 && self.dma_on(dma::SPREN) {
             let n = usize::from((h - 0x17) / 4);
+            if self.chipset.aga && self.sprite_blocked(n) {
+                return Slot::Free;
+            }
             if matches!(self.spr_dma[n], SprDma::Control | SprDma::Data) {
                 return Slot::Sprite(n, (h - 0x17).is_multiple_of(4));
             }
         }
         Slot::Free
+    }
+
+    /// AGA: a sprite whose first DMA slot ($17 + 4n) lies at or after
+    /// DDFSTRT gets no DMA on a line with bitplane DMA, whether or not a
+    /// plane takes the slot (WinUAE A1200 with `tools/amiga_agatest.py`,
+    /// 2026-10-26: DDFSTRT $30 loses sprite 7, $28 sprites 5-7, $24 4-7,
+    /// $20 3-7, $18 1-7, while the wide fetch leaves those slots free;
+    /// BigTime's "Real AGA Plasma" logo uses sprites 0-3 with DDFSTRT $24).
+    fn sprite_blocked(&self, n: usize) -> bool {
+        self.bpl_vertical
+            && self.v >= self.standard.top() - 1
+            && self.dma_on(dma::BPLEN)
+            && self.denise.planes() > 0
+            && 0x17 + 4 * n as u16 >= (self.ddfstrt & 0xfc).max(0x18)
     }
 
     /// Words per bitplane fetch (FMODE bits 1–0 on the AGA).
@@ -519,6 +650,29 @@ impl Custom {
     /// low resolution, 4 in high, 2 in super-hires, times the fetch width.
     #[inline(always)]
     fn fetch_unit(&self) -> u16 {
+        self.fetch_geometry().1
+    }
+
+    /// The fetch window and unit, from [`FetchCache`] while the registers
+    /// they come from are unchanged.
+    #[inline(always)]
+    fn fetch_geometry(&self) -> ((u16, u16), u16) {
+        let key = u64::from(self.ddfstrt)
+            | u64::from(self.ddfstop) << 16
+            | u64::from(self.fmode) << 32
+            | u64::from(self.denise.bplcon0 & 0x8040) << 40
+            | u64::from(self.denise.ecs) << 60;
+        if let Some((k, window, unit)) = self.fetch_cache.0.get() {
+            if k == key {
+                return (window, unit);
+            }
+        }
+        let g = (self.compute_fetch_window(), self.compute_fetch_unit());
+        self.fetch_cache.0.set(Some((key, g.0, g.1)));
+        g
+    }
+
+    fn compute_fetch_unit(&self) -> u16 {
         let base = if self.denise.shres() {
             2
         } else if self.denise.hires() {
@@ -540,16 +694,26 @@ impl Custom {
     /// units, 32 bytes a plane, as its modulo of 32 for interlace needs;
     /// the aligned values — lores FMODE 3 $38/$B8 for 320 pixels — are
     /// unchanged).
+    #[inline(always)]
     fn fetch_window(&self) -> (u16, u16) {
+        self.fetch_geometry().0
+    }
+
+    fn compute_fetch_window(&self) -> (u16, u16) {
         let start = (self.ddfstrt & 0xfc).max(0x18);
         let stop_raw = (self.ddfstop & 0xfc).min(0xd8);
         if self.fetch_words() > 1 {
-            let unit = self.fetch_unit();
+            // The fetch runs in blocks aligned to the unit (DDFSTRT $40,
+            // $44 and $48 fetch alike, $38 a block earlier: WinUAE A1200
+            // with `tools/amiga_agatest.py`, 2026-10-26); the count of
+            // units still comes from DDFSTRT itself.
+            let unit = self.compute_fetch_unit();
             if stop_raw < start {
                 return (start, start);
             }
             let units = (stop_raw - start).div_ceil(unit) + 1;
-            return (start, start + units * unit);
+            let first = start & !(unit - 1);
+            return (first, first + units * unit);
         }
         let stop = stop_raw
             + if self.denise.hires() || self.denise.shres() {
@@ -581,16 +745,26 @@ impl Custom {
         // empty); high resolution fetches every plane twice per 8 clocks,
         // super-hires (ECS Denise) four times — the two planes take the
         // bandwidth of four hires planes per the HRM; the order within the
-        // unit is this project's assumption.
+        // unit is this project's assumption. A wider AGA fetch unit has
+        // room for more planes: the pattern follows the unit's length (up
+        // to eight slots), so hires takes eight planes from FMODE 1 and
+        // super-hires from FMODE 3 (BigTime's hires HAM8 picture with
+        // FMODE 3 lost planes 7 and 8 with the FMODE 0 pattern). In a unit
+        // longer than eight clocks the planes take its last eight, plane 1
+        // last: its fetch starts the shifters, and DDFSTRT $38 with hires
+        // FMODE 3 (block $30) shows on DIWSTRT $81 as on the OCS (WinUAE
+        // A1200, `tools/amiga_agatest.py`).
         const SLOTS8: [usize; 8] = [8, 4, 6, 2, 7, 3, 5, 1];
         const SLOTS4: [usize; 4] = [4, 2, 3, 1];
         const SLOTS2: [usize; 2] = [2, 1];
         let unit = self.fetch_unit();
         let off = usize::from((h - start) % unit);
-        let p = match unit / self.fetch_words() as u16 {
+        let p = match unit {
             2 => SLOTS2.get(off).copied(),
             4 => SLOTS4.get(off).copied(),
-            _ => SLOTS8.get(off).copied(),
+            _ => off
+                .checked_sub(usize::from(unit) - 8)
+                .and_then(|i| SLOTS8.get(i).copied()),
         };
         p.filter(|&p| p <= planes).map(|p| p - 1)
     }
@@ -605,7 +779,12 @@ impl Custom {
     /// while a word fetched in slot `h` still appears at pixel 2h + 3 (plus
     /// scroll and shifter), the DDFSTRT $38 / DIWSTRT $81 relation.
     fn denise_h(&self, h: u16) -> u32 {
-        let hd = (h + self.line_len() - DENISE_LAG) % self.line_len();
+        // `h` < the line length: no division needed (it showed in profiles).
+        let hd = if h >= DENISE_LAG {
+            h - DENISE_LAG
+        } else {
+            h + self.line_len() - DENISE_LAG
+        };
         if hd >= denise::LINE_START {
             u32::from(hd)
         } else {
@@ -662,6 +841,12 @@ impl Custom {
             }
             self.fetched = false;
             self.sprite_lines(v);
+            if self.denise.needs_fine() {
+                self.fine_seen = true;
+                if !self.wide {
+                    self.go_wide();
+                }
+            }
         }
         if h == denise::LINE_START + DENISE_LAG {
             if EXTRAS && self.rec.is_some() {
@@ -810,9 +995,21 @@ impl Custom {
                 self.v = 0;
                 self.fields += 1;
                 out.field_done = true;
+                if self.wide {
+                    self.fine_idle = if self.fine_seen {
+                        0
+                    } else {
+                        self.fine_idle + 1
+                    };
+                    if self.fine_idle >= FINE_HOLD {
+                        self.go_narrow();
+                    }
+                }
+                self.fine_seen = false;
                 if EXTRAS && self.rec.is_some() {
                     self.record_end_field();
                 }
+                self.last_lof = self.lof;
                 if self.interlaced() {
                     self.lof = !self.lof;
                 }
@@ -907,8 +1104,8 @@ impl Custom {
 
     fn render<const EXTRAS: bool>(&mut self, v: u16, h: u16) {
         let dh = self.denise_h(h);
-        let mut px = [0u32; 4];
-        self.denise.output(dh, &mut px);
+        let mut px = [0u32; 8];
+        let n = self.denise.output(dh, &mut px) as u32;
         let row = if h >= denise::LINE_START + DENISE_LAG {
             i32::from(v)
         } else {
@@ -918,28 +1115,29 @@ impl Custom {
         if y < 0 || y as u32 >= self.standard.height() {
             return;
         }
-        let Some(x) = (4 * dh).checked_sub(4 * FIRST_CCK) else {
+        let Some(x) = (n * dh).checked_sub(n * FIRST_CCK) else {
             return;
         };
-        if x + 4 > WIDTH {
+        let width = n * (WIDTH / 4);
+        if x + n > width {
             return;
         }
-        let base = (y as u32 * WIDTH + x) as usize;
-        for (i, c) in px.iter().enumerate() {
+        let base = (y as u32 * width + x) as usize;
+        for (i, c) in px[..n as usize].iter().enumerate() {
             self.frame[base + i] = denise::rgb24(*c);
         }
         if EXTRAS && self.pen.is_some() {
-            self.pen_sees(base, x, y as u32);
+            self.pen_sees(base, x, y as u32, n);
         }
     }
 
-    /// A light pen points into the picture: did the four pixels at frame
+    /// A light pen points into the picture: did the `n` pixels at frame
     /// index `base` (column `x`, row `y`) light it?
     #[cold]
     #[inline(never)]
-    fn pen_sees(&mut self, base: usize, x: u32, y: u32) {
+    fn pen_sees(&mut self, base: usize, x: u32, y: u32, n: u32) {
         if let Some((px, py)) = self.pen {
-            if u32::from(py) == y && (x..x + 4).contains(&u32::from(px)) {
+            if u32::from(py) == y && (x..x + n).contains(&u32::from(px)) {
                 let c = self.frame[base + (u32::from(px) - x) as usize];
                 let luma =
                     (299 * u32::from(c.r) + 587 * u32::from(c.g) + 114 * u32::from(c.b)) / 1000;
@@ -1307,8 +1505,8 @@ impl Savestate for Custom {
         // version 4: four; version 5: the Copper's wake-up after WAIT;
         // version 6: the serial port and the audio attach alternation;
         // version 7: the ECS registers; version 8: AGA (eight planes, FMODE,
-        // Denise's 256 colours of 24 bits).
-        w.chunk(TAG, 9, |w| {
+        // Denise's 256 colours of 24 bits); version 10: 35 ns output.
+        w.chunk(TAG, 10, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1354,12 +1552,15 @@ impl Savestate for Custom {
             let (lv, lh) = self.lpen_latch.unwrap_or_default();
             w.u16(lv);
             w.u16(lh);
+            w.bool(self.wide);
+            w.bool(self.fine_seen);
+            w.u16(self.fine_idle);
         });
     }
 
     /// Atomic; the standard and pointer width are configuration.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (version, mut c) = r.chunk(TAG, 9)?;
+        let (version, mut c) = r.chunk(TAG, 10)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -1423,6 +1624,11 @@ impl Savestate for Custom {
                 let (lv, lh) = (c.u16()?, c.u16()?);
                 n.lpen_latch = latched.then_some((lv, lh));
             }
+            if version >= 10 {
+                n.wide = c.bool()?;
+                n.fine_seen = c.bool()?;
+                n.fine_idle = c.u16()?.min(FINE_HOLD);
+            }
         } else {
             n.diwhigh = Self::diwhigh_default(n.diwstop);
             n.denise.diwhigh = n.diwhigh;
@@ -1443,9 +1649,16 @@ impl Savestate for Custom {
         if n.h >= n.line_len() || n.v >= n.field_lines() {
             return Err(StateError::Invalid("beam position"));
         }
+        // Not saved: the field before alternated with interlace.
+        n.last_lof = n.lof != n.interlaced();
+        // Denise's own flag was saved with it; the field's width decides.
+        n.denise.fine = n.wide;
         n.frame = std::mem::take(&mut self.frame);
-        n.frame
-            .resize((WIDTH * n.standard.height()) as usize, Rgb8::default());
+        let len = (n.width() * n.standard.height()) as usize;
+        if self.width() != n.width() {
+            n.frame.clear();
+        }
+        n.frame.resize(len, Rgb8::default());
         n.rec = self.rec.take();
         n.denise.rec_sprites = self.denise.rec_sprites;
         n.pen = self.pen;

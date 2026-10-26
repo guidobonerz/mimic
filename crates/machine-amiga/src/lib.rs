@@ -101,7 +101,7 @@ pub mod keyboard;
 pub mod memory;
 pub mod stub;
 
-use chips_amiga::custom::{self, Chipset, Custom, Standard, FIRST_CCK, WIDTH};
+use chips_amiga::custom::{self, Chipset, Custom, Standard, FIRST_CCK};
 use chips_cbm::cia::{Cia, CiaModel};
 use cpu_m68k::Model as CpuModel;
 use cpu_m68k::{Access, Step, TimedBus68, M68000};
@@ -425,6 +425,17 @@ struct Board {
 /// vertical blank interrupt is taken one instruction later.
 const IPL_DELAY: u64 = 7;
 
+/// [`IPL_DELAY`] for the A1200's 68EC020: Paula's four colour clocks
+/// plus one for the synchroniser, which on the 68020 wants the level on
+/// two consecutive falling edges of its 14 MHz clock (MC68020 User's
+/// Manual, 5.5 interrupt operation); the 68020 decides at the end of
+/// the instruction, not at its last bus cycle's start. With the 68000's
+/// rule the 68020's quick `MOVE.W #x,INTREQ` / `RTE` still saw the
+/// cleared level and took the interrupt again (BigTime's loader counted
+/// a fade twice a frame and its main loop never saw the value it waits
+/// for, 2026-10-26).
+const IPL_DELAY_020: u64 = 5;
+
 /// One-pole low-pass coefficient at 48 kHz (16-bit fraction):
 /// 1 − e^(−2π·fc/48000) for 4.9 kHz.
 const FILTER_FIXED: i32 = 31_025;
@@ -476,8 +487,8 @@ impl Board {
 
     /// The interrupt level the CPU saw at colour clock `cck` (see
     /// [`IPL_DELAY`]; at most one change since then is told apart).
-    fn ipl_seen_at(&self, cck: u64) -> u8 {
-        if cck < self.ipl_changed + IPL_DELAY {
+    fn ipl_seen_at(&self, cck: u64, delay: u64) -> u8 {
+        if cck < self.ipl_changed + delay {
             self.ipl_before
         } else {
             self.ipl
@@ -1212,7 +1223,12 @@ impl Amiga {
         // The interrupt decision at the end of this instruction uses the
         // level as it stood when its last bus cycle began (the next step
         // acts on it).
-        self.cpu.set_ipl(self.board.ipl_seen_at(sampled / clk));
+        let ipl = if self.model.cpu() == CpuModel::Mc68020 {
+            self.board.ipl_seen_at(end / clk, IPL_DELAY_020)
+        } else {
+            self.board.ipl_seen_at(sampled / clk, IPL_DELAY)
+        };
+        self.cpu.set_ipl(ipl);
         if step == Step::Halted {
             if !self.jam_reported {
                 self.jam_reported = true;
@@ -1303,21 +1319,21 @@ impl Amiga {
         let c = &self.board.custom;
         // The pixel clock is the crystal's; the beam standard can differ
         // on the ECS Agnus (BEAMCON0).
-        let clock = 4 * cck_hz(self.standard);
+        let clock = c.pixels_per_cck() * cck_hz(self.standard);
         let standard = match c.standard {
             Standard::Pal => VideoStandard::Pal,
             Standard::Ntsc => VideoStandard::Ntsc,
         };
         SignalInfo {
             pixel_clock_hz: clock,
-            active_pixels: WIDTH,
-            total_pixels: 4 * u32::from(custom::PAL_LINE),
+            active_pixels: c.width(),
+            total_pixels: c.pixels_per_cck() * u32::from(custom::PAL_LINE),
             lines_per_field: u32::from(c.field_lines()),
             standard,
             output: OutputType::Rgb,
             field: if !c.interlaced() {
                 FieldParity::Progressive
-            } else if c.lof {
+            } else if c.frame_long() {
                 FieldParity::Even
             } else {
                 FieldParity::Odd
@@ -1412,7 +1428,7 @@ impl Machine for Amiga {
 
     fn framebuffer(&self) -> FrameRef<'_> {
         FrameRef {
-            width: WIDTH,
+            width: self.board.custom.width(),
             height: self.board.custom.standard.height(),
             pixels: PixelData::Rgb(self.board.custom.frame()),
             luma_chroma: None,
