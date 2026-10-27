@@ -45,6 +45,10 @@
 //! - `options["net"] = "off"`: the devices see no network even if the
 //!   frontend offers one.
 //!
+//! `options["debugcart"] = "on"`: VICE's debug cartridge for its test
+//! programs, an exit-code register at `$D7FF` (chip "debugcart" in the
+//! debugger's chip list).
+//!
 //! ROMs come from `MachineConfig::roms` ("kernal", "basic", "chargen";
 //! user-supplied, never in the repo). With `options["roms"] = "stub"` a
 //! tiny built-in KERNAL replacement is used instead, for tests without ROMs.
@@ -522,6 +526,11 @@ impl C64 {
             Some("off") => true,
             Some(other) => return Err(ConfigError::Invalid(format!("net option '{other}'"))),
         };
+        let debugcart = match option("debugcart") {
+            None | Some("off") => false,
+            Some("on") => true,
+            Some(other) => return Err(ConfigError::Invalid(format!("debugcart option '{other}'"))),
+        };
         let autostart = match config.options.get("autostart").map(String::as_str) {
             None | Some("off") => Autostart::Off,
             Some("on") => Autostart::Armed,
@@ -548,6 +557,7 @@ impl C64 {
             field_done_pending: false,
             boot_frame: 0,
         };
+        m.io.debugcart = debugcart;
         // The devices' lines from the start (paddles sit at mid travel).
         m.refresh_port(PortId(0));
         m.refresh_port(PortId(1));
@@ -1108,6 +1118,16 @@ impl Machine for C64 {
             },
         ];
         chips.extend(uci);
+        if self.io.debugcart {
+            let exit = self.io.debugcart_exit;
+            chips.push(ChipInfo {
+                name: "debugcart",
+                regs: vec![
+                    reg("EXIT", Some(0xd7ff), exit.unwrap_or(0), 8),
+                    reg("WRITTEN", None, u8::from(exit.is_some()), 1),
+                ],
+            });
+        }
         chips
     }
 

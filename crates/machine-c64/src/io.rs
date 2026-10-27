@@ -63,6 +63,13 @@ pub struct Io {
     /// CIA2 PC2 pulsed in this cycle: the CPU accessed port B. Consumed
     /// within the cycle.
     pub pc2: bool,
+    /// VICE's "debug cartridge" (`options["debugcart"] = "on"`): test
+    /// programs write their exit code to `$D7FF` ($00 passed, $FF failed;
+    /// VICE testbench readme). The SID still sees the write. `debugcart`
+    /// is configuration; `debugcart_exit`, the last code written, is output
+    /// for the test runner like `samples` and not part of savestates.
+    pub debugcart: bool,
+    pub debugcart_exit: Option<u8>,
 }
 
 /// The VIC-II's view of memory: one 16 KB bank of RAM, with the character
@@ -115,6 +122,8 @@ impl Io {
             iec: IecLines::default(),
             user_lines: 0,
             pc2: false,
+            debugcart: false,
+            debugcart_exit: None,
         }
     }
 
@@ -223,7 +232,12 @@ impl Io {
         let reg = addr as u8 & 0x0f;
         match addr {
             0xd000..=0xd3ff => self.vic.write(addr as u8, v),
-            0xd400..=0xd7ff => self.sid.write(addr as u8, v),
+            0xd400..=0xd7ff => {
+                if self.debugcart && addr == 0xd7ff {
+                    self.debugcart_exit = Some(v);
+                }
+                self.sid.write(addr as u8, v)
+            }
             0xd800..=0xdbff => mem.color[usize::from(addr & 0x3ff)] = v & 0x0f,
             0xdc00..=0xdcff => self.cia1.write(reg, v),
             0xdd00..=0xddff => {

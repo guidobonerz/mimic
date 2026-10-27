@@ -378,6 +378,7 @@ EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-m68k --release --test harte -- 
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-z80 --release --test zex -- --ignored --nocapture   # ZEXDOC + ZEXALL, minutes
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz lorenz_suite_stub -- --ignored   # Lorenz, no ROMs (CI gate)
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz lorenz_suite -- --ignored --exact
+python tools/fetch_vice_testprogs.py && EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test vice_testprogs -- --ignored --nocapture   # VICE test programs on the C64 (c64-testlist.in, debugcart $D7FF + reference screenshots; EMU_VICE_FILTER=CIA/; report target/tmp/vice-testprogs.txt, EMU_VICE_DUMP=1 saves failed pictures)
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test acid800 -- --ignored --nocapture   # Acid800 on the 800XL (EMU_ACID_MODEL=800xl-ntsc|130xe, EMU_ACID_FILTER=antic)
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test cpc_acid -- --ignored --nocapture   # Arnold Acid tests on the CPC 6128 (~10 min; EMU_CPC_FILTER=ppi, EMU_CPC_CRTC=0, EMU_CPC_FRAMES=n, EMU_CPC_TAIL=n, EMU_CPC_BREAK=hex)
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)

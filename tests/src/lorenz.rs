@@ -46,7 +46,7 @@ fn petscii(c: u8) -> Option<char> {
     }
 }
 
-fn space(m: &dyn Machine, name: &str) -> MemSpaceId {
+pub fn space(m: &dyn Machine, name: &str) -> MemSpaceId {
     m.memory_spaces()
         .into_iter()
         .find(|s| s.name == name)
@@ -67,7 +67,7 @@ fn reg(m: &mut dyn Machine, name: &str) -> u32 {
 
 /// Load a PRG like the KERNAL does and type RUN: sets the BASIC program
 /// end pointers and puts `RUN⏎` into the keyboard buffer.
-fn load_and_run(m: &mut dyn Machine, prg: &[u8]) {
+pub fn load_and_run(m: &mut dyn Machine, prg: &[u8]) {
     let ram = space(m, "ram");
     let load = u32::from(u16::from_le_bytes([prg[0], prg[1]]));
     let body = &prg[2..];

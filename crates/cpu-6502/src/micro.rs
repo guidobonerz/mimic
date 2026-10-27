@@ -72,6 +72,9 @@ pub(crate) struct Core {
     pub nmi_line: bool,
     /// NMI edge detected and not yet serviced.
     pub nmi_pending: bool,
+    /// An NMI edge was dropped as BRK/IRQ chose its vector; the line,
+    /// if still held, registers again in the next cycle (see `brk`).
+    pub nmi_rearm: bool,
     pub reset_pending: bool,
     /// Interrupt decision for the next opcode fetch.
     pub poll: bool,
@@ -133,6 +136,7 @@ impl Core {
             irq_line: false,
             nmi_line: false,
             nmi_pending: false,
+            nmi_rearm: false,
             reset_pending: false,
             poll: false,
             no_poll: false,
@@ -343,17 +347,23 @@ impl Core {
                     self.p | U
                 };
                 self.push(bus, p);
-                // An NMI arriving in this cycle is lost: too late to hijack,
-                // and the latch is cleared as the vector is chosen (Acid800
-                // `antic_blockednmi`).
+                // An NMI arriving in this cycle is too late to hijack, and the
+                // edge latch is cleared as the vector is chosen. A line that
+                // is still held in the next cycle registers again and is
+                // taken after the first handler instruction (CIA2 on the
+                // C64, Lorenz `nmi`); a pulse that is over by then is lost
+                // (ANTIC's one-cycle NMI, Acid800 `antic_blockednmi`).
                 if !self.lose_late_nmi {
                     self.choose_vector();
                 } else if self.seq != Seq::Reset {
-                    self.nmi_pending = false;
+                    self.nmi_rearm = std::mem::take(&mut self.nmi_pending);
                 }
                 false
             }
             5 => {
+                if std::mem::take(&mut self.nmi_rearm) && self.nmi_line {
+                    self.nmi_pending = true;
+                }
                 self.data = read(bus, self.vector);
                 self.p |= I;
                 if self.cmos {

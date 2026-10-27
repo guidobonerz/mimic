@@ -87,8 +87,9 @@ impl Default for Config {
 }
 
 const STATE_TAG: [u8; 4] = *b"6502";
-/// Version 2 added `polled` (version 1 loads with it clear).
-const STATE_VERSION: u16 = 2;
+/// Version 2 added `polled`, version 3 `nmi_rearm` (older versions load
+/// with them clear).
+const STATE_VERSION: u16 = 3;
 
 /// A 6502-family CPU.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +139,7 @@ impl Cpu6502 {
         c.t = 0;
         c.reset_pending = true;
         c.nmi_pending = false;
+        c.nmi_rearm = false;
         c.poll = false;
     }
 
@@ -361,6 +363,7 @@ impl Savestate for Cpu6502 {
                 c.jammed,
                 self.rdy,
                 c.polled,
+                c.nmi_rearm,
             ] {
                 w.bool(v);
             }
@@ -395,6 +398,7 @@ impl Savestate for Cpu6502 {
         c.jammed = s.bool()?;
         let rdy = s.bool()?;
         c.polled = version >= 2 && s.bool()?;
+        c.nmi_rearm = version >= 3 && s.bool()?;
         if c.t > 8 && !c.jammed {
             return Err(StateError::Invalid("6502 cycle counter"));
         }
@@ -595,6 +599,45 @@ mod tests {
         step(&mut cpu, &mut bus); // first handler instruction
         assert_eq!(cpu.pc(), 0x9001);
         step(&mut cpu, &mut bus); // now the NMI sequence
+        assert_eq!(cpu.pc(), 0xa000);
+    }
+
+    #[test]
+    fn nmi_pulse_at_brks_p_push_is_lost() {
+        // Acid800 `antic_blockednmi`: ANTIC's one-cycle NMI arriving as BRK
+        // pushes P is neither a hijack nor taken later.
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0x00, 0x00]);
+        bus.load(0xfffa, &[0x00, 0xa0, 0x00, 0xb0, 0x00, 0x90]);
+        bus.load(0x9000, &[0xea; 4]);
+        for _ in 0..4 {
+            cpu.tick(&mut bus);
+        }
+        cpu.set_nmi(true);
+        cpu.tick(&mut bus); // P push
+        cpu.set_nmi(false);
+        step(&mut cpu, &mut bus); // rest of BRK
+        assert_eq!(cpu.pc(), 0x9000);
+        for _ in 0..3 {
+            step(&mut cpu, &mut bus);
+        }
+        assert_eq!(cpu.pc(), 0x9003, "no NMI");
+    }
+
+    #[test]
+    fn held_nmi_at_brks_p_push_follows_the_first_handler_instruction() {
+        // Lorenz `nmi`: CIA2 holds the line, which registers again after
+        // the latch is cleared at the P push.
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0x00, 0x00]);
+        bus.load(0xfffa, &[0x00, 0xa0, 0x00, 0xb0, 0x00, 0x90]);
+        bus.load(0x9000, &[0xea; 4]);
+        for _ in 0..4 {
+            cpu.tick(&mut bus);
+        }
+        cpu.set_nmi(true);
+        step(&mut cpu, &mut bus); // rest of BRK
+        assert_eq!(cpu.pc(), 0x9000, "no hijack");
+        step(&mut cpu, &mut bus);
+        step(&mut cpu, &mut bus);
         assert_eq!(cpu.pc(), 0xa000);
     }
 
