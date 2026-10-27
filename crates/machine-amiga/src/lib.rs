@@ -22,10 +22,12 @@
 //! - `1200`: 68EC020 at 14.18 MHz (four CPU clocks per colour clock; the
 //!   68020's bus cycles take three of them, a long-word aligned long is
 //!   one cycle on the 32-bit chip RAM), the AGA chip set (Alice, Lisa), 2 MB
-//!   chip RAM, Gayle (its id register only; no IDE drive, no PCMCIA),
+//!   chip RAM, Gayle (its id register; an empty IDE port that reads $FF; no PCMCIA),
 //!   Kickstart 3.1 by default (the A500/A600/A2000 image 40.063 boots the
-//!   A1200 model; an A1200 image, 3.0 39.106 or 3.1 40.068, goes in as
-//!   `kick30`/`kick31` too — the A4000's 3.0 does not fit: it scans for
+//!   A1200 model; an A1200 image, 3.0 39.106 or 3.1 40.068, is the role
+//!   `kick30a1200`/`kick31a1200`, which the model prefers, e.g. Amiga
+//!   Forever's `amiga-os-310-a1200.rom` with its `rom.key` — the A4000's
+//!   3.0 does not fit: it scans for
 //!   32-bit RAM at $08000000, which the 68EC020's 24-bit bus folds onto
 //!   chip RAM). The E clock stays at the 7 MHz clock's tenth.
 //!
@@ -299,7 +301,11 @@ fn option<'a>(config: &'a MachineConfig, key: &str, default: &'a str) -> &'a str
         .unwrap_or(default)
 }
 
-fn load_rom(config: &MachineConfig, default_kick: &str) -> Result<Vec<u8>, ConfigError> {
+fn load_rom(
+    config: &MachineConfig,
+    default_kick: &str,
+    a1200: bool,
+) -> Result<Vec<u8>, ConfigError> {
     if let Some(v) = config.options.get("roms") {
         return match v.as_str() {
             "stub" => Ok(stub::rom()),
@@ -318,9 +324,12 @@ fn load_rom(config: &MachineConfig, default_kick: &str) -> Result<Vec<u8>, Confi
             )))
         }
     };
-    let rom = config
-        .roms
-        .get(role)
+    // The A1200 takes its own 3.0/3.1 image when there is one.
+    let own = format!("{role}a1200");
+    let rom = (a1200 && matches!(role, "kick30" | "kick31"))
+        .then(|| config.roms.get(&own))
+        .flatten()
+        .or_else(|| config.roms.get(role))
         .ok_or_else(|| ConfigError::MissingRom(role.into()))?;
     if rom.len() != 0x4_0000 && rom.len() != 0x8_0000 {
         return Err(ConfigError::Invalid(format!(
@@ -1061,7 +1070,7 @@ impl Amiga {
         let rom = if boot_rom.is_some() {
             Vec::new()
         } else {
-            load_rom(config, kick_default)?
+            load_rom(config, kick_default, model == Model::A1200)?
         };
         let mut mem = Memory::new(chip, slow, &rom).with_fast(fast);
         if model == Model::A1000 {

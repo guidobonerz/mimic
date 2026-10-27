@@ -70,7 +70,11 @@ impl Region {
 }
 
 /// The A1200's Gayle (IDE interface, PCMCIA, system control). Without an
-/// IDE drive its registers read 0; the id register at $DE1000 delivers the
+/// IDE drive the IDE registers ($DA0000–$DA3FFF) read $FF, the floating
+/// bus (status $FF: no device; with 0 the ROM's scsi.device waited for a
+/// drive to become ready — Kickstart 40.068 never reached insert-disk,
+/// 40.063 only after about 850 frames instead of 150), Gayle's own
+/// registers 0; the id register at $DE1000 delivers the
 /// chip's id ($D0 on the A1200) bit by bit in D7, most significant bit
 /// first, a read per bit; a write restarts the sequence. Kickstart 3.x
 /// reads it to tell an A1200 from an A500/A2000 and then probes the IDE
@@ -92,14 +96,23 @@ impl Gayle {
             self.id_bits = self.id_bits.wrapping_add(1).min(8);
             return bit;
         }
-        0
+        Self::other(addr)
+    }
+
+    /// Reads other than the id: the empty IDE port's floating bus.
+    fn other(addr: u32) -> u8 {
+        if (0xda_0000..0xda_4000).contains(&(addr & 0xff_ffff)) {
+            0xff
+        } else {
+            0
+        }
     }
 
     pub fn peek(&self, addr: u32) -> u8 {
         if addr & 0xff_f000 == 0xde_1000 {
             return (GAYLE_ID_A1200 << (self.id_bits & 7)) & 0x80;
         }
-        0
+        Self::other(addr)
     }
 
     pub fn write(&mut self, addr: u32, _v: u8) {

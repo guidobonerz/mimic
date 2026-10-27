@@ -12,6 +12,12 @@
 //! compared in lower case with `.` and `_` read as `-`. Within a folder
 //! the first prefix of a spec that matches any file wins, so a spec
 //! lists the preferred part number before the generic name.
+//!
+//! Amiga Forever's encrypted ROM files (`amiga-os-310-a1200.rom` …: the
+//! header `AMIROMTYPE1`, then the image XORed byte by byte with the
+//! repeating contents of `rom.key`) are decrypted when a `rom.key` lies in
+//! the same folder (Cloanto, Amiga Forever documentation, "ROM files");
+//! without the key they are skipped.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -252,8 +258,20 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
     ];
     // Amiga Kickstart: 1.2 (33.180), 1.3 (34.5), 2.04 (37.175), 3.1 (40.63),
     // as 256 KB images or 512 KB files that hold one twice. Common names:
-    // kick13.rom, "Kickstart 1.3.rom", kick34005.a500.
+    // kick13.rom, "Kickstart 1.3.rom", kick34005.a500, Amiga Forever's
+    // amiga-os-130.rom. The A1200's own 3.0/3.1 (39.106, 40.068) are
+    // separate roles the A1200 model prefers.
     const AMIGA: &[RomSpec] = &[
+        optional(
+            "kick30a1200",
+            &["amiga-os-300-a1200", "kick30-a1200", "kick39106-a1200"],
+            0x8_0000,
+        ),
+        optional(
+            "kick31a1200",
+            &["amiga-os-310-a1200", "kick31-a1200", "kick40068-a1200"],
+            0x8_0000,
+        ),
         optional(
             "kick12",
             &[
@@ -262,6 +280,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
                 "kickstart 1-2",
                 "kickstart-1-2",
                 "kick33180",
+                "amiga-os-120",
             ],
             0x8_0000,
         ),
@@ -273,6 +292,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
                 "kickstart 1-2",
                 "kickstart-1-2",
                 "kick33180",
+                "amiga-os-120",
             ],
             0x4_0000,
         ),
@@ -284,6 +304,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
                 "kickstart 1-3",
                 "kickstart-1-3",
                 "kick34005",
+                "amiga-os-130",
             ],
             0x8_0000,
         ),
@@ -295,6 +316,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
                 "kickstart 1-3",
                 "kickstart-1-3",
                 "kick34005",
+                "amiga-os-130",
             ],
             0x4_0000,
         ),
@@ -550,6 +572,25 @@ pub fn env_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// The header of an Amiga Forever encrypted ROM file.
+const CLOANTO_HEADER: &[u8] = b"AMIROMTYPE1";
+
+/// The image in an Amiga Forever encrypted ROM file (`AMIROMTYPE1`, then
+/// the image XORed with the repeating key); `None` if `data` is not one or
+/// the key is empty.
+pub fn decrypt_cloanto(data: &[u8], key: &[u8]) -> Option<Vec<u8>> {
+    let body = data.strip_prefix(CLOANTO_HEADER)?;
+    if key.is_empty() {
+        return None;
+    }
+    Some(
+        body.iter()
+            .zip(key.iter().cycle())
+            .map(|(b, k)| b ^ k)
+            .collect(),
+    )
+}
+
 /// A file name as prefixes are written: lower case, `-` for `.` and `_`.
 fn normalize(name: &str) -> String {
     name.to_lowercase()
@@ -558,18 +599,48 @@ fn normalize(name: &str) -> String {
         .collect()
 }
 
-/// (normalized name, path, size) of the files in `dir`, sorted by name.
+/// (normalized name, path, image size) of the files in `dir`, sorted by
+/// name. An Amiga Forever encrypted file counts with its image size when
+/// the folder has a `rom.key`, and is left out without one.
 fn files(dir: &Path) -> io::Result<Vec<(String, PathBuf, u64)>> {
     let mut entries = Vec::new();
+    let has_key = dir.join("rom.key").is_file();
     for e in fs::read_dir(dir)? {
         let e = e?;
         if e.file_type()?.is_file() {
             let name = normalize(&e.file_name().to_string_lossy());
-            entries.push((name, e.path(), e.metadata()?.len()));
+            let mut len = e.metadata()?.len();
+            let header = CLOANTO_HEADER.len() as u64;
+            if len % 1024 == header && is_cloanto(&e.path()) {
+                if !has_key {
+                    continue;
+                }
+                len -= header;
+            }
+            entries.push((name, e.path(), len));
         }
     }
     entries.sort();
     Ok(entries)
+}
+
+fn is_cloanto(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0; 11];
+    fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|()| head == CLOANTO_HEADER)
+}
+
+/// A ROM file's image: Amiga Forever files decrypted with the folder's key.
+fn read_rom(path: &Path) -> io::Result<Vec<u8>> {
+    let data = fs::read(path)?;
+    if data.starts_with(CLOANTO_HEADER) {
+        let key = fs::read(path.with_file_name("rom.key"))?;
+        return decrypt_cloanto(&data, &key)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "empty rom.key"));
+    }
+    Ok(data)
 }
 
 /// Load every ROM `machine` needs from `dir` (see the module docs for the
@@ -599,7 +670,7 @@ pub fn load(dir: &Path, machine: &str) -> io::Result<BTreeMap<String, Vec<u8>>> 
         });
         match found {
             Some((_, path, _)) => {
-                roms.insert(spec.role.to_string(), fs::read(path)?);
+                roms.insert(spec.role.to_string(), read_rom(path)?);
             }
             None if spec.optional => {}
             None => {
@@ -639,7 +710,26 @@ pub fn match_files(
         let folder = parts.next().map(str::to_lowercase).unwrap_or_default();
         (folder, name, data.clone())
     };
-    let all: Vec<(String, String, Vec<u8>)> = files.iter().map(entry).collect();
+    let mut all: Vec<(String, String, Vec<u8>)> = files.iter().map(entry).collect();
+    // Amiga Forever files: decrypted with a rom.key from the same folder.
+    let keys: Vec<(String, Vec<u8>)> = all
+        .iter()
+        .filter(|(_, name, _)| name == "rom-key")
+        .map(|(folder, _, data)| (folder.clone(), data.clone()))
+        .collect();
+    all.retain_mut(|(folder, _, data)| {
+        if !data.starts_with(CLOANTO_HEADER) {
+            return true;
+        }
+        let key = keys.iter().find(|(f, _)| f == folder);
+        match key.and_then(|(_, k)| decrypt_cloanto(data, k)) {
+            Some(image) => {
+                *data = image;
+                true
+            }
+            None => false,
+        }
+    });
     let mut groups: Vec<Vec<&(String, String, Vec<u8>)>> = Vec::new();
     for sub in folders(machine).iter().chain(&["drives"]) {
         groups.push(all.iter().filter(|(f, _, _)| f == sub).collect());
@@ -688,6 +778,43 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// An Amiga Forever file of `image` under `key`.
+    fn cloanto(image: &[u8], key: &[u8]) -> Vec<u8> {
+        let mut f = CLOANTO_HEADER.to_vec();
+        f.extend(image.iter().zip(key.iter().cycle()).map(|(b, k)| b ^ k));
+        f
+    }
+
+    #[test]
+    fn amiga_forever_roms_are_decrypted_with_rom_key() {
+        let key: Vec<u8> = (0..1544u32).map(|i| (i * 7 + 3) as u8).collect();
+        let image: Vec<u8> = (0..0x8_0000u32).map(|i| (i >> 3) as u8).collect();
+        let dir = temp_dir("cloanto");
+        fs::create_dir_all(dir.join("amiga")).unwrap();
+        let file = dir.join("amiga/amiga-os-310-a1200.rom");
+        fs::write(&file, cloanto(&image, &key)).unwrap();
+        // Without the key the file is not offered.
+        assert!(!load(&dir, "amiga").unwrap().contains_key("kick31a1200"));
+        fs::write(dir.join("amiga/rom.key"), &key).unwrap();
+        let roms = load(&dir, "amiga").unwrap();
+        assert_eq!(roms.get("kick31a1200"), Some(&image));
+        assert!(
+            !roms.contains_key("kick31"),
+            "the A1200 image is its own role"
+        );
+        // Uploaded files (browser) the same way.
+        let files = vec![
+            (
+                "roms/amiga/amiga-os-310-a1200.rom".to_string(),
+                cloanto(&image, &key),
+            ),
+            ("roms/amiga/rom.key".to_string(), key.clone()),
+        ];
+        let roms = match_files(&files, "amiga").unwrap();
+        assert_eq!(roms.get("kick31a1200"), Some(&image));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

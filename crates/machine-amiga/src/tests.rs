@@ -608,6 +608,14 @@ fn the_1200_has_a_68020_the_aga_chips_and_gayle() {
     }
     assert_eq!(id, 0xd0);
     assert_eq!(b.read(0xda_8000, Size::Byte, false), 0, "no IDE drive");
+    // The empty IDE port: status (and every IDE register) floats to $FF,
+    // which the ROM's scsi.device takes as "no device".
+    assert_eq!(b.read(0xda_201c, Size::Byte, false), 0xff);
+    assert_eq!(
+        peek_cpu(&m, 0xda_201c, Size::Byte),
+        0xff,
+        "peek sees the same"
+    );
     // Another model has no Gayle: open bus.
     let mut m = stub_with(None, &[]);
     assert_eq!(m.board.read(0xde_1000, Size::Byte, false), 0);
