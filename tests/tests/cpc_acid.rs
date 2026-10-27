@@ -162,7 +162,20 @@ fn cpc_acid_suite() {
     println!("{summary}");
     report.push_str(&summary);
     report.push('\n');
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("cpc-acid.txt");
+    // Trend per program: it finishes without a failed result.
+    let outcomes: Vec<(String, bool)> = results
+        .iter()
+        .map(|(name, r)| {
+            let ok = matches!(r, Ok(o) if o.done && o.failed == 0);
+            (name.clone(), ok)
+        })
+        .collect();
+    let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let trend = emu_tests::trend::record(&tmp, &format!("cpc-acid-crtc{crtc}"), &outcomes);
+    println!("{trend}");
+    report.push_str(&trend);
+    report.push('\n');
+    let out = tmp.join("cpc-acid.txt");
     std::fs::write(&out, report).unwrap();
     if filter.is_empty() {
         assert!(ratio >= GATE, "{summary}; report: {}", out.display());

@@ -338,7 +338,10 @@ fn divl(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
         (q as u32, rem as u32, q >> 32 != 0)
     };
     if overflow {
+        // N and Z clear (A1200 run of tools/m68020_random.py).
         cpu.set_flag(sr::V, true);
+        cpu.set_flag(sr::N, false);
+        cpu.set_flag(sr::Z, false);
     } else {
         cpu.set_flag(sr::V, false);
         cpu.set_flag(sr::N, quotient & 0x8000_0000 != 0);

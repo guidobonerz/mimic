@@ -375,6 +375,8 @@ EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-6502 --release -- --ignored   #
 EMU_HARTE_FULL=1 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-6502 --release -- --ignored   # also the 65C02 (synertek65c02 set)
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-z80 --release --test harte -- --ignored   # every 10th Z80 test (EMU_HARTE_ONLY=ed: only "ed …" files)
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-m68k --release --test harte -- --ignored --nocapture   # every 10th 68000 test (EMU_HARTE_FULL=1 all, EMU_HARTE_ONLY=MOVE,DIVU file prefixes)
+python tools/m68020_random.py build m020.adf [--seed N] [--bin tests/data/m68020_random.bin]   # 68020 random instruction tests as an A1200 boot disk; boot it in WinUAE (A1200, 68EC020, no FPU/JIT, 2 MB chip, KS 3.1, disk writable) until the screen turns green, then `extract m020.adf tests/data/m68020_random.ref`
+cargo test -p emu-tests --release --test m68020_random -- --ignored --nocapture   # compares the bare 68020 with the reference (report target/tmp/m68020-random.txt, trend per case); random_68020_disk_runs_on_the_a1200 with EMU_ROM_DIR + EMU_M68020_ADF checks the disk on mimic's A1200 first
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-z80 --release --test zex -- --ignored --nocapture   # ZEXDOC + ZEXALL, minutes
 EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz lorenz_suite_stub -- --ignored   # Lorenz, no ROMs (CI gate)
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz lorenz_suite -- --ignored --exact
@@ -454,6 +456,7 @@ cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms --option user
 - Atari: Acid800, Altirra test programs. CPC: CRTC/Z80 timing test programs. Amiga: vAmigaTS. NES: nestest and blargg's suites (nes-test-roms collection).
 - Regression: headless run → N frames → compare against reference images in `tests/reference/` (exact match; update only with an explanation in the commit).
 - Test-suite data and ROMs are fetched by `tools/fetch-testdata.sh`, never committed if license forbids.
+- Suite runners (Lorenz, Acid800, CPC Acid, VICE test programs, 68020 random tests) record a trend against their previous run with `emu_tests::trend` (`target/tmp/trend/<suite>.txt` + `-history.tsv`): passed before → now, newly passing, newly failing. Report it with every result.
 - A new chip or machine feature is not done without tests and savestate round-trip coverage.
 - Freezer: tests for each `FreezeMode` (blocked write, frame reapply, banked addresses), cheat-search narrowing on a scripted test program, and freezer-cartridge freeze/restart round trips.
 - CRT: CPU-path output is compared against reference images per profile (tolerance-based, not exact); signal-stage tests use known test patterns (color bars, PAL color-mix pairs, Atari artifact stripes). GPU shaders are checked against the CPU path within a tolerance.

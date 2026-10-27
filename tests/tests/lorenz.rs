@@ -104,7 +104,15 @@ fn run_suite(mut config: MachineConfig, data: &Path, skip: &[&str], report_name:
     for name in &skipped {
         report.push_str(&format!("{name:<12} skipped (needs real ROMs)\n"));
     }
-    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(report_name);
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let outcomes: Vec<(String, bool)> = results
+        .iter()
+        .map(|(name, o)| (name.clone(), o.verdict == Verdict::Pass))
+        .collect();
+    let trend = emu_tests::trend::record(tmp, report_name.trim_end_matches(".txt"), &outcomes);
+    report.push_str(&trend);
+    report.push('\n');
+    let out = tmp.join(report_name);
     std::fs::write(&out, &report).unwrap();
     for (name, o) in results.iter().filter(|(_, o)| o.verdict != Verdict::Pass) {
         println!("FAIL {name:<12} {:?}", o.verdict);
@@ -116,6 +124,7 @@ fn run_suite(mut config: MachineConfig, data: &Path, skip: &[&str], report_name:
         skipped.len(),
         out.display()
     );
+    println!("{trend}");
     if filter.is_empty() {
         ratio
     } else {

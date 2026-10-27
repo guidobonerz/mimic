@@ -928,6 +928,7 @@ name = "emu-tests"
 version = "0.1.0"
 dependencies = [
  "chips-cbm",
+ "cpu-m68k",
  "devices-cartridge",
  "devices-net",
  "drives-other",

@@ -5,4 +5,5 @@
 pub mod acid800;
 pub mod cpc_acid;
 pub mod lorenz;
+pub mod trend;
 pub mod typing;

@@ -39,3 +39,4 @@ qoi.workspace = true
 png.workspace = true
 video-crt.workspace = true
 chips-cbm.workspace = true
+cpu-m68k.workspace = true

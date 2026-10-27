@@ -503,7 +503,23 @@ fn vice_testprogs_c64() {
     } else {
         "vice-testprogs-filtered.txt"
     };
-    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(report_name);
+    // Trend: every entry that ran (the options tell apart entries of one
+    // program).
+    let outcomes: Vec<(String, bool)> = results
+        .iter()
+        .filter(|(_, v)| !matches!(v, Verdict::Skipped(_)))
+        .map(|(i, v)| {
+            let e = &entries[*i];
+            let name = format!("{} {}", e.name(), e.options.join(","));
+            (name.trim_end().to_string(), matches!(v, Verdict::Pass))
+        })
+        .collect();
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let trend = emu_tests::trend::record(tmp, "vice-testprogs-c64", &outcomes);
+    report.push('\n');
+    report.push_str(&trend);
+    report.push('\n');
+    let out = tmp.join(report_name);
     std::fs::write(&out, &report).unwrap();
     let run = total[0] + total[1] + total[2];
     println!(
@@ -516,4 +532,5 @@ fn vice_testprogs_c64() {
         total[3],
         out.display()
     );
+    println!("{trend}");
 }

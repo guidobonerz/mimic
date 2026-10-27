@@ -473,7 +473,8 @@ fn line4(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
     if op & 0x01c0 == 0x01c0 {
         return lea(cpu, bus, op);
     }
-    if op & 0x01c0 == 0x0180 {
+    // CHK.W; CHK.L on the 68020 (chk refuses it on the 68000).
+    if op & 0x01c0 == 0x0180 || op & 0x01c0 == 0x0100 {
         return chk(cpu, bus, op);
     }
     match op & 0x0fc0 {
@@ -704,6 +705,28 @@ fn chk(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
     };
     cpu.prefetch(bus)?;
     cpu.set_flag(sr::Z, dn == 0);
+    if cpu.is_020() {
+        // The 68020 leaves N = sign of Dn and V/C of bound − Dn in the
+        // operand size (results of an A1200 68EC020 run with
+        // tools/m68020_random.py; the manual calls them undefined).
+        let (sz, msb) = if long {
+            (Sz::L, 1u32 << 31)
+        } else {
+            (Sz::W, 1 << 15)
+        };
+        let (b, d) = (bound as u32 & sz.mask(), dn as u32 & sz.mask());
+        let r = b.wrapping_sub(d) & sz.mask();
+        cpu.set_flag(sr::N, dn < 0);
+        cpu.set_flag(sr::V, (b ^ d) & (b ^ r) & msb != 0);
+        cpu.set_flag(sr::C, d > b);
+        if dn > bound || dn < 0 {
+            cpu.idle(bus, 6);
+            let pc = cpu.pc();
+            return cpu.exception(bus, vector::CHK, pc, Frame::LowSrHigh);
+        }
+        cpu.idle(bus, 6);
+        return Ok(());
+    }
     cpu.set_flag(sr::V, false);
     cpu.set_flag(sr::C, false);
     // The upper bound is checked first.
@@ -818,12 +841,18 @@ fn movem(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, to_regs: bool) -> 
                 continue;
             }
             let reg = 15 - i;
-            let v = if reg < 8 { cpu.d[reg] } else { cpu.a[reg - 8] };
+            let mut v = if reg < 8 { cpu.d[reg] } else { cpu.a[reg - 8] };
+            // The 68020 stores An itself decremented by one operand (A1200
+            // 68EC020 run of tools/m68020_random.py; the 68000 stores the
+            // initial value).
+            if reg == 8 + r && cpu.is_020() {
+                v = v.wrapping_sub(sz.bytes());
+            }
             addr = addr.wrapping_sub(sz.bytes());
             cpu.write_mem(bus, addr, sz, v, true)?;
         }
-        // An in the list is stored with its initial value; it changes at
-        // the end.
+        // On the 68000 An in the list is stored with its initial value; it
+        // changes at the end.
         cpu.a[r] = addr;
     } else {
         for i in 0..16 {
@@ -1475,6 +1504,7 @@ fn div(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, signed: bool) -> Res
     let s = cpu.src(bus, m, r, Sz::W)? & 0xffff;
     let dn = usize::from((op >> 9) & 7);
     let dividend = cpu.d[dn];
+    let carry = cpu.flag(sr::C);
     cpu.set_flag(sr::C, false);
     if s == 0 {
         // N, Z, V are "undefined" in the manual; the 68000 clears them
@@ -1491,6 +1521,13 @@ fn div(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, signed: bool) -> Res
         let q = dividend / s;
         if q > 0xffff {
             cpu.set_flag(sr::V, true);
+            // The 68020 sets N and Z too and leaves C (A1200 run of
+            // tools/m68020_random.py).
+            if cpu.is_020() {
+                cpu.set_flag(sr::N, true);
+                cpu.set_flag(sr::Z, true);
+                cpu.set_flag(sr::C, carry);
+            }
             cpu.idle(bus, 6);
             return cpu.prefetch(bus);
         }
@@ -1507,6 +1544,11 @@ fn div(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16, signed: bool) -> Res
     let q = (a as i64) / (b as i64);
     if !(-0x8000..=0x7fff).contains(&q) {
         cpu.set_flag(sr::V, true);
+        // The 68020 clears N and Z (A1200 run of tools/m68020_random.py).
+        if cpu.is_020() {
+            cpu.set_flag(sr::N, false);
+            cpu.set_flag(sr::Z, false);
+        }
         cpu.idle(bus, divs_clocks(a, b) - 4);
         return cpu.prefetch(bus);
     }
@@ -1621,7 +1663,8 @@ fn bcd_add(cpu: &mut M68000, s: u32, d: u32) -> u32 {
     let r = rr & 0xff;
     cpu.set_flag(sr::C, carry);
     cpu.set_flag(sr::X, carry);
-    cpu.set_flag(sr::V, !ss & rr & 0x80 != 0);
+    // V: the 68020 clears it (A1200 run of tools/m68020_random.py).
+    cpu.set_flag(sr::V, !ss & rr & 0x80 != 0 && !cpu.is_020());
     cpu.set_flag(sr::N, r & 0x80 != 0);
     if r != 0 {
         cpu.set_flag(sr::Z, false);
@@ -1640,7 +1683,7 @@ fn bcd_sub(cpu: &mut M68000, s: u32, d: u32) -> u32 {
     let r = rr & 0xff;
     cpu.set_flag(sr::C, carry);
     cpu.set_flag(sr::X, carry);
-    cpu.set_flag(sr::V, dd & !rr & 0x80 != 0);
+    cpu.set_flag(sr::V, dd & !rr & 0x80 != 0 && !cpu.is_020());
     cpu.set_flag(sr::N, r & 0x80 != 0);
     if r != 0 {
         cpu.set_flag(sr::Z, false);
@@ -1706,9 +1749,11 @@ fn shift(cpu: &mut M68000, kind: u16, left: bool, sz: Sz, v: u32, count: u32) ->
                     v = (v >> 1) | sign;
                 }
             }
-            // Shifted right past the operand's width, ASR ends with C and
-            // X clear (Harte data), although the result is all sign bits.
-            if kind == 0 && !left && count > sz.bytes() * 8 {
+            // Shifted right past the operand's width, the 68000's ASR ends
+            // with C and X clear (Harte data), although the result is all
+            // sign bits; the 68020 keeps the sign in C and X (A1200 run of
+            // tools/m68020_random.py).
+            if kind == 0 && !left && count > sz.bytes() * 8 && !cpu.is_020() {
                 c = false;
             }
             if count > 0 {

@@ -113,7 +113,22 @@ fn acid800_suite() {
     println!("{summary}");
     report.push_str(&summary);
     report.push('\n');
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("acid800-{model}.txt"));
+    let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let outcomes: Vec<(String, bool)> = results
+        .iter()
+        .filter(|(_, r)| !matches!(r, Ok(o) if o.verdict == Verdict::Skipped))
+        .map(|(name, r)| {
+            (
+                name.clone(),
+                matches!(r, Ok(o) if o.verdict == Verdict::Pass),
+            )
+        })
+        .collect();
+    let trend = emu_tests::trend::record(&tmp, &format!("acid800-{model}"), &outcomes);
+    println!("{trend}");
+    report.push_str(&trend);
+    report.push('\n');
+    let out = tmp.join(format!("acid800-{model}.txt"));
     std::fs::write(&out, report).unwrap();
     if filter.is_empty() {
         assert!(ratio >= GATE, "{summary}; report: {}", out.display());
