@@ -68,6 +68,8 @@ pub mod reg {
     pub const BLTAPTL: u16 = 0x052;
     pub const BLTDPTL: u16 = 0x056;
     pub const BLTSIZE: u16 = 0x058;
+    /// ECS: BLTCON0's low byte (the minterm) alone.
+    pub const BLTCON0L: u16 = 0x05a;
     pub const BLTSIZV: u16 = 0x05c;
     pub const BLTSIZH: u16 = 0x05e;
     pub const BLTCMOD: u16 = 0x060;

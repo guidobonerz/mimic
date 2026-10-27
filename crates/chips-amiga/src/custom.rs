@@ -1267,6 +1267,11 @@ impl Custom {
                 Self::set_ptr(&mut self.blitter.pt[ch], r & 2 == 0, v, mask);
             }
             reg::BLTSIZE => self.blitter.start(v),
+            // ECS: the minterm alone, the channel enables and the A shift
+            // stay (HRM 3rd edition, appendix C "Enhanced Chip Set").
+            reg::BLTCON0L if self.chipset.ecs_agnus => {
+                self.blitter.con0 = (self.blitter.con0 & 0xff00) | (v & 0x00ff);
+            }
             reg::BLTSIZV if self.chipset.ecs_agnus => self.blitter.sizv = v & 0x7fff,
             reg::BLTSIZH if self.chipset.ecs_agnus => self.blitter.start_ecs(v),
             reg::BLTCMOD..=reg::BLTDMOD => {

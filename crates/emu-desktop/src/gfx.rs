@@ -102,10 +102,18 @@ impl Gfx {
         if let Some(f) = caps.formats.iter().find(|f| !f.is_srgb()) {
             config.format = *f;
         }
-        config.present_mode = wgpu::PresentMode::AutoVsync;
-        // One frame in flight: every redraw waits for the next vertical
-        // blank, so redraws come evenly instead of in bursts that would
-        // find the frame queue empty or overfull.
+        // Mailbox where there is one (DX12, some Vulkan drivers): a present
+        // never blocks and the display shows the newest frame at its next
+        // vertical blank, so a frame goes out the moment the emulation has
+        // it. FIFO (the fallback) queues presents and, through the
+        // compositor, releases them in bursts of two or three; a frame then
+        // waits up to two refreshes, and the render thread paces itself by
+        // the blocking (`render::run`).
+        config.present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::AutoVsync
+        };
         config.desired_maximum_frame_latency = 1;
         surface.configure(&device, &config);
 
@@ -283,11 +291,6 @@ impl Gfx {
         })
     }
 
-    /// Footer width in window pixels.
-    pub fn footer_width(&self) -> u32 {
-        self.config.width.max(1)
-    }
-
     /// Height the footer takes from the window, in window pixels.
     fn footer_height(&self) -> u32 {
         self.footer
@@ -358,19 +361,17 @@ impl Gfx {
         }
     }
 
-    /// The frame pixel under window position (`x`, `y`), if the pointer is
-    /// over the picture.
-    pub fn frame_pos(&self, x: f64, y: f64) -> Option<(u32, u32)> {
-        let (_, _, fw, fh) = self.texture.as_ref()?;
-        let (vx, vy, vw, vh) = self.viewport();
-        let (px, py) = (x - f64::from(vx), y - f64::from(vy));
-        if px < 0.0 || py < 0.0 || px >= f64::from(vw) || py >= f64::from(vh) {
-            return None;
-        }
-        Some((
-            (px * f64::from(*fw) / f64::from(vw)) as u32,
-            (py * f64::from(*fh) / f64::from(vh)) as u32,
-        ))
+    /// Presents block until the display took the previous frame (FIFO),
+    /// which paces a loop of presents at the refresh rate.
+    pub fn presents_block(&self) -> bool {
+        self.config.present_mode != wgpu::PresentMode::Mailbox
+    }
+
+    /// The uploaded frame's size (0 x 0 before the first).
+    pub fn frame_size(&self) -> (u32, u32) {
+        self.texture
+            .as_ref()
+            .map_or((0, 0), |(_, _, w, h)| (*w, *h))
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -443,7 +444,8 @@ impl Gfx {
     }
 
     /// The largest rectangle with the output's aspect ratio in the window.
-    fn viewport(&self) -> (u32, u32, u32, u32) {
+    /// The picture's rectangle in the window: x, y, width, height.
+    pub fn viewport(&self) -> (u32, u32, u32, u32) {
         let (sw, sh) = (self.config.width, self.config.height - self.footer_height());
         let (ow, oh) = (self.out_size.0.max(1), self.out_size.1.max(1));
         let (w, h) = if u64::from(sw) * u64::from(oh) > u64::from(sh) * u64::from(ow) {
@@ -547,7 +549,21 @@ impl Gfx {
         }))
     }
 
-    pub fn render(&mut self) {
+    /// Take the window's next image. With one frame in flight this blocks
+    /// until the display has consumed the previous one (its vertical
+    /// blank). `None`: the surface was lost and is configured again.
+    pub fn acquire(&mut self) -> Option<wgpu::SurfaceTexture> {
+        match self.surface.get_current_texture() {
+            Ok(t) => Some(t),
+            Err(_) => {
+                self.surface.configure(&self.device, &self.config);
+                None
+            }
+        }
+    }
+
+    /// Draw the frame and the footer into `target` and present it.
+    pub fn draw(&mut self, target: wgpu::SurfaceTexture) {
         let Some((_, _, fw, fh)) = &self.texture else {
             return;
         };
@@ -563,13 +579,6 @@ impl Gfx {
         let bytes = video_crt::gpu::params_bytes(&self.profile, src, (w, h), origin);
         self.queue.write_buffer(&self.params, 0, &bytes);
 
-        let target = match self.surface.get_current_texture() {
-            Ok(t) => t,
-            Err(_) => {
-                self.surface.configure(&self.device, &self.config);
-                return;
-            }
-        };
         let view = target.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let history = self.history.as_ref().filter(|_| persistent);

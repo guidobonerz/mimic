@@ -16,6 +16,7 @@ mod gfx;
 mod host;
 mod panel;
 mod picker;
+mod render;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -23,6 +24,7 @@ use std::process::ExitCode;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use emu_core::media::{MediaKind, SlotId};
 use emu_core::port::PortKind;
@@ -35,12 +37,12 @@ use video_crt::field::Deinterlace;
 use video_crt::Profile;
 use winit::application::ApplicationHandler;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Icon, Window, WindowId};
 
 use emu::{Shared, TapeKey};
-use gfx::Gfx;
+use render::{Renderer, Strip};
 
 /// The mimic logo (16×14 RGBA), shown as the window icon.
 const ICON_PNG: &[u8] = include_bytes!("../assets/mimic-icon.png");
@@ -455,7 +457,8 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
         let dir = args.rom_dir.clone().or_else(media_backends::roms::env_dir);
         match dir {
             Some(dir) => {
-                let found = media_backends::roms::load(&dir, &args.machine).map_err(|e| e.to_string())?;
+                let found =
+                    media_backends::roms::load(&dir, &args.machine).map_err(|e| e.to_string())?;
                 for (role, data) in found {
                     args.config.roms.entry(role).or_insert(data);
                 }
@@ -587,12 +590,9 @@ struct App {
     input: Sender<HostEvent>,
     gilrs: Option<gilrs::Gilrs>,
     window: Option<Arc<Window>>,
-    gfx: Option<Gfx>,
+    /// The render thread, once there is a window.
+    render: Option<Renderer>,
     error: Option<String>,
-    /// Display refresh period from the monitor (0 = not locked) and the
-    /// measured average, in ns.
-    nominal_period_ns: u64,
-    period_ns: f64,
     /// A shift key is down (Shift+F9 = RECORD).
     shift: bool,
     /// A port device wants the host mouse.
@@ -743,11 +743,13 @@ impl App {
         if let (Some(machine), Some(display)) = (machine_hz, display_hz) {
             let locked = (display / machine - 1.0).abs() < 0.01;
             if locked {
-                self.nominal_period_ns = (1e9 / display) as u64;
-                self.period_ns = self.nominal_period_ns as f64;
+                let nominal = (1e9 / display) as u64;
+                self.shared
+                    .nominal_period_ns
+                    .store(nominal, Ordering::Relaxed);
                 self.shared
                     .display_period_ns
-                    .store(self.nominal_period_ns, Ordering::Relaxed);
+                    .store(nominal, Ordering::Relaxed);
             }
             eprintln!(
                 "display {display:.2} Hz, machine {machine:.2} Hz: {}",
@@ -804,8 +806,14 @@ impl App {
         let size = self.window_size(event_loop);
         if let Some(w) = self.window.clone() {
             let _ = w.request_inner_size(winit::dpi::LogicalSize::new(size.0, size.1));
-            match Gfx::new(w.clone(), self.profile.clone()) {
-                Ok(g) => self.gfx = Some(g),
+            self.render = None;
+            match Renderer::start(
+                w.clone(),
+                self.profile.clone(),
+                self.shared.clone(),
+                self.scale,
+            ) {
+                Ok(r) => self.render = Some(r),
                 Err(e) => {
                     self.error = Some(e);
                     event_loop.exit();
@@ -822,12 +830,13 @@ impl App {
             q.clear();
             q.push_back(p.frame());
         }
+        self.shared.wake_render();
     }
 
     /// The picker row under the pointer.
     fn picker_row(&self) -> Option<usize> {
         let (x, y) = self.cursor?;
-        let (_, fy) = self.gfx.as_ref()?.frame_pos(x, y)?;
+        let (_, fy) = self.render.as_ref()?.frame_pos(x, y)?;
         self.picker.as_ref()?.row_at(fy)
     }
 
@@ -935,7 +944,7 @@ impl App {
     fn send_pointer(&self) {
         let pos = self
             .cursor
-            .and_then(|(x, y)| self.gfx.as_ref()?.frame_pos(x, y))
+            .and_then(|(x, y)| self.render.as_ref()?.frame_pos(x, y))
             .map(|(x, y)| (x.min(0xfffe) as u16, y.min(0xfffe) as u16));
         let _ = self.input.send(HostEvent::Pointer {
             pos,
@@ -958,8 +967,8 @@ impl App {
         match self.crt_watch.as_mut().and_then(CrtWatch::poll) {
             Some(Ok(p)) => {
                 eprintln!("monitor profile '{}' reloaded", p.name);
-                if let Some(g) = &mut self.gfx {
-                    g.set_profile(p.clone());
+                if let Some(r) = &self.render {
+                    r.set_profile(p.clone());
                 }
                 self.profile = p;
             }
@@ -969,22 +978,110 @@ impl App {
         }
     }
 
-    /// Record a vertical blank (redraws return from a blocking present) and
-    /// refine the measured refresh period for the emulation's phase lock.
-    fn track_vsync(&mut self) {
-        let now = self.shared.epoch.elapsed().as_nanos() as u64;
-        let last = self.shared.last_vsync_ns.swap(now, Ordering::Relaxed);
-        if self.nominal_period_ns == 0 || last == 0 {
+    /// Compose the panel and footer rows under the picture for the render
+    /// thread and refresh the title bar.
+    fn update_strip(&mut self) {
+        self.reload_crt_profile();
+        let Some(window) = self.window.clone() else {
             return;
+        };
+        let size = footer::font_size(window.scale_factor());
+        let width = window.inner_size().width.max(1);
+        let row = footer::height(size);
+        // The strip under the picture: the panel, then the footer.
+        let mut strip = Vec::new();
+        let mut rows = 0;
+        if self.panel_on {
+            let mut controls = vec![panel::pause_control(
+                self.shared.paused.load(Ordering::Relaxed),
+            )];
+            if let Ok(c) = self.shared.controls.lock() {
+                controls.extend(c.iter().cloned());
+            }
+            controls.push(panel::joy_keys_control(
+                self.shared.joy_keys.load(Ordering::Relaxed),
+            ));
+            let ports = self.shared.joy_ports.load(Ordering::Relaxed);
+            if ports > 1 {
+                controls.push(panel::joy_port_control(
+                    ports,
+                    self.shared.joy_port.load(Ordering::Relaxed),
+                ));
+            }
+            if self.has_pad {
+                controls.push(panel::pad_fire_control(
+                    self.shared.pad_fire.load(Ordering::Relaxed),
+                ));
+            }
+            controls.push(panel::save_mapping_control());
+            let mut items: Vec<panel::Item> = controls.iter().map(panel::Item::from).collect();
+            if let Ok(cheats) = self.shared.cheats.lock() {
+                items.extend(cheats.iter().enumerate().map(|(i, c)| panel::Item {
+                    id: panel::CHEAT_BASE + i as u16,
+                    name: c.label.clone(),
+                    positions: vec!["OFF".into(), "ON".into()],
+                    value: u8::from(c.enabled),
+                }));
+            }
+            let (rgba, hits, n) = panel::render_items(&items, width, size);
+            strip.extend_from_slice(&rgba);
+            self.panel_hits = hits;
+            self.panel_rows = n;
+            rows += row * n as u32;
         }
-        let interval = (now - last) as f64;
-        let nominal = self.nominal_period_ns as f64;
-        // Ignore hiccups (window hidden, dropped refresh).
-        if (interval / nominal - 1.0).abs() < 0.1 {
-            self.period_ns += (interval - self.period_ns) * 0.02;
-            self.shared
-                .display_period_ns
-                .store(self.period_ns as u64, Ordering::Relaxed);
+        if self.footer_on {
+            let mouse = if self.mouse_captured {
+                footer::Mouse::Captured(self.mouse_sum.0, self.mouse_sum.1)
+            } else {
+                self.cursor
+                    .and_then(|(x, y)| self.render.as_ref()?.frame_pos(x, y))
+                    .map_or(footer::Mouse::Outside, |(x, y)| footer::Mouse::At(x, y))
+            };
+            let info = self
+                .shared
+                .footer
+                .lock()
+                .map(|f| f.clone())
+                .unwrap_or_default();
+            let speed = usize::from(self.shared.speed.load(Ordering::Relaxed));
+            let (rgba, slider, button) =
+                footer::render(&footer::segments(&info, mouse), speed, width, size);
+            strip.extend_from_slice(&rgba);
+            rows += row;
+            self.speed_slider = Some(slider);
+            self.snapshot_button = Some(button);
+        } else {
+            self.speed_slider = None;
+            self.snapshot_button = None;
+            self.speed_drag = false;
+        }
+        if let Some(r) = &self.render {
+            if rows == 0 {
+                r.set_strip(None);
+            } else {
+                r.set_strip(Some(Strip {
+                    rgba: strip,
+                    width,
+                    rows,
+                }));
+            }
+        }
+        let window_height = window.inner_size().height;
+        self.panel_top = f64::from(window_height.saturating_sub(rows));
+        self.panel_row = f64::from(row);
+        self.footer_top = f64::from(window_height.saturating_sub(row));
+        if !self.panel_on {
+            self.panel_rows = 0;
+        }
+        if let (Some(w), Ok(status)) = (&self.window, self.shared.status.lock()) {
+            let title = match status.as_ref() {
+                Some(s) => format!("{} — {s}", self.title),
+                None => self.title.clone(),
+            };
+            if title != self.shown_title {
+                w.set_title(&title);
+                self.shown_title = title;
+            }
         }
     }
 
@@ -1057,8 +1154,13 @@ impl ApplicationHandler for App {
                 return;
             }
         };
-        match Gfx::new(window.clone(), self.profile.clone()) {
-            Ok(g) => self.gfx = Some(g),
+        match Renderer::start(
+            window.clone(),
+            self.profile.clone(),
+            self.shared.clone(),
+            self.scale,
+        ) {
+            Ok(r) => self.render = Some(r),
             Err(e) => {
                 self.error = Some(e);
                 event_loop.exit();
@@ -1200,8 +1302,8 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Resized(s) => {
-                if let Some(g) = &mut self.gfx {
-                    g.resize(s.width, s.height);
+                if let Some(r) = &self.render {
+                    r.resize(s.width, s.height);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -1319,137 +1421,27 @@ impl ApplicationHandler for App {
                     });
                 }
             }
+            // The OS wants the window drawn (exposed): the render thread
+            // redraws by itself; only the strip is refreshed here.
             WindowEvent::RedrawRequested => {
-                self.shared.redraws.fetch_add(1, Ordering::Relaxed);
-                self.track_vsync();
-                // One frame per display refresh, in order. The emulation is
-                // phase-locked to the refresh (frames are ready half a
-                // refresh ahead), so normally exactly one frame waits here. A
-                // backlog beyond two frames (window hidden, slow GPU) is
-                // skipped, not replayed.
                 if self.picker.is_some() {
                     self.show_picker();
                 }
-                let shared = &self.shared;
-                let frame = self.shared.frames.lock().ok().and_then(|mut q| {
-                    while q.len() > 2 {
-                        q.pop_front();
-                        shared.dropped.fetch_add(1, Ordering::Relaxed);
-                    }
-                    q.pop_front()
-                });
-                self.reload_crt_profile();
-                if let Some(g) = &mut self.gfx {
-                    if let Some(f) = frame {
-                        g.upload(&f, self.scale);
-                        self.shared.presented.fetch_add(1, Ordering::Relaxed);
-                    }
-                    let size =
-                        footer::font_size(self.window.as_ref().map_or(1.0, |w| w.scale_factor()));
-                    let width = g.footer_width();
-                    let row = footer::height(size);
-                    // The strip under the picture: the panel, then the footer.
-                    let mut strip = Vec::new();
-                    let mut rows = 0;
-                    if self.panel_on {
-                        let mut controls = vec![panel::pause_control(
-                            self.shared.paused.load(Ordering::Relaxed),
-                        )];
-                        if let Ok(c) = self.shared.controls.lock() {
-                            controls.extend(c.iter().cloned());
-                        }
-                        controls.push(panel::joy_keys_control(
-                            self.shared.joy_keys.load(Ordering::Relaxed),
-                        ));
-                        let ports = self.shared.joy_ports.load(Ordering::Relaxed);
-                        if ports > 1 {
-                            controls.push(panel::joy_port_control(
-                                ports,
-                                self.shared.joy_port.load(Ordering::Relaxed),
-                            ));
-                        }
-                        if self.has_pad {
-                            controls.push(panel::pad_fire_control(
-                                self.shared.pad_fire.load(Ordering::Relaxed),
-                            ));
-                        }
-                        controls.push(panel::save_mapping_control());
-                        let mut items: Vec<panel::Item> =
-                            controls.iter().map(panel::Item::from).collect();
-                        if let Ok(cheats) = self.shared.cheats.lock() {
-                            items.extend(cheats.iter().enumerate().map(|(i, c)| panel::Item {
-                                id: panel::CHEAT_BASE + i as u16,
-                                name: c.label.clone(),
-                                positions: vec!["OFF".into(), "ON".into()],
-                                value: u8::from(c.enabled),
-                            }));
-                        }
-                        let (rgba, hits, n) = panel::render_items(&items, width, size);
-                        strip.extend_from_slice(&rgba);
-                        self.panel_hits = hits;
-                        self.panel_rows = n;
-                        rows += row * n as u32;
-                    }
-                    if self.footer_on {
-                        let mouse = if self.mouse_captured {
-                            footer::Mouse::Captured(self.mouse_sum.0, self.mouse_sum.1)
-                        } else {
-                            self.cursor
-                                .and_then(|(x, y)| g.frame_pos(x, y))
-                                .map_or(footer::Mouse::Outside, |(x, y)| footer::Mouse::At(x, y))
-                        };
-                        let info = self
-                            .shared
-                            .footer
-                            .lock()
-                            .map(|f| f.clone())
-                            .unwrap_or_default();
-                        let speed = usize::from(self.shared.speed.load(Ordering::Relaxed));
-                        let (rgba, slider, button) =
-                            footer::render(&footer::segments(&info, mouse), speed, width, size);
-                        strip.extend_from_slice(&rgba);
-                        rows += row;
-                        self.speed_slider = Some(slider);
-                        self.snapshot_button = Some(button);
-                    } else {
-                        self.speed_slider = None;
-                        self.snapshot_button = None;
-                        self.speed_drag = false;
-                    }
-                    if rows == 0 {
-                        g.set_footer(None);
-                    } else {
-                        g.set_footer(Some((&strip, width, rows)));
-                    }
-                    let window_height = self.window.as_ref().map_or(0, |w| w.inner_size().height);
-                    self.panel_top = f64::from(window_height.saturating_sub(rows));
-                    self.panel_row = f64::from(row);
-                    self.footer_top = f64::from(window_height.saturating_sub(row));
-                    if !self.panel_on {
-                        self.panel_rows = 0;
-                    }
-                    g.render();
-                }
-                if let (Some(w), Ok(status)) = (&self.window, self.shared.status.lock()) {
-                    let title = match status.as_ref() {
-                        Some(s) => format!("{} — {s}", self.title),
-                        None => self.title.clone(),
-                    };
-                    if title != self.shown_title {
-                        w.set_title(&title);
-                        self.shown_title = title;
-                    }
-                }
+                self.update_strip();
             }
             _ => {}
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    /// Between events: gamepads and the strip, every 8 ms. The event loop
+    /// never blocks on the display (the render thread does), so input
+    /// reaches the machine as it comes.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.poll_gamepads();
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
+        self.update_strip();
+        event_loop.set_control_flow(ControlFlow::WaitUntil(
+            Instant::now() + Duration::from_millis(8),
+        ));
     }
 }
 
@@ -1804,10 +1796,8 @@ fn run() -> Result<(), String> {
             }
         }),
         window: None,
-        gfx: None,
+        render: None,
         error: None,
-        nominal_period_ns: 0,
-        period_ns: 0.0,
         shift: false,
         wants_mouse: st.wants_mouse,
         wants_pointer: st.wants_pointer,
@@ -1840,6 +1830,8 @@ fn run() -> Result<(), String> {
     };
     let result = event_loop.run_app(&mut app).map_err(|e| e.to_string());
     app.shared.quit.store(true, Ordering::Relaxed);
+    // The render thread first: it holds the GPU surface of the window.
+    drop(app.render.take());
     if let Some(r) = app.running.take() {
         let _ = r.emu.join();
         if let Some(s) = r.server {

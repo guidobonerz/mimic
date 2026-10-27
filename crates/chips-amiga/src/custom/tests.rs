@@ -566,6 +566,22 @@ fn diwhigh_extends_the_vertical_window_until_diwstrt_is_written() {
 }
 
 #[test]
+fn ecs_bltcon0l_sets_only_the_minterm() {
+    // Kickstart 2+/3.x text: the channels and A shift stay, the minterm
+    // changes between the template blits (Workbench 3.1 drew no text
+    // without it).
+    let (mut c, _) = setup_ecs(Standard::Pal);
+    c.write(reg::BLTCON0, 0x970a);
+    c.write(reg::BLTCON0L, 0x12ca);
+    assert_eq!(c.blitter.con0, 0x97ca);
+    // The OCS Agnus has no such register.
+    let (mut c, _) = setup();
+    c.write(reg::BLTCON0, 0x970a);
+    c.write(reg::BLTCON0L, 0x00ca);
+    assert_eq!(c.blitter.con0, 0x970a);
+}
+
+#[test]
 fn ecs_blitter_sizes_and_copper_reach_every_register() {
     let (mut c, mut chip) = setup_ecs(Standard::Pal);
     c.write(reg::BLTCON0, 0x01ff);

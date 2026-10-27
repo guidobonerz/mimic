@@ -11,7 +11,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -41,8 +41,10 @@ pub struct Shared {
     /// When the window last presented (ns since `epoch`): the display's
     /// vertical blank, for phase-locking the emulation to it.
     pub last_vsync_ns: AtomicU64,
-    /// Finished frames in order; the window shows each once.
+    /// Finished frames in order; the render thread shows the newest.
     pub frames: Mutex<VecDeque<Frame>>,
+    /// Signalled with a new frame or a command for the render thread.
+    pub frame_ready: Condvar,
     /// Interlace weaving for [`Shared::frames`].
     pub fields: Mutex<FieldStage>,
     /// Stereo frames (left, right) at 48 kHz; mono machines fill both.
@@ -51,10 +53,12 @@ pub struct Shared {
     pub audio_live: AtomicBool,
     pub quit: AtomicBool,
     /// When the display refresh is within 1 % of the machine's frame rate,
-    /// the window stores its measured refresh period here (ns). Emulation then
-    /// runs at that rate on the wall clock and nudges its phase so a frame is
-    /// ready half a refresh before the next vertical blank. 0 = the machine's
-    /// own rate. Emulation never waits for the window itself.
+    /// the window stores the display's nominal refresh period here (ns) and
+    /// the render thread its measured one. Emulation then runs at that rate
+    /// on the wall clock and nudges its phase so a frame is ready shortly
+    /// before the next vertical blank. 0 = the machine's own rate. Emulation
+    /// never waits for the window itself.
+    pub nominal_period_ns: AtomicU64,
     pub display_period_ns: AtomicU64,
     /// Frames the window presented (diagnostics).
     pub presented: AtomicU64,
@@ -171,15 +175,22 @@ impl TapeKey {
 }
 
 impl Shared {
+    /// Wake the render thread (a new frame or a command).
+    pub fn wake_render(&self) {
+        self.frame_ready.notify_all();
+    }
+
     pub fn new() -> Self {
         Self {
             epoch: Instant::now(),
             last_vsync_ns: AtomicU64::new(0),
             frames: Mutex::default(),
+            frame_ready: Condvar::new(),
             fields: Mutex::default(),
             audio: Mutex::default(),
             audio_live: AtomicBool::new(false),
             quit: AtomicBool::new(false),
+            nominal_period_ns: AtomicU64::new(0),
             display_period_ns: AtomicU64::new(0),
             presented: AtomicU64::new(0),
             redraws: AtomicU64::new(0),
@@ -223,8 +234,31 @@ impl Shared {
 
 /// Audio kept buffered ahead of the device (48 kHz frames, 100 ms).
 pub const AUDIO_TARGET: usize = 4_800;
-/// Frames waiting for the window before old ones are dropped.
+/// Frames waiting for the render thread before old ones are dropped.
 const MAX_QUEUED_FRAMES: usize = 4;
+
+/// Hand the host input waiting in `input` to the machine, timed now;
+/// false when the window has gone.
+fn drain_input(
+    input: &Receiver<HostEvent>,
+    mapper: &mut Mapper,
+    tracker: &mut Tracker,
+    session: &mut Session,
+) -> bool {
+    loop {
+        match input.try_recv() {
+            Ok(ev) => {
+                let now = session.machine().now();
+                for e in mapper.handle(&ev, now) {
+                    tracker.observe(&e);
+                    session.input(e);
+                }
+            }
+            Err(TryRecvError::Empty) => return true,
+            Err(TryRecvError::Disconnected) => return false,
+        }
+    }
+}
 
 /// Sleep until `deadline`: the OS sleep for the bulk (its granularity can
 /// be coarse), the last stretch by yielding.
@@ -242,11 +276,11 @@ fn wait_until(deadline: Instant) {
         }
     }
 }
-/// Shift `deadline` a little towards the middle between two vertical
-/// blanks (a frame takes a few ms to emulate and must be queued before the
-/// next blank). Small steps (1/8 of the error per frame) keep the frame
-/// rate itself steady.
-fn phase_lock(deadline: Instant, period: u64, shared: &Shared) -> Instant {
+/// Shift `deadline` a little towards `target` ns after a vertical blank
+/// (the frame must be emulated and queued before the next blank; the later
+/// it starts, the less input waits for it). Small steps (1/8 of the error
+/// per frame) keep the frame rate itself steady.
+fn phase_lock(deadline: Instant, period: u64, target: u64, shared: &Shared) -> Instant {
     let vsync = shared.last_vsync_ns.load(Ordering::Relaxed);
     if vsync == 0 || deadline < shared.epoch {
         return deadline;
@@ -254,7 +288,7 @@ fn phase_lock(deadline: Instant, period: u64, shared: &Shared) -> Instant {
     let at = (deadline - shared.epoch).as_nanos() as i128;
     let p = i128::from(period);
     let phase = (at - i128::from(vsync)).rem_euclid(p);
-    let error = phase - p / 2; // −p/2 … p/2
+    let error = phase - i128::from(target); // -target … p - target
     let nudge = (error / 8).unsigned_abs() as u64;
     if error > 0 {
         deadline - Duration::from_nanos(nudge)
@@ -537,6 +571,10 @@ pub fn spawn(
         let mut samples = Vec::new();
         let frame_time = session.frame_duration();
         let mut deadline = Instant::now();
+        // Wall time a frame takes to emulate and queue (a slowly decaying
+        // maximum, ns): the phase lock starts the frame as late as that
+        // allows before the next vertical blank.
+        let mut slice_ns = 0.0f64;
         let mut shown_at = None;
         let debug_stats = std::env::var_os("EMU_DESKTOP_DEBUG").is_some();
         let mut report = Instant::now();
@@ -550,18 +588,8 @@ pub fn spawn(
         let mut tracker = Tracker::default();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
-            loop {
-                match input.try_recv() {
-                    Ok(ev) => {
-                        let now = session.machine().now();
-                        for e in mapper.handle(&ev, now) {
-                            tracker.observe(&e);
-                            session.input(e);
-                        }
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => return,
-                }
+            if !drain_input(&input, &mut mapper, &mut tracker, &mut session) {
+                return;
             }
 
             if let Some(key) = TapeKey::from_u8(shared.tape_key.swap(0, Ordering::Relaxed)) {
@@ -824,13 +852,24 @@ pub fn spawn(
                 deadline += frame_time;
             } else {
                 deadline += Duration::from_nanos(period);
-                deadline = phase_lock(deadline, period, &shared);
+                // The render thread takes the newest frame at the blank: the
+                // frame must be there by then, with 2 ms to spare.
+                let margin = 2_000_000.0;
+                let target = (period as f64 - slice_ns * 1.25 - margin)
+                    .clamp(period as f64 / 8.0, period as f64 * 0.8);
+                deadline = phase_lock(deadline, period, target as u64, &shared);
             }
             // Fell far behind (slow host, debugger): do not catch up in a burst.
             if Instant::now() > deadline + frame_time * 5 {
                 deadline = Instant::now();
             }
+            // Input that came during the wait goes into this frame, not the
+            // next (a frame less from mouse to picture).
+            if !drain_input(&input, &mut mapper, &mut tracker, &mut session) {
+                return;
+            }
 
+            let slice_start = Instant::now();
             session.run_slice();
             frames_run += 1;
             match &endpoint {
@@ -872,6 +911,8 @@ pub fn spawn(
                 (min_fill, max_fill, frames) = (usize::MAX, 0, 0);
             }
             push_frame(&shared, session.machine(), screen);
+            let took = slice_start.elapsed().as_nanos() as f64;
+            slice_ns = took.max(slice_ns * 0.98);
         }
     })
 }
@@ -925,6 +966,7 @@ fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {
             shared.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
+    shared.wake_render();
 }
 
 #[cfg(test)]
