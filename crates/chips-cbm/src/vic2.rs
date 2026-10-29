@@ -10,8 +10,10 @@
 //!
 //! Cycles are numbered 1–63 (6569) or 1–65 (6567R8) as in Bauer's timing
 //! diagrams. Both types share the layout up to cycle 58; the 6567R8 has two
-//! more cycles before the fetch of sprites 0–2, which therefore come two
-//! cycles later (60/62/64 instead of 58/60/62). X coordinates are VIC-II
+//! more cycles, one before the refresh (sprite fetches 3–7 at 65/2/4/6/8)
+//! and one before sprite 0 (fetches at 59/61/63; Bauer's diagram puts them
+//! at 60/62/64, the VICE test program VICII/phi1timing measured a 6567R8
+//! otherwise). X coordinates are VIC-II
 //! sprite coordinates, 8 pixels per cycle: cycle 1 starts at X = `$194`
 //! (6569, wrapping after `$1F7`) or `$19C` (6567R8, wrapping after `$1FF`,
 //! with the counter repeating `$18C–$18F` twice to fill 520 pixels; Bauer
@@ -95,6 +97,12 @@ pub struct Timing {
     /// (VICE test programs VICII/spriteenable: "modify sprite enable on
     /// cycle 55 (56 on NTSC)").
     pub dma_check: u8,
+    /// Cycle of sprite 0's p-access: 58 on the 6569, 59 on the 6567R8
+    /// (whose sprite 3 fetch then straddles the line: p-access in cycle 65).
+    /// Measured by VICE test program VICII/phi1timing on a 6567R8: two idle
+    /// cycles between sprite 7's fetch and the refresh, three between the
+    /// last g-access and sprite 0 (Bauer's diagram has p0 at 60).
+    pub sprite0_slot: u8,
 }
 
 pub const PAL: Timing = Timing {
@@ -110,6 +118,7 @@ pub const PAL: Timing = Timing {
     pixel_clock_hz: 7_881_984,
     standard: VideoStandard::Pal,
     dma_check: 55,
+    sprite0_slot: 58,
 };
 
 /// 6567R8: visible lines 41–262 and 0–12 (first/last vblank line 13/40),
@@ -127,6 +136,7 @@ pub const NTSC: Timing = Timing {
     pixel_clock_hz: 8_181_816,
     standard: VideoStandard::Ntsc,
     dma_check: 56,
+    sprite0_slot: 59,
 };
 
 impl Model {
@@ -188,13 +198,11 @@ impl Timing {
             .min(self.width as u16 - 1)
     }
 
-    /// First cycle (p-access) of sprite `n`'s fetch slot.
+    /// First cycle (p-access) of sprite `n`'s fetch slot: sprite 0 at
+    /// `sprite0_slot`, the others every two cycles after it, around the
+    /// end of the line.
     fn sprite_slot(&self, n: usize) -> u8 {
-        if n < 3 {
-            self.cycles - 5 + 2 * n as u8
-        } else {
-            1 + 2 * (n as u8 - 3)
-        }
+        (self.sprite0_slot + 2 * n as u8 - 1) % self.cycles + 1
     }
 
     /// Is `cycle` within `[start, start + len)` on the cycle ring?
@@ -365,6 +373,9 @@ pub struct Vic2 {
     /// The sprite whose row fetch completed in this cycle's phi2 (only
     /// within a cycle, so not saved).
     fetch_done: Option<usize>,
+    /// Sprites whose p-access is in this cycle (only within a cycle, so
+    /// not saved).
+    fetching: u8,
 
     /// The light pen latched in this frame (the LP input works once a
     /// frame, Bauer 3.11).
@@ -458,6 +469,7 @@ impl Vic2 {
             dma_started: 0,
             coll_late: (0, 0),
             fetch_done: None,
+            fetching: 0,
             lp_done: false,
             lp_low: false,
             lp_pending: false,
@@ -698,6 +710,7 @@ impl Vic2 {
                 phi1_value = p;
                 if self.sprites[n].dma {
                     self.phi2_sprite = Some(n);
+                    self.fetching |= 1 << n;
                 }
             } else if c == slot % t.cycles + 1 && self.sprites[n].dma {
                 phi1_value = self.sprite_fetch(mem, n);
@@ -762,6 +775,20 @@ impl Vic2 {
                 self.char_base() | ((c & 0xff) << 3) | u16::from(self.rc)
             };
             (addr, c)
+        } else if self.bad_line {
+            // The cycle a bad line is made in idle state (DMA delay): the
+            // display logic has not switched yet, but the idle access
+            // already comes from elsewhere — $38FF on the 6569 and 6567R8,
+            // $3807 on the 8565/8562 (VICE test program VICII/vsp-tester,
+            // readme with measurements of real chips).
+            (
+                if self.model.grey_dot() {
+                    0x3807
+                } else {
+                    0x38ff
+                },
+                0,
+            )
         } else {
             (0x3fff, 0)
         };
@@ -990,6 +1017,7 @@ impl Vic2 {
         self.lag.copy_from_slice(&out[4..]);
         self.written = 0;
         self.fetch_done = None;
+        self.fetching = 0;
         self.cycle_regs = [self.sprite_prio, self.sprite_xe, self.sprite_mc];
         self.cycle_sprite_x = self.sprites.map(|s| s.x);
     }
@@ -1139,7 +1167,10 @@ impl Vic2 {
             let mc = mc_reg & (1 << n) != 0;
             let xe = xe_reg & (1 << n) != 0;
             let sx = if i < 4 { self.cycle_sprite_x[n] } else { s.x };
-            let not_yet = i < 3 && self.fetch_done == Some(n);
+            // No trigger while the row is fetched: in the p-access cycle
+            // and up to pixel 2 of the next (VICE test programs
+            // VICII/spritex/testsuite 14-16 on PAL and NTSC).
+            let not_yet = self.fetching & (1 << n) != 0 || (i < 3 && self.fetch_done == Some(n));
             if s.bits_left == 0 && sx == x && !not_yet {
                 if let Some(r) = self.rec.0.as_deref_mut() {
                     r.sprite_shown(n, self.raster, x, self.sprite_xe & (1 << n) != 0);

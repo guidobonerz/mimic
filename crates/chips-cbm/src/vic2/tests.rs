@@ -364,7 +364,9 @@ fn x_coordinates_per_line() {
 }
 
 #[test]
-fn ntsc_sprite_0_dma_steals_cycles_57_to_61() {
+fn ntsc_sprite_0_dma_steals_cycles_56_to_60() {
+    // The 6567R8 fetches sprite 0 in cycles 59/60 (VICE test program
+    // VICII/phi1timing), so BA is low from cycle 56.
     let mut v = Vic2::new(Model::Mos6567R8);
     let m = Mem::new();
     v.write(0x15, 0x01);
@@ -378,7 +380,7 @@ fn ntsc_sprite_0_dma_steals_cycles_57_to_61() {
         }
         v.phi2(&m);
     }
-    assert_eq!(low, [57, 58, 59, 60, 61]);
+    assert_eq!(low, [56, 57, 58, 59, 60]);
 }
 
 #[test]
