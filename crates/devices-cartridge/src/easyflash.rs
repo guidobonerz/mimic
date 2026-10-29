@@ -69,6 +69,14 @@ impl ExpansionCart for EasyFlash {
         "EasyFlash"
     }
 
+    /// Banks are 8 KB per chip here; a 64 KB sector holds eight of them
+    /// (bank bits 3–5).
+    fn erase_flash_sector(&mut self, bank: u8, high: bool) -> bool {
+        let chip = if high { &mut self.romh } else { &mut self.roml };
+        chip.erase_sector(usize::from(bank & 0x3f) * BANK);
+        true
+    }
+
     fn lines(&self) -> CartLines {
         let game = if self.control & 4 != 0 {
             self.control & 1 != 0
@@ -199,6 +207,18 @@ pub fn blank_image(boot: &[u8]) -> Crt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sector_erase_from_outside() {
+        let mut ef = EasyFlash::from_crt(&blank_image(&[])).unwrap();
+        ef.roml.data[9 * BANK] = 0;
+        ef.roml.data[16 * BANK] = 0;
+        assert!(ef.erase_flash_sector(9, false));
+        // Bank 9 lies in the sector of banks 8–15; bank 16 is untouched.
+        assert_eq!(ef.roml.data[9 * BANK], 0xff);
+        assert_eq!(ef.roml.data[16 * BANK], 0);
+        assert!(ef.roml.modified);
+    }
 
     #[test]
     fn boots_in_ultimax_from_romh_bank_0() {

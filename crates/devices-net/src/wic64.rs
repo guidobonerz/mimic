@@ -743,9 +743,9 @@ impl Wic64 {
                 match r {
                     None if now >= deadline => self.fail(status::NETWORK_ERROR, "Timeout"),
                     None => {}
-                    Some(Ok(HttpResponse { status: s, body })) if (200..300).contains(&s) => {
-                        self.ok(&body)
-                    }
+                    Some(Ok(HttpResponse {
+                        status: s, body, ..
+                    })) if (200..300).contains(&s) => self.ok(&body),
                     Some(Ok(HttpResponse { status: s, .. })) => {
                         self.fail(status::SERVER_ERROR, &format!("HTTP error {s}"))
                     }

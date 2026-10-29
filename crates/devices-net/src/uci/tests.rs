@@ -2,10 +2,10 @@ use super::*;
 use crate::testing::FakeNet;
 use emu_core::host::{Journal, MemFileHost};
 
-const STATUS: u16 = 0xdf1c;
-const CMD: u16 = 0xdf1d;
-const RESP: u16 = 0xdf1e;
-const STAT: u16 = 0xdf1f;
+pub(super) const STATUS: u16 = 0xdf1c;
+pub(super) const CMD: u16 = 0xdf1d;
+pub(super) const RESP: u16 = 0xdf1e;
+pub(super) const STAT: u16 = 0xdf1f;
 
 fn uci_with(files: MemFileHost, net: FakeNet) -> Uci {
     let mut u = Uci::new();
@@ -24,23 +24,29 @@ fn uci() -> Uci {
     uci_with(fs, FakeNet::new())
 }
 
-fn state(u: &Uci) -> u8 {
+pub(super) fn state(u: &Uci) -> u8 {
     (u.peek(STATUS) >> 4) & 3
 }
 
 /// Run until the interface leaves "busy"; bounded.
-fn wait(u: &mut Uci) {
+pub(super) fn wait(u: &mut Uci) {
+    wait_m(u, &mut NoMachine)
+}
+
+fn wait_m(u: &mut Uci, m: &mut dyn UciMachine) {
     for _ in 0..100_000 {
         if state(u) != State::Busy as u8 {
             return;
         }
-        u.tick();
+        if u.countdown() {
+            u.run_due(m);
+        }
     }
     panic!("UCI stays busy");
 }
 
 /// Read the response and status queues like a C64 program does.
-fn take(u: &mut Uci) -> (Vec<u8>, String) {
+pub(super) fn take(u: &mut Uci) -> (Vec<u8>, String) {
     let mut data = Vec::new();
     while u.read(STATUS) & status::DATA_AV != 0 {
         data.push(u.read(RESP));
@@ -49,11 +55,19 @@ fn take(u: &mut Uci) -> (Vec<u8>, String) {
     while u.read(STATUS) & status::STAT_AV != 0 {
         stat.push(u.read(STAT));
     }
-    (data, String::from_utf8(stat).unwrap())
+    (data, stat.iter().map(|&b| char::from(b)).collect())
 }
 
 /// Send a command and collect all packets until "data last".
-fn command(u: &mut Uci, bytes: &[u8]) -> (Vec<Vec<u8>>, String) {
+pub(super) fn command(u: &mut Uci, bytes: &[u8]) -> (Vec<Vec<u8>>, String) {
+    command_m(u, &mut NoMachine, bytes)
+}
+
+pub(super) fn command_m(
+    u: &mut Uci,
+    m: &mut dyn UciMachine,
+    bytes: &[u8],
+) -> (Vec<Vec<u8>>, String) {
     assert_eq!(state(u), State::Idle as u8, "not idle before {bytes:02x?}");
     for &b in bytes {
         u.write(CMD, b);
@@ -64,7 +78,7 @@ fn command(u: &mut Uci, bytes: &[u8]) -> (Vec<Vec<u8>>, String) {
     let mut packets = Vec::new();
     let mut last = String::new();
     loop {
-        wait(u);
+        wait_m(u, m);
         let more = state(u) == State::DataMore as u8;
         let (data, stat) = take(u);
         packets.push(data);
@@ -80,7 +94,7 @@ fn command(u: &mut Uci, bytes: &[u8]) -> (Vec<Vec<u8>>, String) {
     (packets, last)
 }
 
-fn text(u: &mut Uci, bytes: &[u8]) -> (String, String) {
+pub(super) fn text(u: &mut Uci, bytes: &[u8]) -> (String, String) {
     let (p, s) = command(u, bytes);
     (String::from_utf8_lossy(&p.concat()).into_owned(), s)
 }
@@ -112,7 +126,7 @@ fn registers_and_identification() {
         "ULTIMATE-II NETWORK INTERFACE V1.0"
     );
     assert_eq!(text(&mut u, &[4, 0x28, 0]).0, "ULTIMATE 64");
-    assert_eq!(text(&mut u, &[4, 0x06]).1, "21,UNKNOWN COMMAND");
+    assert_eq!(text(&mut u, &[4, 0x7f]).1, "21,UNKNOWN COMMAND");
     assert_eq!(text(&mut u, &[9, 1]).1, "21,UNKNOWN COMMAND");
 }
 
@@ -212,12 +226,12 @@ fn dos_reads_writes_and_lists_files() {
     let mut esc = vec![1, 0x02, 0x01];
     esc.extend(b"../../etc/passwd");
     assert_eq!(command(&mut u, &esc).1, "87,INVALID PATH");
-    // Time from the host clock, mount refused, echo.
+    // Time from the host clock, no drive to mount on, echo.
     assert_eq!(text(&mut u, &[1, 0x26]).0, "2026/10/25 14:14:15");
     assert_eq!(text(&mut u, &[1, 0x26, 1]).0, "Sun 2026/10/25 14:14:15");
     assert_eq!(
         command(&mut u, &[1, 0x23, 8, b'a']).1,
-        "99,FUNCTION NOT IMPLEMENTED"
+        "90,DRIVE NOT PRESENT"
     );
     assert_eq!(command(&mut u, &[1, 0xf0, 7]).0[0], [1, 0xf0, 7]);
 }

@@ -95,6 +95,14 @@ impl Flash {
         self.state = State::Read;
     }
 
+    /// Erase the 64 KB sector holding `offset` from outside the command
+    /// cycles (a programmer, the Ultimate's EASYFLASH_ERASE).
+    pub fn erase_sector(&mut self, offset: usize) {
+        let start = offset % SIZE / SECTOR * SECTOR;
+        self.data[start..start + SECTOR].fill(0xff);
+        self.modified = true;
+    }
+
     pub fn save(&self, w: &mut StateWriter) {
         w.u8(self.state as u8);
     }

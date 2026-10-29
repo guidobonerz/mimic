@@ -247,25 +247,51 @@ pub struct Tod {
     stopped: bool,
     /// Power-line ticks within the current tenth.
     divider: u8,
+    /// Output of the time = alarm comparator; the alarm flag rises with it
+    /// (VICE test programs CIA/tod/4tod, 5tod: rewriting the time it
+    /// already has raises nothing).
+    equal: bool,
 }
 
 impl Default for Tod {
+    /// Power-up and reset: 1:00:00.0, alarm 0:00:00.0, the clock stopped
+    /// until tenths are written (VICE test program CIA/tod/powerup).
     fn default() -> Self {
         Self {
             time: [0, 0, 0, 0x01],
             alarm: [0; 4],
             latch: None,
-            stopped: false,
+            stopped: true,
             divider: 0,
+            equal: false,
         }
     }
 }
 
-fn bcd_inc(v: u8) -> u8 {
-    if v & 0x0f == 9 {
-        (v & 0xf0) + 0x10
+/// One count of a seconds or minutes register. The digits are binary
+/// counters; the carry to the next digit and register is a comparison by
+/// value, so invalid values count on within the digit's bits (VICE test
+/// programs CIA/tod/fix-sec, fix-min). Returns the new value and the carry.
+fn sexagesimal_inc(v: u8) -> (u8, bool) {
+    if v == 0x59 {
+        (0, true)
+    } else if v & 0x0f == 9 {
+        ((v + 0x10) & 0x70, false)
     } else {
-        v + 1
+        ((v & 0x70) | ((v + 1) & 0x0f), false)
+    }
+}
+
+/// One count of the hours register (bit 7 PM): 11 turns to 12 and flips
+/// PM, 12 turns to 1; otherwise digits count like the others, the tens
+/// digit only from 09 (VICE test programs CIA/tod/fix-hour, hour-test).
+fn hours_inc(v: u8) -> u8 {
+    let pm = v & 0x80;
+    match v & 0x1f {
+        0x11 => 0x12 | (pm ^ 0x80),
+        0x12 => 0x01 | pm,
+        0x09 => 0x10 | pm,
+        h => (h & 0x10) | ((h + 1) & 0x0f) | pm,
     }
 }
 
@@ -282,7 +308,15 @@ impl Tod {
         .wrapping_add(1)
             & 0xff_ffff;
         self.time = [v as u8, (v >> 8) as u8, (v >> 16) as u8, 0];
-        self.time == self.alarm
+        self.compare()
+    }
+
+    /// Update the comparator; true on its rising edge.
+    fn compare(&mut self) -> bool {
+        let equal = self.time == self.alarm;
+        let rise = equal && !self.equal;
+        self.equal = equal;
+        rise
     }
 
     /// 8520 register read: reading the high byte (A) latches the counter
@@ -322,7 +356,7 @@ impl Tod {
                 _ => {}
             }
         }
-        self.time == self.alarm
+        self.compare()
     }
 
     /// One power-line period. Returns true if the alarm matched.
@@ -330,40 +364,41 @@ impl Tod {
         if self.stopped {
             return false;
         }
-        self.divider += 1;
-        if self.divider < if fifty_hz { 5 } else { 6 } {
+        // The divider counts 0–6 and wraps; it is compared with 5 (50 Hz)
+        // or 6 (60 Hz) only on a tick, so switching to 50 Hz when it already
+        // passed 5 makes one long tenth (VICE test program CIA/tod/hzsync6).
+        self.divider = if self.divider >= 6 {
+            0
+        } else {
+            self.divider + 1
+        };
+        if self.divider != if fifty_hz { 5 } else { 6 } {
             return false;
         }
         self.divider = 0;
         let t = &mut self.time;
-        t[0] = bcd_inc(t[0]);
-        if t[0] == 0x10 {
+        if t[0] == 9 {
             t[0] = 0;
-            t[1] = bcd_inc(t[1]);
-            if t[1] == 0x60 {
-                t[1] = 0;
-                t[2] = bcd_inc(t[2]);
-                if t[2] == 0x60 {
-                    t[2] = 0;
-                    let pm = t[3] & 0x80;
-                    let mut h = bcd_inc(t[3] & 0x1f);
-                    let mut flip = 0;
-                    if h == 0x12 {
-                        flip = 0x80;
-                    }
-                    if h == 0x13 {
-                        h = 0x01;
-                    }
-                    t[3] = h | (pm ^ flip);
+            let (sec, carry) = sexagesimal_inc(t[1]);
+            t[1] = sec;
+            if carry {
+                let (min, carry) = sexagesimal_inc(t[2]);
+                t[2] = min;
+                if carry {
+                    t[3] = hours_inc(t[3]);
                 }
             }
+        } else {
+            t[0] = (t[0] + 1) & 0x0f;
         }
-        self.time == self.alarm
+        self.compare()
     }
 
     fn read(&mut self, reg: u8) -> u8 {
         let i = usize::from(reg - 8);
-        if reg == 0x0b {
+        // Reading the hours latches the time; further reads of the hours
+        // do not latch again until tenths are read (CIA/tod/read-latch).
+        if reg == 0x0b && self.latch.is_none() {
             self.latch = Some(self.time);
         }
         let v = self.latch.unwrap_or(self.time)[i];
@@ -383,6 +418,9 @@ impl Tod {
         let v = match reg {
             0x08 => v & 0x0f,
             0x09 | 0x0a => v & 0x7f,
+            // Writing 12 to the hours of the clock flips AM/PM
+            // (CIA/tod/hour-test).
+            _ if !alarm && v & 0x1f == 0x12 => (v & 0x9f) ^ 0x80,
             _ => v & 0x9f,
         };
         if alarm {
@@ -391,14 +429,16 @@ impl Tod {
             self.time[i] = v;
             match reg {
                 0x0b => self.stopped = true,
-                0x08 => {
+                // The divider restarts only with a stopped clock (CIA/tod/
+                // hzsync0, hzsync1, hzsync3).
+                0x08 if self.stopped => {
                     self.stopped = false;
                     self.divider = 0;
                 }
                 _ => {}
             }
         }
-        self.time == self.alarm
+        self.compare()
     }
 }
 
@@ -443,6 +483,7 @@ impl Cia {
         let tod = if model == CiaModel::Mos8520 {
             Tod {
                 time: [0; 4],
+                stopped: false,
                 ..Tod::default()
             }
         } else {
@@ -744,7 +785,8 @@ impl Cia {
 }
 
 const TAG: [u8; 4] = *b"6526";
-const VERSION: u16 = 1;
+/// 2: the TOD alarm comparator's output.
+const VERSION: u16 = 2;
 
 impl Savestate for Cia {
     fn save(&self, w: &mut StateWriter) {
@@ -784,13 +826,14 @@ impl Savestate for Cia {
             w.bool(self.cnt_in);
             w.bool(self.cnt_edge);
             w.bool(self.flag_in);
+            w.bool(self.tod.equal);
         });
     }
 
     /// Atomic: on error the chip is unchanged. The model is configuration
     /// and is kept.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut n = Cia::new(self.model);
         n.pra = c.u8()?;
         n.prb = c.u8()?;
@@ -806,7 +849,7 @@ impl Savestate for Cia {
         n.tod.latch = has_latch.then_some(latch);
         n.tod.stopped = c.bool()?;
         n.tod.divider = c.u8()?;
-        if n.tod.divider > 5 {
+        if n.tod.divider > 6 {
             return Err(StateError::Invalid("CIA TOD divider"));
         }
         n.serial = Serial {
@@ -828,6 +871,11 @@ impl Savestate for Cia {
         n.cnt_in = c.bool()?;
         n.cnt_edge = c.bool()?;
         n.flag_in = c.bool()?;
+        n.tod.equal = if version >= 2 {
+            c.bool()?
+        } else {
+            n.tod.time == n.tod.alarm
+        };
         *self = n;
         Ok(())
     }

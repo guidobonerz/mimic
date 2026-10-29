@@ -14,11 +14,18 @@
 //! disks), "virtual" (the default without
 //! DOS ROMs) or "none"; `drive8_ppm` sets the drive crystal's deviation.
 //! `options["autostart"] = "on"` loads and runs the disk in drive 8 after boot.
+//! `options["fastload"] = "on"`: the virtual drive serves the KERNAL's
+//! serial routines without bus time (see [`fastload`]).
 //!
 //! Models: "pal" (default; 6569, 985 248 Hz, 312 lines × 63 cycles, TOD 50 Hz)
 //! and "ntsc" (6567R8, 1 022 727 Hz, 263 lines × 65 cycles, TOD 60 Hz). The
 //! KERNAL tells them apart by itself (raster line count at boot); the stub
 //! KERNAL always sets up PAL timer values.
+//!
+//! VIC-II type: options["vicii"] = "6569" or "8565" (PAL), "6567" (the
+//! 6567R8) or "8562" (NTSC); the default is the model's 6569 / 6567R8, the
+//! 8565/8562 of the C64C show the grey dot. Without a model the type
+//! chooses the video standard.
 //!
 //! CIA revision: options["cia"] = "6526" (default, original C64) or
 //! "6526a" (C64C).
@@ -35,10 +42,18 @@
 //! Network and folder devices (host services from
 //! [`Machine::attach_host`], `devices_net`):
 //! - `options["uci"] = "on"`: the Ultimate 64 command interface at
-//!   `$DF1C–$DF1F` (DOS targets on the frontend's folder, network target,
-//!   control identify). It wins its four I/O2 registers over a cartridge,
-//!   as on the Ultimate, where the interface sits in the cartridge logic;
-//!   the cartridge keeps the rest of I/O1/I/O2.
+//!   `$DF1C–$DF1F` (DOS, network, control, Software IEC and HTTP targets;
+//!   files in the frontend's folder). It wins its four I/O2 registers over
+//!   the REU and a cartridge, as on the Ultimate, where the interface sits
+//!   in the cartridge logic; the cartridge keeps the rest of I/O1/I/O2.
+//!   Its commands reach the machine through [`ultimate`]: DMA, the REU,
+//!   drive 8 (power, mounting images from the folder), the EasyFlash and
+//!   the palette (a changed palette is part of the savestate).
+//! - `options["reu"]`: a RAM Expansion Unit, "128k" (1700), "256k"
+//!   (1764), "512k" (1750), "1m" … "16m", or "off" (default); see
+//!   [`devices_cartridge::reu`]. Its registers win I/O2 (`$DF00–$DFFF`,
+//!   but for the UCI's) over a cartridge; its DMA stops the CPU and waits
+//!   while the VIC-II holds BA.
 //! - `options["userport"] = "wic64"`: a WiC64 in the user port
 //!   (`PortId(2)`, [`PortKind::CbmUserPort`]: CIA2 port B, PA2, PC2 and
 //!   FLAG2); "none" by default.
@@ -56,12 +71,14 @@
 #![forbid(unsafe_code)]
 
 pub mod drive;
+pub mod fastload;
 pub mod io;
 pub mod keyboard;
 pub mod loader;
 pub mod memory;
 pub use chips_cbm::pla;
 pub mod stub;
+pub mod ultimate;
 
 use chips_cbm::cia::CiaModel;
 use chips_cbm::sid::SidModel;
@@ -82,6 +99,7 @@ use emu_core::{
     StateReader, StateWriter, StopReason,
 };
 
+use devices_cartridge::reu::{self, Reu};
 use devices_cartridge::slot::ExpansionSlot;
 use devices_cartridge::{CartLines, ExpansionCart};
 use devices_net::uci::{is_uci, Uci};
@@ -103,6 +121,8 @@ pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 pub const RAM_SPACE: MemSpaceId = MemSpaceId(1);
 /// The 1 KB × 4 bit colour RAM.
 pub const COLOR_SPACE: MemSpaceId = MemSpaceId(2);
+/// The REU's memory (`options["reu"]`), 24-bit addresses.
+pub const REU_SPACE: MemSpaceId = MemSpaceId(4);
 
 /// VIC-II register names $D000–$D02E (C64 Programmer's Reference Guide).
 const VIC_REGS: [&str; 47] = [
@@ -126,6 +146,7 @@ pub mod irq {
     pub const VIC: u8 = 1 << 0;
     pub const CIA1: u8 = 1 << 1;
     pub const CARTRIDGE: u8 = 1 << 2;
+    pub const REU: u8 = 1 << 3;
 }
 
 pub mod nmi {
@@ -164,17 +185,28 @@ fn is_cart_io(addr: u16) -> bool {
     (0xde00..=0xdfff).contains(&addr)
 }
 
+/// The REU's registers: all of I/O2.
+fn is_reu(addr: u16) -> bool {
+    (0xdf00..=0xdfff).contains(&addr)
+}
+
 /// Side-effect-free CPU-view read.
 fn cpu_peek(
     mem: &Memory,
     io: &Io,
     cart: Option<&dyn ExpansionCart>,
     uci: Option<&Uci>,
+    reu: Option<&Reu>,
     addr: u16,
 ) -> u8 {
     if let Some(u) = uci {
         if is_uci(addr) && mem.bank(addr) == Bank::Io {
             return u.peek(addr);
+        }
+    }
+    if let Some(r) = reu {
+        if is_reu(addr) && mem.bank(addr) == Bank::Io {
+            return r.peek(addr);
         }
     }
     let from_cart = match mem.bank(addr) {
@@ -199,6 +231,9 @@ struct C64Bus<'a> {
     cart: Option<&'a mut (dyn ExpansionCart + 'static)>,
     /// The Ultimate command interface, if enabled: it wins `$DF1C–$DF1F`.
     uci: Option<&'a mut Uci>,
+    /// The REU, if enabled: I/O2 but for the UCI. `None` on the REU's own
+    /// DMA bus.
+    reu: Option<&'a mut Reu>,
 }
 
 impl Bus for C64Bus<'_> {
@@ -211,6 +246,11 @@ impl Bus for C64Bus<'_> {
         if let (Some(u), Bank::Io) = (&mut self.uci, bank) {
             if is_uci(a) {
                 return u32::from(u.read(a));
+            }
+        }
+        if let (Some(r), Bank::Io) = (&mut self.reu, bank) {
+            if is_reu(a) {
+                return u32::from(r.read(a));
             }
         }
         let from_cart = match (&mut self.cart, bank) {
@@ -231,6 +271,7 @@ impl Bus for C64Bus<'_> {
             self.io,
             self.cart.as_deref(),
             self.uci.as_deref(),
+            self.reu.as_deref(),
             addr as u16,
         ))
     }
@@ -241,6 +282,13 @@ impl Bus for C64Bus<'_> {
         if let (Some(u), Bank::Io) = (&mut self.uci, bank) {
             if is_uci(a) {
                 return u.write(a, v);
+            }
+        }
+        if let Some(r) = &mut self.reu {
+            // A write to $FF00 starts an armed transfer, whatever is there.
+            r.cpu_write(a);
+            if bank == Bank::Io && is_reu(a) {
+                return r.write(a, v);
             }
         }
         if let Some(c) = &mut self.cart {
@@ -363,6 +411,7 @@ struct PeekBus<'a>(
     &'a Io,
     Option<&'a dyn ExpansionCart>,
     Option<&'a Uci>,
+    Option<&'a Reu>,
 );
 
 impl Bus for PeekBus<'_> {
@@ -371,7 +420,14 @@ impl Bus for PeekBus<'_> {
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(cpu_peek(self.0, self.1, self.2, self.3, addr as u16))
+        u32::from(cpu_peek(
+            self.0,
+            self.1,
+            self.2,
+            self.3,
+            self.4,
+            addr as u16,
+        ))
     }
 
     fn write(&mut self, _addr: u32, _size: Size, _v: u32) {}
@@ -437,6 +493,10 @@ pub struct C64 {
     cart: ExpansionSlot,
     /// The Ultimate command interface (`options["uci"]`).
     uci: Option<Uci>,
+    /// The RAM Expansion Unit (`options["reu"]`).
+    reu: Option<Reu>,
+    /// Drive 8 is switched on (the UCI's control target switches it).
+    drive_power: bool,
     /// The device in the user port.
     user_port: Option<Box<dyn PortDevice>>,
     /// `options["net"] = "off"`: no network for the devices.
@@ -448,6 +508,10 @@ pub struct C64 {
     field_done_pending: bool,
     /// VIC-II frame of the last reset; programs wait [`BOOT_FRAMES`] from here.
     boot_frame: u64,
+    /// `options["fastload"] = "on"` with the stock KERNAL ([`fastload`]).
+    fastload: bool,
+    /// A trapped exchange with the virtual drive is in progress.
+    fast_serving: bool,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -463,10 +527,24 @@ struct Snapshot {
 
 impl C64 {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let vic = match config.model.as_deref() {
-            None | Some("pal") => vic2::Model::Mos6569,
-            Some("ntsc") => vic2::Model::Mos6567R8,
-            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        // `options["vicii"]`: the VIC-II type, "6569"/"8565" (PAL) or
+        // "6567"/"8562" (NTSC; the 6567R8); without it the model's old
+        // type. The HMOS-II types 8565/8562 (C64C) show the grey dot.
+        let vic = match (
+            config.model.as_deref(),
+            config.options.get("vicii").map(String::as_str),
+        ) {
+            (None | Some("pal"), None | Some("6569")) => vic2::Model::Mos6569,
+            (None | Some("pal"), Some("8565")) => vic2::Model::Mos8565,
+            (None | Some("ntsc"), Some("6567")) | (Some("ntsc"), None) => vic2::Model::Mos6567R8,
+            (None | Some("ntsc"), Some("8562")) => vic2::Model::Mos8562,
+            (None, Some(v)) => return Err(ConfigError::Invalid(format!("vicii option '{v}'"))),
+            (Some(m @ ("pal" | "ntsc")), Some(v)) => {
+                return Err(ConfigError::Invalid(format!(
+                    "vicii option '{v}' for model '{m}'"
+                )))
+            }
+            (Some(other), _) => return Err(ConfigError::UnknownModel(other.into())),
         };
         let cpu_hz = vic.timing().cpu_hz();
         let mut cpu = Cpu6502::new(CpuConfig {
@@ -516,6 +594,13 @@ impl C64 {
             Some("on") => Some(Uci::new()),
             Some(other) => return Err(ConfigError::Invalid(format!("uci option '{other}'"))),
         };
+        let reu = match option("reu") {
+            None | Some("off") => None,
+            Some(v) => match reu::size_option(v) {
+                Some(size) => Some(Reu::new(size)),
+                None => return Err(ConfigError::Invalid(format!("reu option '{v}'"))),
+            },
+        };
         let user_port: Option<Box<dyn PortDevice>> = match option("userport") {
             None | Some("none") => None,
             Some("wic64") => Some(Box::new(devices_net::Wic64::new())),
@@ -531,14 +616,21 @@ impl C64 {
             Some("on") => true,
             Some(other) => return Err(ConfigError::Invalid(format!("debugcart option '{other}'"))),
         };
+        let fastload = match option("fastload") {
+            None | Some("off") => false,
+            Some("on") => true,
+            Some(other) => return Err(ConfigError::Invalid(format!("fastload option '{other}'"))),
+        };
         let autostart = match config.options.get("autostart").map(String::as_str) {
             None | Some("off") => Autostart::Off,
             Some("on") => Autostart::Armed,
             Some(other) => return Err(ConfigError::Invalid(format!("autostart option '{other}'"))),
         };
+        let mem = Memory::new(load_roms(config)?);
+        let fastload = fastload && fastload::kernal_matches(&mem.roms.kernal[..]);
         let mut m = Self {
             cpu,
-            mem: Memory::new(load_roms(config)?),
+            mem,
             io: Io::new(vic, cia, sid),
             ints: Interrupts::default(),
             sched: Scheduler::new(),
@@ -549,6 +641,8 @@ impl C64 {
             tape: Datasette::new(TapMachine::C64, cpu_hz),
             cart: devices_cartridge::slot::expansion_slot(),
             uci,
+            reu,
+            drive_power: true,
             user_port,
             net_off,
             host: HostServices::default(),
@@ -556,6 +650,8 @@ impl C64 {
             palette: vic2::palette::palette(),
             field_done_pending: false,
             boot_frame: 0,
+            fastload,
+            fast_serving: false,
         };
         m.io.debugcart = debugcart;
         // The devices' lines from the start (paddles sit at mid travel).
@@ -655,8 +751,24 @@ impl C64 {
         self.cpu.set_irq(self.ints.irq != 0);
         self.cpu.set_nmi(self.ints.nmi != 0);
         let beam = self.beam_pos();
-        // Without AEC the halted CPU does not reach the bus at all.
-        let result = if !self.io.vic.aec() {
+        if self.fastload && self.cpu.at_instruction_boundary() {
+            self.fastload_trap();
+        }
+        // Without AEC the halted CPU does not reach the bus at all; while
+        // the REU holds /DMA it moves a byte whenever BA is high.
+        let result = if let Some(r) = self.reu.as_mut().filter(|r| r.dma_active()) {
+            if self.io.vic.ba() {
+                let mut bus = C64Bus {
+                    mem: &mut self.mem,
+                    io: &mut self.io,
+                    cart: self.cart.cart_mut().map(|c| c.as_mut()),
+                    uci: self.uci.as_mut(),
+                    reu: None,
+                };
+                r.step(&mut bus);
+            }
+            CycleResult::Busy
+        } else if !self.io.vic.aec() {
             CycleResult::Busy
         } else {
             let mut bus = C64Bus {
@@ -664,6 +776,7 @@ impl C64 {
                 io: &mut self.io,
                 cart: self.cart.cart_mut().map(|c| c.as_mut()),
                 uci: self.uci.as_mut(),
+                reu: self.reu.as_mut(),
             };
             let mut hooked = HookedC64Bus {
                 bus: &mut bus,
@@ -675,7 +788,23 @@ impl C64 {
         let entered = self.cpu.take_interrupt();
         self.user_port_cycle();
         if let Some(u) = &mut self.uci {
-            u.tick();
+            if u.countdown() {
+                let mut ctx = ultimate::UciContext {
+                    mem: &mut self.mem,
+                    io: &mut self.io,
+                    cart: &mut self.cart,
+                    reu: self.reu.as_mut(),
+                    drive: self.drive.as_mut(),
+                    drive_power: &mut self.drive_power,
+                    palette: &mut self.palette,
+                    reboot: false,
+                };
+                u.run_due(&mut ctx);
+                if ctx.reboot {
+                    // REBOOT: the C64 and the interface restart.
+                    self.reset(ResetKind::Soft);
+                }
+            }
         }
         // φ2: VIC-II's own phi2 accesses, pixel output, beam advance.
         let bank = self.io.vic_bank();
@@ -689,12 +818,12 @@ impl C64 {
         let c64 = drive::c64_lines(self.io.cia2.port_a_out());
         let mut drive_stop = None;
         self.io.iec = match &mut self.drive {
-            Some(d) => {
+            Some(d) if self.drive_power => {
                 let (bus, stop) = d.run(c64, dbg.as_deref_mut());
                 drive_stop = stop;
                 bus
             }
-            None => c64,
+            _ => c64,
         };
         // Datasette: port bit 3 WRITE, bit 5 MOTOR (output low = on), bit 4
         // SENSE; READ on CIA1 /FLAG.
@@ -848,6 +977,49 @@ impl C64 {
         }
     }
 
+    /// A KERNAL serial routine about to run with the virtual drive as
+    /// partner: done at once, as if it had run ([`fastload`]).
+    fn fastload_trap(&mut self) {
+        let pc = self.cpu.pc();
+        let Some(trap) = fastload::trap_at(pc) else {
+            return;
+        };
+        if self.mem.bank(pc) != Bank::Kernal || !self.drive_power {
+            return;
+        }
+        let Some(drive) = &mut self.drive else {
+            return;
+        };
+        let drives_cbm::DriveKind::Virtual(v) = &mut drive.kind else {
+            return;
+        };
+        let regs = self.cpu.regs();
+        let reg = |n: &str| regs.0.iter().find(|r| r.name == n).map_or(0, |r| r.value) as u8;
+        let Some(out) = fastload::run(trap, reg("A"), &mut self.fast_serving, &mut v.dos) else {
+            return;
+        };
+        if let Some(a) = out.a {
+            self.cpu.set_reg("A", u32::from(a));
+        }
+        if out.status != 0 {
+            self.mem.ram[0x90] |= out.status;
+        }
+        // RTS: the return address from the stack, plus one.
+        let s = reg("S");
+        let lo = self.mem.ram[0x100 | usize::from(s.wrapping_add(1))];
+        let hi = self.mem.ram[0x100 | usize::from(s.wrapping_add(2))];
+        self.cpu.set_reg("S", u32::from(s.wrapping_add(2)));
+        self.cpu.set_reg(
+            "PC",
+            u32::from(u16::from_le_bytes([lo, hi]).wrapping_add(1)),
+        );
+        let mut p = reg("P") & !0x01;
+        if out.cli {
+            p &= !0x04;
+        }
+        self.cpu.set_reg("P", u32::from(p));
+    }
+
     fn type_text(&mut self, text: &str) {
         let (events, _) = keyboard::typed_events(text, self.sched.now().0);
         for e in events {
@@ -872,6 +1044,8 @@ impl C64 {
         self.ints.set_irq(irq::CIA1, cia1);
         self.ints.set_nmi(nmi::CIA2, cia2);
         self.ints.set_nmi(nmi::RESTORE, self.io.keyboard.restore);
+        self.ints
+            .set_irq(irq::REU, self.reu.as_ref().is_some_and(|r| r.irq()));
     }
 
     fn apply_frame_freezes(&mut self, dbg: &DebugHooks) {
@@ -885,6 +1059,7 @@ impl C64 {
                         io: &mut self.io,
                         cart: self.cart.cart_mut().map(|c| c.as_mut()),
                         uci: self.uci.as_mut(),
+                        reu: self.reu.as_mut(),
                     }
                     .write(addr & 0xffff, Size::Byte, u32::from(v)),
                     RAM_SPACE => self.mem.ram[(addr & 0xffff) as usize] = v,
@@ -936,11 +1111,15 @@ impl Machine for C64 {
         if let Some(u) = &mut self.uci {
             u.reset();
         }
+        if let Some(r) = &mut self.reu {
+            r.reset();
+        }
         self.cartridge_cycle();
         self.input.clear();
         if self.autostart == Autostart::Loading {
             self.autostart = Autostart::Done;
         }
+        self.fast_serving = false;
         self.field_done_pending = false;
         self.boot_frame = self.io.vic.beam().frame;
         self.sync_light_pen();
@@ -1035,6 +1214,9 @@ impl Machine for C64 {
             space(RAM_SPACE, "ram", 16),
             space(COLOR_SPACE, "colorram", 10),
         ];
+        if self.reu.is_some() {
+            spaces.push(space(REU_SPACE, "reu", 24));
+        }
         if self.drive.as_ref().is_some_and(|d| d.is_true()) {
             spaces.push(MemSpace {
                 id: DRIVE_SPACE,
@@ -1118,6 +1300,22 @@ impl Machine for C64 {
             },
         ];
         chips.extend(uci);
+        if let Some(r) = &self.reu {
+            const NAMES: [&str; 11] = [
+                "STATUS", "COMMAND", "C64LO", "C64HI", "REULO", "REUHI", "BANK", "LENLO", "LENHI",
+                "IMR", "ACR",
+            ];
+            chips.push(ChipInfo {
+                name: "reu",
+                regs: NAMES
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &name)| {
+                        reg(name, Some(0xdf00 + i as u32), r.peek(0xdf00 + i as u16), 8)
+                    })
+                    .collect(),
+            });
+        }
         if self.io.debugcart {
             let exit = self.io.debugcart_exit;
             chips.push(ChipInfo {
@@ -1284,12 +1482,14 @@ impl Machine for C64 {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"C64S", 6, |w| {
+        w.chunk(*b"C64S", 7, |w| {
             w.u8(self.ints.irq);
             w.u8(self.ints.nmi);
             w.bool(self.field_done_pending);
             w.u8(self.autostart.to_u8());
             w.u64(self.boot_frame);
+            // Version 7: a fast-loading exchange in progress.
+            w.bool(self.fast_serving);
         });
         self.cpu.save(&mut w);
         self.mem.save(&mut w);
@@ -1311,7 +1511,7 @@ impl Machine for C64 {
             }
         });
         // The UCI and the user port device (empty: none).
-        w.chunk(*b"C64X", 1, |w| {
+        w.chunk(*b"C64X", 2, |w| {
             let mut uci = StateWriter::new();
             if let Some(u) = &self.uci {
                 u.save(&mut uci);
@@ -1324,6 +1524,16 @@ impl Machine for C64 {
                     .map(|d| d.save_state())
                     .unwrap_or_default(),
             );
+            // Version 2: the REU (empty: none), drive 8's power, the palette.
+            let mut reu = StateWriter::new();
+            if let Some(r) = &self.reu {
+                r.save(&mut reu);
+            }
+            w.bytes(&reu.into_bytes());
+            w.bool(self.drive_power);
+            for c in &self.palette {
+                w.raw(&[c.r, c.g, c.b]);
+            }
         });
         w.into_bytes()
     }
@@ -1341,7 +1551,7 @@ impl Machine for C64 {
             field_done_pending: self.field_done_pending,
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"C64S", 6)?;
+        let (version, mut c) = r.chunk(*b"C64S", 7)?;
         if version < 3 {
             return Err(StateError::UnsupportedVersion {
                 tag: *b"C64S",
@@ -1357,6 +1567,7 @@ impl Machine for C64 {
             Autostart::from_u8(c.u8()?).ok_or(StateError::Invalid("autostart state"))?;
         // Version 3 states predate resets: booted at power-on.
         let boot_frame = if version >= 4 { c.u64()? } else { 0 };
+        let fast_serving = version >= 7 && c.bool()?;
         next.cpu.load(&mut r)?;
         next.mem.load(&mut r)?;
         next.io.load(&mut r)?;
@@ -1436,10 +1647,31 @@ impl Machine for C64 {
                 return Err(e);
             }
         };
-        // The UCI and the user port (states before C64X have neither).
-        let extra = match r.chunk(*b"C64X", 1) {
-            Ok((_, mut c)) => match (c.bytes(), c.bytes()) {
-                (Ok(u), Ok(d)) => Some((u.to_vec(), d.to_vec())),
+        // The UCI and the user port (states before C64X have neither), from
+        // version 2 the REU, drive power and palette.
+        let mut more: Option<(Vec<u8>, bool, [u8; 48])> = None;
+        let extra = match r.chunk(*b"C64X", 2) {
+            Ok((v, mut c)) => match (c.bytes(), c.bytes()) {
+                (Ok(u), Ok(d)) => {
+                    let (u, d) = (u.to_vec(), d.to_vec());
+                    if v >= 2 {
+                        let mut rgb = [0; 48];
+                        let read = c.bytes().map(<[u8]>::to_vec).and_then(|reu| {
+                            let power = c.bool()?;
+                            c.raw_into(&mut rgb)?;
+                            Ok((reu, power))
+                        });
+                        match read {
+                            Ok((reu, power)) => more = Some((reu, power, rgb)),
+                            Err(e) => {
+                                restore_drive(&mut self.drive);
+                                restore_tape(&mut self.tape, &mut self.cart);
+                                return Err(e);
+                            }
+                        }
+                    }
+                    Some((u, d))
+                }
                 (Err(e), _) | (_, Err(e)) => {
                     restore_drive(&mut self.drive);
                     restore_tape(&mut self.tape, &mut self.cart);
@@ -1464,6 +1696,27 @@ impl Machine for C64 {
         };
         let next_uci = match next_uci {
             Ok(u) => u,
+            Err(e) => {
+                restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape, &mut self.cart);
+                return Err(e);
+            }
+        };
+        // The REU loads into a copy (states before version 2 have none and
+        // leave it as it is).
+        let next_reu = match (&self.reu, more.as_ref().map(|m| m.0.is_empty())) {
+            (_, None) | (None, Some(true)) => Ok(None),
+            (Some(r), Some(false)) => {
+                let mut r = r.clone();
+                r.load(&mut StateReader::new(
+                    more.as_ref().map_or(&[][..], |m| &m.0),
+                ))
+                .map(|()| Some(r))
+            }
+            _ => Err(StateError::Invalid("REU configuration differs")),
+        };
+        let next_reu = match next_reu {
+            Ok(r) => r,
             Err(e) => {
                 restore_drive(&mut self.drive);
                 restore_tape(&mut self.tape, &mut self.cart);
@@ -1515,6 +1768,25 @@ impl Machine for C64 {
         if let Some(u) = next_uci {
             self.uci = Some(u);
         }
+        if let Some(r) = next_reu {
+            self.reu = Some(r);
+        }
+        match more {
+            Some((_, power, rgb)) => {
+                self.drive_power = power;
+                for (i, c) in self.palette.iter_mut().enumerate() {
+                    *c = Rgb8 {
+                        r: rgb[i * 3],
+                        g: rgb[i * 3 + 1],
+                        b: rgb[i * 3 + 2],
+                    };
+                }
+            }
+            None => {
+                self.drive_power = true;
+                self.palette = vic2::palette::palette();
+            }
+        }
         self.cpu = next.cpu;
         self.mem = next.mem;
         self.mem.cassette_sense = self.tape.sense();
@@ -1525,6 +1797,7 @@ impl Machine for C64 {
         self.field_done_pending = next.field_done_pending;
         self.autostart = autostart;
         self.boot_frame = boot_frame;
+        self.fast_serving = fast_serving;
         self.sync_light_pen();
         Ok(())
     }
@@ -1548,11 +1821,16 @@ impl DebugTarget for C64 {
                         &self.io,
                         self.cart.cart().map(|c| c.as_ref()),
                         self.uci.as_ref(),
+                        self.reu.as_ref(),
                     )
                     .peek(a & 0xffff, Size::Byte),
                 ),
                 RAM_SPACE => Some(u32::from(self.mem.ram[(a & 0xffff) as usize])),
                 COLOR_SPACE => Some(u32::from(self.mem.color[(a & 0x3ff) as usize])),
+                REU_SPACE => self
+                    .reu
+                    .as_ref()
+                    .map(|r| u32::from(r.ram()[a as usize % r.size()])),
                 _ => None,
             }
         };
@@ -1579,12 +1857,20 @@ impl DebugTarget for C64 {
                             io: &mut self.io,
                             cart: self.cart.cart_mut().map(|c| c.as_mut()),
                             uci: self.uci.as_mut(),
+                            reu: self.reu.as_mut(),
                         }
                         .write(u32::from(a), Size::Byte, u32::from(b)),
                     }
                 }
                 RAM_SPACE => self.mem.ram[(a & 0xffff) as usize] = b,
                 COLOR_SPACE => self.mem.color[(a & 0x3ff) as usize] = b & 0x0f,
+                REU_SPACE => match &mut self.reu {
+                    Some(r) => {
+                        let size = r.size();
+                        r.ram_mut()[a as usize % size] = b;
+                    }
+                    None => return false,
+                },
                 _ => return false,
             }
         }
@@ -1598,6 +1884,7 @@ impl DebugTarget for C64 {
                 &self.io,
                 self.cart.cart().map(|c| c.as_ref()),
                 self.uci.as_ref(),
+                self.reu.as_ref(),
             ),
             addr,
         )
@@ -1608,3 +1895,5 @@ impl DebugTarget for C64 {
 mod tests;
 #[cfg(test)]
 mod tests_net;
+#[cfg(test)]
+mod tests_ultimate;

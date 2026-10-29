@@ -55,6 +55,9 @@ usage: mimic-headless [options]
   --uci-dir DIR         the folder the Ultimate command interface's DOS
                         targets work in (default ./ultimate, created on the
                         first write; paths cannot leave it)
+  --uci-mount NAME=DIR  hang host folder DIR into the UCI file system as
+                        /NAME, like the Ultimate's drives: SD, Usb0, Usb1,
+                        Flash, Temp (repeatable)
   --frames N            frames to run (default: 1)
   --snapshot FILE.png   write the last frame as PNG
   --snapshot-every N    with --snapshot: also write FILE-<frame>.png every N frames
@@ -119,6 +122,7 @@ struct Args {
     /// `--net off`.
     net_off: bool,
     uci_dir: Option<String>,
+    uci_mounts: Vec<(String, std::path::PathBuf)>,
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
@@ -219,6 +223,9 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 }
             }
             "--uci-dir" => args.uci_dir = Some(value("--uci-dir")?),
+            "--uci-mount" => args
+                .uci_mounts
+                .push(media_backends::parse_mount(&value("--uci-mount")?)?),
             "--list" => args.list = true,
             "--help" | "-h" => args.help = true,
             "--version" | "-V" => args.version = true,
@@ -463,10 +470,13 @@ fn run(args: Args) -> Result<ExitCode, String> {
     }
     // Network and folder for the devices that reach outside (UCI, WiC64),
     // through a journal so debugger recordings replay exactly.
-    let journal = media_backends::host_journal(
-        !args.net_off,
-        Some(args.uci_dir.as_deref().unwrap_or("ultimate").into()),
-    );
+    // With the Ultimate command interface the folders are there from the
+    // start (otherwise they appear on the first write).
+    let uci_dir = std::path::PathBuf::from(args.uci_dir.as_deref().unwrap_or("ultimate"));
+    if args.config.options.get("uci").is_some_and(|v| v == "on") {
+        media_backends::create_host_folders(Some(&uci_dir), &args.uci_mounts)?;
+    }
+    let journal = media_backends::host_journal(!args.net_off, Some(uci_dir), &args.uci_mounts)?;
     machine.attach_host(journal.services());
     if let Some(path) = &args.load_state {
         machine

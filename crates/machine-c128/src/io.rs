@@ -59,8 +59,8 @@ impl Io {
     pub fn new(vic: vic2::Model, sid: SidModel, vdc_kb: usize) -> Self {
         let cpu_hz = vic.timing().cpu_hz();
         let (standard, mains) = match vic {
-            vic2::Model::Mos6569 => (VideoStandard::Pal, 50),
-            vic2::Model::Mos6567R8 => (VideoStandard::Ntsc, 60),
+            vic2::Model::Mos6569 | vic2::Model::Mos8565 => (VideoStandard::Pal, 50),
+            vic2::Model::Mos6567R8 | vic2::Model::Mos8562 => (VideoStandard::Ntsc, 60),
         };
         Self {
             vic: Vic2::new(vic),

@@ -3,10 +3,11 @@
 //!
 //! Everything the emulation thread calls returns at once: name lookups,
 //! connects and HTTP requests run on short-lived worker threads, sockets
-//! are non-blocking. HTTP is a small HTTP/1.1 client over TCP (GET and
-//! POST, `Connection: close`, chunked or sized bodies, up to five
-//! redirects; message syntax per RFC 9112); `https:` is reported as unsupported (no TLS crate in the
-//! workspace). TCP listeners bind to the loopback interface only, so a
+//! are non-blocking. HTTP is a small HTTP/1.1 client over TCP (any verb,
+//! the caller's header fields, `Connection: close`, chunked or sized
+//! bodies, up to five redirects; message syntax per RFC 9112, redirect
+//! rules per RFC 9110 15.4); `https:` is reported as unsupported (no TLS
+//! crate in the workspace). TCP listeners bind to the loopback interface only, so a
 //! guest program cannot open a port to the network by itself.
 //!
 //! The clock is the host's UTC time; the local offset comes from the
@@ -23,8 +24,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use emu_core::host::{
-    lock, ConnState, HostTime, HttpResponse, HttpTicket, NetBackend, NetError, NetHandle, NetInfo,
-    Recv, SocketKind,
+    lock, ConnState, HostTime, HttpRequest, HttpResponse, HttpTicket, NetBackend, NetError,
+    NetHandle, NetInfo, Recv, SocketKind,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -111,23 +112,22 @@ impl StdNet {
         Ok(s)
     }
 
-    fn request(
-        &mut self,
-        method: &'static str,
-        url: &str,
-        content_type: &str,
-        body: &[u8],
-    ) -> Result<HttpTicket, NetError> {
+    fn request(&mut self, req: HttpRequest) -> Result<HttpTicket, NetError> {
         self.enabled()?;
         // Fail early on what the worker would refuse anyway.
-        parse_url(url)?;
+        parse_url(&req.url)?;
+        if req.method.is_empty() || !req.method.bytes().all(|b| b.is_ascii_alphabetic()) {
+            return Err(NetError::Unsupported(format!(
+                "HTTP method '{}'",
+                req.method
+            )));
+        }
         let slot: Slot<HttpResponse> = Arc::new(Mutex::new(None));
         let worker = slot.clone();
-        let (url, ct, body) = (url.to_string(), content_type.to_string(), body.to_vec());
         std::thread::Builder::new()
             .name("mimic-http".into())
             .spawn(move || {
-                let r = http(method, &url, &ct, &body, 0);
+                let r = http(&req, 0);
                 *lock(&worker) = Some(r);
             })
             .map_err(|e| NetError::Io(e.to_string()))?;
@@ -254,11 +254,29 @@ impl NetBackend for StdNet {
     }
 
     fn http_get(&mut self, url: &str) -> Result<HttpTicket, NetError> {
-        self.request("GET", url, "", &[])
+        self.request(HttpRequest {
+            method: "GET".into(),
+            url: url.into(),
+            ..Default::default()
+        })
     }
 
     fn http_post(&mut self, url: &str, ct: &str, body: &[u8]) -> Result<HttpTicket, NetError> {
-        self.request("POST", url, ct, body)
+        let ct = if ct.is_empty() {
+            "application/octet-stream"
+        } else {
+            ct
+        };
+        self.request(HttpRequest {
+            method: "POST".into(),
+            url: url.into(),
+            headers: vec![("Content-Type".into(), ct.into())],
+            body: body.to_vec(),
+        })
+    }
+
+    fn http_request(&mut self, req: &HttpRequest) -> Result<HttpTicket, NetError> {
+        self.request(req.clone())
     }
 
     fn poll_http(&mut self, t: HttpTicket) -> Option<Result<HttpResponse, NetError>> {
@@ -400,15 +418,35 @@ fn parse_url(url: &str) -> Result<(String, u16, String, String), NetError> {
     Ok((host, port.unwrap_or(80), authority.to_string(), path))
 }
 
+/// Header fields the client frames itself; the caller's are dropped.
+const FRAMING: [&str; 4] = ["host", "connection", "content-length", "transfer-encoding"];
+
+/// The request head: the caller's fields replace the defaults of the same
+/// name; a body always gets its length.
+fn request_head(req: &HttpRequest, authority: &str, path: &str) -> String {
+    let mut head = format!("{} {path} HTTP/1.1\r\nHost: {authority}\r\n", req.method);
+    for (k, v) in [("User-Agent", USER_AGENT), ("Accept", "*/*")] {
+        if req.header(k).is_none() {
+            head.push_str(&format!("{k}: {v}\r\n"));
+        }
+    }
+    let clean = |s: &str| s.replace(['\r', '\n'], "");
+    for (k, v) in &req.headers {
+        if !FRAMING.iter().any(|f| k.eq_ignore_ascii_case(f)) && !k.trim().is_empty() {
+            head.push_str(&format!("{}: {}\r\n", clean(k).trim(), clean(v).trim()));
+        }
+    }
+    head.push_str("Connection: close\r\n");
+    if !req.body.is_empty() || matches!(req.method.as_str(), "POST" | "PUT" | "PATCH") {
+        head.push_str(&format!("Content-Length: {}\r\n", req.body.len()));
+    }
+    head.push_str("\r\n");
+    head
+}
+
 /// On a worker thread: one HTTP/1.1 request, following redirects.
-fn http(
-    method: &'static str,
-    url: &str,
-    content_type: &str,
-    body: &[u8],
-    depth: u8,
-) -> Result<HttpResponse, NetError> {
-    let (host, port, authority, path) = parse_url(url)?;
+fn http(req: &HttpRequest, depth: u8) -> Result<HttpResponse, NetError> {
+    let (host, port, authority, path) = parse_url(&req.url)?;
     let addrs = resolve(&host, port)?;
     let mut stream = addrs
         .iter()
@@ -417,25 +455,9 @@ fn http(
     let io = |e: std::io::Error| NetError::Io(e.to_string());
     stream.set_read_timeout(Some(HTTP_TIMEOUT)).map_err(io)?;
     stream.set_write_timeout(Some(HTTP_TIMEOUT)).map_err(io)?;
-    let mut req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: {USER_AGENT}\r\nAccept: */*\r\nConnection: close\r\n"
-    );
-    if method == "POST" {
-        let ct = if content_type.is_empty() {
-            "application/octet-stream"
-        } else {
-            content_type
-        };
-        req.push_str(&format!(
-            "Content-Type: {ct}\r\nContent-Length: {}\r\n",
-            body.len()
-        ));
-    }
-    req.push_str("\r\n");
-    stream.write_all(req.as_bytes()).map_err(io)?;
-    if method == "POST" {
-        stream.write_all(body).map_err(io)?;
-    }
+    let mut message = request_head(req, &authority, &path).into_bytes();
+    message.extend_from_slice(&req.body);
+    stream.write_all(&message).map_err(io)?;
     let mut raw = Vec::new();
     stream
         .take(MAX_BODY as u64 + 65536)
@@ -452,34 +474,50 @@ fn http(
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| NetError::Io("malformed HTTP status line".into()))?;
-    let mut headers = BTreeMap::new();
-    for l in lines {
-        if let Some((k, v)) = l.split_once(':') {
-            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
-        }
-    }
+    let headers: Vec<(String, String)> = lines
+        .filter_map(|l| l.split_once(':'))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .collect();
+    let field = |name: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    };
     if matches!(status, 301 | 302 | 303 | 307 | 308) && depth < 5 {
-        if let Some(loc) = headers.get("location") {
-            let next = if loc.starts_with('/') {
+        if let Some(loc) = field("location") {
+            let url = if loc.starts_with('/') {
                 format!("http://{authority}{loc}")
             } else {
-                loc.clone()
+                loc.to_string()
             };
-            let (m, b) = if status == 303 || method == "GET" {
-                ("GET", &[][..])
+            // 303, and 301/302 after a POST, continue as GET without body.
+            let as_get = status == 303 || (matches!(status, 301 | 302) && req.method == "POST");
+            let next = if as_get {
+                HttpRequest {
+                    method: if req.method == "HEAD" { "HEAD" } else { "GET" }.into(),
+                    url,
+                    headers: req
+                        .headers
+                        .iter()
+                        .filter(|(k, _)| !k.eq_ignore_ascii_case("content-type"))
+                        .cloned()
+                        .collect(),
+                    body: Vec::new(),
+                }
             } else {
-                (method, body)
+                HttpRequest { url, ..req.clone() }
             };
-            return http(m, &next, content_type, b, depth + 1);
+            return http(&next, depth + 1);
         }
     }
     let rest = &raw[head_end + 4..];
-    let body = if headers
-        .get("transfer-encoding")
-        .is_some_and(|t| t.to_ascii_lowercase().contains("chunked"))
+    let body = if req.method == "HEAD" || matches!(status, 100..=199 | 204 | 304) {
+        Vec::new()
+    } else if field("transfer-encoding").is_some_and(|t| t.to_ascii_lowercase().contains("chunked"))
     {
         dechunk(rest)?
-    } else if let Some(n) = headers.get("content-length").and_then(|n| n.parse().ok()) {
+    } else if let Some(n) = field("content-length").and_then(|n| n.parse().ok()) {
         rest[..rest.len().min(n)].to_vec()
     } else {
         rest.to_vec()
@@ -487,6 +525,7 @@ fn http(
     Ok(HttpResponse {
         status,
         body: body[..body.len().min(MAX_BODY)].to_vec(),
+        headers,
     })
 }
 
@@ -531,6 +570,10 @@ mod tests {
                 let mut buf = [0u8; 2048];
                 let _ = s.read(&mut buf);
                 let _ = s.write_all(response);
+                // Close without unread data (Windows answers that with RST).
+                let _ = s.shutdown(std::net::Shutdown::Write);
+                let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
+                while matches!(s.read(&mut buf), Ok(n) if n > 0) {}
             }
         });
         port
@@ -587,6 +630,37 @@ mod tests {
         let r = wait_http(&mut net, t).unwrap();
         assert_eq!((r.status, r.body.as_slice()), (200, &b"hello"[..]));
         assert_eq!(net.poll_http(t), Some(Err(NetError::BadHandle)));
+    }
+
+    #[test]
+    fn requests_carry_the_callers_verb_and_fields() {
+        let req = HttpRequest {
+            method: "PUT".into(),
+            url: "http://h/".into(),
+            headers: vec![
+                ("Accept".into(), "application/json".into()),
+                ("X-Key".into(), "a\r\nb".into()),
+                ("Content-Length".into(), "999".into()),
+            ],
+            body: b"{}".to_vec(),
+        };
+        let head = request_head(&req, "h", "/x");
+        assert!(head.starts_with("PUT /x HTTP/1.1\r\nHost: h\r\n"), "{head}");
+        assert!(head.contains("Accept: application/json\r\n"));
+        assert!(!head.contains("*/*"));
+        assert!(head.contains("X-Key: ab\r\n"));
+        assert!(head.contains("Content-Length: 2\r\n") && !head.contains("999"));
+        let port = serve(b"HTTP/1.1 201 Created\r\nX-Id: 7\r\nContent-Length: 2\r\n\r\nokjunk");
+        let mut net = StdNet::new(true);
+        let t = net
+            .http_request(&HttpRequest {
+                url: format!("http://127.0.0.1:{port}/x"),
+                ..req
+            })
+            .unwrap();
+        let r = wait_http(&mut net, t).unwrap();
+        assert_eq!((r.status, r.body.as_slice()), (201, &b"ok"[..]));
+        assert_eq!(r.headers[0], ("X-Id".to_string(), "7".to_string()));
     }
 
     #[test]

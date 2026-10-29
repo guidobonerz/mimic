@@ -25,18 +25,35 @@
 //!
 //! Targets:
 //! - 1 and 2: Ultimate DOS, each with its own directory and open file, on
-//!   the frontend's [`FileHost`] folder (source: "Ultimate DOS Target",
+//!   the frontend's [`FileHost`] folder, with LOAD_REU/SAVE_REU and
+//!   MOUNT/UMOUNT/SWAP_DISK for the machine's drives (source: "Ultimate
+//!   DOS Target",
 //!   https://1541u-documentation.readthedocs.io/en/latest/uci/ultimate_dos_target.html).
 //! - 3: network, TCP/UDP sockets on the [`NetBackend`] (source: "Network
 //!   Target", https://1541u-documentation.readthedocs.io/en/latest/uci/network_target.html).
-//! - 4: control, IDENTIFY and GET_HWINFO only (source: "Control Target",
-//!   https://1541u-documentation.readthedocs.io/en/latest/uci/control_target.html);
-//!   the machine-control commands (freeze, reboot, drives, REU, palette)
-//!   and the DOS target's mount/REU commands are not offered.
+//! - 4: control (source: "Control Target",
+//!   https://1541u-documentation.readthedocs.io/en/latest/uci/control_target.html):
+//!   IDENTIFY, REBOOT, LOAD/SAVE_REU, U64_SAVEMEM, EASYFLASH_ERASE,
+//!   GET_HWINFO, GET_DRVINFO, drive power, the RAM-disk info and the
+//!   palette. FREEZE (no freezer) and DECODE_TRACK are not offered.
+//! - 5: Software IEC, direct file access for KERNAL replacements with
+//!   DMA loads ([`siec`]).
+//! - 6: HTTP, requests built from header and body handles with JSON
+//!   bodies ([`http`]).
+//!
+//! The machine lends the command its memory, REU, drives and palette
+//! through [`UciMachine`] ([`Uci::countdown`], [`Uci::run_due`]).
 //!
 //! Unverified (not in the documentation, chosen plausibly): the busy time
 //! of a command (64 cycles) and the poll interval while connecting (1000
-//! cycles); the status texts for file-system errors ("87,…") and failed
+//! cycles); MOUNT's "89,NOT A DISK IMAGE" for whatever the drive refuses;
+//! SWAP_DISK's next disk (the next image in the folder whose name differs
+//! only in digits); LOAD/SAVE_REU's file path relative to DOS target 1's
+//! directory in the control target; "84,REU NOT ENABLED" in the DOS
+//! target; "84,EASYFLASH NOT PRESENT"; "90,DRIVE NOT PRESENT" for drive
+//! power; GET_DRVINFO's power byte (1 = on) and the virtual drive's type
+//! (Software IEC); GET_MP3_RAMDISKINFO's answer without RAM disks (zeros);
+//! the status texts for file-system errors ("87,…") and failed
 //! connections ("85,CONNECTION FAILED"), unknown commands/targets
 //! ("21,UNKNOWN COMMAND"), bad socket handles ("82,…"); socket handles
 //! counting from 1; READ_SOCKET with nothing there (a zero count with
@@ -56,9 +73,18 @@ use std::collections::BTreeMap;
 
 use emu_core::host::{
     join_path, lock, ConnState, DirEntry, FileHandle, FileHost, FileStat, FsError, HostServices,
-    NetError, NetHandle, OpenMode, Recv, SocketKind,
+    HttpRequest, HttpTicket, NetError, NetHandle, OpenMode, Recv, SocketKind,
 };
+use emu_core::media::{Media, MediaError, MediaKind};
 use emu_core::{StateError, StateReader, StateWriter};
+
+pub mod http;
+mod machine;
+pub mod siec;
+
+pub use machine::{
+    drive_kind, read_file, write_file, FolderImage, NoMachine, UciDrive, UciMachine, UciSid,
+};
 
 /// The UCI's registers: `$DF1C–$DF1F`.
 pub fn is_uci(addr: u16) -> bool {
@@ -102,6 +128,8 @@ pub mod target {
     pub const DOS2: u8 = 2;
     pub const NETWORK: u8 = 3;
     pub const CONTROL: u8 = 4;
+    pub const SOFTWARE_IEC: u8 = 5;
+    pub const HTTP: u8 = 6;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,6 +158,25 @@ enum Pending {
     /// OPEN_TCP/OPEN_UDP waiting for the connection.
     Connect {
         handle: NetHandle,
+    },
+    /// The rest of a response longer than one packet.
+    Data {
+        rest: Vec<u8>,
+    },
+    /// An HTTP exchange waiting for the answer.
+    Http {
+        ticket: HttpTicket,
+        /// Header and body handles of the request (body `0xFF`: none).
+        header: u8,
+        body: u8,
+        raw: bool,
+    },
+    /// A Software IEC CHKIN stream on channel `sa`; `start` is the file
+    /// position of the packet in the queue, `size` the next packet's size.
+    Chkin {
+        sa: u8,
+        start: u64,
+        size: u16,
     },
 }
 
@@ -184,6 +231,12 @@ pub struct Uci {
     /// UCI socket number → host handle.
     sockets: BTreeMap<u8, NetHandle>,
     listener: Option<Listener>,
+    /// Disk images mounted by MOUNT_DISK: IEC number → path; and the
+    /// drive mounted last.
+    mounts: BTreeMap<u8, String>,
+    last_mount: Option<u8>,
+    http: http::HttpState,
+    siec: siec::SiecState,
     host: HostServices,
 }
 
@@ -218,6 +271,10 @@ impl PartialEq for Uci {
         ) && self.dos == o.dos
             && self.sockets == o.sockets
             && self.listener == o.listener
+            && self.mounts == o.mounts
+            && self.last_mount == o.last_mount
+            && self.http == o.http
+            && self.siec == o.siec
     }
 }
 
@@ -321,6 +378,10 @@ impl Uci {
             dos: Default::default(),
             sockets: BTreeMap::new(),
             listener: None,
+            mounts: BTreeMap::new(),
+            last_mount: None,
+            http: http::HttpState::default(),
+            siec: siec::SiecState::default(),
             host: HostServices::default(),
         }
     }
@@ -382,8 +443,11 @@ impl Uci {
     pub fn write(&mut self, addr: u16, v: u8) {
         match addr & 3 {
             0 => self.control(v),
-            // Command bytes are taken while idle only (unverified).
-            1 if self.state == State::Idle && self.cmd.len() < CMD_MAX => self.cmd.push(v),
+            // Command bytes are taken while idle only (unverified), and
+            // while a Software IEC CHKIN stream stays open.
+            1 if (self.state == State::Idle || self.in_chkin()) && self.cmd.len() < CMD_MAX => {
+                self.cmd.push(v)
+            }
             _ => {}
         }
     }
@@ -412,6 +476,11 @@ impl Uci {
             }
         }
         if v & ctrl::PUSH_CMD != 0 {
+            // A new command ends an open CHKIN stream: the channel keeps
+            // what the C64 has not read.
+            if self.in_chkin() {
+                self.end_chkin();
+            }
             if self.state == State::Idle {
                 self.state = State::Busy;
                 self.pending = Pending::Command;
@@ -429,32 +498,60 @@ impl Uci {
         self.stat_pos = 0;
     }
 
-    /// One cycle. Costs a compare while nothing is pending.
-    #[inline]
+    /// One cycle without a machine around (tests): see [`Uci::countdown`].
     pub fn tick(&mut self) {
-        if self.timer > 0 {
-            self.timer -= 1;
-            if self.timer == 0 {
-                self.run();
-            }
+        if self.countdown() {
+            self.run_due(&mut NoMachine);
         }
     }
 
+    /// One cycle of the busy time; `true` when work is due, which the
+    /// machine then does with [`Uci::run_due`]. Costs a compare while
+    /// nothing is pending.
+    #[inline]
+    pub fn countdown(&mut self) -> bool {
+        if self.timer > 0 {
+            self.timer -= 1;
+            return self.timer == 0;
+        }
+        false
+    }
+
+    /// Do what is due, with the machine's memory, drives and REU at hand.
+    pub fn run_due(&mut self, m: &mut dyn UciMachine) {
+        self.run(m);
+    }
+
     /// RESET: the interface restarts with the C64; host files and sockets
-    /// are closed.
+    /// are closed. HTTP handles, Software IEC partitions and the mounted
+    /// images survive, as on the Ultimate, where they live in the
+    /// cartridge until it is powered off.
     pub fn reset(&mut self) {
         self.release_host_handles();
         let host = std::mem::take(&mut self.host);
+        let http = std::mem::take(&mut self.http);
+        let partitions = std::mem::take(&mut self.siec.partitions);
+        let (mounts, last) = (std::mem::take(&mut self.mounts), self.last_mount);
         *self = Self::new();
         self.host = host;
+        self.http = http;
+        self.siec.partitions = partitions;
+        self.mounts = mounts;
+        self.last_mount = last;
+    }
+
+    /// A Software IEC CHKIN stream is open.
+    fn in_chkin(&self) -> bool {
+        matches!(self.pending, Pending::Chkin { .. }) && self.state == State::DataMore
     }
 
     fn release_host_handles(&mut self) {
-        let files: Vec<FileHandle> = self
+        let mut files: Vec<FileHandle> = self
             .dos
             .iter()
             .filter_map(|d| d.file.as_ref().map(|f| f.handle))
             .collect();
+        files.extend(self.siec.channels.values().map(|c| c.handle));
         if let Some(fs) = &self.host.files {
             let mut fs = lock(fs);
             for h in files {
@@ -466,6 +563,7 @@ impl Uci {
         if let Pending::Connect { handle } = self.pending {
             socks.push(handle);
         }
+        self.siec.channels.clear();
         if let Some(net) = &self.host.net {
             let mut net = lock(net);
             for h in socks {
@@ -485,6 +583,19 @@ impl Uci {
         self.resp_pos = 0;
     }
 
+    /// A response of any length: the first packet now, the rest after
+    /// each DATA_ACC.
+    fn respond(&mut self, mut data: Vec<u8>) {
+        if data.len() <= RESP_MAX {
+            self.set_resp(data);
+            return self.finish(false);
+        }
+        let rest = data.split_off(RESP_MAX);
+        self.set_resp(data);
+        self.pending = Pending::Data { rest };
+        self.finish(true)
+    }
+
     fn finish(&mut self, more: bool) {
         self.state = if more {
             State::DataMore
@@ -498,7 +609,7 @@ impl Uci {
     }
 
     /// The busy time is over: do what is pending.
-    fn run(&mut self) {
+    fn run(&mut self, m: &mut dyn UciMachine) {
         if self.abort {
             self.abort = false;
             if let Pending::Connect { handle } = self.pending {
@@ -522,7 +633,7 @@ impl Uci {
                 let cmd = std::mem::take(&mut self.cmd);
                 self.clear_queues();
                 self.pending = Pending::None;
-                self.execute(&cmd);
+                self.execute(&cmd, m);
             }
             Pending::ReadFile { t, left } => {
                 self.clear_queues();
@@ -533,18 +644,34 @@ impl Uci {
                 self.read_dir_entry(t);
             }
             Pending::Connect { handle } => self.poll_connect(handle),
+            Pending::Data { rest } => {
+                self.clear_queues();
+                self.respond(rest);
+            }
+            Pending::Http {
+                ticket,
+                header,
+                body,
+                raw,
+            } => self.poll_exchange(ticket, header, body, raw),
+            Pending::Chkin { sa, size, .. } => {
+                self.clear_queues();
+                self.chkin_packet(sa, size);
+            }
         }
     }
 
-    fn execute(&mut self, cmd: &[u8]) {
+    fn execute(&mut self, cmd: &[u8], m: &mut dyn UciMachine) {
         let Some((&t, rest)) = cmd.split_first() else {
             self.set_status("81,INVALID PARAMS");
             return self.finish(false);
         };
         match t {
-            target::DOS1 | target::DOS2 => self.dos_command(t - 1, cmd, rest),
+            target::DOS1 | target::DOS2 => self.dos_command(t - 1, cmd, rest, m),
             target::NETWORK => self.net_command(rest),
-            target::CONTROL => self.control_command(rest),
+            target::CONTROL => self.control_command(rest, m),
+            target::SOFTWARE_IEC => self.siec_command(rest, m),
+            target::HTTP => self.http_command(rest),
             _ => {
                 self.set_status("21,UNKNOWN COMMAND");
                 self.finish(false)
@@ -569,7 +696,7 @@ impl Uci {
         self.finish(false);
     }
 
-    fn dos_command(&mut self, t: u8, whole: &[u8], cmd: &[u8]) {
+    fn dos_command(&mut self, t: u8, whole: &[u8], cmd: &[u8], m: &mut dyn UciMachine) {
         let i = usize::from(t);
         let Some((&op, p)) = cmd.split_first() else {
             self.set_status("81,INVALID PARAMS");
@@ -772,10 +899,34 @@ impl Uci {
                 self.set_status("00,OK");
                 self.finish(false)
             }
-            // LOAD_REU, SAVE_REU, MOUNT_DISK, UMOUNT_DISK, SWAP_DISK: the
-            // Ultimate's machine control, not offered here.
-            0x21..=0x25 => {
-                self.set_status("99,FUNCTION NOT IMPLEMENTED");
+            0x21 | 0x22 => self.dos_reu(i, op == 0x21, p, m),
+            0x23 => {
+                let Some((&id, file)) = p.split_first() else {
+                    self.set_status("81,INVALID PARAMS");
+                    return self.finish(false);
+                };
+                match path(self, file) {
+                    Ok(pa) => self.mount(id, &pa, m),
+                    Err(e) => self.set_status(&fs_status(&e)),
+                }
+                self.finish(false)
+            }
+            0x24 => {
+                match p.first().and_then(|&id| self.drive_for(id, m)) {
+                    Some(a) => {
+                        m.unmount(a);
+                        self.mounts.remove(&a);
+                        self.set_status("00,OK");
+                    }
+                    None => self.set_status("90,DRIVE NOT PRESENT"),
+                }
+                self.finish(false)
+            }
+            0x25 => {
+                match p.first().and_then(|&id| self.drive_for(id, m)) {
+                    Some(a) => self.swap_disk(a, m),
+                    None => self.set_status("90,DRIVE NOT PRESENT"),
+                }
                 self.finish(false)
             }
             _ => {
@@ -1108,26 +1259,331 @@ impl Uci {
 
     // --- control target -------------------------------------------------
 
-    fn control_command(&mut self, cmd: &[u8]) {
-        match cmd {
-            [0x01, ..] => {
+    fn control_command(&mut self, cmd: &[u8], m: &mut dyn UciMachine) {
+        let Some((&op, p)) = cmd.split_first() else {
+            self.set_status("81,INVALID PARAMS");
+            return self.finish(false);
+        };
+        match op {
+            0x01 => {
                 self.set_resp(b"CONTROL TARGET V1.1".to_vec());
                 self.set_status("00,OK");
             }
-            [0x28] | [0x28, 0x00, ..] => {
-                self.set_resp(b"ULTIMATE 64".to_vec());
+            // FINISH_CAPTURE: nothing is captured here.
+            0x03 => self.set_status("00,OK"),
+            // REBOOT: no answer; the machine resets the C64 and the UCI.
+            0x06 => m.reboot(),
+            0x08 | 0x09 => {
+                let file = name(p);
+                if file.is_empty() {
+                    self.set_status("81,INVALID PARAMS");
+                    return self.finish(false);
+                }
+                let r = join_path(&self.dos[0].cwd, &file)
+                    .map_err(Some)
+                    .and_then(|pa| self.reu_file(&pa, op == 0x08, m));
+                match r {
+                    Ok(n) => {
+                        self.set_resp(n.to_le_bytes().to_vec());
+                        self.set_status("00,OK");
+                    }
+                    Err(None) => self.set_status("84,REU NOT ENABLED"),
+                    Err(Some(_)) => {
+                        self.set_resp((-1i32).to_le_bytes().to_vec());
+                        self.set_status("85,REU FILE CANNOT BE OPENED.");
+                    }
+                }
+            }
+            0x0f => {
+                let file = match name(p) {
+                    f if f.is_empty() => "/temp/c64_memory.bin".to_string(),
+                    f => f,
+                };
+                let ram = m.ram().map(<[u8]>::to_vec);
+                let r = match ram {
+                    Some(ram) => join_path(&self.dos[0].cwd, &file).and_then(|pa| {
+                        self.fs(|f| {
+                            if let Some((dir, _)) = pa.rsplit_once('/') {
+                                if !dir.is_empty() && f.stat(dir).is_err() {
+                                    f.mkdir(dir)?;
+                                }
+                            }
+                            write_file(f, &pa, &ram)
+                        })
+                    }),
+                    None => Err(FsError::Io("no memory".into())),
+                };
+                match r {
+                    Ok(()) => self.set_status("00,OK"),
+                    Err(e) => {
+                        self.set_status(&format!("87,DISK ERR: {}", e.to_string().to_uppercase()))
+                    }
+                }
+            }
+            0x20 => match p {
+                [0x00, bank, base] if (0x80..0xc0).contains(base) => {
+                    if m.erase_flash(*bank, *base >= 0xa0) {
+                        self.set_status("00,OK");
+                    } else {
+                        self.set_status("84,EASYFLASH NOT PRESENT");
+                    }
+                }
+                _ => self.set_status("81,INVALID PARAMS"),
+            },
+            0x28 => match p {
+                [] | [0x00, ..] => {
+                    self.set_resp(b"ULTIMATE 64".to_vec());
+                    self.set_status("00,OK");
+                }
+                [0x01, ..] => {
+                    let sids = m.sids();
+                    let mut out = vec![sids.len() as u8];
+                    for s in &sids {
+                        out.extend(s.base.to_le_bytes());
+                        out.extend(s.second.to_be_bytes());
+                        out.push(s.kind);
+                    }
+                    self.set_resp(out);
+                    self.set_status("00,OK");
+                }
+                _ => self.set_status("81,INVALID PARAMS"),
+            },
+            0x29 => {
+                let drives = m.drives();
+                let mut out = vec![drives.len() as u8];
+                for d in &drives {
+                    out.extend([d.kind, d.address, u8::from(d.powered)]);
+                }
+                self.set_resp(out);
                 self.set_status("00,OK");
             }
-            [] => self.set_status("81,INVALID PARAMS"),
+            0x30..=0x33 => {
+                let index = usize::from((op - 0x30) / 2);
+                if m.set_drive_power(index, op & 1 == 0) {
+                    self.set_status("00,OK");
+                } else {
+                    self.set_status("90,DRIVE NOT PRESENT");
+                }
+            }
+            0x34 | 0x35 => {
+                let on = m
+                    .drives()
+                    .get(usize::from(op - 0x34))
+                    .is_some_and(|d| d.powered);
+                self.set_resp(if on { b"on".to_vec() } else { b"off".to_vec() });
+                self.set_status("00,OK");
+            }
+            // GET_MP3_RAMDISKINFO: no RAM disks in the REU image.
+            0x40 => {
+                self.set_resp(vec![0; 8]);
+                self.set_status("00,OK");
+            }
+            0x51 => match (p.is_empty(), m.palette()) {
+                (_, None) => self.set_status("21,UNKNOWN COMMAND"),
+                (false, _) => self.set_status("81,INVALID PARAMS"),
+                (true, Some(rgb)) => {
+                    self.set_resp(rgb.to_vec());
+                    self.set_status("00,OK");
+                }
+            },
+            0x52 => match <&[u8; 48]>::try_from(p) {
+                Ok(rgb) if m.set_palette(rgb) => self.set_status("00,OK"),
+                Ok(_) => self.set_status("21,UNKNOWN COMMAND"),
+                Err(_) => self.set_status("81,INVALID PARAMS"),
+            },
+            0x53 => match (p, m.palette()) {
+                (_, None) => self.set_status("21,UNKNOWN COMMAND"),
+                ([i, r, g, b], Some(mut rgb)) if *i < 16 => {
+                    let i = usize::from(*i) * 3;
+                    rgb[i..i + 3].copy_from_slice(&[*r, *g, *b]);
+                    m.set_palette(&rgb);
+                    self.set_status("00,OK");
+                }
+                _ => self.set_status("81,INVALID PARAMS"),
+            },
+            0x54 => {
+                if !p.is_empty() {
+                    self.set_status("81,INVALID PARAMS");
+                } else if m.reset_palette() {
+                    self.set_status("00,OK");
+                } else {
+                    self.set_status("21,UNKNOWN COMMAND");
+                }
+            }
+            // FREEZE, DECODE_TRACK.
+            0x05 | 0x11 => self.set_status("99,FUNCTION NOT IMPLEMENTED"),
             _ => self.set_status("21,UNKNOWN COMMAND"),
         }
         self.finish(false)
     }
 
+    /// LOAD_REU/SAVE_REU of the control target: a whole REU image from or
+    /// to `path`; the number of bytes moved. `Err(None)`: no REU.
+    fn reu_file(
+        &mut self,
+        path: &str,
+        load: bool,
+        m: &mut dyn UciMachine,
+    ) -> Result<i32, Option<FsError>> {
+        let files = self.host.files.clone();
+        let reu = m.reu().ok_or(None)?;
+        let files = files.ok_or(Some(FsError::Unavailable))?;
+        let mut f = lock(&files);
+        if load {
+            let data = read_file(&mut *f, path).map_err(Some)?;
+            let n = data.len().min(reu.len());
+            reu[..n].copy_from_slice(&data[..n]);
+            Ok(n as i32)
+        } else {
+            write_file(&mut *f, path, reu).map_err(Some)?;
+            Ok(reu.len() as i32)
+        }
+    }
+
+    /// LOAD_REU/SAVE_REU of DOS target `i`: between the open file and the
+    /// REU at a 24-bit address (the documentation's top bytes are masked).
+    fn dos_reu(&mut self, i: usize, load: bool, p: &[u8], m: &mut dyn UciMachine) {
+        if p.len() < 8 {
+            self.set_status("81,INVALID PARAMS");
+            return self.finish(false);
+        }
+        let addr = u32::from_le_bytes([p[0], p[1], p[2], 0]) as usize;
+        let len = u32::from_le_bytes([p[4], p[5], p[6], 0]) as usize;
+        let Some(of) = self.dos[i].file.clone() else {
+            self.set_status("85,NO FILE OPEN");
+            return self.finish(false);
+        };
+        let files = self.host.files.clone();
+        let Some(reu) = m.reu() else {
+            self.set_status("84,REU NOT ENABLED");
+            return self.finish(false);
+        };
+        let Some(files) = files else {
+            self.set_status(&fs_status(&FsError::Unavailable));
+            return self.finish(false);
+        };
+        let size = reu.len();
+        let start = addr.min(size);
+        let n = len.min(size - start);
+        let truncated = n < len;
+        let mut f = lock(&files);
+        let r = if load {
+            let mut done = 0;
+            loop {
+                if done == n {
+                    break Ok(done);
+                }
+                match f.read(of.handle, &mut reu[start + done..start + n]) {
+                    Ok(0) => break Ok(done),
+                    Ok(k) => done += k,
+                    Err(e) => break Err(e),
+                }
+            }
+        } else if !of.write {
+            Err(FsError::Denied)
+        } else {
+            f.write(of.handle, &reu[start..start + n])
+        };
+        drop(f);
+        match r {
+            Ok(k) => {
+                let text = if load {
+                    format!("${k:06X} BYTES LOADED TO REU ${addr:06X}")
+                } else {
+                    format!("${k:06X} BYTES SAVED FROM REU ${addr:06X}")
+                };
+                self.set_resp(text.into_bytes());
+                self.set_status(if truncated {
+                    "02,REQUEST TRUNCATED"
+                } else {
+                    "00,OK"
+                });
+            }
+            Err(e) => self.set_status(&fs_status(&e)),
+        }
+        self.finish(false)
+    }
+
+    /// The drive with IEC number `id`, else the drive mounted on last.
+    fn drive_for(&self, id: u8, m: &mut dyn UciMachine) -> Option<u8> {
+        let drives = m.drives();
+        if drives.iter().any(|d| d.address == id) {
+            return Some(id);
+        }
+        self.last_mount
+            .filter(|a| drives.iter().any(|d| d.address == *a))
+    }
+
+    /// MOUNT_DISK: the image at `path` into drive `id`.
+    fn mount(&mut self, id: u8, path: &str, m: &mut dyn UciMachine) {
+        let Some(addr) = self.drive_for(id, m) else {
+            return self.set_status("90,DRIVE NOT PRESENT");
+        };
+        let Some(files) = self.host.files.clone() else {
+            return self.set_status(&fs_status(&FsError::Unavailable));
+        };
+        let image = match FolderImage::open(&files, path) {
+            Ok(i) => i,
+            Err(e) => return self.set_status(&fs_status(&e)),
+        };
+        let media = Media {
+            name: path.rsplit('/').next().unwrap_or(path).to_string(),
+            kind: MediaKind::Disk,
+            backend: Box::new(image),
+        };
+        match m.mount(addr, media) {
+            Ok(()) => {
+                self.mounts.insert(addr, path.to_string());
+                self.last_mount = Some(addr);
+                self.set_status("00,OK");
+            }
+            Err(MediaError::Format(_) | MediaError::Unsupported(_)) => {
+                self.set_status("89,NOT A DISK IMAGE")
+            }
+            Err(e) => self.set_status(&format!("87,DISK ERR: {}", e.to_string().to_uppercase())),
+        }
+    }
+
+    /// SWAP_DISK: the next image of the set in the mounted image's folder
+    /// (same name but for its digits), wrapping around.
+    fn swap_disk(&mut self, addr: u8, m: &mut dyn UciMachine) {
+        let Some(current) = self.mounts.get(&addr).cloned() else {
+            return self.set_status("00,OK");
+        };
+        let (dir, file) = current.rsplit_once('/').unwrap_or(("", &current));
+        let dir = if dir.is_empty() { "/" } else { dir };
+        let key = |n: &str| -> String {
+            n.chars()
+                .filter(|c| !c.is_ascii_digit())
+                .collect::<String>()
+                .to_ascii_lowercase()
+        };
+        let list = match self.fs(|f| f.list_dir(dir)) {
+            Ok(l) => l,
+            Err(e) => return self.set_status(&fs_status(&e)),
+        };
+        let set: Vec<String> = list
+            .into_iter()
+            .filter(|e| !e.stat.is_dir && key(&e.name) == key(file))
+            .map(|e| e.name)
+            .collect();
+        let next = set
+            .iter()
+            .position(|n| n == file)
+            .map(|i| set[(i + 1) % set.len()].clone());
+        match next {
+            Some(n) if n != file => {
+                let path = join_path(dir, &n).unwrap_or_default();
+                self.mount(addr, &path, m)
+            }
+            _ => self.set_status("00,OK"),
+        }
+    }
+
     // --- savestate ------------------------------------------------------
 
     pub fn save(&self, w: &mut StateWriter) {
-        w.chunk(*b"UCI0", 1, |w| {
+        w.chunk(*b"UCI0", 2, |w| {
             w.bytes(&self.cmd);
             w.bytes(&self.resp);
             w.u32(self.resp_pos as u32);
@@ -1153,6 +1609,28 @@ impl Uci {
                 Pending::Connect { handle } => {
                     w.u8(4);
                     w.u32(*handle);
+                }
+                Pending::Data { rest } => {
+                    w.u8(5);
+                    w.bytes(rest);
+                }
+                Pending::Http {
+                    ticket,
+                    header,
+                    body,
+                    raw,
+                } => {
+                    w.u8(6);
+                    w.u32(*ticket);
+                    w.u8(*header);
+                    w.u8(*body);
+                    w.bool(*raw);
+                }
+                Pending::Chkin { sa, start, size } => {
+                    w.u8(7);
+                    w.u8(*sa);
+                    w.u64(*start);
+                    w.u16(*size);
                 }
             }
             for d in &self.dos {
@@ -1186,13 +1664,22 @@ impl Uci {
                 w.u8(l.state);
                 w.u8(l.socket.unwrap_or(0));
             }
+            // Version 2.
+            w.u32(self.mounts.len() as u32);
+            for (a, p) in &self.mounts {
+                w.u8(*a);
+                w.str(p);
+            }
+            w.u8(self.last_mount.unwrap_or(0));
+            self.http.save(w);
+            self.siec.save(w);
         });
     }
 
     /// Atomic: on error nothing changes. Host handles open before the load
     /// are closed (see the module documentation).
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(*b"UCI0", 1)?;
+        let (version, mut c) = r.chunk(*b"UCI0", 2)?;
         let mut n = Self::new();
         let bad = StateError::Invalid("UCI state");
         n.cmd = c.bytes()?.to_vec();
@@ -1228,6 +1715,20 @@ impl Uci {
             },
             3 => Pending::ReadDir { t: c.u8()? & 1 },
             4 => Pending::Connect { handle: c.u32()? },
+            5 => Pending::Data {
+                rest: c.bytes()?.to_vec(),
+            },
+            6 => Pending::Http {
+                ticket: c.u32()?,
+                header: c.u8()?,
+                body: c.u8()?,
+                raw: c.bool()?,
+            },
+            7 => Pending::Chkin {
+                sa: c.u8()? & 0x0f,
+                start: c.u64()?,
+                size: c.u16()?,
+            },
             _ => return Err(bad),
         };
         for d in &mut n.dos {
@@ -1279,6 +1780,21 @@ impl Uci {
                 socket: (socket != 0).then_some(socket),
             });
         }
+        if version >= 2 {
+            let count = c.u32()?;
+            if count > 255 {
+                return Err(bad);
+            }
+            for _ in 0..count {
+                let a = c.u8()?;
+                let p = c.string()?;
+                join_path("/", &p).map_err(|_| StateError::Invalid("UCI mount path"))?;
+                n.mounts.insert(a, p);
+            }
+            n.last_mount = Some(c.u8()?).filter(|&a| a != 0);
+            n.http = http::HttpState::load(&mut c)?;
+            n.siec = siec::SiecState::load(&mut c)?;
+        }
         self.release_host_handles();
         n.host = std::mem::take(&mut self.host);
         *self = n;
@@ -1328,3 +1844,5 @@ fn copy_file(f: &mut dyn FileHost, from: &str, to: &str) -> Result<(), FsError> 
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_targets;

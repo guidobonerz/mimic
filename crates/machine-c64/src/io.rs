@@ -31,8 +31,8 @@ use crate::memory::Memory;
 /// NTSC countries.
 fn mains_hz(vic: vic2::Model) -> u32 {
     match vic {
-        vic2::Model::Mos6569 => 50,
-        vic2::Model::Mos6567R8 => 60,
+        vic2::Model::Mos6569 | vic2::Model::Mos8565 => 50,
+        vic2::Model::Mos6567R8 | vic2::Model::Mos8562 => 60,
     }
 }
 

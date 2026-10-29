@@ -309,7 +309,10 @@ mod tests {
             v.write(0x20, 0);
             field(&mut v);
             let at = v.frame_row(100).unwrap() as usize * v.timing().width as usize;
-            assert_eq!((v.pixels()[at + x - 1], v.pixels()[at + x]), (0, 5));
+            // A colour register acts four pixels before the cycle's column,
+            // the first of them still in the old colour on the 6569 (see
+            // `Vic2::draw`).
+            assert_eq!((v.pixels()[at + x - 4], v.pixels()[at + x - 3]), (0, 5));
             assert_eq!(v.timing().cycle_column(1), 0, "clamped left");
             assert_eq!(v.timing().cycle_column(63), 383, "clamped right");
         }

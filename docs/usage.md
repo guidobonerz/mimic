@@ -135,7 +135,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 
 | Maschine | Optionen |
 | --- | --- |
-| C64 | `sid=6581\|8580`, `cia=6526\|6526a`, `drive8=1541\|1571\|1581\|virtual\|none`, `drive8_ppm=N`, `port1`/`port2=joystick\|paddles\|mouse1351\|none`, `autostart=on`, `uci=on` (Ultimate Command Interface, Abschnitt 7b), `userport=wic64\|none` (WiC64, Abschnitt 7b), `net=on\|off` |
+| C64 | `sid=6581\|8580`, `cia=6526\|6526a`, `vicii=6569\|8565\|6567\|8562` (VIC-II-Typ; 8565/8562 des C64C mit „Grey Dot“, ohne `--model` wählt der Typ PAL/NTSC), `drive8=1541\|1571\|1581\|virtual\|none`, `drive8_ppm=N`, `port1`/`port2=joystick\|paddles\|mouse1351\|none`, `autostart=on`, `fastload=on` (virtuelles Laufwerk ohne Buszeit), `uci=on` (Ultimate Command Interface, Abschnitt 7b), `userport=wic64\|none` (WiC64, Abschnitt 7b), `net=on\|off` |
 | VIC-20 | `ram=none\|3k\|8k\|16k\|24k\|all`, `port1=joystick\|none`, `drive8=…`, `autostart=on` |
 | PET | `ram=8k\|16k\|32k`, `keyboard=graphics\|business`, `hz=50\|60`, `drive8=virtual\|none` |
 | C16/Plus/4 | `ram=16k\|64k`, `drive8=…`, `port1=joystick\|none`, `autostart=on` |
@@ -154,6 +154,17 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 KERNAL-LOAD/SAVE), die anderen Werte emulieren das echte Laufwerk mit eigener
 CPU (nötig für Schnelllader und Kopierschutz). Ein Ordner kann als virtuelle
 Diskette dienen (`--disk ./ordner`).
+
+Auch das virtuelle Laufwerk überträgt jedes Byte im Takt der seriellen
+Routinen des KERNALs (wie eine echte 1541, gut 400 Byte/s). Mit
+`--option fastload=on` (C64, zusammen mit `drive8=virtual`) fängt die
+Maschine diese Routinen ab (TALK, LISTEN, SECOND, TKSA, CIOUT, ACPTR,
+UNTLK, UNLSN) und reicht die Bytes direkt an das virtuelle Laufwerk:
+LOAD, SAVE, OPEN/GET#/PRINT# und der Befehlskanal brauchen keine Buszeit
+mehr, Meldungen und der Status ST bleiben wie gewohnt. 100 Blöcke laden
+in gut 2 statt 43 Sekunden (den Rest braucht die LOAD-Schleife des KERNALs
+selbst). Das gilt nur mit dem Original-KERNAL (nicht mit JiffyDOS o. ä.)
+und nicht für Schnelllader, die den Bus selbst bedienen.
 
 ## 5. Desktop-Frontend `emu-desktop`
 
@@ -254,7 +265,10 @@ ein (`--footer` startet mit ihr). Links sitzt ein **Geschwindigkeitsregler**:
 ein Klick auf eine Stufe oder Ziehen des Knopfs stellt 10 %, 25 %, 50 %,
 100 %, 150 %, 200 %, 400 % oder 800 % der Echtzeit ein (ist der Rechner zu
 langsam für eine Stufe, läuft die Emulation so schnell sie kann); außerhalb von 100 %
-ist der Ton stumm. Dahinter folgen die emulierte Zeit seit dem Einschalten
+ist der Ton stumm. Bei 100 % läuft die Emulation, solange ein
+Diskettenlaufwerk arbeitet (LED oder Motor, z. B. beim LOAD), so schnell
+sie kann und stumm, wie VICE beim Autostart; die Statuszeile zeigt dann
+„warp: loading“. `--warp-load off` schaltet das ab. Dahinter folgen die emulierte Zeit seit dem Einschalten
 (`m:ss.t`) mit der Bildnummer (dieselbe, die der Debugger in `beam` meldet),
 die Mausposition, die Joystick-Richtungen und der Zustand der Laufwerke.
 
@@ -460,9 +474,19 @@ Ultimate-Steuerbefehle (Mount, Reset, REU, Palette …) fehlen bewusst. Ein
 Steckmodul bleibt nutzbar; nur die vier UCI-Register gehören dann dem UCI.
 
 Die DOS-Targets arbeiten in einem Ordner des Rechners: `--uci-dir ORDNER`
-(Standard `./ultimate`, wird beim ersten Schreiben angelegt). Pfade können
-den Ordner nicht verlassen (`..`, absolute Pfade, Laufwerksbuchstaben und
-symbolische Links werden abgewiesen).
+(Standard `./ultimate`) ist die Wurzel `/`. Pfade können den Ordner nicht
+verlassen (`..`, absolute Pfade, Laufwerksbuchstaben und symbolische Links
+werden abgewiesen).
+
+Das echte Ultimate zeigt SD-Karte und USB-Sticks als Verzeichnisse der
+Wurzel (`/SD`, `/Usb0`, `/Usb1`, `/Flash`, `/Temp`). `--uci-mount NAME=ORDNER`
+(mehrfach möglich) hängt einen Ordner des Rechners als `/NAME` ein, z. B.
+`--uci-mount SD=D:\c64\sd --uci-mount Usb0=E:\`. Groß-/Kleinschreibung
+spielt beim Namen keine Rolle; ein Mount verdeckt einen gleichnamigen
+Unterordner von `--uci-dir`. Mountpunkte lassen sich nicht löschen oder
+umbenennen, und Umbenennen zwischen zwei Mounts geht nicht (Kopieren schon).
+Mit `--option uci=on` legt das Frontend alle diese Ordner gleich beim Start
+an, sonst erst beim ersten Schreiben.
 
 **WiC64** – `--option userport=wic64`: der WLAN-Adapter am Userport
 (PB0–PB7, PA2 als Richtung, PC2/FLAG2 als Handshake), Firmware 2.x mit dem
@@ -483,7 +507,7 @@ hochgeladenen Dateien als Ordner (Änderungen bleiben im Speicher).
 
 ```powershell
 cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms --option userport=wic64
-cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --option uci=on --uci-dir C:\c64\ultimate --debug
+cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --option uci=on --uci-dir C:\c64\ultimate --uci-mount Usb0=E:\c64 --debug
 ```
 
 **Aufnahme und Wiedergabe:** Läufe mit echtem Netz sind nicht

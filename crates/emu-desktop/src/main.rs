@@ -103,12 +103,17 @@ usage: mimic-desktop [options]
                         then $EMU_ROM_DIR)
   --rom ROLE=FILE       a single ROM image for a role (repeatable)
   --speed PERCENT       start at 10, 25, 50, 100, 150, 200, 400 or 800 % speed
+  --warp-load on|off    at 100 % run as fast as possible (muted) while a disk
+                        drive works, e.g. during LOAD (default on)
   --option KEY=VALUE    machine option (repeatable)
   --net on|off          the host network for the C64's WiC64 (--option
                         userport=wic64) and Ultimate command interface
                         (--option uci=on); default on, off: no network
   --uci-dir DIR         the Ultimate command interface's DOS folder (default
                         ./ultimate, created on the first write)
+  --uci-mount NAME=DIR  hang host folder DIR into the UCI file system as
+                        /NAME, like the Ultimate's drives: SD, Usb0, Usb1,
+                        Flash, Temp (repeatable)
   --crt PROFILE         monitor: raw, lite, 1702, 1084s, 1084s-rgb, tv, pal-tv,
                         ntsc-tv, pet-white, pet-green, ctm644, gt65, mac or a
                         .toml file, re-read when it changes (default: the
@@ -209,6 +214,8 @@ struct Args {
     net_off: bool,
     /// `--uci-dir`.
     uci_dir: Option<PathBuf>,
+    /// `--uci-mount NAME=DIR`.
+    uci_mounts: Vec<(String, PathBuf)>,
     /// Filled by `build_machine`: the machine's host-service journal.
     host_journal: Option<emu_core::host::Journal>,
     cheat: Vec<String>,
@@ -225,6 +232,8 @@ struct Args {
     rom: Vec<(String, String)>,
     /// Start speed in percent.
     speed: Option<u32>,
+    /// `--warp-load off`.
+    no_warp_load: bool,
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
@@ -247,6 +256,7 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         cheats_dir: None,
         net_off: false,
         uci_dir: None,
+        uci_mounts: Vec::new(),
         host_journal: None,
         cheat: Vec::new(),
         input: None,
@@ -260,6 +270,7 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         joyport: None,
         rom: Vec::new(),
         speed: None,
+        no_warp_load: false,
     };
     let mut it = argv.into_iter().peekable();
     while let Some(flag) = it.next() {
@@ -281,6 +292,9 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
                 }
             }
             "--uci-dir" => a.uci_dir = Some(PathBuf::from(value("--uci-dir")?)),
+            "--uci-mount" => a
+                .uci_mounts
+                .push(media_backends::parse_mount(&value("--uci-mount")?)?),
             "--joyport" => {
                 let v = value("--joyport")?;
                 let n = v
@@ -307,6 +321,13 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
                     .split_once('=')
                     .ok_or_else(|| format!("--rom expects ROLE=FILE, got '{kv}'"))?;
                 a.rom.push((k.into(), v.into()));
+            }
+            "--warp-load" => {
+                a.no_warp_load = match value("--warp-load")?.as_str() {
+                    "on" => false,
+                    "off" => true,
+                    v => return Err(format!("--warp-load {v}: on or off")),
+                };
             }
             "--speed" => {
                 let v = value("--speed")?;
@@ -479,10 +500,13 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
         .map_err(|e| e.to_string())?;
     // Network and folder for the devices that reach outside (UCI, WiC64),
     // in a journal the debugger's recordings carry.
-    let journal = media_backends::host_journal(
-        !args.net_off,
-        Some(args.uci_dir.clone().unwrap_or_else(|| "ultimate".into())),
-    );
+    // With the Ultimate command interface the folders are there from the
+    // start (otherwise they appear on the first write).
+    let uci_dir = args.uci_dir.clone().unwrap_or_else(|| "ultimate".into());
+    if args.config.options.get("uci").is_some_and(|v| v == "on") {
+        media_backends::create_host_folders(Some(&uci_dir), &args.uci_mounts)?;
+    }
+    let journal = media_backends::host_journal(!args.net_off, Some(uci_dir), &args.uci_mounts)?;
     m.attach_host(journal.services());
     args.host_journal = Some(journal);
     if let Some(p) = &args.prg {
@@ -1641,6 +1665,9 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
     if let Ok(mut d) = shared.snapshot_dir.lock() {
         *d = settings.snapshots.as_ref().map(PathBuf::from);
     }
+    shared
+        .warp_load
+        .store(!args.no_warp_load, Ordering::Relaxed);
     if let Some(pct) = args.speed {
         // The slider step nearest to the percentage.
         let step = footer::SPEEDS

@@ -25,8 +25,8 @@ use std::sync::{Arc, Mutex};
 
 use super::{
     lock, ConnState, DirEntry, FileHandle, FileHost, FileStat, FsError, HostServices, HostTime,
-    HttpResponse, HttpTicket, NetBackend, NetError, NetHandle, NetInfo, OpenMode, Recv,
-    SharedFiles, SharedNet, SocketKind,
+    HttpRequest, HttpResponse, HttpTicket, NetBackend, NetError, NetHandle, NetInfo, OpenMode,
+    Recv, SharedFiles, SharedNet, SocketKind,
 };
 use crate::savestate::{StateError, StateReader, StateWriter};
 
@@ -95,6 +95,7 @@ mod call {
     pub const POLL_HTTP: u8 = 10;
     pub const INFO: u8 = 11;
     pub const TIME: u8 = 12;
+    pub const HTTP_REQUEST: u8 = 13;
     pub const OPEN: u8 = 32;
     pub const READ: u8 = 33;
     pub const WRITE: u8 = 34;
@@ -516,15 +517,35 @@ impl Value for Recv {
     }
 }
 
+/// The header fields follow the body; records made before they were kept
+/// end after the body (no fields).
 impl Value for HttpResponse {
     fn enc(&self, w: &mut StateWriter) {
         w.u16(self.status);
         w.bytes(&self.body);
+        w.u32(self.headers.len() as u32);
+        for (k, v) in &self.headers {
+            w.str(k);
+            w.str(v);
+        }
     }
     fn dec(r: &mut StateReader<'_>) -> Result<Self, StateError> {
+        let status = r.u16()?;
+        let body = r.bytes()?.to_vec();
+        let mut headers = Vec::new();
+        if r.remaining() > 0 {
+            let n = r.u32()? as usize;
+            if n > r.remaining() {
+                return Err(StateError::Truncated);
+            }
+            for _ in 0..n {
+                headers.push((r.string()?, r.string()?));
+            }
+        }
         Ok(HttpResponse {
-            status: r.u16()?,
-            body: r.bytes()?.to_vec(),
+            status,
+            headers,
+            body,
         })
     }
 }
@@ -723,6 +744,12 @@ impl NetBackend for JournalNet {
         })
     }
 
+    fn http_request(&mut self, req: &HttpRequest) -> Result<HttpTicket, NetError> {
+        journalled(&self.0, call::HTTP_REQUEST, |s| {
+            with_net(s, |n| n.http_request(req))
+        })
+    }
+
     fn poll_http(&mut self, t: HttpTicket) -> Option<Result<HttpResponse, NetError>> {
         journalled(&self.0, call::POLL_HTTP, |s| match s.net.as_deref_mut() {
             Some(n) => n.poll_http(t),
@@ -864,6 +891,7 @@ mod tests {
             (self.0 > 20).then(|| {
                 Ok(HttpResponse {
                     status: 200,
+                    headers: vec![("Content-Type".into(), "text/plain".into())],
                     body: b"hello".to_vec(),
                 })
             })
@@ -896,6 +924,12 @@ mod tests {
                 break;
             }
         }
+        let put = HttpRequest {
+            method: "PUT".into(),
+            url: "http://x/".into(),
+            ..Default::default()
+        };
+        log.push(format!("{:?} {:?}", net.http_request(&put), net.time()));
         log.push(format!("{:?} {:?}", net.time(), net.listen(1)));
         net.close(h);
         let f = files

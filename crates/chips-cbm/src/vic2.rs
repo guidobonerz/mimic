@@ -58,6 +58,11 @@ pub enum Model {
     Mos6569,
     /// NTSC-M, the common NTSC type from 1983 on.
     Mos6567R8,
+    /// PAL-B, HMOS-II (C64C): the 6569's timing; the first pixel after a
+    /// colour register write shows light grey ("grey dot").
+    Mos8565,
+    /// NTSC-M, HMOS-II (C64C): the 6567R8's timing with the grey dot.
+    Mos8562,
 }
 
 /// Line and frame geometry of a VIC-II type (Bauer 3.4, 3.6.3).
@@ -120,9 +125,16 @@ pub const NTSC: Timing = Timing {
 impl Model {
     pub fn timing(self) -> &'static Timing {
         match self {
-            Model::Mos6569 => &PAL,
-            Model::Mos6567R8 => &NTSC,
+            Model::Mos6569 | Model::Mos8565 => &PAL,
+            Model::Mos6567R8 | Model::Mos8562 => &NTSC,
         }
+    }
+
+    /// The HMOS-II types show a light grey pixel where a colour register
+    /// changes (VICE test program VICII/greydot; colorsplit references
+    /// `-8565`).
+    pub fn grey_dot(self) -> bool {
+        matches!(self, Model::Mos8565 | Model::Mos8562)
     }
 }
 
@@ -191,6 +203,15 @@ impl Timing {
     }
 }
 
+/// Colour sources of a pixel before the colour registers are looked up:
+/// 0–15 a colour number from video/colour RAM, the rest a register.
+mod src {
+    pub const BG0: u8 = 16;
+    pub const BORDER: u8 = 20;
+    pub const MM0: u8 = 21;
+    pub const SPRITE0: u8 = 23;
+}
+
 pub mod irq {
     pub const RASTER: u8 = 0x01;
     pub const SPRITE_DATA: u8 = 0x02;
@@ -228,6 +249,11 @@ struct Sprite {
     mc_phase: bool,
     /// Current 2-bit (or 1-bit) value being output.
     current: u8,
+    /// Multicolour mode on the previous pixel.
+    was_mc: bool,
+    /// MCBASE was crunched in this line's cycle 15 (only between cycles 15
+    /// and 16, so not saved).
+    crunched: bool,
 }
 
 /// Graphics data waiting to be loaded into the sequencer.
@@ -299,6 +325,24 @@ pub struct Vic2 {
     phi2_sprite: Option<usize>,
 
     pixels: Vec<u8>,
+    /// The last four pixels of the previous cycle: index into `pixels`
+    /// (`usize::MAX` off the picture) and colour source ([`src`]), resolved
+    /// with the registers as they are after this cycle's CPU write.
+    lag: [(usize, u8); 4],
+    /// Colour sources whose register the CPU wrote in this cycle (bit
+    /// `src - src::BG0`), and their values before it: the first pixel of
+    /// the new colour shows the old one (6569/6567) or light grey
+    /// (8565/8562).
+    written: u16,
+    before: [u8; 15],
+    /// $D01B, $D01D and $D01C as they were before this cycle's CPU write
+    /// (equal to the registers between cycles, so not saved).
+    cycle_regs: [u8; 3],
+    /// Sprite X positions as they were before this cycle's CPU write: the
+    /// comparison uses them for the cycle's first four pixels (VICE test
+    /// program VICII/spritesplit/ss-xpos). Equal to the registers between
+    /// cycles, so not saved.
+    cycle_sprite_x: [u16; 8],
 
     /// The light pen latched in this frame (the LP input works once a
     /// frame, Bauer 3.11).
@@ -382,6 +426,11 @@ impl Vic2 {
             raster_irq_done: false,
             phi2_sprite: None,
             pixels: vec![0; (t.width * t.height) as usize],
+            lag: [(usize::MAX, 0); 4],
+            written: 0,
+            before: [0; 15],
+            cycle_regs: [0; 3],
+            cycle_sprite_x: [0; 8],
             lp_done: false,
             lp_low: false,
             pen: None,
@@ -500,6 +549,18 @@ impl Vic2 {
         }
         self.update_bad_line();
 
+        // Vertical border: the comparison works in every cycle of the line,
+        // before the CPU's write of this cycle, besides the check at the
+        // left edge (VICE test programs VICII/border/vborder2: RSEL cleared
+        // for four cycles anywhere in line 247, up to its cycle 63, closes
+        // the border; a write in cycle 63 counts for the next line).
+        let (top, bottom) = self.border_rows();
+        if self.raster == bottom {
+            self.vert_border = true;
+        } else if self.raster == top && self.den() {
+            self.vert_border = false;
+        }
+
         // Sprite Y expansion and DMA start (cycles 55/56).
         if c == 55 {
             for (n, s) in self.sprites.iter_mut().enumerate() {
@@ -509,21 +570,15 @@ impl Vic2 {
             }
         }
         if c == 55 || c == 56 {
-            for n in 0..8 {
-                let s = &mut self.sprites[n];
-                if self.sprite_enable & (1 << n) != 0 && s.y == self.raster as u8 && !s.dma {
-                    s.dma = true;
-                    s.mcbase = 0;
-                    if self.sprite_ye & (1 << n) != 0 {
-                        s.exp = false;
-                    }
-                }
-            }
+            self.sprite_dma_check();
         }
         if c == 58 {
-            for s in self.sprites.iter_mut() {
+            for (n, s) in self.sprites.iter_mut().enumerate() {
                 s.mc = s.mcbase;
-                if s.dma && s.y == self.raster as u8 {
+                // A sprite disabled again before cycle 58 is not shown, but
+                // its DMA runs and takes its cycles (VICE test programs
+                // VICII/spriteenable 1, 2 and 4).
+                if s.dma && s.y == self.raster as u8 && self.sprite_enable & (1 << n) != 0 {
                     s.display = true;
                 }
                 if !s.dma {
@@ -556,7 +611,8 @@ impl Vic2 {
         }
         if c == 16 {
             for s in self.sprites.iter_mut() {
-                if s.exp {
+                // A crunched MCBASE (cycle 15) takes no further step.
+                if s.exp && !std::mem::take(&mut s.crunched) {
                     s.mcbase = (s.mcbase + 1) & 63;
                 }
                 // DMA ends here; the row already fetched is still shown, the
@@ -614,6 +670,21 @@ impl Vic2 {
             phi1_value = self.g_access(mem);
         }
         self.last_bus = phi1_value;
+    }
+
+    /// Sprite DMA start in cycles 55 and 56, with $D015 as it is before the
+    /// CPU's write of the cycle.
+    fn sprite_dma_check(&mut self) {
+        for n in 0..8 {
+            let s = &mut self.sprites[n];
+            if self.sprite_enable & (1 << n) != 0 && s.y == self.raster as u8 && !s.dma {
+                s.dma = true;
+                s.mcbase = 0;
+                if self.sprite_ye & (1 << n) != 0 {
+                    s.exp = false;
+                }
+            }
+        }
     }
 
     fn sprite_fetch(&mut self, mem: &dyn VicMemory, n: usize) -> u8 {
@@ -697,16 +768,6 @@ impl Vic2 {
             }
         }
 
-        // Vertical border, cycle 63 rules (the last cycle of the line).
-        if c == t.cycles {
-            let (top, bottom) = self.border_rows();
-            if self.raster == bottom {
-                self.vert_border = true;
-            } else if self.raster == top && self.den() {
-                self.vert_border = false;
-            }
-        }
-
         if c == t.cycles {
             if let Some(r) = self.rec.0.as_deref_mut() {
                 r.end_line(self.raster);
@@ -752,8 +813,9 @@ impl Vic2 {
         let (left, right) = self.border_cols();
         let (top, bottom) = self.border_rows();
         let row = t.row(self.raster).map(|r| r * t.width as usize);
+        let mut out = [(usize::MAX, 0u8); 8];
 
-        for p in p0..p0 + 8 {
+        for (i, p) in (p0..p0 + 8).enumerate() {
             let x = t.x_at(p);
 
             // Border flip-flops.
@@ -772,7 +834,7 @@ impl Vic2 {
             }
 
             let (gfx_color, gfx_fg) = self.graphics_pixel();
-            let (sprite, colliding) = self.sprite_pixel(x);
+            let (sprite, colliding) = self.sprite_pixel(x, i);
 
             if colliding.count_ones() >= 2 {
                 if self.coll_mm == 0 {
@@ -788,21 +850,65 @@ impl Vic2 {
             }
 
             let mut color = gfx_color;
+            // $D01B takes effect from the cycle's pixel 2 (VICE test
+            // program VICII/spritesplit/ss-pri).
+            let prio = if i < 2 {
+                self.cycle_regs[0]
+            } else {
+                self.sprite_prio
+            };
             if let Some((n, sc)) = sprite {
-                if !(gfx_fg && self.sprite_prio & (1 << n) != 0) {
+                if !(gfx_fg && prio & (1 << n) != 0) {
                     color = sc;
                 }
             }
             if self.main_border {
-                color = self.border_color;
+                color = src::BORDER;
             }
 
             if let Some(row) = row {
                 let col = p.wrapping_sub(t.visible_p0);
                 if u32::from(col) < t.width {
-                    self.pixels[row + usize::from(col)] = color;
+                    out[i] = (row + usize::from(col), color);
                 }
             }
+        }
+
+        // The colour registers act on the output four pixels before the
+        // cycle's own pixels: the previous cycle's last four pixels and
+        // this cycle's first four get the registers after this cycle's
+        // write (VICE test programs VICII/colorsplit, spritesplit). The
+        // first of them still shows the old colour if its register was just
+        // written; the HMOS-II types show light grey there.
+        let lag = self.lag;
+        for (k, &(index, source)) in lag.iter().chain(&out[..4]).enumerate() {
+            if index != usize::MAX {
+                let bit = source.wrapping_sub(src::BG0);
+                self.pixels[index] = if k == 0 && bit < 15 && self.written & 1 << bit != 0 {
+                    if self.model.grey_dot() {
+                        15
+                    } else {
+                        self.before[usize::from(bit)]
+                    }
+                } else {
+                    self.resolve(source)
+                };
+            }
+        }
+        self.lag.copy_from_slice(&out[4..]);
+        self.written = 0;
+        self.cycle_regs = [self.sprite_prio, self.sprite_xe, self.sprite_mc];
+        self.cycle_sprite_x = self.sprites.map(|s| s.x);
+    }
+
+    /// Colour number of a colour source.
+    fn resolve(&self, source: u8) -> u8 {
+        match source {
+            0..=15 => source,
+            src::BORDER => self.border_color,
+            s if s < src::BORDER => self.bg[usize::from(s - src::BG0)],
+            s if s < src::SPRITE0 => self.sprite_mm[usize::from(s - src::MM0)],
+            s => self.sprites[usize::from(s - src::SPRITE0) & 7].color,
         }
     }
 
@@ -810,9 +916,16 @@ impl Vic2 {
     fn graphics_pixel(&mut self) -> (u8, bool) {
         if let Some(p) = &mut self.pending[0] {
             if p.delay == 0 {
-                self.sr = p.g;
-                self.sr_c = p.c;
-                self.sr_mc_phase = false;
+                // While the vertical border flip-flop is set the sequencer
+                // loads nothing: the shifter runs empty and the colour data
+                // of the last load stays (visible where the side border is
+                // open; VICE test programs VICII/border, readme.txt:
+                // border-bm-idle, hvborder1/2).
+                if !self.vert_border {
+                    self.sr = p.g;
+                    self.sr_c = p.c;
+                    self.sr_mc_phase = false;
+                }
                 self.pending[0] = self.pending[1].take();
             }
         }
@@ -846,7 +959,7 @@ impl Vic2 {
                 if bits != 0 {
                     color
                 } else {
-                    self.bg[0]
+                    src::BG0
                 }
             }
             (false, false, true) => {
@@ -854,13 +967,13 @@ impl Vic2 {
                     if bits != 0 {
                         color & 7
                     } else {
-                        self.bg[0]
+                        src::BG0
                     }
                 } else {
                     match bits {
-                        0 => self.bg[0],
-                        1 => self.bg[1],
-                        2 => self.bg[2],
+                        0 => src::BG0,
+                        1 => src::BG0 + 1,
+                        2 => src::BG0 + 2,
                         _ => color & 7,
                     }
                 }
@@ -873,7 +986,7 @@ impl Vic2 {
                 }
             }
             (false, true, true) => match bits {
-                0 => self.bg[0],
+                0 => src::BG0,
                 1 => cc >> 4,
                 2 => cc & 0x0f,
                 _ => color,
@@ -882,7 +995,7 @@ impl Vic2 {
                 if bits != 0 {
                     color
                 } else {
-                    self.bg[usize::from(cc >> 6)]
+                    src::BG0 + (cc >> 6)
                 }
             }
             // Invalid modes output black; collisions still work.
@@ -891,8 +1004,21 @@ impl Vic2 {
         (out, fg)
     }
 
-    /// Sprite output at X: (winning sprite and colour, mask of opaque sprites).
-    fn sprite_pixel(&mut self, x: u16) -> (Option<(usize, u8)>, u8) {
+    /// Sprite output at X for pixel `i` of the cycle: (winning sprite and
+    /// colour, mask of opaque sprites).
+    ///
+    /// The shifter moves one bit per pixel (every second pixel when
+    /// X-expanded); in multicolour mode the two top bits are latched every
+    /// second step. A write to $D01D takes effect from the cycle's pixel 2,
+    /// to $D01C from pixel 3. Multicolour switched on at the start of a
+    /// step latches first on the step after, so the last high-resolution
+    /// value stays one step longer; a pair latched on the
+    /// last step still shows its second step (VICE test programs
+    /// VICII/spritesplit, compared pixel by pixel with their references).
+    fn sprite_pixel(&mut self, x: u16, i: usize) -> (Option<(usize, u8)>, u8) {
+        let [_, old_xe, old_mc] = self.cycle_regs;
+        let xe_reg = if i < 2 { old_xe } else { self.sprite_xe };
+        let mc_reg = if i < 3 { old_mc } else { self.sprite_mc };
         let mut winner = None;
         let mut opaque = 0u8;
         for n in 0..8 {
@@ -900,47 +1026,57 @@ impl Vic2 {
             if !s.display {
                 continue;
             }
-            if s.bits_left == 0 && s.x == x {
+            let mc = mc_reg & (1 << n) != 0;
+            let xe = xe_reg & (1 << n) != 0;
+            let sx = if i < 4 { self.cycle_sprite_x[n] } else { s.x };
+            if s.bits_left == 0 && sx == x {
                 if let Some(r) = self.rec.0.as_deref_mut() {
                     r.sprite_shown(n, self.raster, x, self.sprite_xe & (1 << n) != 0);
                 }
-                s.shift = s.data;
+                // The fetched row is shifted out once: a second X match in
+                // the same line shows nothing (VICE test program
+                // VICII/spritesplit/ss-xpos).
+                s.shift = std::mem::take(&mut s.data);
                 s.bits_left = 24;
                 s.xexp_phase = false;
                 s.mc_phase = false;
+                s.was_mc = mc;
             }
             if s.bits_left == 0 {
                 continue;
             }
-            let mc = self.sprite_mc & (1 << n) != 0;
-            let xe = self.sprite_xe & (1 << n) != 0;
-            // New data bits only every second pixel when X-expanded.
+            // Switched on at the start of a step, multicolour latches on
+            // the next step; in the middle of an expanded step, at the next.
+            if mc && !s.was_mc {
+                s.mc_phase = !s.xexp_phase;
+            }
+            s.was_mc = mc;
+            if !xe {
+                s.xexp_phase = false;
+            }
+            // A step starts on every pixel, every second one when expanded.
             if !s.xexp_phase {
-                if mc {
-                    if !s.mc_phase {
-                        s.current = (s.shift >> 22) as u8 & 3;
-                    }
-                } else {
+                if !mc {
                     s.current = ((s.shift >> 23) & 1) as u8 * 2;
+                } else if !s.mc_phase {
+                    s.current = (s.shift >> 22) as u8 & 3;
                 }
             }
             let value = s.current;
-            let advance = !xe || s.xexp_phase;
+            let step_ends = !xe || s.xexp_phase;
             if xe {
                 s.xexp_phase = !s.xexp_phase;
             }
-            if advance {
+            if step_ends {
+                s.shift = (s.shift << 1) & 0xff_ffff;
+                s.bits_left -= 1;
                 if mc {
-                    if s.mc_phase {
-                        s.shift <<= 2;
-                        s.bits_left -= 2;
-                    }
                     s.mc_phase = !s.mc_phase;
-                } else {
-                    s.shift <<= 1;
-                    s.bits_left -= 1;
+                    // The second half of a pair latched on the last step.
+                    if s.bits_left == 0 && s.mc_phase {
+                        s.bits_left = 1;
+                    }
                 }
-                s.shift &= 0xff_ffff;
             }
             if value == 0 {
                 continue;
@@ -948,9 +1084,9 @@ impl Vic2 {
             opaque |= 1 << n;
             if winner.is_none() {
                 let color = match value {
-                    1 => self.sprite_mm[0],
-                    3 => self.sprite_mm[1],
-                    _ => s.color,
+                    1 => src::MM0,
+                    3 => src::MM0 + 1,
+                    _ => src::SPRITE0 + n as u8,
                 };
                 winner = Some((n, color));
             }
@@ -1039,8 +1175,17 @@ impl Vic2 {
             0x15 => self.sprite_enable = v,
             0x16 => self.ctrl2 = v & 0x1f,
             0x17 => {
+                let cleared = self.sprite_ye & !v;
                 self.sprite_ye = v;
                 for (n, s) in self.sprites.iter_mut().enumerate() {
+                    // Sprite crunching: Y expansion cleared in cycle 15 while
+                    // the expansion flip-flop is clear mixes MCBASE with MC
+                    // (Linus Akesson, "Sprite crunching"; VICE test programs
+                    // VICII/spritecrunch).
+                    if self.cycle == 15 && cleared & (1 << n) != 0 && !s.exp {
+                        s.mcbase = (0x2a & (s.mcbase & s.mc)) | (0x15 & (s.mcbase | s.mc));
+                        s.crunched = true;
+                    }
                     if v & (1 << n) == 0 {
                         s.exp = true;
                     }
@@ -1052,12 +1197,37 @@ impl Vic2 {
             0x1b => self.sprite_prio = v,
             0x1c => self.sprite_mc = v,
             0x1d => self.sprite_xe = v,
-            0x20 => self.border_color = v & 0x0f,
-            0x21..=0x24 => self.bg[usize::from(reg - 0x21)] = v & 0x0f,
-            0x25 | 0x26 => self.sprite_mm[usize::from(reg - 0x25)] = v & 0x0f,
-            0x27..=0x2e => self.sprites[usize::from(reg - 0x27)].color = v & 0x0f,
+            0x20..=0x2e => {
+                self.colour_written(reg);
+                self.write_colour(reg, v);
+            }
             // Light pen and collision registers are read-only.
             _ => {}
+        }
+    }
+
+    /// Note the old value of colour register `reg` at its first write in
+    /// this cycle.
+    fn colour_written(&mut self, reg: u8) {
+        let bit = match reg {
+            0x20 => src::BORDER - src::BG0,
+            0x21..=0x24 => reg - 0x21,
+            0x25 | 0x26 => src::MM0 - src::BG0 + reg - 0x25,
+            _ => src::SPRITE0 - src::BG0 + reg - 0x27,
+        };
+        if self.written & 1 << bit == 0 {
+            self.written |= 1 << bit;
+            self.before[usize::from(bit)] = self.peek(reg) & 0x0f;
+        }
+    }
+
+    fn write_colour(&mut self, reg: u8, v: u8) {
+        let v = v & 0x0f;
+        match reg {
+            0x20 => self.border_color = v,
+            0x21..=0x24 => self.bg[usize::from(reg - 0x21)] = v,
+            0x25 | 0x26 => self.sprite_mm[usize::from(reg - 0x25)] = v,
+            _ => self.sprites[usize::from(reg - 0x27) & 7].color = v,
         }
     }
 
@@ -1129,8 +1299,9 @@ impl Vic2 {
 
 const TAG: [u8; 4] = *b"6569";
 /// 2: VIC-II type byte first (version 1 states are 6569). 3: the light
-/// pen's once-a-frame flag and the LP line level.
-const VERSION: u16 = 3;
+/// pen's once-a-frame flag and the LP line level. 4: types 8565/8562 and
+/// the four pixels waiting for their colour.
+const VERSION: u16 = 4;
 
 fn save_sprite(w: &mut StateWriter, s: &Sprite) {
     w.u16(s.x);
@@ -1167,6 +1338,8 @@ fn load_sprite(r: &mut StateReader<'_>) -> Result<Sprite, StateError> {
         xexp_phase: r.bool()?,
         mc_phase: r.bool()?,
         current: r.u8()? & 3,
+        was_mc: false,
+        crunched: false,
     };
     if s.bits_left > 24 {
         return Err(StateError::Invalid("VIC-II sprite shifter"));
@@ -1180,6 +1353,8 @@ impl Savestate for Vic2 {
             w.u8(match self.model {
                 Model::Mos6569 => 0,
                 Model::Mos6567R8 => 1,
+                Model::Mos8565 => 2,
+                Model::Mos8562 => 3,
             });
             w.u8(self.sprite_x_msb);
             w.u8(self.ctrl1);
@@ -1247,6 +1422,13 @@ impl Savestate for Vic2 {
             w.bytes(&self.pixels);
             w.bool(self.lp_done);
             w.bool(self.lp_low);
+            for &(index, source) in &self.lag {
+                w.u32(index as u32);
+                w.u8(source);
+            }
+            for s in &self.sprites {
+                w.bool(s.was_mc);
+            }
         });
     }
 
@@ -1255,6 +1437,8 @@ impl Savestate for Vic2 {
         let model = match if version < 2 { 0 } else { c.u8()? } {
             0 => Model::Mos6569,
             1 => Model::Mos6567R8,
+            2 => Model::Mos8565,
+            3 => Model::Mos8562,
             _ => return Err(StateError::Invalid("VIC-II type")),
         };
         if model != self.model {
@@ -1308,7 +1492,7 @@ impl Savestate for Vic2 {
             let g = c.u8()?;
             let cdata = c.u16()? & 0x0fff;
             let delay = c.u8()?;
-            if delay > 11 {
+            if delay > 15 {
                 return Err(StateError::Invalid("VIC-II sequencer"));
             }
             *p = some.then_some(Pending { g, c: cdata, delay });
@@ -1340,6 +1524,25 @@ impl Savestate for Vic2 {
         } else {
             v.lp_done = v.irq_flags & irq::LIGHT_PEN != 0;
         }
+        if version >= 4 {
+            for l in v.lag.iter_mut() {
+                let index = c.u32()?;
+                let source = c.u8()?;
+                let index = if index == u32::MAX {
+                    usize::MAX
+                } else if (index as usize) < v.pixels.len() && source <= src::SPRITE0 + 7 {
+                    index as usize
+                } else {
+                    return Err(StateError::Invalid("VIC-II pixel colour source"));
+                };
+                *l = (index, source);
+            }
+            for s in v.sprites.iter_mut() {
+                s.was_mc = c.bool()?;
+            }
+        }
+        v.cycle_regs = [v.sprite_prio, v.sprite_xe, v.sprite_mc];
+        v.cycle_sprite_x = v.sprites.map(|s| s.x);
         // The pen's aim is configuration from the port: keep it.
         v.pen = self.pen;
         v.pen_lit = self.pen_lit;

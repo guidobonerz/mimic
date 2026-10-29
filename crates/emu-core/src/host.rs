@@ -7,11 +7,13 @@
 //! come through [`crate::media::MediaBackend`]:
 //!
 //! - [`NetBackend`]: TCP/UDP sockets, a TCP listener, asynchronous HTTP
-//!   requests, network information and the host's clock. Every call
+//!   requests (GET/POST, or any verb with headers through
+//!   [`NetBackend::http_request`]), network information and the host's clock. Every call
 //!   returns at once; nothing ever blocks the emulation thread.
 //! - [`FileHost`]: one sandboxed folder. Paths are canonical, `/`-separated
 //!   and relative to the folder's root (see [`join_path`]); no path can
-//!   leave the root.
+//!   leave the root. [`MountFileHost`] hangs further folders into it as
+//!   directories of the root (the Ultimate's `/SD`, `/Usb0` …).
 //!
 //! The frontend implements them (native: `media-backends`; the web
 //! frontend offers a [`MemFileHost`] and no network) and hands them to the
@@ -22,9 +24,11 @@
 
 mod journal;
 mod memfs;
+mod mount;
 
 pub use journal::{Journal, JournalMode, ReplayStatus};
 pub use memfs::MemFileHost;
+pub use mount::MountFileHost;
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -102,11 +106,37 @@ pub enum Recv {
 }
 
 /// A finished HTTP request.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HttpResponse {
     /// HTTP status code (200 …).
     pub status: u16,
+    /// The response's header fields in the order received (names as sent).
+    pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+}
+
+/// An HTTP request with any verb and header fields
+/// ([`NetBackend::http_request`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HttpRequest {
+    /// "GET", "PUT", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS" …
+    pub method: String,
+    pub url: String,
+    /// Header fields to send. `Host`, `Connection` and `Content-Length` are
+    /// the backend's (it frames the message); a field given here replaces
+    /// the backend's default of the same name (`User-Agent`, `Accept`).
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl HttpRequest {
+    /// The value of header field `name` (case-insensitive), if given.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
 }
 
 /// The network as the emulated device reports it.
@@ -208,6 +238,26 @@ pub trait NetBackend: Send {
         content_type: &str,
         body: &[u8],
     ) -> Result<HttpTicket, NetError>;
+
+    /// Start a request with any verb and header fields. The default
+    /// covers what [`NetBackend::http_get`] and [`NetBackend::http_post`]
+    /// can express (other verbs and extra fields: unsupported); backends
+    /// that speak HTTP themselves implement it fully.
+    fn http_request(&mut self, req: &HttpRequest) -> Result<HttpTicket, NetError> {
+        let extra = req.headers.iter().any(|(k, _)| {
+            !k.eq_ignore_ascii_case("content-type") && !k.eq_ignore_ascii_case("content-length")
+        });
+        match req.method.as_str() {
+            _ if extra => Err(NetError::Unsupported("HTTP header fields".into())),
+            "GET" if req.body.is_empty() => self.http_get(&req.url),
+            "POST" => self.http_post(
+                &req.url,
+                req.header("content-type").unwrap_or(""),
+                &req.body,
+            ),
+            m => Err(NetError::Unsupported(format!("HTTP {m}"))),
+        }
+    }
 
     /// `None` while the request runs; then its result, once (the ticket is
     /// gone afterwards). An unknown ticket: `Some(Err(BadHandle))`.
@@ -378,6 +428,9 @@ impl NetBackend for BoxedNet {
     }
     fn http_post(&mut self, url: &str, ct: &str, body: &[u8]) -> Result<HttpTicket, NetError> {
         self.0.http_post(url, ct, body)
+    }
+    fn http_request(&mut self, req: &HttpRequest) -> Result<HttpTicket, NetError> {
+        self.0.http_request(req)
     }
     fn poll_http(&mut self, t: HttpTicket) -> Option<Result<HttpResponse, NetError>> {
         self.0.poll_http(t)

@@ -158,12 +158,14 @@ fn config(base: &MachineConfig, e: &Entry) -> Result<MachineConfig, String> {
     c.options.insert("debugcart".into(), "on".into());
     c.options.insert("cia".into(), "6526a".into());
     c.options.insert("sid".into(), "8580".into());
+    // The 8565/8562 like the testbench's C64C, unless the entry asks for
+    // the old type (the reference pictures follow the same choice).
+    let old_vic = e.has("vicii-old");
     for o in &e.options {
         if let Some(u) = UNSUPPORTED.iter().find(|u| o.starts_with(*u)) {
             return Err(format!("{u} not emulated"));
         }
         match o.as_str() {
-            "vicii-pal" => c.model = Some("pal".into()),
             "vicii-ntsc" => c.model = Some("ntsc".into()),
             "cia-old" => {
                 c.options.insert("cia".into(), "6526".into());
@@ -180,6 +182,14 @@ fn config(base: &MachineConfig, e: &Entry) -> Result<MachineConfig, String> {
             _ => {}
         }
     }
+    let ntsc = c.model.as_deref() == Some("ntsc");
+    let vic = match (ntsc, old_vic) {
+        (false, false) => "8565",
+        (false, true) => "6569",
+        (true, false) => "8562",
+        (true, true) => "6567",
+    };
+    c.options.insert("vicii".into(), vic.into());
     if e.prg.is_empty() && e.options.iter().any(|o| o.starts_with("mountd64:")) {
         c.options.insert("autostart".into(), "on".into());
     }

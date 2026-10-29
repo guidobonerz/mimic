@@ -133,6 +133,11 @@ pub struct Shared {
     /// Emulation speed set with the footer's slider: an index into
     /// [`crate::footer::SPEEDS`]. Off 100 % the sound is muted.
     pub speed: AtomicU8,
+    /// `--warp-load`: at 100 % the machine runs as fast as it can while a
+    /// disk drive works (LED or motor), muted, like VICE's autostart warp.
+    pub warp_load: AtomicBool,
+    /// Published by the emulation thread: running at warp now.
+    pub warping: AtomicBool,
     /// Set by the footer's snapshot button: save the shown screen as PNG
     /// (named after [`Shared::snapshot_name`] in the working folder).
     pub snapshot: AtomicBool,
@@ -224,6 +229,8 @@ impl Shared {
             pause_toggle: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             speed: AtomicU8::new(crate::footer::NORMAL_SPEED as u8),
+            warp_load: AtomicBool::new(true),
+            warping: AtomicBool::new(false),
             snapshot: AtomicBool::new(false),
             snapshot_name: Mutex::new(String::from("mimic")),
             snapshot_dir: Mutex::new(None),
@@ -585,6 +592,8 @@ pub fn spawn(
         // frames run so far (the swap pause counts emulated frames).
         let mut pending_disk: Option<(String, u64)> = None;
         let mut frames_run = 0u64;
+        // Frames left at warp after a disk drive was last seen working.
+        let mut warp_hold = 0u32;
         let mut tracker = Tracker::default();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
@@ -761,6 +770,9 @@ pub fn spawn(
                         .filter(|(_, at)| at.elapsed() < Duration::from_secs(4))
                         .map(|(m, _)| m.clone());
                 }
+                if f.note.is_none() && shared.warping.load(Ordering::Relaxed) {
+                    f.note = Some("warp: loading".into());
+                }
                 if let Ok(mut s) = shared.footer.lock() {
                     *s = f;
                 }
@@ -844,13 +856,20 @@ pub fn spawn(
             }
 
             let percent = crate::footer::speed_percent(shared.speed.load(Ordering::Relaxed));
-            wait_until(deadline);
+            let warp = warp_hold > 0 && percent == 100 && shared.warp_load.load(Ordering::Relaxed);
+            shared.warping.store(warp, Ordering::Relaxed);
             let period = shared.display_period_ns.load(Ordering::Relaxed);
-            if percent != 100 {
+            if warp {
+                // No wait; pacing starts afresh when the drive is done.
+                deadline = Instant::now();
+            } else if percent != 100 {
+                wait_until(deadline);
                 deadline += frame_time.mul_f64(100.0 / f64::from(percent));
             } else if period == 0 {
+                wait_until(deadline);
                 deadline += frame_time;
             } else {
+                wait_until(deadline);
                 deadline += Duration::from_nanos(period);
                 // The render thread takes the newest frame at the blank: the
                 // frame must be there by then, with 2 ms to spare.
@@ -872,6 +891,11 @@ pub fn spawn(
             let slice_start = Instant::now();
             session.run_slice();
             frames_run += 1;
+            warp_hold = if disk_working(session.machine_mut()) {
+                WARP_HOLD
+            } else {
+                warp_hold.saturating_sub(1)
+            };
             match &endpoint {
                 Some(ep) => ep.publish(&mut session),
                 None => drop(session.take_events()),
@@ -881,7 +905,7 @@ pub fn spawn(
             if let Some(tap) = &preview {
                 tap.publish_audio(&samples, format);
             }
-            if percent != 100 {
+            if percent != 100 || warp {
                 // Sound at another speed would only crackle: muted.
                 if let Ok(mut a) = shared.audio.lock() {
                     a.clear();
@@ -915,6 +939,18 @@ pub fn spawn(
             slice_ns = took.max(slice_ns * 0.98);
         }
     })
+}
+
+/// Frames the warp lasts after a disk drive was last seen working (the
+/// LED goes out between files for a moment).
+const WARP_HOLD: u32 = 25;
+
+/// Is a disk drive working (activity LED or motor)?
+fn disk_working(m: &mut dyn Machine) -> bool {
+    m.media_slots()
+        .into_iter()
+        .filter(|s| s.kind == emu_core::media::MediaKind::Disk && s.inserted)
+        .any(|s| m.media_slot(s.id).is_some_and(|d| d.status().active))
 }
 
 /// Save the shown screen (the raw picture, as the debugger and preview
@@ -1074,6 +1110,47 @@ mod tests {
             .speed
             .store(crate::footer::NORMAL_SPEED as u8, Ordering::Relaxed);
         assert!(eventually(|| !shared.audio.lock().unwrap().is_empty()));
+        shared.quit.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    #[ignore = "needs C64 ROMs and the 1541 DOS ROM in EMU_ROM_DIR"]
+    fn a_working_disk_drive_runs_at_warp() {
+        let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
+        let mut config = MachineConfig {
+            roms: media_backends::roms::load(&dir, "c64").expect("ROMs"),
+            ..MachineConfig::default()
+        };
+        config.options.insert("drive8".into(), "1541".into());
+        config.options.insert("autostart".into(), "on".into());
+        let mut machine = emu_machines::registry().create("c64", &config).unwrap();
+        // An empty (unformatted) disk: LOAD"*" keeps the drive busy until
+        // it gives up.
+        let slot = machine
+            .media_slots()
+            .into_iter()
+            .find(|s| s.kind == emu_core::media::MediaKind::Disk)
+            .unwrap()
+            .id;
+        let disk = media_backends::image::from_bytes(
+            "empty.d64",
+            vec![0; 174_848],
+            emu_core::media::MediaKind::Disk,
+        );
+        machine.media_slot(slot).unwrap().insert(disk).unwrap();
+        let mapper = Mapper::new(emu_input::Profile::default_for("c64"));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let shared = Arc::new(Shared::new());
+        let handle = spawn(machine, mapper, rx, shared.clone(), None, None);
+        assert!(
+            eventually_for(30, || shared.warping.load(Ordering::Relaxed)),
+            "warp while the drive works"
+        );
+        assert!(
+            eventually_for(60, || !shared.warping.load(Ordering::Relaxed)),
+            "back to 100 % afterwards"
+        );
         shared.quit.store(true, Ordering::Relaxed);
         handle.join().unwrap();
     }

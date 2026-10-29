@@ -5,8 +5,11 @@
 //! - any host ending in `.invalid`: the name does not resolve.
 //! - other hosts: the connection is refused.
 //! - Connections stand after [`FakeNet::connect_polls`] calls of `state`.
-//! - `http_get`/`http_post`: answers from [`FakeNet::pages`] (404
-//!   otherwise; a POST answers with its body), after
+//! - `http_get`/`http_post`/`http_request`: answers from
+//!   [`FakeNet::pages`] with the field `Content-Type` from
+//!   [`FakeNet::types`] (404 otherwise; a request with a body answers with
+//!   it and its content type); every request is kept in
+//!   [`FakeNet::requests`]; answers come after
 //!   [`FakeNet::http_polls`] calls of `poll_http`; `https:` is
 //!   unsupported.
 //! - `listen` works on any port; [`FakeNet::incoming`] connections (echo
@@ -16,8 +19,8 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use emu_core::host::{
-    ConnState, HostTime, HttpResponse, HttpTicket, NetBackend, NetError, NetHandle, NetInfo, Recv,
-    SocketKind,
+    ConnState, HostTime, HttpRequest, HttpResponse, HttpTicket, NetBackend, NetError, NetHandle,
+    NetInfo, Recv, SocketKind,
 };
 
 #[derive(Clone, Debug)]
@@ -38,6 +41,10 @@ pub struct FakeNet {
     pub http_polls: u32,
     /// URL → (status, body).
     pub pages: BTreeMap<String, (u16, Vec<u8>)>,
+    /// URL → content type of its page.
+    pub types: BTreeMap<String, String>,
+    /// The requests made, in order.
+    pub requests: Vec<HttpRequest>,
     pub incoming: u32,
     pub time: HostTime,
     sockets: BTreeMap<NetHandle, Socket>,
@@ -59,6 +66,8 @@ impl FakeNet {
             connect_polls: 2,
             http_polls: 3,
             pages: BTreeMap::new(),
+            types: BTreeMap::new(),
+            requests: Vec::new(),
             incoming: 0,
             // 2026-10-25 13:14:15 UTC, local time one hour ahead.
             time: HostTime {
@@ -92,25 +101,39 @@ impl FakeNet {
         }
     }
 
-    fn request(&mut self, url: &str, post: Option<&[u8]>) -> Result<HttpTicket, NetError> {
+    /// Serve `body` as `application/json` at `url`.
+    pub fn json_page(mut self, url: &str, body: &str) -> Self {
+        self.types.insert(url.into(), "application/json".into());
+        self.page(url, body.as_bytes())
+    }
+
+    fn request(&mut self, req: HttpRequest) -> Result<HttpTicket, NetError> {
         self.online()?;
-        if !url.starts_with("http://") {
-            return Err(NetError::Unsupported(format!("scheme of {url}")));
+        if !req.url.starts_with("http://") {
+            return Err(NetError::Unsupported(format!("scheme of {}", req.url)));
         }
-        let res = match (self.pages.get(url), post) {
-            (Some((status, body)), _) => HttpResponse {
+        let typed = |ct: Option<&str>| {
+            ct.map(|t| vec![("Content-Type".to_string(), t.to_string())])
+                .unwrap_or_default()
+        };
+        let res = match self.pages.get(&req.url) {
+            Some((status, body)) => HttpResponse {
                 status: *status,
+                headers: typed(self.types.get(&req.url).map(String::as_str)),
                 body: body.clone(),
             },
-            (None, Some(body)) => HttpResponse {
+            None if !req.body.is_empty() || req.method == "POST" => HttpResponse {
                 status: 200,
-                body: body.to_vec(),
+                headers: typed(req.header("content-type")),
+                body: req.body.clone(),
             },
-            (None, None) => HttpResponse {
+            None => HttpResponse {
                 status: 404,
                 body: b"not found".to_vec(),
+                ..Default::default()
             },
         };
+        self.requests.push(req);
         let t = self.handle();
         self.http.insert(t, (self.http_polls, Ok(res)));
         Ok(t)
@@ -222,11 +245,24 @@ impl NetBackend for FakeNet {
     }
 
     fn http_get(&mut self, url: &str) -> Result<HttpTicket, NetError> {
-        self.request(url, None)
+        self.request(HttpRequest {
+            method: "GET".into(),
+            url: url.into(),
+            ..Default::default()
+        })
     }
 
-    fn http_post(&mut self, url: &str, _: &str, body: &[u8]) -> Result<HttpTicket, NetError> {
-        self.request(url, Some(body))
+    fn http_post(&mut self, url: &str, ct: &str, body: &[u8]) -> Result<HttpTicket, NetError> {
+        self.request(HttpRequest {
+            method: "POST".into(),
+            url: url.into(),
+            headers: vec![("Content-Type".into(), ct.into())],
+            body: body.to_vec(),
+        })
+    }
+
+    fn http_request(&mut self, req: &HttpRequest) -> Result<HttpTicket, NetError> {
+        self.request(req.clone())
     }
 
     fn poll_http(&mut self, t: HttpTicket) -> Option<Result<HttpResponse, NetError>> {

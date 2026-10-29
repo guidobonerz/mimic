@@ -37,6 +37,8 @@ own section.
 | VIC-II timing, bad lines, sprites, AEC | Christian Bauer, *The MOS 6567/6569 video controller (VIC-II) and its application in the Commodore 64* (1996) | `chips-cbm/src/vic2.rs` |
 | VIC-II palette | Philip "Pepto" Timmermans, *Calculating the color palette of the VIC II* (method and measured luma levels) | `chips-cbm/src/vic2/palette.rs` |
 | CIA 6526 | MOS 6526 data sheet; Wolfgang Lorenz, *A Software Model of the CIA6526* | `chips-cbm/src/cia.rs` |
+| VIC-II pixel timing measured from test programs: colour registers act four pixels before the cycle's pixels (old colour or 8565 grey dot on the first), $D01B/$D01D/$D01C from pixel 2/2/3, sprite shifter and multicolour switching, vertical border compare in every cycle, sequencer idle while the vertical border is set, sprite display at cycle 58 only with MxE set, sprite X write from pixel 4, sprite crunching (MCBASE formula from Linus Åkesson's description of sprite crunching; `VICII/spritecrunch` readme) | VICE test programs `VICII/border` (`readme.txt`, `vborder2.asm`), `VICII/colorsplit`, `VICII/spritesplit` (`spritesplit.asm`, `8565.txt`), `VICII/spriteenable` (`README.txt`, `core*.asm`) and their reference pictures (behaviour read from programs and pictures, no emulator code) | `chips-cbm/src/vic2.rs` |
+| CIA TOD: binary digit counters with carries by comparison, AM/PM flip on writing 12, clock stopped at power-up, relatch only after tenths, divider reset only on restart, 0–6 divider compared on ticks, alarm on the comparator's rising edge | VICE test programs `CIA/tod` (`readme.txt`, `hour-test.txt`, `fix-*.s`, `read-latch.s`, `hzsync*.asm`, `4tod.asm`, `powerup.s`) | `chips-cbm/src/cia.rs` |
 | SID 6581/8580 | MOS 6581 data sheet (envelope rates); published analyses of the envelope counter | `chips-cbm/src/sid.rs` |
 | VIA 6522 | MOS 6522 data sheet; Rockwell R6522 data sheet (timing diagrams) | `chips-cbm/src/via.rs` |
 | PIA 6520 | MOS 6520 data sheet; Motorola MC6820 data sheet | `chips-cbm/src/pia.rs` |
@@ -58,6 +60,7 @@ own section.
 | 1581, D81, MFM | *Commodore 1581 User's Guide* and service manual (318044); Western Digital WD1770/1772 data sheet | `drives-cbm/src/c1581.rs`, `wd177x.rs`, `media/src/mfm.rs` |
 | 8050/8250, D80/D82 | *CBM 8050/8250 user's manual* | `media/src/d64.rs` |
 | Serial (IEC) bus protocol | *Commodore 64 Programmer's Reference Guide*, serial bus; *Inside the 1541* | `drives-cbm/src/virtual_drive.rs` |
+| KERNAL serial routines (fast loading) | *Commodore 64 Programmer's Reference Guide*, chapter 5 (KERNAL jump table, TALK/LISTEN/SECOND/TKSA/CIOUT/ACPTR/UNTLK/UNLSN); entry addresses and register effects read from the user's KERNAL 901227-03 | `machine-c64/src/fastload.rs` |
 | IEEE-488 on the PET | PET KERNAL behaviour (e.g. `$F0D8`), IEEE-488 three-wire handshake | `drives-cbm/src/ieee_drive.rs` |
 | TAP | TAP format as written by C64S and documented with the VICE tools | `media/src/tap.rs` |
 | CRT cartridges | CRT format documentation of the VICE cartridge tools; C64-Wiki | `media/src/crt.rs`, `devices-cartridge/src/banked.rs` |
@@ -277,6 +280,11 @@ own section.
 | Light pens: 6845 LPSTB latching the refresh address into R16 (MA13–8) / R17 (MA7–0); CPC expansion port pin 47 LPEN | Motorola MC6845 data sheet ("Light pen registers"); cpcwiki, "Connector:Expansion port" | `chips-amstrad/src/crtc.rs`, `machine-cpc` |
 | Light-pen threshold (Rec. 601 luma) | ITU-R Recommendation BT.601 | `devices-input/src/lightpen.rs` |
 
+### C64 RAM Expansion Unit
+
+- Commodore 1764 RAM Expansion Module User's Guide, appendix "REC registers", and the 1700/1750 RAM Expansion Module user's guide — REC 8726 registers $DF00–$DF0A, command and status bits, the $FF00 trigger, autoload, address control, interrupt mask, transfer types and timing (`devices-cartridge::reu`).
+- AMD Am29F040B data sheet — the 64 KB flash sector the EASYFLASH_ERASE command clears (`devices-cartridge::flash::Flash::erase_sector`).
+
 ### Network devices (C64 Ultimate command interface, WiC64)
 
 Documentation only; the 1541 Ultimate and WiC64 firmware sources are GPL and were not used (golden rule 7).
@@ -284,12 +292,15 @@ Documentation only; the 1541 Ultimate and WiC64 firmware sources are GPL and wer
 - Ultimate documentation, "Core UCI Architecture" (https://1541u-documentation.readthedocs.io/en/latest/uci/core_uci_architecture.html) — registers $DF1C–$DF1F, control and status bits, the state machine, queue sizes (`devices-net::uci`).
 - Ultimate documentation, "Ultimate DOS Target" (https://1541u-documentation.readthedocs.io/en/latest/uci/ultimate_dos_target.html) — DOS commands, open attributes, file info packet, directory entries, status texts.
 - Ultimate documentation, "Network Target" (https://1541u-documentation.readthedocs.io/en/latest/uci/network_target.html) — socket commands, MAC/IP answers, READ_SOCKET/WRITE_SOCKET formats.
-- Ultimate documentation, "Control Target" (https://1541u-documentation.readthedocs.io/en/latest/uci/control_target.html) — IDENTIFY, GET_HWINFO.
+- Ultimate documentation, "Control Target" (https://1541u-documentation.readthedocs.io/en/latest/uci/control_target.html) — IDENTIFY, REBOOT, LOAD/SAVE_REU, U64_SAVEMEM, EASYFLASH_ERASE, GET_HWINFO, GET_DRVINFO and its drive types, drive power, GET_MP3_RAMDISKINFO, the palette commands; the DOS target page also for LOAD_REU/SAVE_REU (24-bit address and length, answer texts) and MOUNT/UMOUNT/SWAP_DISK (`devices-net::uci`, `machine-c64::ultimate`).
+- Ultimate documentation, "Software IEC Target" (https://1541u-documentation.readthedocs.io/en/latest/uci/software_iec_target.html) — target 5: status codes, LOAD_SU/LOAD_EX/SAVE, OPEN/CLOSE/CHKIN/CHKOUT, partitions, GET_FATNAME/GET_IECNAME (`devices-net::uci::siec`).
+- Ultimate documentation, "HTTP Target" (https://1541u-documentation.readthedocs.io/en/latest/uci/http_target.html) — target 6: header and body handles, verbs, body formats, BODY_ADD/BODY_QUERY encoding, paths, the two exchanges, status texts (`devices-net::uci::http`).
+- RFC 8259 (JSON) — the HTTP target's JSON text and parser; RFC 9110 sections 15 (status codes and reason phrases) and 15.4 (redirects: 303, and 301/302 after POST, continue as GET); WHATWG URL Standard, "application/x-www-form-urlencoded serializing" — URL-encoded bodies.
 - WiC64 library README (https://github.com/WiC64-Team/wic64-library) — legacy, standard and extended protocols, status codes, the command list and behaviour (`devices-net::wic64`); command ids from its `wic64.h` constants.
 - Forum64, "WiC64 Hardware Infos" (https://www.forum64.de/index.php?thread/119265-wic64-hardware-infos/) and pagetable.com (https://www.pagetable.com/?p=1656) — the user-port wiring: PA2 direction, PC2 and FLAG2 handshake.
 - C64 Programmer's Reference Guide, appendix I — user port pinout (`emu-core::port::user_port`); MOS 6526 data sheet — PC pulses after port B accesses.
 - Howard Hinnant, "chrono-Compatible Low-Level Date Algorithms" (http://howardhinnant.github.io/date_algorithms.html, public domain) — civil date from days (`emu-core::host::HostTime::local`).
-- RFC 9112 (HTTP/1.1 message syntax, chunked transfer coding) — the small HTTP client in `media-backends::net`.
+- RFC 9112 (HTTP/1.1 message syntax, chunked transfer coding) — the small HTTP client in `media-backends::net` (any verb and the caller's header fields since the HTTP target).
 
 ## Test suites and test data
 

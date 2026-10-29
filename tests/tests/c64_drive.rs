@@ -22,6 +22,10 @@ fn c64(autostart: bool) -> Box<dyn Machine> {
 
 /// A C64 with drive 8 as "1541", "1571" (true drives) or "virtual".
 fn c64_with(autostart: bool, drive: &str) -> Box<dyn Machine> {
+    c64_options(autostart, drive, &[])
+}
+
+fn c64_options(autostart: bool, drive: &str, options: &[(&str, &str)]) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, "c64").expect("ROMs"),
@@ -34,6 +38,9 @@ fn c64_with(autostart: bool, drive: &str) -> Box<dyn Machine> {
     config.options.insert("drive8".into(), drive.into());
     if autostart {
         config.options.insert("autostart".into(), "on".into());
+    }
+    for (k, v) in options {
+        config.options.insert((*k).into(), (*v).into());
     }
     emu_machines::registry().create("c64", &config).unwrap()
 }
@@ -193,7 +200,20 @@ fn save_writes_the_file_to_the_disk_image() {
 #[test]
 #[ignore = "needs C64 ROMs in EMU_ROM_DIR"]
 fn virtual_drive_autostart_directory_and_save() {
-    let mut m = c64_with(true, "virtual");
+    virtual_drive_session(false);
+}
+
+#[test]
+#[ignore = "needs C64 ROMs in EMU_ROM_DIR"]
+fn fastload_autostart_directory_and_save() {
+    virtual_drive_session(true);
+}
+
+/// Autostart, directory, SAVE on the virtual drive; returns the frames
+/// until the program ran.
+fn virtual_drive_session(fastload: bool) -> u32 {
+    let on = if fastload { "on" } else { "off" };
+    let mut m = c64_options(true, "virtual", &[("fastload", on)]);
     let slot = m
         .media_slots()
         .into_iter()
@@ -264,6 +284,82 @@ fn virtual_drive_autostart_directory_and_save() {
     let image = D64::parse(&bytes).unwrap();
     let (_, prg) = image.load(b"VFILE").expect("saved file");
     assert_eq!(prg.load, 0x0801);
+    ran
+}
+
+/// A 100-block program: fast loading takes a fraction of the bus time,
+/// and a missing file still reports FILE NOT FOUND.
+#[test]
+#[ignore = "needs C64 ROMs in EMU_ROM_DIR"]
+fn fastload_is_fast_and_reports_missing_files() {
+    // At $2000: BASIC relinks the lines from $0801 after a LOAD.
+    let mut body = vec![0x00, 0x20];
+    body.extend((0..25_000u32).map(|i| (i * 7) as u8));
+    let mut d = D64::blank(b"BIG", *b"BG");
+    d.add_prg(b"BIG", &body).unwrap();
+    let frames = |fastload: &str| {
+        let mut m = c64_options(false, "virtual", &[("fastload", fastload)]);
+        let slot = m
+            .media_slots()
+            .into_iter()
+            .find(|s| s.name == "drive 8")
+            .unwrap()
+            .id;
+        let media = Media {
+            name: "big.d64".into(),
+            kind: MediaKind::Disk,
+            backend: Box::new(MemoryBackend { data: d.to_bytes() }),
+        };
+        m.media_slot(slot).unwrap().insert(media).unwrap();
+        let mut dbg = DebugHooks::new();
+        for _ in 0..150 {
+            m.run_frame(&mut dbg);
+        }
+        let (events, end) = emu_tests::typing::type_text("LOAD\"BIG\",8,1\r", m.now().0);
+        for e in events {
+            m.input(e);
+        }
+        while m.now().0 < end {
+            m.run_frame(&mut dbg);
+        }
+        let n = (0..5000)
+            .find(|_| {
+                m.run_frame(&mut dbg);
+                // READY. in the line after LOADING.
+                let rows: Vec<Vec<u8>> =
+                    screen(m.as_mut()).chunks(40).map(<[u8]>::to_vec).collect();
+                rows.windows(2).any(|w| {
+                    w[0].starts_with(&[12, 15, 1, 4, 9, 14, 7])
+                        && w[1].starts_with(&[18, 5, 1, 4, 25, 46])
+                })
+            })
+            .expect("load finished");
+        // The data arrived intact.
+        let ram = m
+            .memory_spaces()
+            .into_iter()
+            .find(|s| s.name == "ram")
+            .unwrap()
+            .id;
+        let cpu = m.debug_target(DeviceId("cpu")).unwrap();
+        for i in [0u32, 1, 9_999, 24_999] {
+            let v = cpu.peek(ram, 0x2000 + i, Size::Byte).unwrap() as u8;
+            assert_eq!(v, (i * 7) as u8, "byte {i}");
+        }
+        if fastload == "on" {
+            assert!(type_and_wait(
+                m.as_mut(),
+                "LOAD\"NOPE\",8\r",
+                "FILE NOT FOUND",
+                100
+            ));
+        }
+        n
+    };
+    let (slow, fast) = (frames("off"), frames("on"));
+    eprintln!("100 blocks: {slow} frames without, {fast} with fast loading");
+    // The KERNAL's own loop (STOP key, store, ST) stays: about 20 times.
+    assert!(fast * 10 < slow, "{fast} vs {slow}");
 }
 
 #[test]

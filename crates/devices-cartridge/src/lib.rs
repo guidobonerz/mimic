@@ -18,6 +18,7 @@ pub mod easyflash;
 pub mod expansion;
 pub mod flash;
 pub mod nes;
+pub mod reu;
 pub mod slot;
 pub mod snes;
 pub mod ted;

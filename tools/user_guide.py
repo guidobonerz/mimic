@@ -422,7 +422,10 @@ table(["Option", "Meaning"], [
     ["`--net on|off`", "the host network for the C64's WiC64 and Ultimate command interface "
      "(default on; off: they report no network)"],
     ["`--uci-dir DIR`", "the folder of the Ultimate command interface's DOS targets "
-     "(default `./ultimate`, created on the first write)"],
+     "(default `./ultimate`; created at start with `uci=on`, else on the first write)"],
+    ["`--uci-mount NAME=DIR`", "hang a folder of your computer into the command interface's "
+     "file system as `/NAME`, like the Ultimate's drives `SD`, `Usb0`, `Usb1`, `Flash`, "
+     "`Temp` (repeatable)"],
     ["`--debug [ADDR]`", "serve the debug protocol (default 127.0.0.1:6510)"],
     ["`--preview [ADDR]`", "serve the live preview (default 127.0.0.1:6580)"],
     ["`--vice [ADDR]`", "serve the VICE binary monitor (default 127.0.0.1:6502)"],
@@ -494,7 +497,9 @@ h2("The status footer")
 p("""Ctrl+Space shows a status line below the picture. On the left is a
 **speed control**: click a step or drag the knob for 10 %, 25 %, 50 %,
 100 %, 150 %, 200 %, 400 % or 800 % of real time (sound is muted away from
-100 %). Next to it the **snapshot** button saves the picture as a PNG file
+100 %). At 100 % the emulator runs as fast as it can, muted, while a disk
+drive works (LED or motor, e.g. during LOAD); the footer then shows "warp:
+loading". `--warp-load off` turns that off. Next to it the **snapshot** button saves the picture as a PNG file
 named after the machine (`mac-001.png`, `mac-002.png` …) in the `snapshots`
 folder of the profile file's settings, else in the folder the emulator was
 started from; the footer shows the file name for a few seconds. It then shows the emulated time since power-on (m:ss.t) with the
@@ -593,7 +598,11 @@ table(["Option", "Values"], [
      "KERNAL load/save only), `none`"],
     ["`port1`, `port2`", "`joystick`, `paddles`, `mouse1351`, `none`"],
     ["`autostart`", "`on`: load and run the disk's first program"],
+    ["`fastload`", "`on` (with `drive8=virtual`): the KERNAL's serial routines are served "
+     "by the virtual drive without bus time; LOAD, SAVE and OPEN/GET# take no time on the bus"],
     ["`uci`", "`on`: the Ultimate 64 command interface at $DF1C-$DF1F (see below)"],
+    ["`reu`", "a RAM Expansion Unit: `128k` (1700), `256k` (1764), `512k` (1750), "
+     "`1m`, `2m`, `4m`, `8m`, `16m`; `off` (default)"],
     ["`userport`", "`wic64`: a WiC64 WLAN adapter in the user port; `none` (default)"],
     ["`net`", "`off`: no network for the UCI and the WiC64, even if the frontend has one"],
 ], [0.22, 0.78])
@@ -607,12 +616,28 @@ p("""**Ultimate command interface** (`--option uci=on`): the four registers
 of the Ultimate 64 / 1541 Ultimate II+ command interface at $DF1C-$DF1F.
 The DOS targets 1 and 2 work on a folder of your computer (`--uci-dir`,
 default `./ultimate`): open, read, write, seek, file info, delete, rename,
-copy, change, create and list directories, the time. Paths can never
-leave the folder. The network target 3 opens TCP and UDP sockets (and a
-TCP listener on 127.0.0.1); the control target 4 answers IDENTIFY. The
-Ultimate's own control commands (mounting, reset, REU, palette) are not
-offered. A cartridge can stay plugged in; the interface takes only its four
-registers.""")
+copy, change, create and list directories, the time, REU data to and from
+the open file, and mounting disk images from the folder in drive 8
+(mount, unmount, swap to the next disk of a set like game-1.d64,
+game-2.d64). Paths can never leave the folder. The real Ultimate shows
+its SD card and USB sticks as `/SD`, `/Usb0` … in the root; `--uci-mount
+Usb0=DIR` (repeatable) hangs a folder of your computer in as such a
+directory. With `uci=on` the folders are created at start. The network target 3 opens
+TCP and UDP sockets (and a TCP listener on 127.0.0.1). The control target 4
+reboots the C64, loads and saves REU images, saves the RAM, erases
+EasyFlash sectors, reports the SID and drive 8, switches drive 8 off and on
+and reads or changes the palette (freezing is not offered). The Software
+IEC target 5 gives KERNAL replacements direct file access: LOAD and SAVE by
+DMA, OPEN/CHKIN/CHKOUT/CLOSE, partitions on sub-folders, `LOAD"$"` as a
+directory listing. The HTTP target 6 sends requests with any verb and
+header fields and JSON, URL-encoded or binary bodies, and lets programs
+query the JSON answer by path (`http:` only). A cartridge can stay plugged
+in; the interface takes only its four registers.""")
+p("""**RAM Expansion Unit** (`--option reu=512k`): a Commodore REU with
+the REC 8726 at $DF00 (all of I/O2 but the command interface's four
+registers). Its DMA stops the CPU, one byte a cycle; GEOS and REU-aware
+programs use it. Its memory is part of the savestate (16 MB make large
+savestates).""")
 p("""**WiC64** (`--option userport=wic64`): the WLAN adapter on the user port
 with firmware 2.x commands in the legacy and the protocol-2 format: HTTP
 GET (plain and URL-encoded), HTTP POST, TCP open/read/write/close, IP, MAC,
@@ -865,7 +890,11 @@ h2("Commodore drives")
 p("""Each Commodore drive slot has two modes: **true drive emulation** (the
 drive's own CPU and the disk's GCR data, cycle-exact — needed for fast
 loaders and copy protection) and the **virtual drive** (serves files on the
-protocol level — fast, but only for normal LOAD and SAVE).""")
+protocol level — fast, but only for normal LOAD and SAVE). The virtual
+drive still answers at the pace of the KERNAL's serial routines (about 400
+bytes a second, as a 1541); with `--option fastload=on` the C64 hands every
+byte of the KERNAL's TALK/LISTEN/SECOND/TKSA/CIOUT/ACPTR/UNTLK/UNLSN
+straight to it (stock KERNAL only; fast loaders are not affected).""")
 
 # ---- 7 monitors ----------------------------------------------------------------
 

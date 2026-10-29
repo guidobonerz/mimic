@@ -73,6 +73,13 @@ pub trait ExpansionCart: Send {
         false
     }
 
+    /// Erase the 64 KB flash sector holding 16 KB bank `bank` of ROML
+    /// (`high = false`) or ROMH, as the Ultimate's EASYFLASH_ERASE does;
+    /// `false` for cartridges without flash.
+    fn erase_flash_sector(&mut self, _bank: u8, _high: bool) -> bool {
+        false
+    }
+
     /// The image with what the machine wrote (flash), if anything changed.
     fn written_image(&self) -> Option<Crt> {
         None
