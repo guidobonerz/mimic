@@ -90,6 +90,11 @@ pub struct Timing {
     /// Dot clock; the CPU clock is an eighth of it.
     pub pixel_clock_hz: u32,
     pub standard: VideoStandard,
+    /// First of the two cycles that start sprite DMA; the Y expansion
+    /// flip-flop turns in its phi2. 55 on the 6569, 56 on the 6567R8
+    /// (VICE test programs VICII/spriteenable: "modify sprite enable on
+    /// cycle 55 (56 on NTSC)").
+    pub dma_check: u8,
 }
 
 pub const PAL: Timing = Timing {
@@ -104,6 +109,7 @@ pub const PAL: Timing = Timing {
     height: 272,
     pixel_clock_hz: 7_881_984,
     standard: VideoStandard::Pal,
+    dma_check: 55,
 };
 
 /// 6567R8: visible lines 41–262 and 0–12 (first/last vblank line 13/40),
@@ -120,6 +126,7 @@ pub const NTSC: Timing = Timing {
     height: 235,
     pixel_clock_hz: 8_181_816,
     standard: VideoStandard::Ntsc,
+    dma_check: 56,
 };
 
 impl Model {
@@ -604,7 +611,7 @@ impl Vic2 {
 
         // Sprite DMA start (cycles 55/56); the Y expansion flip-flop turns
         // in cycle 55's phi2 (see `phi2`).
-        if c == 55 || c == 56 {
+        if c == t.dma_check || c == t.dma_check + 1 {
             self.dma_started = self.sprite_dma_check();
         }
         if c == 58 {
@@ -789,7 +796,7 @@ impl Vic2 {
         // counts (VICE test programs VICII/spritecrunch/spritecrunch2). A
         // sprite whose DMA started in this cycle keeps its cleared
         // flip-flop.
-        if c == 55 {
+        if c == t.dma_check {
             let started = std::mem::take(&mut self.dma_started);
             for (n, s) in self.sprites.iter_mut().enumerate() {
                 if self.sprite_ye & (1 << n) != 0 && started & (1 << n) == 0 {
