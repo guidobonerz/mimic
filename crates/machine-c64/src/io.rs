@@ -70,6 +70,11 @@ pub struct Io {
     /// for the test runner like `samples` and not part of savestates.
     pub debugcart: bool,
     pub debugcart_exit: Option<u8>,
+    /// The data of the CPU's (or the REU's) last bus access, for the
+    /// VIC-II's colour read while the CPU still drives the bus. A halted
+    /// CPU repeats its read, so the value stays; not saved (it is set again
+    /// by the next access).
+    pub cpu_data: u8,
 }
 
 /// The VIC-II's view of memory: one 16 KB bank of RAM, with the character
@@ -81,6 +86,8 @@ pub struct VicView<'a> {
     /// The cartridge: in Ultimax mode the VIC-II sees its ROMH at `$3000`
     /// of every bank.
     pub cart: Option<&'a dyn ExpansionCart>,
+    /// The byte on the CPU's data bus in this cycle.
+    pub cpu_data: u8,
 }
 
 impl VicMemory for VicView<'_> {
@@ -101,6 +108,10 @@ impl VicMemory for VicView<'_> {
 
     fn color(&self, index: u16) -> u8 {
         self.mem.color[usize::from(index & 0x3ff)]
+    }
+
+    fn cpu_data(&self) -> Option<u8> {
+        Some(self.cpu_data)
     }
 }
 
@@ -124,6 +135,7 @@ impl Io {
             pc2: false,
             debugcart: false,
             debugcart_exit: None,
+            cpu_data: 0xff,
         }
     }
 

@@ -105,6 +105,10 @@ pub struct Cpu6502 {
     /// The last tick with RDY low or HALT high did not run (see
     /// [`Cpu6502::halted`]). Only written on that slow path.
     halted: bool,
+    /// The address of the read the last stalled tick repeated (see
+    /// [`Cpu6502::stalled_read`]). Only written on the slow path; not
+    /// state.
+    stalled_addr: Option<u16>,
 }
 
 impl Cpu6502 {
@@ -124,6 +128,7 @@ impl Cpu6502 {
             halt: false,
             free: true,
             halted: false,
+            stalled_addr: None,
         }
     }
 
@@ -196,6 +201,17 @@ impl Cpu6502 {
         self.halted
     }
 
+    /// The address of the read cycle the last tick repeated with RDY low:
+    /// the CPU keeps it on the bus (the VIC-II sees the data of that read
+    /// on a C64). None after a tick that ran or wrote.
+    pub fn stalled_read(&self) -> Option<u16> {
+        if self.free || !self.halted {
+            None
+        } else {
+            self.stalled_addr
+        }
+    }
+
     /// SO input: a falling edge sets the V flag (used by the 1541).
     pub fn set_overflow(&mut self) {
         self.core.p |= V;
@@ -237,10 +253,12 @@ impl Default for Cpu6502 {
 struct WriteProbe<'a> {
     bus: &'a mut dyn Bus,
     wrote: bool,
+    read: Option<u16>,
 }
 
 impl Bus for WriteProbe<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
+        self.read = Some(addr as u16);
         self.bus.peek(addr, size)
     }
 
@@ -270,8 +288,13 @@ impl Cpu for Cpu6502 {
         // RDY low: the CPU repeats a read cycle, so roll the state back
         // unless the cycle was a write.
         let saved = self.core;
-        let mut probe = WriteProbe { bus, wrote: false };
+        let mut probe = WriteProbe {
+            bus,
+            wrote: false,
+            read: None,
+        };
         let result = self.core.cycle(&mut probe);
+        self.stalled_addr = probe.read;
         if probe.wrote || self.core.jammed {
             self.halted = false;
             result

@@ -226,6 +226,12 @@ pub trait VicMemory {
     fn read(&self, addr: u16) -> u8;
     /// Colour RAM nibble at a 10-bit index.
     fn color(&self, index: u16) -> u8;
+    /// The byte on the CPU's data bus in this cycle, if the machine knows
+    /// it: in the three cycles after BA falls a c-access gets its colour
+    /// bits from there.
+    fn cpu_data(&self) -> Option<u8> {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -343,6 +349,9 @@ pub struct Vic2 {
     /// program VICII/spritesplit/ss-xpos). Equal to the registers between
     /// cycles, so not saved.
     cycle_sprite_x: [u16; 8],
+    /// Sprites whose DMA started in this cycle's phi1 (only between phi1
+    /// and phi2, so not saved).
+    dma_started: u8,
 
     /// The light pen latched in this frame (the LP input works once a
     /// frame, Bauer 3.11).
@@ -431,6 +440,7 @@ impl Vic2 {
             before: [0; 15],
             cycle_regs: [0; 3],
             cycle_sprite_x: [0; 8],
+            dma_started: 0,
             lp_done: false,
             lp_low: false,
             pen: None,
@@ -510,9 +520,6 @@ impl Vic2 {
         self.bad_line = self.bad_lines_enabled
             && (0x30..=0xf7).contains(&self.raster)
             && self.raster & 7 == self.yscroll();
-        if self.bad_line {
-            self.display_state = true;
-        }
     }
 
     fn vm_base(&self) -> u16 {
@@ -561,16 +568,10 @@ impl Vic2 {
             self.vert_border = false;
         }
 
-        // Sprite Y expansion and DMA start (cycles 55/56).
-        if c == 55 {
-            for (n, s) in self.sprites.iter_mut().enumerate() {
-                if self.sprite_ye & (1 << n) != 0 {
-                    s.exp = !s.exp;
-                }
-            }
-        }
+        // Sprite DMA start (cycles 55/56); the Y expansion flip-flop turns
+        // in cycle 55's phi2 (see `phi2`).
         if c == 55 || c == 56 {
-            self.sprite_dma_check();
+            self.dma_started = self.sprite_dma_check();
         }
         if c == 58 {
             for (n, s) in self.sprites.iter_mut().enumerate() {
@@ -669,15 +670,28 @@ impl Vic2 {
         if (16..=55).contains(&c) {
             phi1_value = self.g_access(mem);
         }
+        // The display logic sees a bad line one cycle after BA does: a
+        // bad line made by a $D011 write in cycle 15 has BA low from cycle
+        // 16 and display state from cycle 17's g-access (VICE test program
+        // VICII/colorfetchbug, readme).
+        // A bad line made after cycle 54 no longer switches the display on
+        // (VICE test programs VICII/fldscroll: $D011 written in cycle 54
+        // makes the line a display line, in cycle 56 not).
+        if self.bad_line && c <= 55 {
+            self.display_state = true;
+        }
         self.last_bus = phi1_value;
     }
 
     /// Sprite DMA start in cycles 55 and 56, with $D015 as it is before the
     /// CPU's write of the cycle.
-    fn sprite_dma_check(&mut self) {
+    /// Returns the sprites whose DMA starts.
+    fn sprite_dma_check(&mut self) -> u8 {
+        let mut started = 0;
         for n in 0..8 {
             let s = &mut self.sprites[n];
             if self.sprite_enable & (1 << n) != 0 && s.y == self.raster as u8 && !s.dma {
+                started |= 1 << n;
                 s.dma = true;
                 s.mcbase = 0;
                 if self.sprite_ye & (1 << n) != 0 {
@@ -685,6 +699,7 @@ impl Vic2 {
                 }
             }
         }
+        started
     }
 
     fn sprite_fetch(&mut self, mem: &dyn VicMemory, n: usize) -> u8 {
@@ -735,6 +750,19 @@ impl Vic2 {
     pub fn phi2(&mut self, mem: &dyn VicMemory) -> bool {
         let c = self.cycle;
         let t = self.timing();
+        // The Y expansion flip-flop turns in cycle 55 with $D017 as it is
+        // after the CPU's write; a $D017 set as late as cycle 55 still
+        // counts (VICE test programs VICII/spritecrunch/spritecrunch2). A
+        // sprite whose DMA started in this cycle keeps its cleared
+        // flip-flop.
+        if c == 55 {
+            let started = std::mem::take(&mut self.dma_started);
+            for (n, s) in self.sprites.iter_mut().enumerate() {
+                if self.sprite_ye & (1 << n) != 0 && started & (1 << n) == 0 {
+                    s.exp = !s.exp;
+                }
+            }
+        }
         if let Some(n) = self.phi2_sprite {
             let v = if self.ba_low_cycles > 3 {
                 self.sprite_fetch(mem, n)
@@ -746,14 +774,23 @@ impl Vic2 {
             };
             self.last_bus = v;
         }
-        if self.bad_line && (15..=54).contains(&c) {
+        // A c-access needs BA low since phi1: a $D011 write that makes the
+        // line a bad line in this cycle starts the accesses in the next
+        // (VICE test program VICII/colorfetchbug, readme).
+        if self.bad_line && (15..=54).contains(&c) && self.ba_low_cycles > 0 {
             // The first three cycles after BA the CPU may still own the bus;
-            // the VIC-II then reads $FF.
+            // the VIC-II then reads $FF and takes the colour bits from the
+            // low nibble of the CPU's data bus: a CPU halted on an opcode
+            // fetch of TXA ($8A) gives colour 10 (VICE test program
+            // VICII/colorfetchbug).
             let v = if self.ba_low_cycles > 3 {
                 let addr = self.vm_base() | self.vc;
                 u16::from(mem.read(addr)) | u16::from(mem.color(self.vc)) << 8
             } else {
-                0xff | u16::from(mem.color(self.vc)) << 8
+                let color = mem
+                    .cpu_data()
+                    .map_or_else(|| mem.color(self.vc), |d| d & 0x0f);
+                0xff | u16::from(color) << 8
             };
             self.matrix[self.vmli] = v;
             if let Some(r) = self.rec.0.as_deref_mut() {

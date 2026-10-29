@@ -238,31 +238,9 @@ struct C64Bus<'a> {
 
 impl Bus for C64Bus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
-        let a = addr as u16;
-        if let Some(v) = self.mem.read(a) {
-            return u32::from(v);
-        }
-        let bank = self.mem.bank(a);
-        if let (Some(u), Bank::Io) = (&mut self.uci, bank) {
-            if is_uci(a) {
-                return u32::from(u.read(a));
-            }
-        }
-        if let (Some(r), Bank::Io) = (&mut self.reu, bank) {
-            if is_reu(a) {
-                return u32::from(r.read(a));
-            }
-        }
-        let from_cart = match (&mut self.cart, bank) {
-            (Some(c), Bank::RomL) => c.read_roml(a),
-            (Some(c), Bank::RomH) => c.read_romh(a),
-            (Some(c), Bank::Io) if is_cart_io(a) => c.read_io(a),
-            _ => None,
-        };
-        u32::from(from_cart.unwrap_or_else(|| match bank {
-            Bank::Io if !is_cart_io(a) => self.io.read(self.mem, a),
-            _ => self.io.open_bus(),
-        }))
+        let v = self.read_byte(addr as u16);
+        self.io.cpu_data = v;
+        u32::from(v)
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
@@ -277,7 +255,44 @@ impl Bus for C64Bus<'_> {
     }
 
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
-        let (a, v) = (addr as u16, v as u8);
+        self.io.cpu_data = v as u8;
+        self.write_byte(addr as u16, v as u8);
+    }
+
+    fn addr_bits(&self) -> u8 {
+        16
+    }
+}
+
+impl C64Bus<'_> {
+    fn read_byte(&mut self, a: u16) -> u8 {
+        if let Some(v) = self.mem.read(a) {
+            return v;
+        }
+        let bank = self.mem.bank(a);
+        if let (Some(u), Bank::Io) = (&mut self.uci, bank) {
+            if is_uci(a) {
+                return u.read(a);
+            }
+        }
+        if let (Some(r), Bank::Io) = (&mut self.reu, bank) {
+            if is_reu(a) {
+                return r.read(a);
+            }
+        }
+        let from_cart = match (&mut self.cart, bank) {
+            (Some(c), Bank::RomL) => c.read_roml(a),
+            (Some(c), Bank::RomH) => c.read_romh(a),
+            (Some(c), Bank::Io) if is_cart_io(a) => c.read_io(a),
+            _ => None,
+        };
+        from_cart.unwrap_or_else(|| match bank {
+            Bank::Io if !is_cart_io(a) => self.io.read(self.mem, a),
+            _ => self.io.open_bus(),
+        })
+    }
+
+    fn write_byte(&mut self, a: u16, v: u8) {
         let bank = self.mem.bank(a);
         if let (Some(u), Bank::Io) = (&mut self.uci, bank) {
             if is_uci(a) {
@@ -302,10 +317,6 @@ impl Bus for C64Bus<'_> {
         if !self.mem.write(a, v) {
             self.io.write(self.mem, a, v);
         }
-    }
-
-    fn addr_bits(&self) -> u8 {
-        16
     }
 }
 
@@ -734,6 +745,7 @@ impl C64 {
             mem: &self.mem,
             bank,
             cart: self.cart.cart().map(|c| c.as_ref()),
+            cpu_data: self.io.cpu_data,
         });
         self.cpu.set_rdy(self.io.vic.ba());
         // The user port device's lines for this cycle: PB0–PB7 and FLAG2.
@@ -783,7 +795,20 @@ impl C64 {
                 dbg: dbg.as_deref_mut(),
                 beam,
             };
-            self.cpu.tick(&mut hooked)
+            let result = self.cpu.tick(&mut hooked);
+            // A CPU stopped by RDY repeats its read: the data of that read
+            // is on the bus for the VIC-II (see `Io::cpu_data`).
+            if let Some(a) = self.cpu.stalled_read() {
+                self.io.cpu_data = cpu_peek(
+                    &self.mem,
+                    &self.io,
+                    self.cart.cart().map(|c| c.as_ref()),
+                    self.uci.as_ref(),
+                    self.reu.as_ref(),
+                    a,
+                );
+            }
+            result
         };
         let entered = self.cpu.take_interrupt();
         self.user_port_cycle();
@@ -812,6 +837,7 @@ impl C64 {
             mem: &self.mem,
             bank,
             cart: self.cart.cart().map(|c| c.as_ref()),
+            cpu_data: self.io.cpu_data,
         });
         self.cartridge_cycle();
         // Serial bus: the drive sees what the C64 drives now.
@@ -1183,6 +1209,7 @@ impl Machine for C64 {
             mem: &self.mem,
             bank,
             cart: self.cart.cart().map(|c| c.as_ref()),
+            cpu_data: self.io.cpu_data,
         };
         let ctx = vic2::gfx::GfxContext {
             mem: &view,
