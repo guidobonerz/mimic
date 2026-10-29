@@ -36,8 +36,8 @@
 //! its fire button latches $D013/$D014, and a light pen there latches them
 //! when the beam draws a bright pixel under its tip (see
 //! `devices_input::lightpen`; the pen's button reads as joystick left).
-//! CIA 1 PB4, the same wire, driving LP from the keyboard side is not
-//! modelled.
+//! CIA 1 PB4, the same wire, pulls LP low when driven low as an output;
+//! the keyboard matrix pulling it is not modelled.
 //!
 //! Network and folder devices (host services from
 //! [`Machine::attach_host`], `devices_net`):
@@ -811,6 +811,12 @@ impl C64 {
             result
         };
         let entered = self.cpu.take_interrupt();
+        // LP is also CIA 1 PB4: driving it low as an output pulls the line
+        // like the fire button of control port 1 (VICE test programs
+        // VICII/lp-trigger).
+        let fire = self.io.port_lines[0] & devices_input::joystick::pin::FIRE != 0;
+        let pb4_low = self.io.cia1.port_b_out() & 0x10 == 0 && self.io.cia1.ddrb & 0x10 != 0;
+        self.io.vic.set_lp_line(fire || pb4_low);
         self.user_port_cycle();
         if let Some(u) = &mut self.uci {
             if u.countdown() {

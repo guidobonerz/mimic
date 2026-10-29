@@ -906,7 +906,11 @@ fn fire_on_control_port_1_latches_the_light_pen_registers() {
         emu_core::input::Dirs::NONE,
         1,
     ));
-    m.step_cycle();
+    // The VIC-II samples LP in the next cycle, and not before cycle 3 of
+    // line 0 (where a frame starts).
+    for _ in 0..3 {
+        m.step_cycle();
+    }
     assert_ne!(m.peek(CPU_SPACE, 0xd019, Size::Byte).unwrap() & 0x08, 0);
     assert_eq!(lp(&m).1, line as u8);
 }

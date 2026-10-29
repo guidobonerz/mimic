@@ -476,12 +476,23 @@ fn light_pen_needs_light() {
 fn lp_line_edge_latches_and_a_held_line_masks_the_pen() {
     let (mut v, m) = pen_setup(1);
     run_to(&mut v, &m, 20, 14);
-    // Fire on control port 1: a falling edge latches now (cycle 14
-    // starts at X = $194 + 104 - 504 = 4).
+    // Fire on control port 1: a falling edge in cycle 14 is sampled in
+    // cycle 15, whose first X coordinate the registers get (cycle 14
+    // starts at X = $194 + 104 - 504 = 4, cycle 15 at 12; VICE test
+    // program VICII/lp-trigger/test2).
     v.set_lp_line(true);
-    assert_eq!((v.peek(0x13), v.peek(0x14)), (4 / 2, 20));
-    // Held low into the next frame: the pen's pulse makes no edge.
-    frame(&mut v, &m);
+    assert_eq!(
+        (v.peek(0x13), v.peek(0x14)),
+        (0, 0),
+        "not before the next cycle"
+    );
+    v.phi2(&m);
+    v.phi1(&m);
+    assert_eq!((v.peek(0x13), v.peek(0x14)), (12 / 2, 20));
+    // Held low into the next frame: it latches in cycle 2 of line 0 (X of
+    // cycle 3 minus 2 = $1A2), and the pen's pulse makes no edge.
+    run_to(&mut v, &m, 0, 4);
+    assert_eq!((v.peek(0x13), v.peek(0x14)), ((0x1a2 / 2) as u8, 0));
     v.write(0x19, irq::LIGHT_PEN);
     run_to(&mut v, &m, 100, 1);
     assert_eq!(v.peek(0x19) & irq::LIGHT_PEN, 0);

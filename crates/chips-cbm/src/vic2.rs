@@ -352,6 +352,12 @@ pub struct Vic2 {
     /// Sprites whose DMA started in this cycle's phi1 (only between phi1
     /// and phi2, so not saved).
     dma_started: u8,
+    /// Collisions of the previous cycle's last four pixels, not yet in
+    /// the registers.
+    coll_late: (u8, u8),
+    /// The sprite whose row fetch completed in this cycle's phi2 (only
+    /// within a cycle, so not saved).
+    fetch_done: Option<usize>,
 
     /// The light pen latched in this frame (the LP input works once a
     /// frame, Bauer 3.11).
@@ -359,6 +365,8 @@ pub struct Vic2 {
     /// The LP line is held low from outside (control port 1's fire button,
     /// CIA 1 PB4): a pen's pulse makes no edge then.
     lp_low: bool,
+    /// A light pen edge waits for the next cycle.
+    lp_pending: bool,
     /// Where a light pen points (configuration from the port device, not
     /// state: the machine sets it again after loading) and the colour
     /// indices bright enough to light it (bit n = colour n).
@@ -441,8 +449,11 @@ impl Vic2 {
             cycle_regs: [0; 3],
             cycle_sprite_x: [0; 8],
             dma_started: 0,
+            coll_late: (0, 0),
+            fetch_done: None,
             lp_done: false,
             lp_low: false,
+            lp_pending: false,
             pen: None,
             pen_lit: 0,
             rec: crate::overlay::Recorder(None),
@@ -530,6 +541,17 @@ impl Vic2 {
         u16::from((self.mem_ptrs >> 1) & 7) << 11
     }
 
+    /// RASTER as read: in cycle 1 of line 0 it still holds the last line
+    /// (VICE test program VICII/split-tests/lightpen, dumps of real chips;
+    /// the raster compare of line 0 also waits for cycle 2).
+    fn raster_reg(&self) -> u16 {
+        if self.raster == 0 && self.cycle == 1 {
+            self.timing().lines - 1
+        } else {
+            self.raster
+        }
+    }
+
     fn check_raster_irq(&mut self) {
         if self.raster == self.raster_cmp {
             if !self.raster_irq_done {
@@ -546,6 +568,18 @@ impl Vic2 {
     pub fn phi1(&mut self, mem: &dyn VicMemory) {
         let c = self.cycle;
         let t = self.timing();
+        if std::mem::take(&mut self.lp_pending) {
+            self.light_pen_sampled();
+        }
+        // The light pen input is shut off from the last line of the frame
+        // to cycle 2 of line 0 (an edge sampled before cycle 3 is lost); in
+        // cycle 2 a line still held low latches X = cycle 3's minus 2 (the
+        // dumps of 6569, 8565, 6567 and 8562 in VICE test program
+        // VICII/split-tests/lightpen).
+        if self.raster == 0 && c == 2 && self.lp_low {
+            let x = t.x_at(16 - 2);
+            self.latch_light_pen(x);
+        }
 
         // The raster compare runs in cycle 1, for line 0 one cycle later.
         if c == 1 && self.raster != 0 {
@@ -773,6 +807,12 @@ impl Vic2 {
                 0xff
             };
             self.last_bus = v;
+            // The row's third byte arrives with this cycle's pixel 3: a
+            // sprite triggered again before that shows nothing (VICE test
+            // program VICII/spritex/testsuite 14-17, Krestage 3).
+            if c != t.sprite_slot(n) {
+                self.fetch_done = Some(n);
+            }
         }
         // A c-access needs BA low since phi1: a $D011 write that makes the
         // line a bad line in this cycle starts the accesses in the next
@@ -851,6 +891,8 @@ impl Vic2 {
         let (top, bottom) = self.border_rows();
         let row = t.row(self.raster).map(|r| r * t.width as usize);
         let mut out = [(usize::MAX, 0u8); 8];
+        let (mm, md) = std::mem::take(&mut self.coll_late);
+        self.collide(mm, md);
 
         for (i, p) in (p0..p0 + 8).enumerate() {
             let x = t.x_at(p);
@@ -873,17 +915,23 @@ impl Vic2 {
             let (gfx_color, gfx_fg) = self.graphics_pixel();
             let (sprite, colliding) = self.sprite_pixel(x, i);
 
-            if colliding.count_ones() >= 2 {
-                if self.coll_mm == 0 {
-                    self.irq_flags |= irq::SPRITE_SPRITE;
-                }
-                self.coll_mm |= colliding;
-            }
-            if gfx_fg && colliding != 0 {
-                if self.coll_md == 0 {
-                    self.irq_flags |= irq::SPRITE_DATA;
-                }
-                self.coll_md |= colliding;
+            // Collisions reach the registers with the pixel output, four
+            // pixels after the cycle's own: those of the last four pixels
+            // count from the next cycle (VICE test programs
+            // VICII/spritecollisions/*-collision-cycle).
+            let (mm, md) = (
+                if colliding.count_ones() >= 2 {
+                    colliding
+                } else {
+                    0
+                },
+                if gfx_fg { colliding } else { 0 },
+            );
+            if i < 4 {
+                self.collide(mm, md);
+            } else {
+                self.coll_late.0 |= mm;
+                self.coll_late.1 |= md;
             }
 
             let mut color = gfx_color;
@@ -934,8 +982,26 @@ impl Vic2 {
         }
         self.lag.copy_from_slice(&out[4..]);
         self.written = 0;
+        self.fetch_done = None;
         self.cycle_regs = [self.sprite_prio, self.sprite_xe, self.sprite_mc];
         self.cycle_sprite_x = self.sprites.map(|s| s.x);
+    }
+
+    /// Sprite-sprite (`mm`) and sprite-data (`md`) collisions: the first
+    /// one since the register was read raises the interrupt flag.
+    fn collide(&mut self, mm: u8, md: u8) {
+        if mm != 0 {
+            if self.coll_mm == 0 {
+                self.irq_flags |= irq::SPRITE_SPRITE;
+            }
+            self.coll_mm |= mm;
+        }
+        if md != 0 {
+            if self.coll_md == 0 {
+                self.irq_flags |= irq::SPRITE_DATA;
+            }
+            self.coll_md |= md;
+        }
     }
 
     /// Colour number of a colour source.
@@ -1066,7 +1132,8 @@ impl Vic2 {
             let mc = mc_reg & (1 << n) != 0;
             let xe = xe_reg & (1 << n) != 0;
             let sx = if i < 4 { self.cycle_sprite_x[n] } else { s.x };
-            if s.bits_left == 0 && sx == x {
+            let not_yet = i < 3 && self.fetch_done == Some(n);
+            if s.bits_left == 0 && sx == x && !not_yet {
                 if let Some(r) = self.rec.0.as_deref_mut() {
                     r.sprite_shown(n, self.raster, x, self.sprite_xe & (1 << n) != 0);
                 }
@@ -1144,8 +1211,8 @@ impl Vic2 {
                 }
             }
             0x10 => self.sprite_x_msb,
-            0x11 => (self.ctrl1 & 0x7f) | ((self.raster >> 1) as u8 & 0x80),
-            0x12 => self.raster as u8,
+            0x11 => (self.ctrl1 & 0x7f) | ((self.raster_reg() >> 1) as u8 & 0x80),
+            0x12 => self.raster_reg() as u8,
             0x13 => self.lp_x,
             0x14 => self.lp_y,
             0x15 => self.sprite_enable,
@@ -1270,8 +1337,31 @@ impl Vic2 {
 
     /// Latch the beam position into the light-pen registers (LP input
     /// falling edge now, at the first pixel of the current cycle).
+    ///
+    /// The edge is sampled in the next cycle: the registers get that
+    /// cycle's raster line and first X coordinate (two pixels less on the
+    /// HMOS-II types). An edge in the last line of the frame is ignored
+    /// (VICE test programs VICII/lp-trigger/test2, test2new and
+    /// VICII/split-tests/lightpen with its dumps of real chips).
     pub fn light_pen(&mut self) {
-        let x = self.timing().cycle_x(self.cycle);
+        if self.raster + 1 != self.timing().lines {
+            self.lp_pending = true;
+        }
+    }
+
+    /// The light pen edge of the previous cycle reaches the registers.
+    fn light_pen_sampled(&mut self) {
+        let t = self.timing();
+        if self.raster == 0 && self.cycle < 3 {
+            return;
+        }
+        let p = (u16::from(self.cycle) - 1) * 8;
+        let x = match (self.model.grey_dot(), p) {
+            (false, _) => t.x_at(p),
+            (true, 2..) => t.x_at(p - 2),
+            // Two pixels before cycle 1: the end of the previous line.
+            (true, _) => t.x_at(8 * u16::from(t.cycles) - 2),
+        };
         self.latch_light_pen(x);
     }
 
@@ -1337,8 +1427,9 @@ impl Vic2 {
 const TAG: [u8; 4] = *b"6569";
 /// 2: VIC-II type byte first (version 1 states are 6569). 3: the light
 /// pen's once-a-frame flag and the LP line level. 4: types 8565/8562 and
-/// the four pixels waiting for their colour.
-const VERSION: u16 = 4;
+/// the four pixels waiting for their colour. 5: collisions waiting for
+/// the registers. 6: a light pen edge waiting for the next cycle.
+const VERSION: u16 = 6;
 
 fn save_sprite(w: &mut StateWriter, s: &Sprite) {
     w.u16(s.x);
@@ -1466,6 +1557,9 @@ impl Savestate for Vic2 {
             for s in &self.sprites {
                 w.bool(s.was_mc);
             }
+            w.u8(self.coll_late.0);
+            w.u8(self.coll_late.1);
+            w.bool(self.lp_pending);
         });
     }
 
@@ -1576,6 +1670,12 @@ impl Savestate for Vic2 {
             }
             for s in v.sprites.iter_mut() {
                 s.was_mc = c.bool()?;
+            }
+            if version >= 5 {
+                v.coll_late = (c.u8()?, c.u8()?);
+            }
+            if version >= 6 {
+                v.lp_pending = c.bool()?;
             }
         }
         v.cycle_regs = [v.sprite_prio, v.sprite_xe, v.sprite_mc];

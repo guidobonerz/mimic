@@ -13,9 +13,9 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 7.7 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 780 / 1240 (399 failed, 61 errors, 303 skipped) | 62.9 % | 26.5 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 794 / 1240 (385 failed, 61 errors, 303 skipped) | 64.0 % | 26.5 min |
 
-Trend: VICE test programs 680 → 780 (+100 since the run of 2026-10-28,
+Trend: VICE test programs 680 → 794 (+114 since the run of 2026-10-28,
 none newly failing); Lorenz with real ROMs 264 → 264 (no change). The
 Harte, Dormann and Lorenz stub-ROM rows are from 2026-10-28 and were not
 run again (the CPU core did not change). The VICE test programs were at 676 / 1240
@@ -25,11 +25,11 @@ on 2026-10-26.
 
 | Area | Pass | Fail | Error | Skip | Pass rate (pass / pass+fail+error) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| general (incl. Lorenz 2.15: 314/314) | 318 | 6 | 0 | 1 | 98.1 % |
+| general (incl. Lorenz 2.15: 314/314) | 319 | 5 | 0 | 1 | 98.5 % |
 | CPU | 91 | 24 | 0 | 5 | 79.1 % |
 | CIA | 112 | 76 | 0 | 3 | 59.6 % |
-| interrupts | 19 | 20 | 0 | 4 | 48.7 % |
-| VICII | 197 | 76 | 0 | 88 | 72.2 % |
+| interrupts | 20 | 19 | 0 | 4 | 51.3 % |
+| VICII | 209 | 64 | 0 | 88 | 76.6 % |
 | SID | 14 | 155 | 0 | 22 | 8.3 % |
 | C64 | 12 | 10 | 48 | 25 | 17.1 % |
 | drive | 6 | 32 | 13 | 4 | 11.8 % |
@@ -40,7 +40,7 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **780** | **399** | **61** | **303** | **62.9 %** |
+| **total** | **794** | **385** | **61** | **303** | **64.0 %** |
 
 Largest open blocks: `SID/wb_testsuite` (110 failing, SID waveform
 sampling), `CIA/shiftregister` (68, mostly `cia-sdr-icr`),
@@ -55,7 +55,7 @@ Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 
 ## Changes of 2026-10-28/29
 
-VIC-II (`chips-cbm/src/vic2.rs`), 112 → 197:
+VIC-II (`chips-cbm/src/vic2.rs`), 112 → 209:
 
 - types 8565/8562 (`--option vicii=6569|8565|6567|8562`, the runner picks
   8565/8562 unless an entry asks for the old VIC-II) with the grey dot;
@@ -81,7 +81,18 @@ VIC-II (`chips-cbm/src/vic2.rs`), 112 → 197:
 - in the three cycles after BA falls a c-access takes its colour from the
   low nibble of the CPU's data bus; a CPU stopped by RDY keeps repeating its
   read (`Cpu6502::stalled_read`), so it is the data of that read
-  (`colorfetchbug`).
+  (`colorfetchbug`);
+- collisions of a cycle's last four pixels reach $D01E/$D01F one cycle
+  later (`spritecollisions/*-collision-cycle`);
+- a sprite row fetched in this cycle is available from pixel 3
+  (`spritex/testsuite`, Krestage 3);
+- light pen: CIA 1 PB4 driven low pulls LP; the edge is sampled in the
+  next cycle with that cycle's X (8565/8562: minus 2) and raster line;
+  edges in the last line and up to cycle 2 of line 0 are lost, and a line
+  held low into the frame latches in cycle 2 of line 0; RASTER reads the
+  last line in cycle 1 of line 0 (`lp-trigger`, `lplatency`,
+  `split-tests/lightpen` with its dumps of real chips; the `fldscroll`
+  programs sync on the light pen).
 
 CIA (`chips-cbm/src/cia.rs`), 98 → 112: TOD digits as binary counters
 with carries by comparison, AM/PM flip on writing 12, clock stopped at
@@ -90,8 +101,8 @@ restarting a stopped clock, 0–6 divider, alarm on the comparator's rising
 edge.
 
 Still failing and looked at: `VICII/videomode` (mode-change pixels per
-combination, references marked unsafe), `VICII/fldscroll` (the lower part;
-the readme of `dmadelay` describes VMLI as a 40-bit shift register), the
-8565 variants of the multicolour splits in `VICII/spritesplit`, `CIA/tod/hzsync6` (one line-clock tick
+combination, references marked unsafe), `fldscroll-20`, the 8565 variants
+of the multicolour splits in `VICII/spritesplit`, the NTSC variants of
+`spritex`/`spriteenable`, `spritegap`, `CIA/tod/hzsync6` (one line-clock tick
 longer than the reference), the old-6526 ICR timing of `ciavarious` 3/3a/4/8
 and `cia-timer-oldcias`, `CIA/shiftregister/cia-sdr-icr`.
