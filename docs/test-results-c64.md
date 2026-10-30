@@ -1,7 +1,7 @@
 # C64 test results
 
 Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
-2026-10-29 after the VIC-II and CIA work (release build, user ROMs in
+2026-10-30 after the VIC-II and CIA work (release build, user ROMs in
 `roms/`, test data from `tools/fetch-testdata.sh` and
 `tools/fetch_vice_testprogs.py`).
 
@@ -13,10 +13,10 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 7.7 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 800 / 1240 (379 failed, 61 errors, 303 skipped) | 64.5 % | 26.5 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 840 / 1240 (339 failed, 61 errors, 303 skipped) | 67.7 % | 26.5 min |
 
-Trend: VICE test programs 680 → 800 (+120 since the run of 2026-10-28,
-none newly failing); Lorenz with real ROMs 264 → 264 (no change). The
+Trend: VICE test programs 804 → 840 (+36 since the run of 2026-10-29, all
+in `CIA/shiftregister`, none newly failing; 680 → 840 since 2026-10-28); Lorenz with real ROMs 264 → 264 (no change). The
 Harte, Dormann and Lorenz stub-ROM rows are from 2026-10-28 and were not
 run again (the CPU core did not change). The VICE test programs were at 676 / 1240
 on 2026-10-26.
@@ -27,7 +27,7 @@ on 2026-10-26.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | general (incl. Lorenz 2.15: 314/314) | 319 | 5 | 0 | 1 | 98.5 % |
 | CPU | 91 | 24 | 0 | 5 | 79.1 % |
-| CIA | 112 | 76 | 0 | 3 | 59.6 % |
+| CIA | 152 | 36 | 0 | 3 | 80.9 % |
 | interrupts | 20 | 19 | 0 | 4 | 51.3 % |
 | VICII | 215 | 58 | 0 | 88 | 78.8 % |
 | SID | 14 | 155 | 0 | 22 | 8.3 % |
@@ -40,10 +40,10 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **800** | **379** | **61** | **303** | **64.5 %** |
+| **total** | **840** | **339** | **61** | **303** | **67.7 %** |
 
 Largest open blocks: `SID/wb_testsuite` (110 failing, SID waveform
-sampling), `CIA/shiftregister` (68, mostly `cia-sdr-icr`),
+sampling), `CIA/shiftregister` (28, `cia-sdr-icr`),
 `VICII/videomode` (28), `drive/viavarious` (19), `interrupts/irqdma`
 (17); the 48 errors under
 `C64` are programs that do not finish. Skipped: tests that need hardware
@@ -100,13 +100,36 @@ VIC-II (`chips-cbm/src/vic2.rs`), 112 → 215:
   (DMA delay) reads $38FF (6569/6567R8) or $3807 (8565/8562)
   (`vsp-tester`, measured on real machines). This costs
   `colorfetchbug/main` one cell in line $30, whose reference picture x64sc
-  made without that effect.
+  made without that effect;
+- without DMA a sprite's data latches take the bus in its slot ($FF, the
+  idle byte, $FF), shown by a sprite at X >= $164 in the line its DMA
+  starts (`sb_sprite_fetch` readme; `sbsprf24-164` 11 -> 7 pixels).
 
-CIA (`chips-cbm/src/cia.rs`), 98 → 112: TOD digits as binary counters
+Mode changes in the middle of a line (`videomode`, `modesplit`,
+`vicii_timing`, 38 of the 58 failing VIC-II entries) show transition
+pixels that depend on the multicolour pair phase; their references were
+crafted by hand ("unsafe reference"), so no model was fitted to them.
+
+CIA (`chips-cbm/src/cia.rs`), 98 → 152: TOD digits as binary counters
 with carries by comparison, AM/PM flip on writing 12, clock stopped at
 power-up and reset, hours relatch only after tenths, divider reset only on
 restarting a stopped clock, 0–6 divider, alarm on the comparator's rising
-edge.
+edge. Serial shift register: the last half-bit of a byte takes no timer
+underflow of its own; four cycles after the 15th underflow CNT rises, the
+interrupt flag is set and the next byte can start at the next underflow
+(`cia-sdr-init`, `cia-sdr-delay`, `cia-sdr-load` match the real-hardware
+values of their readme exactly). For phase 2 of `cia-sdr-icr` (the shifter
+switched to input and back to output with state left over) the CIA keeps an
+internal output signal: a timer A underflow with CNT low sets it one and
+three cycles later and clears it after two, an underflow with CNT high or
+an idle one clears it after four, the last half-bit sets it after three; on
+switching SP to output a set signal sets SP. A further underflow while the
+finished byte waits restarts the four-cycle wait once (with latch 0 the
+byte never completes). Phase 1 matches the reference for every latch
+checked, phase 2 for latch 19, 37, 39; single values still differ at latch
+1, 2, 40, 64 and 100 — stops at the end of the first half-bit, where the
+reference generator (`generate.c`) assumes SP = 0 — so 28 `cia-sdr-icr`
+entries (the `*_7f` ones stop at those values) still fail.
 
 Still failing and looked at: `VICII/videomode` (mode-change pixels per
 combination, references marked unsafe), `fldscroll-20`, the 8565 variants

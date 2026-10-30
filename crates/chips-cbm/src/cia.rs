@@ -452,6 +452,41 @@ struct Serial {
     pending: bool,
     cnt_out: bool,
     sp_out: bool,
+    /// Cycles until the shift register's interrupt flag is set.
+    flag_delay: u8,
+    /// The internal SDR signal and its pending changes (bit n: in n + 1
+    /// cycles of running timer A), see [`Serial::signal`].
+    signal: bool,
+    sets: u8,
+    clears: u8,
+    /// The end of the byte was started again once.
+    end_again: bool,
+}
+
+impl Serial {
+    /// The internal SDR signal of a byte in progress, measured by stopping
+    /// timer A at every cycle and restarting it (VICE test program
+    /// CIA/shiftregister/cia-sdr-icr, phase 2 against the reference of a
+    /// 6526 and the model in its `generate.c`): an underflow starting a
+    /// CNT-low half-bit sets it one cycle later, clears it after two and
+    /// sets it again after three (the readme's "bounce"); one starting a
+    /// CNT-high half or coming after the byte clears it after four; the
+    /// underflow of the last half-bit sets it after three only.
+    fn signal(&self) -> bool {
+        self.signal
+    }
+
+    /// One cycle of running timer A for the signal's pending changes.
+    fn signal_tick(&mut self) {
+        if self.clears & 1 != 0 {
+            self.signal = false;
+        }
+        if self.sets & 1 != 0 {
+            self.signal = true;
+        }
+        self.clears >>= 1;
+        self.sets >>= 1;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -587,6 +622,15 @@ impl Cia {
 
     /// One φ2 cycle, before the CPU's bus access in that cycle.
     pub fn tick(&mut self) {
+        if self.ta.cr & CR_START != 0 {
+            self.serial.signal_tick();
+        }
+        if self.serial.flag_delay > 0 {
+            self.serial.flag_delay -= 1;
+            if self.serial.flag_delay == 0 {
+                self.serial_byte_done();
+            }
+        }
         if std::mem::take(&mut self.irq_next) {
             self.irq = true;
         }
@@ -634,8 +678,22 @@ impl Cia {
             return;
         }
         let s = &mut self.serial;
+        if s.flag_delay > 0 {
+            // The byte is ending. An underflow in the third of the four
+            // cycles starts them once more (timer A latch 2: the byte ends
+            // three cycles later); with latch 0 the byte never ends
+            // (cia-sdr-icr with latches 0-3; latch 1 ends normally,
+            // cia-sp-test-continues).
+            if self.ta.latch == 0 || (s.flag_delay == 1 && !s.end_again) {
+                s.flag_delay = 4;
+                s.end_again = true;
+            }
+            return;
+        }
         if s.count == 0 {
             if !s.pending {
+                // Idle: the signal of the last byte runs out.
+                s.clears |= 1 << 3;
                 return;
             }
             s.pending = false;
@@ -647,13 +705,35 @@ impl Cia {
         if s.count % 2 == 1 {
             s.sp_out = s.shift & 0x80 != 0;
             s.cnt_out = false;
+            if s.count == 1 {
+                s.sets |= 1 << 2;
+            } else {
+                s.sets |= 1 << 0 | 1 << 2;
+                s.clears |= 1 << 1;
+            }
         } else {
             s.cnt_out = true;
             s.shift <<= 1;
+            s.clears |= 1 << 3;
         }
-        if s.count == 0 {
-            self.raise(icr::SP);
+        // The last half-bit takes no underflow of its own: four cycles
+        // after the 15th, CNT rises, the byte is done and the interrupt
+        // flag is set; the shift register can take the next byte at the
+        // next underflow (VICE test programs CIA/shiftregister:
+        // cia-sdr-init, cia-sdr-delay and cia-sdr-load on real hardware).
+        if s.count == 1 {
+            s.flag_delay = 4;
+            s.end_again = false;
         }
+    }
+
+    /// The end of a byte, four cycles after its 15th half-bit.
+    fn serial_byte_done(&mut self) {
+        let s = &mut self.serial;
+        s.count = 0;
+        s.cnt_out = true;
+        s.shift <<= 1;
+        self.raise(icr::SP);
     }
 
     fn serial_shift_in(&mut self) {
@@ -754,7 +834,20 @@ impl Cia {
             }
             0x0e => {
                 if (v ^ self.ta.cr) & 0x40 != 0 {
+                    // Back to output with the internal SDR signal of an
+                    // interrupted byte still active: the flag is set
+                    // (VICE test programs CIA/shiftregister/cia-sdr-icr,
+                    // phase 2).
+                    // Switched to input, the half-bit state stays frozen.
+                    if v & 0x40 != 0 {
+                        if self.serial.signal() {
+                            self.raise(icr::SP);
+                        }
+                        let s = &mut self.serial;
+                        (s.signal, s.sets, s.clears) = (false, 0, 0);
+                    }
                     self.serial.count = 0;
+                    self.serial.flag_delay = 0;
                     self.serial.cnt_out = true;
                 }
                 self.ta.write_cr(v);
@@ -785,8 +878,9 @@ impl Cia {
 }
 
 const TAG: [u8; 4] = *b"6526";
-/// 2: the TOD alarm comparator's output.
-const VERSION: u16 = 2;
+/// 2: the TOD alarm comparator's output. 3: the end of a serial byte
+/// still to come.
+const VERSION: u16 = 3;
 
 impl Savestate for Cia {
     fn save(&self, w: &mut StateWriter) {
@@ -827,6 +921,11 @@ impl Savestate for Cia {
             w.bool(self.cnt_edge);
             w.bool(self.flag_in);
             w.bool(self.tod.equal);
+            w.u8(self.serial.flag_delay);
+            w.bool(self.serial.signal);
+            w.u8(self.serial.sets);
+            w.u8(self.serial.clears);
+            w.bool(self.serial.end_again);
         });
     }
 
@@ -859,6 +958,11 @@ impl Savestate for Cia {
             pending: c.bool()?,
             cnt_out: c.bool()?,
             sp_out: c.bool()?,
+            flag_delay: 0,
+            signal: false,
+            sets: 0,
+            clears: 0,
+            end_again: false,
         };
         if n.serial.count > 16 {
             return Err(StateError::Invalid("CIA serial count"));
@@ -876,6 +980,16 @@ impl Savestate for Cia {
         } else {
             n.tod.time == n.tod.alarm
         };
+        if version >= 3 {
+            n.serial.flag_delay = c.u8()?;
+            if n.serial.flag_delay > 4 {
+                return Err(StateError::Invalid("CIA serial flag delay"));
+            }
+            n.serial.signal = c.bool()?;
+            n.serial.sets = c.u8()?;
+            n.serial.clears = c.u8()?;
+            n.serial.end_again = c.bool()?;
+        }
         *self = n;
         Ok(())
     }

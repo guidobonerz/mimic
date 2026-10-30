@@ -715,6 +715,19 @@ impl Vic2 {
             } else if c == slot % t.cycles + 1 && self.sprites[n].dma {
                 phi1_value = self.sprite_fetch(mem, n);
                 self.phi2_sprite = Some(n);
+            } else if c == slot % t.cycles + 1 {
+                // Without DMA the sprite's data latches still take what is
+                // on the bus in its slot: $FF in both CPU halves and the
+                // idle access in between. A sprite at X >= $164 is shown in
+                // the line DMA starts and displays that (VICE test programs
+                // VICII/sb_sprite_fetch, readme).
+                let addr = if self.ctrl1 & 0x40 != 0 {
+                    0x39ff
+                } else {
+                    0x3fff
+                };
+                let g = mem.read(addr);
+                self.sprites[n].data = 0xff_00ff | u32::from(g) << 8;
             }
         }
         if (11..=15).contains(&c) {
