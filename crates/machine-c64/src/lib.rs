@@ -560,6 +560,9 @@ impl C64 {
         let cpu_hz = vic.timing().cpu_hz();
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Mos6510,
+            // VICE testprogs `CPU/ane/readme.txt`: the constant loaders and
+            // games on these machines expect.
+            ane_magic: 0xef,
             ..CpuConfig::default()
         });
         cpu.reset();

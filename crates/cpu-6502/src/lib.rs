@@ -87,9 +87,9 @@ impl Default for Config {
 }
 
 const STATE_TAG: [u8; 4] = *b"6502";
-/// Version 2 added `polled`, version 3 `nmi_rearm` (older versions load
-/// with them clear).
-const STATE_VERSION: u16 = 3;
+/// Version 2 added `polled`, version 3 `nmi_rearm`, version 4 `rdy_stalled`
+/// (older versions load with them clear).
+const STATE_VERSION: u16 = 4;
 
 /// A 6502-family CPU.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -307,6 +307,7 @@ impl Cpu for Cpu6502 {
             let poll = saved.t != 0 && saved.op != 0x00 && !saved.no_poll;
             self.core = saved;
             self.core.polled = poll;
+            self.core.rdy_stalled = saved.rdy_sensitive();
             if poll {
                 let c = &mut self.core;
                 c.poll |= c.nmi_pending || (c.irq_line && c.p & I == 0);
@@ -387,6 +388,7 @@ impl Savestate for Cpu6502 {
                 self.rdy,
                 c.polled,
                 c.nmi_rearm,
+                c.rdy_stalled,
             ] {
                 w.bool(v);
             }
@@ -422,6 +424,7 @@ impl Savestate for Cpu6502 {
         let rdy = s.bool()?;
         c.polled = version >= 2 && s.bool()?;
         c.nmi_rearm = version >= 3 && s.bool()?;
+        c.rdy_stalled = version >= 4 && s.bool()?;
         if c.t > 8 && !c.jammed {
             return Err(StateError::Invalid("6502 cycle counter"));
         }
@@ -721,6 +724,78 @@ mod tests {
         fn addr_bits(&self) -> u8 {
             16
         }
+    }
+
+    /// SHX $2000,Y: the cycles up to the fix-up, stalled there or not, then
+    /// the fix-up and the write.
+    fn shx_with_y(y: u8, stall_fixup: bool) -> FlatBus {
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0x9e, 0xf0, 0x20]);
+        cpu.set_reg("X", 0xff);
+        cpu.set_reg("Y", u32::from(y));
+        for _ in 0..3 {
+            cpu.tick(&mut bus);
+        }
+        if stall_fixup {
+            cpu.set_rdy(false);
+            cpu.tick(&mut bus);
+            assert!(cpu.halted());
+            cpu.set_rdy(true);
+        }
+        cpu.tick(&mut bus);
+        cpu.tick(&mut bus);
+        bus
+    }
+
+    #[test]
+    fn unstable_store_drops_the_and_when_rdy_held_the_fixup() {
+        assert_eq!(shx_with_y(0, false).peek(0x20f0, Size::Byte), 0x21);
+        assert_eq!(shx_with_y(0, true).peek(0x20f0, Size::Byte), 0xff);
+    }
+
+    #[test]
+    fn dropped_and_leaves_the_crossed_address_alone() {
+        // $20F0 + $20 crosses: the high byte is $FF & $21 stalled or not.
+        assert_eq!(shx_with_y(0x20, false).peek(0x2110, Size::Byte), 0x21);
+        assert_eq!(shx_with_y(0x20, true).peek(0x2110, Size::Byte), 0xff);
+    }
+
+    #[test]
+    fn ane_constant_loses_bit_0_in_the_rdy_cycle() {
+        let run = |stall: bool| {
+            let (_, mut bus) = cpu_at(0x0400, &[0x8b, 0xff]); // ANE #$FF
+            let mut cpu = Cpu6502::new(Config {
+                ane_magic: 0xef,
+                ..Config::default()
+            });
+            cpu.set_reg("PC", 0x0400);
+            cpu.set_reg("X", 0xff);
+            cpu.tick(&mut bus);
+            if stall {
+                cpu.set_rdy(false);
+                cpu.tick(&mut bus);
+                cpu.set_rdy(true);
+            }
+            cpu.tick(&mut bus);
+            cpu.regs().0.iter().find(|r| r.name == "A").unwrap().value
+        };
+        assert_eq!(run(false), 0xef);
+        assert_eq!(run(true), 0xee);
+    }
+
+    #[test]
+    fn rdy_stall_survives_a_savestate() {
+        let (mut cpu, mut bus) = cpu_at(0x0400, &[0x9e, 0x00, 0x20]);
+        for _ in 0..3 {
+            cpu.tick(&mut bus);
+        }
+        cpu.set_rdy(false);
+        cpu.tick(&mut bus);
+        let mut w = StateWriter::new();
+        cpu.save(&mut w);
+        let bytes = w.into_bytes();
+        let mut other = Cpu6502::default();
+        other.load(&mut StateReader::new(&bytes)).unwrap();
+        assert_eq!(other.core, cpu.core);
     }
 
     #[test]

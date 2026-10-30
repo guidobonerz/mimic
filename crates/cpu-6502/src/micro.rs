@@ -75,6 +75,10 @@ pub(crate) struct Core {
     /// An NMI edge was dropped as BRK/IRQ chose its vector; the line,
     /// if still held, registers again in the next cycle (see `brk`).
     pub nmi_rearm: bool,
+    /// RDY held the cycle before the one that combines the unstable result:
+    /// the operand read of ANE, the fix-up of SHA/SHX/SHY/TAS. Set on the
+    /// RDY path of `tick`, taken by the instruction.
+    pub rdy_stalled: bool,
     pub reset_pending: bool,
     /// Interrupt decision for the next opcode fetch.
     pub poll: bool,
@@ -137,6 +141,7 @@ impl Core {
             nmi_line: false,
             nmi_pending: false,
             nmi_rearm: false,
+            rdy_stalled: false,
             reset_pending: false,
             poll: false,
             no_poll: false,
@@ -156,6 +161,17 @@ impl Core {
     #[inline]
     pub(crate) fn entry(&self) -> (Op, Mode) {
         self.table[usize::from(self.op)]
+    }
+
+    /// Whether a stall of the cycle about to run changes the instruction's
+    /// result (VICE testprogs `CPU/ane`, `CPU/sha`, `CPU/shs`, `CPU/shxy`).
+    pub(crate) fn rdy_sensitive(&self) -> bool {
+        match self.entry() {
+            (Op::Ane, _) => self.t == 1,
+            (Op::Sha | Op::Shx | Op::Shy | Op::Tas, Mode::IndY) => self.t == 4,
+            (Op::Sha | Op::Shx | Op::Shy | Op::Tas, _) => self.t == 3,
+            _ => false,
+        }
     }
 
     /// Execute one cycle.
@@ -1013,7 +1029,14 @@ impl Core {
             }
             Op::Arr => self.arr(v),
             Op::Ane => {
-                self.a = (self.a | self.ane_magic) & self.x & v;
+                // Bits 0 and 4 of the constant may drop in the RDY cycle
+                // (VICE testprogs `CPU/ane/readme.txt`).
+                let magic = if std::mem::take(&mut self.rdy_stalled) {
+                    self.ane_magic & 0xee
+                } else {
+                    self.ane_magic
+                };
+                self.a = (self.a | magic) & self.x & v;
                 self.set_nz(self.a);
             }
             Op::Lxa => {
@@ -1058,15 +1081,22 @@ impl Core {
     }
 
     /// SHA/SHX/SHY/TAS store `v & (base high byte + 1)`; on a page crossing
-    /// that value also replaces the high byte of the address.
+    /// that value also replaces the high byte of the address. When RDY held
+    /// the cycle before the write the AND drops off the stored value, not
+    /// the address (VICE testprogs `CPU/sha/readme.txt`, `CPU/shxy/readme.txt`).
     fn store_unstable(&mut self, bus: &mut dyn Bus, v: u8) {
-        let v = v & ((self.base >> 8) as u8).wrapping_add(1);
+        let masked = v & ((self.base >> 8) as u8).wrapping_add(1);
         let addr = if self.crossed {
-            (u16::from(v) << 8) | (self.ea & 0x00ff)
+            (u16::from(masked) << 8) | (self.ea & 0x00ff)
         } else {
             self.ea
         };
-        write(bus, addr, v);
+        let stored = if std::mem::take(&mut self.rdy_stalled) {
+            v
+        } else {
+            masked
+        };
+        write(bus, addr, stored);
     }
 
     fn rmw_op(&mut self, op: Op, v: u8) -> u8 {

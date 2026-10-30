@@ -412,6 +412,9 @@ impl C128 {
         };
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Mos8502,
+            // VICE testprogs `CPU/ane/readme.txt`: the constant loaders and
+            // games on these machines expect.
+            ane_magic: 0xef,
             ..CpuConfig::default()
         });
         cpu.reset();

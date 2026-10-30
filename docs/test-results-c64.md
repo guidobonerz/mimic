@@ -13,15 +13,17 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 850 / 1240 (329 failed, 61 errors, 303 skipped) | 68.5 % | 36.5 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 874 / 1240 (305 failed, 61 errors, 303 skipped) | 70.5 % | 36.3 min |
 
-Trend: VICE test programs 840 → 850 (+10 since the previous run of
+Trend: VICE test programs 850 → 874 (+24, none newly failing: all of
+`CPU/sha`, `CPU/shs`, `CPU/shxy`, `CPU/ane`; every other area unchanged), Lorenz 264 → 264 and Acid800
+54 → 54 on 2026-10-30 with the CPU change. Before that: 840 → 850 (+10 since the previous run of
 2026-10-30, none newly failing: `CIA/ciavarious` cia3, cia3a, cia4, cia8,
 `cia-timer-oldcias`, `dd0dtest` on both CIA models, `CIA/tod/hzsync6`,
 `interrupts/cia-int` irq-new and nmi-new; 680 → 850 since 2026-10-28); Lorenz
 with real ROMs 264 → 264 (no change). The
-Harte, Dormann and Lorenz stub-ROM rows are from 2026-10-28 and were not
-run again (the CPU core did not change). The VICE test programs were at 676 / 1240
+Harte (every 10th test, all green after the CPU change) and Lorenz stub-ROM rows
+are from 2026-10-28. The VICE test programs were at 676 / 1240
 on 2026-10-26.
 
 ## VICE test programs by area
@@ -29,7 +31,7 @@ on 2026-10-26.
 | Area | Pass | Fail | Error | Skip | Pass rate (pass / pass+fail+error) |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | general (incl. Lorenz 2.15: 314/314) | 319 | 5 | 0 | 1 | 98.5 % |
-| CPU | 91 | 24 | 0 | 5 | 79.1 % |
+| CPU | 115 | 0 | 0 | 5 | 100 % |
 | CIA | 160 | 28 | 0 | 3 | 85.1 % |
 | interrupts | 22 | 17 | 0 | 4 | 56.4 % |
 | VICII | 215 | 58 | 0 | 88 | 78.8 % |
@@ -43,7 +45,7 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **850** | **329** | **61** | **303** | **68.5 %** |
+| **total** | **874** | **305** | **61** | **303** | **70.5 %** |
 
 Largest open blocks: `SID/wb_testsuite` (110 failing, SID waveform
 sampling), `CIA/shiftregister` (28, `cia-sdr-icr`),
@@ -55,6 +57,15 @@ interactive and analyser programs).
 
 Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 `target/tmp/lorenz.txt`.
+
+## Changes of 2026-10-30, CPU
+
+`cpu-6502`, 91 → 115 of 115: when RDY holds the cycle before the write,
+SHA/SHX/SHY/TAS store the value without `& (H+1)`, while a crossed address
+keeps it (`CPU/sha`, `CPU/shs`, `CPU/shxy`). ANE: constant $EF on the C64 and
+C128 (the plain NMOS default stays $EE for Harte's data), bit 0 clear when RDY
+held the operand read (`CPU/ane`). Savestate version 4. The check runs only
+on the RDY path of `tick`, so the normal cycle costs nothing extra.
 
 ## Changes of 2026-10-28/29
 
