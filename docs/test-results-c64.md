@@ -11,12 +11,15 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | --- | --- | --- | --- | --- |
 | Tom Harte SingleStepTests `6502` (all, `EMU_HARTE_FULL=1`) | NMOS 6502 core of the 6510: every opcode incl. undocumented ones, registers, memory, every bus cycle | 2 560 000 / 2 560 000 | 100 % | 16 s |
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
-| Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 7.7 min |
+| Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 840 / 1240 (339 failed, 61 errors, 303 skipped) | 67.7 % | 26.5 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 850 / 1240 (329 failed, 61 errors, 303 skipped) | 68.5 % | 36.5 min |
 
-Trend: VICE test programs 804 → 840 (+36 since the run of 2026-10-29, all
-in `CIA/shiftregister`, none newly failing; 680 → 840 since 2026-10-28); Lorenz with real ROMs 264 → 264 (no change). The
+Trend: VICE test programs 840 → 850 (+10 since the previous run of
+2026-10-30, none newly failing: `CIA/ciavarious` cia3, cia3a, cia4, cia8,
+`cia-timer-oldcias`, `dd0dtest` on both CIA models, `CIA/tod/hzsync6`,
+`interrupts/cia-int` irq-new and nmi-new; 680 → 850 since 2026-10-28); Lorenz
+with real ROMs 264 → 264 (no change). The
 Harte, Dormann and Lorenz stub-ROM rows are from 2026-10-28 and were not
 run again (the CPU core did not change). The VICE test programs were at 676 / 1240
 on 2026-10-26.
@@ -27,8 +30,8 @@ on 2026-10-26.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | general (incl. Lorenz 2.15: 314/314) | 319 | 5 | 0 | 1 | 98.5 % |
 | CPU | 91 | 24 | 0 | 5 | 79.1 % |
-| CIA | 152 | 36 | 0 | 3 | 80.9 % |
-| interrupts | 20 | 19 | 0 | 4 | 51.3 % |
+| CIA | 160 | 28 | 0 | 3 | 85.1 % |
+| interrupts | 22 | 17 | 0 | 4 | 56.4 % |
 | VICII | 215 | 58 | 0 | 88 | 78.8 % |
 | SID | 14 | 155 | 0 | 22 | 8.3 % |
 | C64 | 12 | 10 | 48 | 25 | 17.1 % |
@@ -40,7 +43,7 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **840** | **339** | **61** | **303** | **67.7 %** |
+| **total** | **850** | **329** | **61** | **303** | **68.5 %** |
 
 Largest open blocks: `SID/wb_testsuite` (110 failing, SID waveform
 sampling), `CIA/shiftregister` (28, `cia-sdr-icr`),
@@ -110,7 +113,7 @@ Mode changes in the middle of a line (`videomode`, `modesplit`,
 pixels that depend on the multicolour pair phase; their references were
 crafted by hand ("unsafe reference"), so no model was fitted to them.
 
-CIA (`chips-cbm/src/cia.rs`), 98 → 152: TOD digits as binary counters
+CIA (`chips-cbm/src/cia.rs`), 98 → 160: TOD digits as binary counters
 with carries by comparison, AM/PM flip on writing 12, clock stopped at
 power-up and reset, hours relatch only after tenths, divider reset only on
 restarting a stopped clock, 0–6 divider, alarm on the comparator's rising
@@ -134,6 +137,20 @@ entries (the `*_7f` ones stop at those values) still fail.
 Still failing and looked at: `VICII/videomode` (mode-change pixels per
 combination, references marked unsafe), `fldscroll-20`, the 8565 variants
 of the multicolour splits in `VICII/spritesplit`,
-`spritex/demusinterruptus`, `spritegap`, `CIA/tod/hzsync6` (one line-clock tick
-longer than the reference), the old-6526 ICR timing of `ciavarious` 3/3a/4/8
-and `cia-timer-oldcias`, `CIA/shiftregister/cia-sdr-icr`.
+`spritex/demusinterruptus`, `spritegap`, `CIA/shiftregister/cia-sdr-icr`.
+
+ICR reads, from `cia-timer` (dumps of real chips), `ciavarious` and
+`dd0dtest`. Old 6526: a read in the cycle before a Timer B underflow loses
+the flag, the interrupt still comes and reads as $80; a read right after one
+that returned an enabled flag shows bit 7 alone; a source masked in the cycle
+of its flag by the second of two writes in a row (`INC $DD0D,X`, test 11)
+raises no interrupt, while a single write there still does
+(`interrupts/cia-int`, reference of a real 6526; only these two tests separate
+the cases, so the two-write condition is inferred from them, not a measured
+signal). 6526A: a read right after a read sees the
+same flags again, and the output comes a cycle late when the flag is set right
+after a read. `CIA/tod/hzsync6`: the TOD divider is a ring of six states, so
+switching to 50 Hz in the sixth makes a tenth of 6 + 5 ticks. `dd0dtest`
+checks these through `INC $DD0D,X`; its readme says the tests were not written
+for the new model cycle by cycle, so the 6526A rule is the one that fits the
+tests' numbers, not a measured signal.

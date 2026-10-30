@@ -364,14 +364,15 @@ impl Tod {
         if self.stopped {
             return false;
         }
-        // The divider counts 0–6 and wraps; it is compared with 5 (50 Hz)
-        // or 6 (60 Hz) only on a tick, so switching to 50 Hz when it already
-        // passed 5 makes one long tenth (VICE test program CIA/tod/hzsync6).
-        self.divider = if self.divider >= 6 {
-            0
-        } else {
-            self.divider + 1
-        };
+        // A ring of six states, compared with the fifth (50 Hz) or sixth
+        // (60 Hz) only on a tick: switching to 50 Hz in the sixth wraps it,
+        // which makes one tenth of 6 + 5 ticks (VICE test program
+        // CIA/tod/hzsync6).
+        self.divider += 1;
+        if self.divider == 6 && fifty_hz {
+            self.divider = 0;
+            return false;
+        }
         if self.divider != if fifty_hz { 5 } else { 6 } {
             return false;
         }
@@ -508,6 +509,14 @@ pub struct Cia {
     irq_next: bool,
     /// An ICR mask write takes effect at the next tick (Lorenz imr).
     mask_written: bool,
+    /// ICR was read in this cycle (until the next tick).
+    icr_read: bool,
+    /// ICR was read in the previous cycle.
+    icr_read_before: bool,
+    /// ICR written in the cycle before (the second write of a read-modify-write).
+    icr_written_before: bool,
+    /// The value of the last ICR read.
+    icr_value: u8,
     cnt_in: bool,
     cnt_edge: bool,
     flag_in: bool,
@@ -539,6 +548,10 @@ impl Cia {
             irq: false,
             irq_next: false,
             mask_written: false,
+            icr_read: false,
+            icr_read_before: false,
+            icr_written_before: false,
+            icr_value: 0,
             cnt_in: true,
             cnt_edge: false,
             flag_in: true,
@@ -615,6 +628,9 @@ impl Cia {
         if self.flags & self.mask != 0 && !self.irq {
             match self.model {
                 CiaModel::Mos6526 => self.irq_next = true,
+                // 6526A: right after an ICR read the output comes a cycle
+                // later (VICE test program CIA/dd0dtest, test 17).
+                CiaModel::Mos6526A if self.icr_read_before => self.irq_next = true,
                 CiaModel::Mos6526A | CiaModel::Mos8520 => self.irq = true,
             }
         }
@@ -634,7 +650,9 @@ impl Cia {
         if std::mem::take(&mut self.irq_next) {
             self.irq = true;
         }
-        if std::mem::take(&mut self.mask_written) {
+        self.icr_read_before = std::mem::take(&mut self.icr_read);
+        self.icr_written_before = std::mem::take(&mut self.mask_written);
+        if self.icr_written_before {
             // Enabling a source whose flag is already set raises IRQ.
             self.raise(0);
         }
@@ -666,7 +684,16 @@ impl Cia {
             self.raise(icr::TA);
         }
         if tb_under {
-            self.raise(icr::TB);
+            if self.model == CiaModel::Mos6526 && self.icr_read_before {
+                // Old 6526: an ICR read in the cycle before the underflow
+                // loses the flag, the interrupt still comes and reads as
+                // $80 (VICE test program CIA/cia-timer, dump of a 6526).
+                if self.mask & icr::TB != 0 && !self.irq {
+                    self.irq_next = true;
+                }
+            } else {
+                self.raise(icr::TB);
+            }
         }
         if cnt_edge && self.ta.cr & 0x40 == 0 {
             self.serial_shift_in();
@@ -761,10 +788,32 @@ impl Cia {
             0x08..=0x0b if self.model == CiaModel::Mos8520 => self.tod.read_counter(reg & 0x0f),
             0x08..=0x0b => self.tod.read(reg & 0x0f),
             0x0d => {
-                let v = self.flags | if self.irq { icr::IRQ } else { 0 };
+                let new = self.model == CiaModel::Mos6526A;
+                let mut v = self.flags;
+                if self.irq || (new && self.irq_next) {
+                    v |= icr::IRQ;
+                }
+                let value = v;
+                // 6526A: the flags clear a cycle late for the read after
+                // (dd0dtest, tests 18 and 19: the two reads of INC $DD0D,X
+                // both see them).
+                if new && self.icr_read_before {
+                    v |= self.icr_value;
+                }
+                // Old 6526: bit 7 alone stays for that read (dd0dtest, tests
+                // 0C-0E and 11-13: INC $DD0D,X writes $80, $81 and the
+                // source stays enabled; test 19: Timer B stays disabled).
+                if self.model == CiaModel::Mos6526
+                    && self.icr_read_before
+                    && self.icr_value & self.mask != 0
+                {
+                    v |= icr::IRQ;
+                }
+                self.icr_value = value;
                 self.flags = 0;
                 self.irq = false;
                 self.irq_next = false;
+                self.icr_read = true;
                 v
             }
             r => self.peek(r, pa_ext, pb_ext),
@@ -829,6 +878,17 @@ impl Cia {
                     self.mask |= v & 0x1f;
                 } else {
                     self.mask &= !(v & 0x1f);
+                    // Old 6526: masked by the second write of INC $DD0D,X in
+                    // the cycle of the flag, the output stays quiet (dd0dtest,
+                    // test 11). A plain STA there still interrupts
+                    // (interrupts/cia-int).
+                    if self.model == CiaModel::Mos6526
+                        && self.icr_written_before
+                        && v & 0x1f != 0
+                        && self.flags & self.mask == 0
+                    {
+                        self.irq_next = false;
+                    }
                 }
                 self.mask_written = true;
             }
@@ -879,8 +939,8 @@ impl Cia {
 
 const TAG: [u8; 4] = *b"6526";
 /// 2: the TOD alarm comparator's output. 3: the end of a serial byte
-/// still to come.
-const VERSION: u16 = 3;
+/// still to come. 4: the ICR reads of the last two cycles.
+const VERSION: u16 = 4;
 
 impl Savestate for Cia {
     fn save(&self, w: &mut StateWriter) {
@@ -926,6 +986,10 @@ impl Savestate for Cia {
             w.u8(self.serial.sets);
             w.u8(self.serial.clears);
             w.bool(self.serial.end_again);
+            w.bool(self.icr_read);
+            w.bool(self.icr_read_before);
+            w.bool(self.icr_written_before);
+            w.u8(self.icr_value);
         });
     }
 
@@ -989,6 +1053,12 @@ impl Savestate for Cia {
             n.serial.sets = c.u8()?;
             n.serial.clears = c.u8()?;
             n.serial.end_again = c.bool()?;
+        }
+        if version >= 4 {
+            n.icr_read = c.bool()?;
+            n.icr_read_before = c.bool()?;
+            n.icr_written_before = c.bool()?;
+            n.icr_value = c.u8()?;
         }
         *self = n;
         Ok(())

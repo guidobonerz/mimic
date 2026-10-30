@@ -366,3 +366,131 @@ fn mos8520_alarm_and_oneshot_start() {
     assert!(c.irq(), "timer A underflow");
     assert_eq!(c.ta.cr & CR_START, 0, "one-shot stops");
 }
+
+/// Cycles until the first of `bits` is set, from the chip's present state.
+fn cycles_to_flag(c: &Cia, bits: u8) -> usize {
+    let mut probe = c.clone();
+    let mut n = 0;
+    while probe.flags & bits == 0 {
+        probe.tick();
+        n += 1;
+    }
+    n
+}
+
+fn enabled_timer(model: CiaModel, reg_lo: u8, cr: u8, source: u8) -> Cia {
+    let mut c = Cia::new(model);
+    c.write(reg_lo, 8);
+    c.write(reg_lo + 1, 0);
+    c.write(0x0d, 0x80 | source);
+    c.write(cr, CR_START | CR_LOAD);
+    c
+}
+
+#[test]
+fn old_cia_loses_the_timer_b_flag_read_the_cycle_before_but_not_the_irq() {
+    let mut c = enabled_timer(CiaModel::Mos6526, 0x06, 0x0f, icr::TB);
+    let n = cycles_to_flag(&c, icr::TB);
+    idle(&mut c, n - 2);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0);
+    idle(&mut c, 2);
+    assert!(c.irq());
+    assert_eq!(c.flags, 0);
+    idle(&mut c, 2);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0x80);
+}
+
+#[test]
+fn old_cia_keeps_the_timer_a_flag_read_the_cycle_before() {
+    let mut c = enabled_timer(CiaModel::Mos6526, 0x04, 0x0e, icr::TA);
+    let n = cycles_to_flag(&c, icr::TA);
+    idle(&mut c, n - 2);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0);
+    idle(&mut c, 3);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0x81);
+}
+
+#[test]
+fn old_cia_second_read_in_a_row_shows_bit_7_alone() {
+    let mut c = enabled_timer(CiaModel::Mos6526, 0x04, 0x0e, icr::TA);
+    let n = cycles_to_flag(&c, icr::TA);
+    idle(&mut c, n - 1);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0x01, "flag, no output yet");
+    assert_eq!(read_cycle(&mut c, 0x0d), 0x80);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0x00);
+    assert!(!c.irq());
+}
+
+#[test]
+fn old_cia_masked_by_the_second_of_two_writes_in_the_flag_cycle_stays_quiet() {
+    let mut c = enabled_timer(CiaModel::Mos6526, 0x04, 0x0e, icr::TA);
+    let n = cycles_to_flag(&c, icr::TA);
+    idle(&mut c, n - 2);
+    write_cycle(&mut c, 0x0d, 0);
+    write_cycle(&mut c, 0x0d, icr::TA);
+    idle(&mut c, 3);
+    assert!(!c.irq());
+}
+
+#[test]
+fn old_cia_masked_by_a_single_write_in_the_flag_cycle_still_interrupts() {
+    let mut c = enabled_timer(CiaModel::Mos6526, 0x04, 0x0e, icr::TA);
+    let n = cycles_to_flag(&c, icr::TA);
+    idle(&mut c, n - 1);
+    write_cycle(&mut c, 0x0d, 0x7f);
+    idle(&mut c, 3);
+    assert!(c.irq());
+}
+
+#[test]
+fn new_cia_two_reads_in_a_row_see_the_same_flags() {
+    let mut c = enabled_timer(CiaModel::Mos6526A, 0x04, 0x0e, icr::TA);
+    let n = cycles_to_flag(&c, icr::TA);
+    idle(&mut c, n - 1);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0x81);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0x81);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0x00);
+}
+
+#[test]
+fn new_cia_irq_comes_a_cycle_late_right_after_an_icr_read() {
+    let mut c = enabled_timer(CiaModel::Mos6526A, 0x04, 0x0e, icr::TA);
+    let n = cycles_to_flag(&c, icr::TA);
+    idle(&mut c, n - 2);
+    assert_eq!(read_cycle(&mut c, 0x0d), 0);
+    c.tick();
+    assert_eq!(c.flags, icr::TA);
+    assert!(!c.irq());
+    c.tick();
+    assert!(c.irq());
+}
+
+#[test]
+fn icr_read_state_survives_a_savestate() {
+    let mut c = enabled_timer(CiaModel::Mos6526A, 0x04, 0x0e, icr::TA);
+    let n = cycles_to_flag(&c, icr::TA);
+    idle(&mut c, n - 1);
+    read_cycle(&mut c, 0x0d);
+    let mut w = StateWriter::new();
+    c.save(&mut w);
+    let bytes = w.into_bytes();
+    let mut n = Cia::new(CiaModel::Mos6526A);
+    n.load(&mut StateReader::new(&bytes)).unwrap();
+    assert_eq!(n, c);
+}
+
+#[test]
+fn tod_switched_to_50_hz_in_the_sixth_state_makes_a_tenth_of_eleven_ticks() {
+    let mut c = Cia::new(CiaModel::Mos6526);
+    c.write(0x08, 0);
+    for _ in 0..5 {
+        c.tod_tick();
+    }
+    c.write(0x0e, 0x80);
+    for _ in 0..5 {
+        c.tod_tick();
+        assert_eq!(c.tod.time[0], 0);
+    }
+    c.tod_tick();
+    assert_eq!(c.tod.time[0], 1);
+}
