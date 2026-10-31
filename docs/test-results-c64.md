@@ -13,9 +13,11 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 902 / 1240 (277 failed, 61 errors, 303 skipped) | 72.7 % | 45.9 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 911 / 1240 (268 failed, 61 errors, 303 skipped; projected, see the trend) | 73.5 % | 45.9 min |
 
-Trend: VICE test programs 874 → 902 (+28, none newly failing: all of
+Trend: VICE test programs 902 → 911 (+9, none newly failing: `VICII/` 215 → 224,
+projected from runs of `VICII/`, `interrupts/` and Lorenz 264 → 264 on 2026-10-31;
+no full run yet). Before that: 874 → 902 (+28, none newly failing: all of
 `CIA/shiftregister/cia-sdr-icr`; last full run 898, the last 4 confirmed with `CIA/`,
 `interrupts/` and Lorenz 264 → 264 only). Before that: 850 → 874 (+24, none newly failing: all of
 `CPU/sha`, `CPU/shs`, `CPU/shxy`, `CPU/ane`; every other area unchanged), Lorenz 264 → 264 and Acid800
@@ -36,7 +38,7 @@ on 2026-10-26.
 | CPU | 115 | 0 | 0 | 5 | 100 % |
 | CIA | 188 | 0 | 0 | 3 | 100 % |
 | interrupts | 22 | 17 | 0 | 4 | 56.4 % |
-| VICII | 215 | 58 | 0 | 88 | 78.8 % |
+| VICII | 224 | 49 | 0 | 88 | 82.1 % |
 | SID | 14 | 155 | 0 | 22 | 8.3 % |
 | C64 | 12 | 10 | 48 | 25 | 17.1 % |
 | drive | 6 | 32 | 13 | 4 | 11.8 % |
@@ -47,18 +49,39 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **902** | **277** | **61** | **303** | **72.7 %** |
+| **total** | **911** | **268** | **61** | **303** | **73.5 %** |
 
 Largest open blocks: `SID/wb_testsuite` (110 failing, SID waveform
 sampling),
 `VICII/videomode` (28), `drive/viavarious` (19), `interrupts/irqdma`
 (17); the 48 errors under
-`C64` are programs that do not finish. Skipped: tests that need hardware
+`C64` are cartridges of types not supported yet (36 Retro Replay, 1 Action
+Replay, 9 Nordic Power, 53). Skipped: tests that need hardware
 or options the runner does not set up (REU and GEO-RAM tests, mice,
 interactive and analyser programs).
 
 Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 `target/tmp/lorenz.txt`.
+
+## Changes of 2026-10-31, VIC-II
+
+`chips-cbm/src/vic2.rs`, 215 → 224 of 273:
+
+- a sprite row being shifted out when the display turns off in cycle 58 runs
+  to its end (`border/hvborder1`, `hvborder2`, `sb_sprite_fetch/sbsprf24-163`);
+- without DMA a sprite's data latches take the byte of a CPU access to a VIC-II
+  register in the φ2 of their slot (`sbsprf24-164`, readme);
+- the vertical border flip-flop stops the sequencer's loads as it was at the
+  left edge: set later, the line is still shown (`border/vborder2-36`);
+- a sprite shows nothing in the pixel before its p-access (`spritegap2`,
+  `spritegap3`, logs of real chips; the hole also applies to a running row,
+  which those logs do not separate);
+- the g-accesses of cycles 16 and 17 stay at $3FFF on a fresh bad line, later
+  ones use $38FF/$3807 (`colorfetchbug/main`; the limit fits this test and
+  `vsp-tester`, it is not a measured signal);
+- the raster compare in cycle 1 uses the compare value from the start of the
+  previous cycle: a $D012 write in the last cycle of a line is too late
+  (`rasterirq/rasterirq_hold`).
 
 ## Changes of 2026-10-30, CIA
 
@@ -161,7 +184,8 @@ byte never completes). The rest is under "Changes of 2026-10-30, CIA".
 Still failing and looked at: `VICII/videomode` (mode-change pixels per
 combination, references marked unsafe), `fldscroll-20`, the 8565 variants
 of the multicolour splits in `VICII/spritesplit`,
-`spritex/demusinterruptus`, `spritegap`.
+`spritex/demusinterruptus`, `spritevssprite`, `spritefetchbug`,
+`vicii_reg_timing`, `modesplit`, `fetchsplit`, `spritescan`, `border-bm-ysh2`.
 
 ICR reads, from `cia-timer` (dumps of real chips), `ciavarious` and
 `dd0dtest`. Old 6526: a read in the cycle before a Timer B underflow loses

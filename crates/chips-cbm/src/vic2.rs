@@ -336,12 +336,18 @@ pub struct Vic2 {
     // Border.
     main_border: bool,
     vert_border: bool,
+    /// The vertical border flip-flop as it was at the left edge: it stops
+    /// the sequencer's loads for the whole line (VICE test program
+    /// VICII/border/vborder2: set after the left edge, the line is shown).
+    no_load: bool,
 
     // Bus.
     ba: bool,
     ba_low_cycles: u8,
     last_bus: u8,
     raster_irq_done: bool,
+    /// The raster compare value at the start of the previous cycle.
+    cmp_held: u16,
     /// Which sprite is fetched in the current cycle's phi2, if any.
     phi2_sprite: Option<usize>,
 
@@ -376,6 +382,9 @@ pub struct Vic2 {
     /// Sprites whose p-access is in this cycle (only within a cycle, so
     /// not saved).
     fetching: u8,
+    /// The byte of a CPU access to a register in this cycle: it is on the
+    /// internal bus in phi2 (only within a cycle, so not saved).
+    reg_bus: Option<u8>,
 
     /// The light pen latched in this frame (the LP input works once a
     /// frame, Bauer 3.11).
@@ -455,10 +464,12 @@ impl Vic2 {
             refresh: 0xff,
             main_border: true,
             vert_border: true,
+            no_load: true,
             ba: true,
             ba_low_cycles: 0,
             last_bus: 0xff,
             raster_irq_done: false,
+            cmp_held: 0,
             phi2_sprite: None,
             pixels: vec![0; (t.width * t.height) as usize],
             lag: [(usize::MAX, 0); 4],
@@ -470,6 +481,7 @@ impl Vic2 {
             coll_late: (0, 0),
             fetch_done: None,
             fetching: 0,
+            reg_bus: None,
             lp_done: false,
             lp_low: false,
             lp_pending: false,
@@ -572,7 +584,11 @@ impl Vic2 {
     }
 
     fn check_raster_irq(&mut self) {
-        if self.raster == self.raster_cmp {
+        self.compare_raster(self.raster_cmp);
+    }
+
+    fn compare_raster(&mut self, cmp: u16) {
+        if self.raster == cmp {
             if !self.raster_irq_done {
                 self.raster_irq_done = true;
                 self.irq_flags |= irq::RASTER;
@@ -600,13 +616,14 @@ impl Vic2 {
             self.latch_light_pen(x);
         }
 
-        // The raster compare runs in cycle 1, for line 0 one cycle later.
-        if c == 1 && self.raster != 0 {
-            self.check_raster_irq();
+        // The raster compare runs in cycle 1, for line 0 one cycle later,
+        // with the compare value of the previous cycle's start: a $D012
+        // write in the last cycle of a line comes too late for the next
+        // line (VICE test program VICII/rasterirq/rasterirq_hold).
+        if c == 1 && self.raster != 0 || c == 2 && self.raster == 0 {
+            self.compare_raster(self.cmp_held);
         }
-        if c == 2 && self.raster == 0 {
-            self.check_raster_irq();
-        }
+        self.cmp_held = self.raster_cmp;
         self.update_bad_line();
 
         // Vertical border: the comparison works in every cycle of the line,
@@ -711,23 +728,27 @@ impl Vic2 {
                 if self.sprites[n].dma {
                     self.phi2_sprite = Some(n);
                     self.fetching |= 1 << n;
+                } else {
+                    self.sprites[n].data = 0xff_ffff;
                 }
             } else if c == slot % t.cycles + 1 && self.sprites[n].dma {
                 phi1_value = self.sprite_fetch(mem, n);
                 self.phi2_sprite = Some(n);
             } else if c == slot % t.cycles + 1 {
                 // Without DMA the sprite's data latches still take what is
-                // on the bus in its slot: $FF in both CPU halves and the
-                // idle access in between. A sprite at X >= $164 is shown in
-                // the line DMA starts and displays that (VICE test programs
-                // VICII/sb_sprite_fetch, readme).
+                // on the bus in its slot: $FF in both CPU halves (or the
+                // byte of a CPU access to a VIC-II register, see `phi2`) and
+                // the idle access in between. A sprite at X >= $164 is shown
+                // in the line DMA starts and displays that (VICE test
+                // programs VICII/sb_sprite_fetch, readme).
                 let addr = if self.ctrl1 & 0x40 != 0 {
                     0x39ff
                 } else {
                     0x3fff
                 };
                 let g = mem.read(addr);
-                self.sprites[n].data = 0xff_00ff | u32::from(g) << 8;
+                let s = &mut self.sprites[n];
+                s.data = s.data & 0xff_00ff | u32::from(g) << 8;
             }
         }
         if (11..=15).contains(&c) {
@@ -788,12 +809,13 @@ impl Vic2 {
                 self.char_base() | ((c & 0xff) << 3) | u16::from(self.rc)
             };
             (addr, c)
-        } else if self.bad_line {
+        } else if self.bad_line && self.cycle > 17 {
             // The cycle a bad line is made in idle state (DMA delay): the
             // display logic has not switched yet, but the idle access
             // already comes from elsewhere — $38FF on the 6569 and 6567R8,
             // $3807 on the 8565/8562 (VICE test program VICII/vsp-tester,
-            // readme with measurements of real chips).
+            // readme with measurements of real chips); the accesses of cycles 16 and 17 stay
+            // $3FFF (VICII/colorfetchbug).
             (
                 if self.model.grey_dot() {
                     0x3807
@@ -841,6 +863,20 @@ impl Vic2 {
             for (n, s) in self.sprites.iter_mut().enumerate() {
                 if self.sprite_ye & (1 << n) != 0 && started & (1 << n) == 0 {
                     s.exp = !s.exp;
+                }
+            }
+        }
+        if let Some(v) = self.reg_bus.take() {
+            for n in 0..8 {
+                let slot = t.sprite_slot(n);
+                let s = &mut self.sprites[n];
+                if s.dma {
+                    continue;
+                }
+                if c == slot {
+                    s.data = s.data & 0x00_ffff | u32::from(v) << 16;
+                } else if c == slot % t.cycles + 1 {
+                    s.data = s.data & 0xff_ff00 | u32::from(v);
                 }
             }
         }
@@ -957,6 +993,7 @@ impl Vic2 {
                 if !self.vert_border {
                     self.main_border = false;
                 }
+                self.no_load = self.vert_border;
             }
 
             let (gfx_color, gfx_fg) = self.graphics_pixel();
@@ -1072,7 +1109,7 @@ impl Vic2 {
                 // of the last load stays (visible where the side border is
                 // open; VICE test programs VICII/border, readme.txt:
                 // border-bm-idle, hvborder1/2).
-                if !self.vert_border {
+                if !self.no_load {
                     self.sr = p.g;
                     self.sr_c = p.c;
                     self.sr_mc_phase = false;
@@ -1167,6 +1204,7 @@ impl Vic2 {
     /// last step still shows its second step (VICE test programs
     /// VICII/spritesplit, compared pixel by pixel with their references).
     fn sprite_pixel(&mut self, x: u16, i: usize) -> (Option<(usize, u8)>, u8) {
+        let t = self.timing();
         let [_, old_xe, old_mc] = self.cycle_regs;
         let xe_reg = if i < 2 { old_xe } else { self.sprite_xe };
         let mc_reg = if i < 3 { old_mc } else { self.sprite_mc };
@@ -1174,7 +1212,9 @@ impl Vic2 {
         let mut opaque = 0u8;
         for n in 0..8 {
             let s = &mut self.sprites[n];
-            if !s.display {
+            // A row being shifted out when the display turns off in cycle 58
+            // still runs to its end (VICE test programs VICII/border/hvborder).
+            if !s.display && s.bits_left == 0 {
                 continue;
             }
             let mc = mc_reg & (1 << n) != 0;
@@ -1183,8 +1223,12 @@ impl Vic2 {
             // No trigger while the row is fetched: in the p-access cycle
             // and up to pixel 2 of the next (VICE test programs
             // VICII/spritex/testsuite 14-16 on PAL and NTSC).
-            let not_yet = self.fetching & (1 << n) != 0 || (i < 3 && self.fetch_done == Some(n));
-            if s.bits_left == 0 && sx == x && !not_yet {
+            // The pixel before the p-access already shows nothing (VICE test
+            // programs VICII/spritegap: logs of real chips).
+            let gap = i == 7 && t.sprite_slot(n) == self.cycle % t.cycles + 1;
+            let not_yet =
+                gap || self.fetching & (1 << n) != 0 || (i < 3 && self.fetch_done == Some(n));
+            if s.display && s.bits_left == 0 && sx == x && !not_yet {
                 if let Some(r) = self.rec.0.as_deref_mut() {
                     r.sprite_shown(n, self.raster, x, self.sprite_xe & (1 << n) != 0);
                 }
@@ -1233,7 +1277,7 @@ impl Vic2 {
                     }
                 }
             }
-            if value == 0 {
+            if value == 0 || gap {
                 continue;
             }
             opaque |= 1 << n;
@@ -1291,6 +1335,7 @@ impl Vic2 {
     /// CPU read: collision registers clear on read.
     pub fn read(&mut self, reg: u8) -> u8 {
         let v = self.peek(reg);
+        self.reg_bus = Some(v);
         match reg & 0x3f {
             0x1e => self.coll_mm = 0,
             0x1f => self.coll_md = 0,
@@ -1300,6 +1345,7 @@ impl Vic2 {
     }
 
     pub fn write(&mut self, reg: u8, v: u8) {
+        self.reg_bus = Some(v);
         let reg = reg & 0x3f;
         match reg {
             0x00..=0x0f => {
@@ -1479,8 +1525,9 @@ const TAG: [u8; 4] = *b"6569";
 /// 2: VIC-II type byte first (version 1 states are 6569). 3: the light
 /// pen's once-a-frame flag and the LP line level. 4: types 8565/8562 and
 /// the four pixels waiting for their colour. 5: collisions waiting for
-/// the registers. 6: a light pen edge waiting for the next cycle.
-const VERSION: u16 = 6;
+/// the registers. 6: a light pen edge waiting for the next cycle. 7: the
+/// sequencer's load gate and the held raster compare value.
+const VERSION: u16 = 7;
 
 fn save_sprite(w: &mut StateWriter, s: &Sprite) {
     w.u16(s.x);
@@ -1611,6 +1658,8 @@ impl Savestate for Vic2 {
             w.u8(self.coll_late.0);
             w.u8(self.coll_late.1);
             w.bool(self.lp_pending);
+            w.bool(self.no_load);
+            w.u16(self.cmp_held);
         });
     }
 
@@ -1727,6 +1776,13 @@ impl Savestate for Vic2 {
             }
             if version >= 6 {
                 v.lp_pending = c.bool()?;
+            }
+            if version >= 7 {
+                v.no_load = c.bool()?;
+                v.cmp_held = c.u16()? & 0x1ff;
+            } else {
+                v.no_load = v.vert_border;
+                v.cmp_held = v.raster_cmp;
             }
         }
         v.cycle_regs = [v.sprite_prio, v.sprite_xe, v.sprite_mc];

@@ -113,6 +113,7 @@ fn raster_irq_at_cycle_1_and_line_0_at_cycle_2() {
     v.phi1(&m);
     assert!(v.irq());
     assert_eq!(v.peek(0x19), 0xf1);
+    v.phi2(&m);
     v.write(0x19, 0x01);
     assert!(!v.irq());
 
@@ -520,4 +521,91 @@ fn light_pen_state_round_trips() {
     frame(&mut n, &m);
     run_to(&mut n, &m, 80, 1);
     assert_eq!(n.peek(0x14), 76);
+}
+
+#[test]
+fn compare_written_in_the_last_cycle_misses_the_next_line() {
+    let (mut v, m) = text_setup();
+    run_to(&mut v, &m, 100, 63);
+    v.write(0x19, 0x01);
+    v.phi1(&m);
+    v.write(0x12, 101);
+    v.phi2(&m);
+    cycle(&mut v, &m);
+    cycle(&mut v, &m);
+    assert_eq!(v.peek(0x19) & irq::RASTER, 0);
+    // One cycle earlier the compare is in time.
+    run_to(&mut v, &m, 110, 62);
+    v.phi1(&m);
+    v.write(0x12, 111);
+    v.phi2(&m);
+    cycle(&mut v, &m);
+    cycle(&mut v, &m);
+    assert_ne!(v.peek(0x19) & irq::RASTER, 0);
+}
+
+#[test]
+fn vertical_border_set_after_the_left_edge_still_shows_the_line() {
+    let (mut v, mut m) = text_setup();
+    m.ram[0x1000..0x1008].fill(0xff);
+    m.color.fill(1);
+    frame(&mut v, &m);
+    // RSEL off around the middle of line 247: the line stays visible.
+    run_to(&mut v, &m, 247, 30);
+    v.write(0x11, 0x13);
+    cycle(&mut v, &m);
+    v.write(0x11, 0x1b);
+    run_to(&mut v, &m, 248, 1);
+    assert_eq!(px(&v, 200, 247), 1);
+}
+
+#[test]
+fn a_row_being_shifted_out_ends_after_the_display_turns_off() {
+    let (mut v, mut m) = text_setup();
+    sprite_setup(&mut v, &mut m, 7, 0x150, 100, 3);
+    v.write(0x10, 0x80);
+    v.write(0x1d, 0x80);
+    frame(&mut v, &m);
+    // Expanded, the last row runs across cycle 58 (X = $164) up to $17F.
+    run_to(&mut v, &m, 121, 58);
+    assert_ne!(v.sprites[7].bits_left, 0);
+    assert!(v.sprites[7].display);
+    run_to(&mut v, &m, 122, 1);
+    assert!(!v.sprites[7].display);
+    assert_eq!(v.sprites[7].bits_left, 0);
+}
+
+#[test]
+fn sprite_latches_take_a_register_access_without_dma() {
+    let (mut v, m) = text_setup();
+    let slot = v.timing().sprite_slot(3);
+    run_to(&mut v, &m, 60, slot);
+    v.phi1(&m);
+    v.write(0x20, 0x5a);
+    v.phi2(&m);
+    v.phi1(&m);
+    v.read(0x20);
+    v.phi2(&m);
+    let last = v.peek(0x20);
+    assert_eq!(v.sprites[3].data, 0x5a_00_00 | u32::from(last));
+}
+
+#[test]
+fn the_pixel_before_the_p_access_shows_no_sprite() {
+    // Sprite 0 has its second pixel, sprite 1 at X + 1 its first.
+    let collide = |x: u16| {
+        let (mut v, mut m) = text_setup();
+        sprite_setup(&mut v, &mut m, 0, x, 100, 3);
+        sprite_setup(&mut v, &mut m, 1, x + 1, 100, 4);
+        v.write(0x10, 0x03);
+        m.ram[0x07f9] = 0x81;
+        m.ram[0x2000..0x2080].fill(0);
+        m.ram[0x2000 + 30] = 0x40;
+        m.ram[0x2040 + 30] = 0x80;
+        frame(&mut v, &m);
+        frame(&mut v, &m);
+        v.peek(0x1e)
+    };
+    assert_eq!(collide(0x161), 3);
+    assert_eq!(collide(0x162), 0);
 }
