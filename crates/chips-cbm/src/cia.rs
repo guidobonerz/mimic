@@ -460,8 +460,12 @@ struct Serial {
     signal: bool,
     sets: u8,
     clears: u8,
-    /// The end of the byte was started again once.
-    end_again: bool,
+    /// Cycles until a byte written to the SDR can start: an underflow in
+    /// the two cycles after the write finds the shifter still idle
+    /// (cia-sdr-icr, timer A latch 2).
+    load_delay: u8,
+    /// Cycles of running timer A until the byte's first half-bit counts.
+    first_half: u8,
 }
 
 impl Serial {
@@ -477,6 +481,17 @@ impl Serial {
         self.signal
     }
 
+    /// A byte in progress whose first half-bit has settled: switching to
+    /// input now sets the interrupt flag (VICE test program
+    /// CIA/shiftregister/cia-sdr-icr, `cia-sdr-icr-test2.asm`).
+    fn interrupted(&self) -> bool {
+        match self.count {
+            0 => false,
+            15 => self.first_half == 0,
+            _ => true,
+        }
+    }
+
     /// One cycle of running timer A for the signal's pending changes.
     fn signal_tick(&mut self) {
         if self.clears & 1 != 0 {
@@ -487,6 +502,7 @@ impl Serial {
         }
         self.clears >>= 1;
         self.sets >>= 1;
+        self.first_half = self.first_half.saturating_sub(1);
     }
 }
 
@@ -641,6 +657,7 @@ impl Cia {
         if self.ta.cr & CR_START != 0 {
             self.serial.signal_tick();
         }
+        self.serial.load_delay = self.serial.load_delay.saturating_sub(1);
         if self.serial.flag_delay > 0 {
             self.serial.flag_delay -= 1;
             if self.serial.flag_delay == 0 {
@@ -706,19 +723,17 @@ impl Cia {
         }
         let s = &mut self.serial;
         if s.flag_delay > 0 {
-            // The byte is ending. An underflow in the third of the four
-            // cycles starts them once more (timer A latch 2: the byte ends
-            // three cycles later); with latch 0 the byte never ends
-            // (cia-sdr-icr with latches 0-3; latch 1 ends normally,
-            // cia-sp-test-continues).
-            if self.ta.latch == 0 || (s.flag_delay == 1 && !s.end_again) {
+            // The byte is ending and the signal runs out; with latch 0 the
+            // byte never ends (cia-sdr-icr with latches 0-3).
+            if self.ta.latch == 0 {
                 s.flag_delay = 4;
-                s.end_again = true;
+            } else {
+                s.clears |= 1 << 3;
             }
             return;
         }
         if s.count == 0 {
-            if !s.pending {
+            if !s.pending || s.load_delay > 0 {
                 // Idle: the signal of the last byte runs out.
                 s.clears |= 1 << 3;
                 return;
@@ -726,6 +741,7 @@ impl Cia {
             s.pending = false;
             s.shift = s.sdr;
             s.count = 16;
+            s.first_half = 4;
         }
         // Two underflows per bit: CNT low with the data bit, then CNT high.
         s.count -= 1;
@@ -734,6 +750,7 @@ impl Cia {
             s.cnt_out = false;
             if s.count == 1 {
                 s.sets |= 1 << 2;
+                s.clears |= 1 << 1;
             } else {
                 s.sets |= 1 << 0 | 1 << 2;
                 s.clears |= 1 << 1;
@@ -750,7 +767,6 @@ impl Cia {
         // cia-sdr-init, cia-sdr-delay and cia-sdr-load on real hardware).
         if s.count == 1 {
             s.flag_delay = 4;
-            s.end_again = false;
         }
     }
 
@@ -871,6 +887,7 @@ impl Cia {
                 self.serial.sdr = v;
                 if self.ta.cr & 0x40 != 0 {
                     self.serial.pending = true;
+                    self.serial.load_delay = 2;
                 }
             }
             0x0d => {
@@ -899,6 +916,11 @@ impl Cia {
                     // (VICE test programs CIA/shiftregister/cia-sdr-icr,
                     // phase 2).
                     // Switched to input, the half-bit state stays frozen.
+                    // Either way a byte waiting in the SDR is dropped
+                    // (cia-sdr-icr, latches from 40 up).
+                    if v & 0x40 == 0 && self.serial.interrupted() {
+                        self.raise(icr::SP);
+                    }
                     if v & 0x40 != 0 {
                         if self.serial.signal() {
                             self.raise(icr::SP);
@@ -907,6 +929,7 @@ impl Cia {
                         (s.signal, s.sets, s.clears) = (false, 0, 0);
                     }
                     self.serial.count = 0;
+                    self.serial.pending = false;
                     self.serial.flag_delay = 0;
                     self.serial.cnt_out = true;
                 }
@@ -939,8 +962,9 @@ impl Cia {
 
 const TAG: [u8; 4] = *b"6526";
 /// 2: the TOD alarm comparator's output. 3: the end of a serial byte
-/// still to come. 4: the ICR reads of the last two cycles.
-const VERSION: u16 = 4;
+/// still to come. 4: the ICR reads of the last two cycles. 5: the SDR load
+/// delay and the first half-bit's count in place of a flag.
+const VERSION: u16 = 5;
 
 impl Savestate for Cia {
     fn save(&self, w: &mut StateWriter) {
@@ -985,7 +1009,8 @@ impl Savestate for Cia {
             w.bool(self.serial.signal);
             w.u8(self.serial.sets);
             w.u8(self.serial.clears);
-            w.bool(self.serial.end_again);
+            w.u8(self.serial.load_delay);
+            w.u8(self.serial.first_half);
             w.bool(self.icr_read);
             w.bool(self.icr_read_before);
             w.bool(self.icr_written_before);
@@ -1026,7 +1051,8 @@ impl Savestate for Cia {
             signal: false,
             sets: 0,
             clears: 0,
-            end_again: false,
+            load_delay: 0,
+            first_half: 0,
         };
         if n.serial.count > 16 {
             return Err(StateError::Invalid("CIA serial count"));
@@ -1052,7 +1078,13 @@ impl Savestate for Cia {
             n.serial.signal = c.bool()?;
             n.serial.sets = c.u8()?;
             n.serial.clears = c.u8()?;
-            n.serial.end_again = c.bool()?;
+            // Version 3 and 4 had a flag here that is gone.
+            if version >= 5 {
+                n.serial.load_delay = c.u8()?.min(2);
+                n.serial.first_half = c.u8()?.min(4);
+            } else {
+                c.bool()?;
+            }
         }
         if version >= 4 {
             n.icr_read = c.bool()?;

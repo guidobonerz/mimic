@@ -13,9 +13,11 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 874 / 1240 (305 failed, 61 errors, 303 skipped) | 70.5 % | 36.3 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 902 / 1240 (277 failed, 61 errors, 303 skipped) | 72.7 % | 45.9 min |
 
-Trend: VICE test programs 850 → 874 (+24, none newly failing: all of
+Trend: VICE test programs 874 → 902 (+28, none newly failing: all of
+`CIA/shiftregister/cia-sdr-icr`; last full run 898, the last 4 confirmed with `CIA/`,
+`interrupts/` and Lorenz 264 → 264 only). Before that: 850 → 874 (+24, none newly failing: all of
 `CPU/sha`, `CPU/shs`, `CPU/shxy`, `CPU/ane`; every other area unchanged), Lorenz 264 → 264 and Acid800
 54 → 54 on 2026-10-30 with the CPU change. Before that: 840 → 850 (+10 since the previous run of
 2026-10-30, none newly failing: `CIA/ciavarious` cia3, cia3a, cia4, cia8,
@@ -32,7 +34,7 @@ on 2026-10-26.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | general (incl. Lorenz 2.15: 314/314) | 319 | 5 | 0 | 1 | 98.5 % |
 | CPU | 115 | 0 | 0 | 5 | 100 % |
-| CIA | 160 | 28 | 0 | 3 | 85.1 % |
+| CIA | 188 | 0 | 0 | 3 | 100 % |
 | interrupts | 22 | 17 | 0 | 4 | 56.4 % |
 | VICII | 215 | 58 | 0 | 88 | 78.8 % |
 | SID | 14 | 155 | 0 | 22 | 8.3 % |
@@ -45,10 +47,10 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **874** | **305** | **61** | **303** | **70.5 %** |
+| **total** | **902** | **277** | **61** | **303** | **72.7 %** |
 
 Largest open blocks: `SID/wb_testsuite` (110 failing, SID waveform
-sampling), `CIA/shiftregister` (28, `cia-sdr-icr`),
+sampling),
 `VICII/videomode` (28), `drive/viavarious` (19), `interrupts/irqdma`
 (17); the 48 errors under
 `C64` are programs that do not finish. Skipped: tests that need hardware
@@ -57,6 +59,21 @@ interactive and analyser programs).
 
 Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 `target/tmp/lorenz.txt`.
+
+## Changes of 2026-10-30, CIA
+
+`chips-cbm/src/cia.rs`, 160 → 188 of 188, checked at the chip for every timer
+A latch 0-127 on both models against the reference of
+`cia-sdr-icr-v3.asm` and `cia-sdr-icr-test2.asm` (`generate.c` differs from the
+`.asm` in phase 1):
+
+- a byte waiting in the SDR is dropped when SP changes direction;
+- an underflow in the two cycles after an SDR write finds the shifter idle
+  (this replaces the rule that restarted the end of a byte at latch 2);
+- the internal signal also runs out during a byte's end, and the last
+  half-bit's underflow clears it after two cycles;
+- switching to input in the middle of a byte sets the SP flag, from four cycles
+  after the first half-bit on.
 
 ## Changes of 2026-10-30, CPU
 
@@ -139,16 +156,12 @@ three cycles later and clears it after two, an underflow with CNT high or
 an idle one clears it after four, the last half-bit sets it after three; on
 switching SP to output a set signal sets SP. A further underflow while the
 finished byte waits restarts the four-cycle wait once (with latch 0 the
-byte never completes). Phase 1 matches the reference for every latch
-checked, phase 2 for latch 19, 37, 39; single values still differ at latch
-1, 2, 40, 64 and 100 — stops at the end of the first half-bit, where the
-reference generator (`generate.c`) assumes SP = 0 — so 28 `cia-sdr-icr`
-entries (the `*_7f` ones stop at those values) still fail.
+byte never completes). The rest is under "Changes of 2026-10-30, CIA".
 
 Still failing and looked at: `VICII/videomode` (mode-change pixels per
 combination, references marked unsafe), `fldscroll-20`, the 8565 variants
 of the multicolour splits in `VICII/spritesplit`,
-`spritex/demusinterruptus`, `spritegap`, `CIA/shiftregister/cia-sdr-icr`.
+`spritex/demusinterruptus`, `spritegap`.
 
 ICR reads, from `cia-timer` (dumps of real chips), `ciavarious` and
 `dd0dtest`. Old 6526: a read in the cycle before a Timer B underflow loses

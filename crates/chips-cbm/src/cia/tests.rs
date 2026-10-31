@@ -494,3 +494,65 @@ fn tod_switched_to_50_hz_in_the_sixth_state_makes_a_tenth_of_eleven_ticks() {
     c.tod_tick();
     assert_eq!(c.tod.time[0], 1);
 }
+
+/// Timer A started in continuous mode with SP as output.
+fn serial_cia(latch: u8) -> Cia {
+    let mut c = Cia::new(CiaModel::Mos6526);
+    c.write(0x04, latch);
+    c.write(0x05, 0);
+    c.write(0x0e, 0x51);
+    c
+}
+
+#[test]
+fn byte_waiting_in_the_sdr_is_dropped_on_a_direction_change() {
+    let mut c = serial_cia(50);
+    c.write(0x0c, 0x55);
+    c.write(0x0e, 0x00);
+    c.write(0x0e, 0x51);
+    for _ in 0..2000 {
+        c.tick();
+    }
+    assert_eq!(c.read(0x0d, 0xff, 0xff) & 0x08, 0, "no byte was sent");
+}
+
+/// Cycles from the SDR write to the byte's interrupt flag.
+fn cycles_to_sdr_flag(latch: u8, before_write: u32) -> u32 {
+    let mut c = serial_cia(latch);
+    for _ in 0..before_write {
+        c.tick();
+    }
+    c.write(0x0c, 0x55);
+    (1..1000)
+        .find(|_| {
+            c.tick();
+            c.peek(0x0d, 0xff, 0xff) & 0x08 != 0
+        })
+        .expect("byte done")
+}
+
+#[test]
+fn underflow_right_after_the_sdr_write_does_not_start_the_byte() {
+    let got: Vec<u32> = (0..6).map(|n| cycles_to_sdr_flag(2, n)).collect();
+    assert_eq!(got, [51, 50, 49, 48, 50, 49]);
+}
+
+#[test]
+fn switching_to_input_in_the_middle_of_a_byte_sets_the_flag() {
+    // Stopped `after` cycles past the first half-bit's underflow.
+    let flag_after = |after: u32| {
+        let mut c = serial_cia(50);
+        c.write(0x0c, 0x55);
+        while c.peek(0x0d, 0xff, 0xff) & 0x01 == 0 {
+            c.tick();
+        }
+        for _ in 0..after {
+            c.tick();
+        }
+        c.write(0x0e, 0x00);
+        c.tick();
+        c.peek(0x0d, 0xff, 0xff) & 0x08 != 0
+    };
+    assert!(!flag_after(3));
+    assert!(flag_after(4));
+}
