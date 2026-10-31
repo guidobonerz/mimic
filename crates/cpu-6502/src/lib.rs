@@ -87,9 +87,10 @@ impl Default for Config {
 }
 
 const STATE_TAG: [u8; 4] = *b"6502";
-/// Version 2 added `polled`, version 3 `nmi_rearm`, version 4 `rdy_stalled`
+/// Version 2 added `polled`, version 3 `nmi_rearm`, version 4 `rdy_stalled`,
+/// version 5 `stall_p`
 /// (older versions load with them clear).
-const STATE_VERSION: u16 = 4;
+const STATE_VERSION: u16 = 5;
 
 /// A 6502-family CPU.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -212,6 +213,17 @@ impl Cpu6502 {
         }
     }
 
+    /// A cycle the CPU, stopped by RDY, spends off the bus (the C64's
+    /// AEC low during a VIC-II DMA): interrupt recognition goes on as in a
+    /// repeated read (`interrupts/irqdma`).
+    pub fn stall_off_bus(&mut self) {
+        let c = &mut self.core;
+        if c.stall_polls() {
+            c.polled = true;
+            c.poll |= c.nmi_pending || (c.irq_line && c.stall_p & I == 0);
+        }
+    }
+
     /// SO input: a falling edge sets the V flag (used by the 1541).
     pub fn set_overflow(&mut self) {
         self.core.p |= V;
@@ -295,6 +307,13 @@ impl Cpu for Cpu6502 {
         };
         let result = self.core.cycle(&mut probe);
         self.stalled_addr = probe.read;
+        // SEI and CLI held in their last cycle already count; PLP takes its
+        // byte off the bus only as the cycle ends.
+        let flags = if saved.op == 0x28 {
+            saved.p
+        } else {
+            self.core.p
+        };
         if probe.wrote || self.core.jammed {
             self.halted = false;
             result
@@ -304,13 +323,14 @@ impl Cpu for Cpu6502 {
             // an NMI that arrives during the stall is taken after the
             // stalled instruction even when that was its last cycle
             // (Acid800 `antic_dlitiming`, DLI during WSYNC).
-            let poll = saved.t != 0 && saved.op != 0x00 && !saved.no_poll;
+            let poll = saved.stall_polls();
             self.core = saved;
             self.core.polled = poll;
+            self.core.stall_p = flags;
             self.core.rdy_stalled = saved.rdy_sensitive();
             if poll {
                 let c = &mut self.core;
-                c.poll |= c.nmi_pending || (c.irq_line && c.p & I == 0);
+                c.poll |= c.nmi_pending || (c.irq_line && flags & I == 0);
             }
             CycleResult::Busy
         }
@@ -392,6 +412,7 @@ impl Savestate for Cpu6502 {
             ] {
                 w.bool(v);
             }
+            w.u8(c.stall_p);
         });
     }
 
@@ -425,6 +446,7 @@ impl Savestate for Cpu6502 {
         c.polled = version >= 2 && s.bool()?;
         c.nmi_rearm = version >= 3 && s.bool()?;
         c.rdy_stalled = version >= 4 && s.bool()?;
+        c.stall_p = if version >= 5 { s.u8()? } else { c.p };
         if c.t > 8 && !c.jammed {
             return Err(StateError::Invalid("6502 cycle counter"));
         }
@@ -951,7 +973,7 @@ mod tests {
         let mut w = StateWriter::new();
         cpu.save(&mut w);
         let mut data = w.into_bytes();
-        let last = data.len() - 1;
+        let last = data.len() - 2; // the last bool, before `stall_p`
         data[last] = 7; // invalid bool
         let mut target = Cpu6502::default();
         target.set_reg("A", 0x99);
@@ -976,6 +998,36 @@ mod tests {
             regs.get("P"),
             Some(0xef),
             "B never set in the register, bit 5 always"
+        );
+    }
+
+    /// Runs `ticks` cycles of `program`, holds the next one with RDY, lets
+    /// /IRQ fall in an off-bus cycle and says whether the CPU took it in.
+    fn poll_while_held(program: &[u8], p: u8, ticks: usize) -> bool {
+        let (mut cpu, mut bus) = cpu_at(0x1000, program);
+        cpu.set_reg("P", u32::from(p));
+        for _ in 0..ticks {
+            cpu.tick(&mut bus);
+        }
+        cpu.set_rdy(false);
+        cpu.tick(&mut bus);
+        cpu.set_irq(true);
+        cpu.stall_off_bus();
+        cpu.core.poll
+    }
+
+    #[test]
+    fn interrupts_are_recognised_while_rdy_holds_a_cycle() {
+        const NOP: u8 = 0xea;
+        const Z: u8 = 0x02;
+        assert!(poll_while_held(&[NOP], 0, 1), "last cycle of a NOP");
+        assert!(!poll_while_held(&[NOP], 0, 0), "not in an opcode fetch");
+        assert!(!poll_while_held(&[0x78], 0, 1), "SEI already counts");
+        assert!(poll_while_held(&[0x58], I, 1), "CLI already counts");
+        assert!(poll_while_held(&[0x28], 0, 3), "PLP's byte comes too late");
+        assert!(
+            !poll_while_held(&[0xf0, 0], Z, 2),
+            "taken branch, last cycle"
         );
     }
 }

@@ -784,6 +784,7 @@ impl C64 {
             }
             CycleResult::Busy
         } else if !self.io.vic.aec() {
+            self.cpu.stall_off_bus();
             CycleResult::Busy
         } else {
             let mut bus = C64Bus {

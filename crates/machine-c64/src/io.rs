@@ -205,6 +205,7 @@ impl Io {
         let reg = addr as u8 & 0x0f;
         match addr {
             0xd000..=0xd3ff => self.vic.read(addr as u8),
+            0xd400..=0xd7ff => self.sid.read(addr as u8),
             0xdc00..=0xdcff => {
                 let (a, b) = self.cia1_ext();
                 self.cia1.read(reg, a, b)

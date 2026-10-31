@@ -562,6 +562,7 @@ impl C128 {
                 self.cpu.set_nmi(nmi_on);
                 // Without AEC the halted CPU does not reach the bus at all.
                 let result = if step == 0 && !self.io.vic.aec() {
+                    self.cpu.stall_off_bus();
                     (CycleResult::Busy, None)
                 } else {
                     self.cpu_cycle(dbg.as_deref_mut())

@@ -79,6 +79,8 @@ pub(crate) struct Core {
     /// the operand read of ANE, the fix-up of SHA/SHX/SHY/TAS. Set on the
     /// RDY path of `tick`, taken by the instruction.
     pub rdy_stalled: bool,
+    /// Flags of the cycle RDY repeats, for the polls while it stands.
+    pub stall_p: u8,
     pub reset_pending: bool,
     /// Interrupt decision for the next opcode fetch.
     pub poll: bool,
@@ -142,6 +144,7 @@ impl Core {
             nmi_pending: false,
             nmi_rearm: false,
             rdy_stalled: false,
+            stall_p: 0,
             reset_pending: false,
             poll: false,
             no_poll: false,
@@ -172,6 +175,14 @@ impl Core {
             (Op::Sha | Op::Shx | Op::Shy | Op::Tas, _) => self.t == 3,
             _ => false,
         }
+    }
+
+    /// Whether interrupts are recognised while RDY repeats this cycle: not
+    /// in an opcode fetch (the last poll stands), BRK or an interrupt
+    /// sequence, nor in the last cycle of a taken branch
+    /// (`interrupts/irqdma` test 3, test 5).
+    pub(crate) fn stall_polls(&self) -> bool {
+        self.t != 0 && self.op != 0x00 && !self.no_poll && !(self.op & 0x1f == 0x10 && self.t == 2)
     }
 
     /// Execute one cycle.

@@ -185,6 +185,7 @@ impl Io {
         let reg = addr as u8;
         match addr {
             0xd000..=0xd3ff if !matches!(reg & 0x3f, 0x2f | 0x30) => self.vic.read(reg),
+            0xd400..=0xd4ff => self.sid.read(reg),
             0xd600..=0xd6ff => self.vdc.read(reg),
             0xdc00..=0xdcff => {
                 let (a, b) = self.cia1_ext();

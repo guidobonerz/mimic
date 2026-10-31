@@ -23,6 +23,12 @@
 //! steps at 1 MHz); the exponential decay steps follow published analyses
 //! of the chip's envelope counter. Implementation is this project's own.
 //!
+//! Oscillator, noise and envelope follow the behaviour the VICE test programs
+//! (`SID/`, readmes and real-chip references) pin down: the shift register's
+//! two-phase clock with the selector writing combined noise back, the 6581's
+//! adder MSB pulled by the selector, the 8580's output register behind
+//! triangle and sawtooth, the 15-bit rate counter, the floating output.
+//!
 //! Approximations (to refine with measurements): combined waveforms are the
 //! AND of their parts; the filter is a digital state-variable filter with a
 //! cutoff curve per model, not a model of the analog circuit.
@@ -39,26 +45,58 @@ pub enum SidModel {
     Mos8580,
 }
 
-/// Attack times in ms from the data sheet, for rate values 0–15.
-const ATTACK_MS: [u32; 16] = [
-    2, 8, 16, 24, 38, 56, 68, 80, 100, 250, 500, 800, 1000, 3000, 5000, 8000,
+/// Rate counter period in cycles for rate values 0–15: the data sheet's
+/// attack times over 255 steps, as measured on real chips (`SID/resid-test`
+/// `envrate`, `envtime`).
+const RATE_PERIOD: [u16; 16] = [
+    9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251,
 ];
 
-/// Rate counter period in cycles: attack time spread over 255 steps.
-const fn rate_period(rate: u8) -> u16 {
-    (ATTACK_MS[rate as usize & 15] * 1000 / 255) as u16
+/// Period of the rate counter, a 15-bit shift register: a match missed
+/// after a rate change takes a full turn (the "ADSR delay bug").
+const RATE_WRAP: u16 = 0x7fff;
+
+/// Noise output d11…d4 taken from these shift register bits.
+const NOISE_BITS: [u8; 8] = [20, 18, 14, 11, 9, 5, 2, 0];
+const NOISE_MASK: u32 = 1 << 20 | 1 << 18 | 1 << 14 | 1 << 11 | 1 << 9 | 1 << 5 | 1 << 2 | 1;
+const LFSR_ONES: u32 = 0x7f_ffff;
+
+/// Cycles from a rate match to the level's step in attack, and from a
+/// match to the divider's carry and from there to a decay or release step;
+/// gate on, gate off, gate off with a step under way until the state
+/// changes. Found by scanning them against `SID/env_test`.
+const ATTACK_STEP: u8 = 3;
+const EXP_CARRY: u8 = 2;
+const DOWN_STEP: u8 = 2;
+const GATE_ON: u8 = 1;
+const GATE_OFF: u8 = 2;
+const GATE_OFF_STEPPING: u8 = 4;
+
+/// Cycles a value stays on the internal bus. Not measured: leakage takes
+/// far less on the 6581 than on the 8580.
+const fn bus_hold(model: SidModel) -> u32 {
+    match model {
+        SidModel::Mos6581 => 8_000,
+        SidModel::Mos8580 => 700_000,
+    }
 }
 
-/// Extra divider of decay/release steps by envelope level (exponential
-/// fall-off).
-fn exp_period(level: u8) -> u8 {
-    match level {
-        0..=6 => 30,
-        7..=14 => 16,
-        15..=26 => 8,
-        27..=54 => 4,
-        55..=93 => 2,
-        _ => 1,
+/// Cycles the output of "no waveform" floats before its bits start to leak
+/// (not measured; `SID/osc3-wave0`: gone after about 3 s).
+const fn float_hold(model: SidModel) -> u32 {
+    match model {
+        SidModel::Mos6581 => 50_000,
+        SidModel::Mos8580 => 1_000_000,
+    }
+}
+
+/// Cycles with the test bit on until the shift register has faded to ones
+/// (on the 6581 `SID/resid-test` `oscsample` needs more than $8000 cycles,
+/// the 8580 takes much longer: `SID/wb_testsuite` readme).
+const fn lfsr_fade(model: SidModel) -> u32 {
+    match model {
+        SidModel::Mos6581 => 35_000,
+        SidModel::Mos8580 => 1_000_000,
     }
 }
 
@@ -76,6 +114,24 @@ struct Envelope {
     level: u8,
     rate_counter: u16,
     exp_counter: u8,
+    /// Divider of decay/release steps, set as the level passes its marks.
+    exp_period: u8,
+    /// The level reached 0: it stays there until the next attack.
+    frozen: bool,
+    /// The rate counter matched: it restarts in the next cycle.
+    rate_hit: bool,
+    /// Cycles until the exponential divider's carry restarts it.
+    exp_wait: u8,
+    /// Cycles until the level moves.
+    step_wait: u8,
+    /// A state change under way: 1 attack, 2 release, 3 decay.
+    gate_edge: u8,
+    /// Cycles until it happens.
+    gate_delay: u8,
+    /// Gate on: one rate compare still uses the decay rate (`env_test_ra_0100`).
+    rate_decay: bool,
+    /// The step under way goes up; attack must still hold when it lands.
+    step_up: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +145,21 @@ struct Voice {
     lfsr: u32,
     /// Accumulator MSB rose in this cycle (sync source).
     msb_rising: bool,
+    /// Shift in progress: 2 = bit 19 rose, 1 = latched, 0 = idle.
+    shift: u8,
+    /// The next shift register value, loaded by the second clock phase.
+    latch: u32,
+    /// Pulse comparator output, 12 bits, one cycle behind the accumulator.
+    pulse: u16,
+    /// Waveform selector output (held and leaking with no waveform).
+    out: u16,
+    /// OSC3 register.
+    osc: u8,
+    /// The 8580's triangle/sawtooth output register.
+    tri_saw: u16,
+    /// Cycles left of the floating output, then of the shift register fade.
+    float_ttl: u32,
+    fade_ttl: u32,
     env: Envelope,
 }
 
@@ -100,116 +171,285 @@ impl Default for Voice {
             ctrl: 0,
             ad: 0,
             sr: 0,
-            acc: 0,
-            lfsr: 0x7f_fff8,
+            // All bits 1, the odd ones stored inverted (`SID/oscinit`).
+            acc: 0x55_5555,
+            // Bit 0 comes up low (`SID/oscinit`).
+            lfsr: LFSR_ONES & !1,
             msb_rising: false,
-            env: Envelope::default(),
+            shift: 0,
+            latch: LFSR_ONES,
+            pulse: 0,
+            out: 0,
+            osc: 0,
+            tri_saw: 0,
+            float_ttl: 0,
+            fade_ttl: 0,
+            env: Envelope {
+                exp_period: 1,
+                ..Envelope::default()
+            },
         }
     }
 }
 
 impl Voice {
-    fn clock_osc(&mut self) {
+    /// One phase-1 of the shift: every bit's output is latched into the
+    /// next bit, `keep` is what the selector leaves of it. With the test
+    /// bit the feedback's bit 22 input is held high.
+    fn latch_shift(&mut self, keep: u32) {
+        let test = self.ctrl & 0x08 != 0;
+        let r = self.lfsr & keep;
+        let bit = (u32::from(test) | (r >> 22)) ^ (r >> 17);
+        self.latch = ((r << 1) | (bit & 1)) & LFSR_ONES;
+    }
+
+    /// What the selector leaves of the shift register's output bits.
+    fn writeback_mask(&self) -> u32 {
+        if self.ctrl >> 4 <= 8 || self.ctrl & 0x80 == 0 {
+            return LFSR_ONES;
+        }
+        let mut keep = !NOISE_MASK & LFSR_ONES;
+        for (i, b) in NOISE_BITS.iter().enumerate() {
+            keep |= u32::from(self.out >> (11 - i) & 1) << b;
+        }
+        keep
+    }
+
+    fn noise(&self) -> u16 {
+        let mut n = 0;
+        for (i, b) in NOISE_BITS.iter().enumerate() {
+            n |= ((self.lfsr >> b & 1) as u16) << (11 - i);
+        }
+        n
+    }
+
+    fn clock_osc(&mut self, model: SidModel) {
         if self.ctrl & 0x08 != 0 {
-            self.acc = 0;
             self.msb_rising = false;
+            if self.fade_ttl > 0 {
+                self.fade_ttl -= 1;
+                if self.fade_ttl == 0 {
+                    self.lfsr = LFSR_ONES;
+                }
+            }
+            self.latch_shift(LFSR_ONES);
             return;
         }
         let old = self.acc;
         self.acc = (self.acc + u32::from(self.freq)) & 0xff_ffff;
         self.msb_rising = old & 0x80_0000 == 0 && self.acc & 0x80_0000 != 0;
+        match self.shift {
+            2 => {
+                self.latch_shift(self.writeback_mask());
+                self.shift = 1;
+            }
+            1 => {
+                self.lfsr = self.latch;
+                self.shift = 0;
+            }
+            _ => {}
+        }
         if old & 0x08_0000 == 0 && self.acc & 0x08_0000 != 0 {
-            let bit = ((self.lfsr >> 22) ^ (self.lfsr >> 17)) & 1;
-            self.lfsr = ((self.lfsr << 1) | bit) & 0x7f_ffff;
+            self.shift = 2;
+        }
+        // The 6581's sawtooth switch connects the adder's MSB directly to
+        // the selector: combined waveforms pull it low (`SID/osc_topbit`).
+        let sel = self.ctrl >> 4;
+        if model == SidModel::Mos6581 && sel & 2 != 0 && sel != 2 && self.out & 0x800 == 0 {
+            self.acc &= 0x7f_ffff;
         }
     }
 
-    fn clock_env(&mut self) {
-        let e = &mut self.env;
-        let rate = match e.state {
+    /// Waveform output for this cycle. `ring_msb` is the source's MSB.
+    fn clock_wave(&mut self, ring_msb: bool, model: SidModel) {
+        let test = self.ctrl & 0x08 != 0;
+        let sel = self.ctrl >> 4;
+        let saw = (self.acc >> 12) as u16;
+        let pulse = if test || saw >= self.pw { 0xfff } else { 0 };
+        if sel == 0 {
+            if self.float_ttl > 0 {
+                self.float_ttl -= 1;
+                if self.float_ttl == 0 {
+                    self.out &= self.out >> 1;
+                    if self.out != 0 {
+                        self.float_ttl = 1000;
+                    }
+                }
+            }
+            self.pulse = pulse;
+            self.osc = (self.out >> 4) as u8;
+            return;
+        }
+        // TriXOR = !Saw & ((!V3 & Ring) ^ bit 23), `SID/ringmod`.
+        let msb = self.acc & 0x80_0000 != 0;
+        let flip = sel & 2 == 0 && (msb ^ (self.ctrl & 0x04 != 0 && !ring_msb));
+        let tri = (((if flip { self.acc ^ 0x7f_ffff } else { self.acc }) >> 11) & 0xfff) as u16;
+        let mut out = 0xfff;
+        if sel & 3 != 0 {
+            let mut t = 0xfff;
+            if sel & 1 != 0 {
+                t &= tri;
+            }
+            if sel & 2 != 0 {
+                t &= saw;
+            }
+            if model == SidModel::Mos8580 {
+                out &= self.tri_saw;
+                self.tri_saw = t;
+            } else {
+                out &= t;
+            }
+        }
+        if sel & 4 != 0 {
+            out &= self.pulse;
+        }
+        if sel & 8 != 0 {
+            out &= self.noise();
+        }
+        self.out = out;
+        self.osc = (out >> 4) as u8;
+        self.float_ttl = float_hold(model);
+        self.pulse = pulse;
+        // Combined noise overwrites the register at every cycle but the
+        // latching one, not only as it shifts (`SID/wb_testsuite`).
+        if !test && self.shift != 1 {
+            self.lfsr &= self.writeback_mask();
+        }
+    }
+
+    fn rate_period(&self) -> u16 {
+        RATE_PERIOD[usize::from(match self.env.state {
+            _ if self.env.rate_decay => self.ad & 15,
             EnvState::Attack => self.ad >> 4,
             EnvState::DecaySustain => self.ad & 15,
             EnvState::Release => self.sr & 15,
-        };
-        e.rate_counter += 1;
-        if e.rate_counter < rate_period(rate).max(1) {
-            return;
-        }
-        e.rate_counter = 0;
-        match e.state {
-            EnvState::Attack => {
-                e.level = e.level.saturating_add(1);
-                if e.level == 255 {
-                    e.state = EnvState::DecaySustain;
-                }
-            }
-            EnvState::DecaySustain | EnvState::Release => {
-                e.exp_counter += 1;
-                if e.exp_counter < exp_period(e.level) {
-                    return;
-                }
-                e.exp_counter = 0;
-                let floor = if e.state == EnvState::DecaySustain {
-                    (self.sr >> 4) * 17
-                } else {
-                    0
-                };
-                if e.level > floor {
-                    e.level -= 1;
-                }
-            }
-        }
+        })]
     }
 
-    fn write_ctrl(&mut self, v: u8) {
-        let gate_on = v & 1 != 0 && self.ctrl & 1 == 0;
-        let gate_off = v & 1 == 0 && self.ctrl & 1 != 0;
-        if gate_on {
-            self.env.state = EnvState::Attack;
-        } else if gate_off {
-            self.env.state = EnvState::Release;
+    fn clock_env(&mut self) {
+        if self.env.gate_delay > 0 {
+            self.env.gate_delay -= 1;
+            let d = self.env.gate_delay;
+            match self.env.gate_edge {
+                1 if d == 0 => {
+                    self.env.state = EnvState::Attack;
+                    self.env.frozen = false;
+                    self.env.gate_edge = 0;
+                }
+                2 if d == 0 => {
+                    self.env.state = EnvState::Release;
+                    self.env.gate_edge = 0;
+                }
+                3 if d == 0 => {
+                    self.env.state = EnvState::DecaySustain;
+                    self.env.gate_edge = 0;
+                }
+                _ => {}
+            }
         }
-        if v & 0x08 != 0 {
-            self.lfsr = 0x7f_fff8;
+        let period = self.rate_period();
+        let sustain = (self.sr >> 4) * 17;
+        let e = &mut self.env;
+        if e.step_wait > 0 {
+            e.step_wait -= 1;
+            if e.step_wait == 0 && !e.frozen {
+                if e.step_up && e.state == EnvState::Attack {
+                    e.level = e.level.wrapping_add(1);
+                    if e.level == 0xff {
+                        e.gate_edge = 3;
+                        e.gate_delay = 1;
+                    }
+                } else {
+                    e.level = e.level.wrapping_sub(1);
+                }
+                e.exp_period = match e.level {
+                    0xff => 1,
+                    0x5d => 2,
+                    0x36 => 4,
+                    0x1a => 8,
+                    0x0e => 16,
+                    0x06 => 30,
+                    0x00 => {
+                        e.frozen = true;
+                        1
+                    }
+                    _ => e.exp_period,
+                };
+            }
+        } else if e.exp_wait > 0 {
+            e.exp_wait -= 1;
+            if e.exp_wait == 0 {
+                e.exp_counter = 0;
+                if e.state == EnvState::Attack {
+                    e.step_wait = DOWN_STEP;
+                    e.step_up = true;
+                } else if e.state == EnvState::Release || e.level != sustain {
+                    e.step_wait = DOWN_STEP;
+                    e.step_up = false;
+                }
+            }
+        } else if e.rate_hit {
+            e.rate_hit = false;
+            e.rate_counter = 0;
+            if e.state == EnvState::Attack {
+                e.exp_counter = 0;
+                e.step_wait = ATTACK_STEP;
+                e.step_up = true;
+            } else if !e.frozen {
+                e.exp_counter = e.exp_counter.wrapping_add(1) & 0x1f;
+                if e.exp_counter == e.exp_period {
+                    e.exp_wait = EXP_CARRY;
+                }
+            }
+        }
+        e.rate_counter = (e.rate_counter + 1) & RATE_WRAP;
+        if e.rate_counter == period {
+            e.rate_hit = true;
+        }
+        e.rate_decay = false;
+    }
+
+    fn write_ctrl(&mut self, v: u8, model: SidModel) {
+        let was = self.ctrl;
+        if was & 0x08 != 0 && v & 0x08 == 0 {
+            // The second phase of the shift. The selector's output reaches
+            // the latch only through a waveform both settings use; on the
+            // 8580 through its register, whichever of the two they use
+            // (`SID/wb_testsuite`).
+            let shared = match model {
+                SidModel::Mos6581 => was >> 4 & v >> 4 & 3 != 0,
+                SidModel::Mos8580 => was >> 4 & 3 != 0 && v >> 4 & 3 != 0,
+            };
+            if shared {
+                self.latch_shift(self.writeback_mask());
+            }
+            self.lfsr = self.latch;
+        }
+        if v & 1 != 0 && was & 1 == 0 {
+            self.env.gate_edge = 1;
+            self.env.gate_delay = GATE_ON;
+            self.env.rate_decay = true;
+        } else if v & 1 == 0 && was & 1 != 0 {
+            self.env.gate_edge = 2;
+            self.env.gate_delay = if self.env.step_wait > 0 {
+                GATE_OFF_STEPPING
+            } else {
+                GATE_OFF
+            };
         }
         self.ctrl = v;
-    }
-
-    /// 12-bit waveform output; `ring_msb` is the ring-modulation source's MSB.
-    fn wave(&self, ring_msb: bool) -> u16 {
-        let sel = self.ctrl >> 4;
-        if sel == 0 {
-            return 0;
-        }
-        let mut out = 0xfff;
-        if sel & 1 != 0 {
-            let mut msb = self.acc & 0x80_0000 != 0;
-            if self.ctrl & 0x04 != 0 {
-                msb ^= ring_msb;
+        if v & 0x08 != 0 && was & 0x08 == 0 {
+            self.acc = 0;
+            self.shift = 0;
+            self.fade_ttl = lfsr_fade(model);
+            // Running into the test bit, triangle or sawtooth (now 0) on
+            // the selector pull the outputs low; with the test bit already
+            // on they do not (`SID/noiselfsrinit` against `wb_testsuite`).
+            if v & 0x80 != 0 && v & 0x30 != 0 {
+                self.lfsr &= !NOISE_MASK;
             }
-            let t = if msb { self.acc ^ 0x7f_ffff } else { self.acc };
-            out &= ((t >> 11) & 0xfff) as u16;
+            self.latch_shift(LFSR_ONES);
         }
-        if sel & 2 != 0 {
-            out &= (self.acc >> 12) as u16;
-        }
-        if sel & 4 != 0 {
-            let high = self.ctrl & 0x08 != 0 || (self.acc >> 12) as u16 >= self.pw;
-            out &= if high { 0xfff } else { 0 };
-        }
-        if sel & 8 != 0 {
-            let r = self.lfsr;
-            let noise = ((r >> 22) & 1) << 7
-                | ((r >> 20) & 1) << 6
-                | ((r >> 16) & 1) << 5
-                | ((r >> 13) & 1) << 4
-                | ((r >> 11) & 1) << 3
-                | ((r >> 7) & 1) << 2
-                | ((r >> 4) & 1) << 1
-                | ((r >> 2) & 1);
-            out &= (noise << 4) as u16;
-        }
-        out
     }
 }
 
@@ -223,6 +463,8 @@ pub struct Sid {
     mode_vol: u8,
     /// Last value on the data bus; write-only registers read it back.
     bus: u8,
+    /// Cycles until that value has leaked away.
+    bus_ttl: u32,
     pub pot: [u8; 2],
     /// Resistance on the POTX/POTY pins (0 = none, 65535 = open).
     pot_in: [u16; 2],
@@ -244,6 +486,7 @@ impl Sid {
             res_filt: 0,
             mode_vol: 0,
             bus: 0,
+            bus_ttl: 0,
             pot: [0xff; 2],
             pot_in: [0xffff; 2],
             pot_cycle: 0,
@@ -279,14 +522,25 @@ impl Sid {
             self.pot_cycle = 0;
             self.pot = self.pot_in.map(|r| (r >> 8) as u8);
         }
+        if self.bus_ttl > 0 {
+            self.bus_ttl -= 1;
+            if self.bus_ttl == 0 {
+                self.bus = 0;
+            }
+        }
+        let model = self.model;
         for v in &mut self.voices {
-            v.clock_osc();
+            v.clock_osc(model);
         }
         for i in 0..3 {
             let src = (i + 2) % 3;
             if self.voices[i].ctrl & 0x02 != 0 && self.voices[src].msb_rising {
                 self.voices[i].acc = 0;
             }
+        }
+        for i in 0..3 {
+            let ring = self.voices[(i + 2) % 3].acc & 0x80_0000 != 0;
+            self.voices[i].clock_wave(ring, model);
         }
         for v in &mut self.voices {
             v.clock_env();
@@ -298,10 +552,8 @@ impl Sid {
         let mut direct = 0i32;
         let mut filtered = 0i32;
         for i in 0..3 {
-            let src = (i + 2) % 3;
-            let ring_msb = self.voices[src].acc & 0x80_0000 != 0;
             let v = &self.voices[i];
-            let out = (i32::from(v.wave(ring_msb)) - 2048) * i32::from(v.env.level);
+            let out = (i32::from(v.out) - 2048) * i32::from(v.env.level);
             if self.res_filt & (1 << i) != 0 {
                 filtered += out;
             } else if !(i == 2 && self.mode_vol & 0x80 != 0) {
@@ -344,17 +596,26 @@ impl Sid {
         match reg & 0x1f {
             0x19 => self.pot[0],
             0x1a => self.pot[1],
-            0x1b => {
-                let ring = self.voices[1].acc & 0x80_0000 != 0;
-                (self.voices[2].wave(ring) >> 4) as u8
-            }
+            0x1b => self.voices[2].osc,
             0x1c => self.voices[2].env.level,
             _ => self.bus,
         }
     }
 
+    /// A read: the read-only registers refresh the internal data bus
+    /// (`SID/busvalue`).
+    pub fn read(&mut self, reg: u8) -> u8 {
+        let v = self.peek(reg);
+        if matches!(reg & 0x1f, 0x19..=0x1c) {
+            self.bus = v;
+            self.bus_ttl = bus_hold(self.model);
+        }
+        v
+    }
+
     pub fn write(&mut self, reg: u8, v: u8) {
         self.bus = v;
+        self.bus_ttl = bus_hold(self.model);
         let reg = reg & 0x1f;
         if reg < 0x15 {
             let voice = &mut self.voices[usize::from(reg / 7)];
@@ -363,7 +624,7 @@ impl Sid {
                 1 => voice.freq = (voice.freq & 0x00ff) | (u16::from(v) << 8),
                 2 => voice.pw = (voice.pw & 0x0f00) | u16::from(v),
                 3 => voice.pw = (voice.pw & 0x00ff) | (u16::from(v & 15) << 8),
-                4 => voice.write_ctrl(v),
+                4 => voice.write_ctrl(v, self.model),
                 5 => voice.ad = v,
                 _ => voice.sr = v,
             }
@@ -380,7 +641,7 @@ impl Sid {
 }
 
 const TAG: [u8; 4] = *b"SID0";
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 
 impl Savestate for Sid {
     fn save(&self, w: &mut StateWriter) {
@@ -413,6 +674,27 @@ impl Savestate for Sid {
             w.u16(self.pot_in[0]);
             w.u16(self.pot_in[1]);
             w.u16(self.pot_cycle);
+            w.u32(self.bus_ttl);
+            for v in &self.voices {
+                w.u8(v.shift);
+                w.u32(v.latch);
+                w.u16(v.pulse);
+                w.u16(v.out);
+                w.u8(v.osc);
+                w.u16(v.tri_saw);
+                w.u32(v.float_ttl);
+                w.u32(v.fade_ttl);
+                let e = &v.env;
+                w.u8(e.exp_period);
+                w.u8(e.gate_delay);
+                w.bool(e.rate_decay);
+                w.bool(e.step_up);
+                w.bool(e.frozen);
+                w.bool(e.rate_hit);
+                w.u8(e.exp_wait);
+                w.u8(e.step_wait);
+                w.u8(e.gate_edge);
+            }
         });
     }
 
@@ -435,7 +717,7 @@ impl Savestate for Sid {
                 _ => return Err(StateError::Invalid("SID envelope state")),
             };
             v.env.level = c.u8()?;
-            v.env.rate_counter = c.u16()?;
+            v.env.rate_counter = c.u16()? & RATE_WRAP;
             v.env.exp_counter = c.u8()?;
         }
         s.cutoff = c.u16()? & 0x7ff;
@@ -452,6 +734,30 @@ impl Savestate for Sid {
         if version >= 2 {
             s.pot_in = [c.u16()?, c.u16()?];
             s.pot_cycle = c.u16()? % 512;
+        }
+        // Version 2 predates the pipelines: they start idle.
+        if version >= 3 {
+            s.bus_ttl = c.u32()?;
+            for v in s.voices.iter_mut() {
+                v.shift = c.u8()? & 3;
+                v.latch = c.u32()? & LFSR_ONES;
+                v.pulse = c.u16()? & 0xfff;
+                v.out = c.u16()? & 0xfff;
+                v.osc = c.u8()?;
+                v.tri_saw = c.u16()? & 0xfff;
+                v.float_ttl = c.u32()?;
+                v.fade_ttl = c.u32()?;
+                let e = &mut v.env;
+                e.exp_period = c.u8()?.max(1);
+                e.gate_delay = c.u8()?;
+                e.rate_decay = c.bool()?;
+                e.step_up = c.bool()?;
+                e.frozen = c.bool()?;
+                e.rate_hit = c.bool()?;
+                e.exp_wait = c.u8()?;
+                e.step_wait = c.u8()?;
+                e.gate_edge = c.u8()?;
+            }
         }
         *self = s;
         Ok(())

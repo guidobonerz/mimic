@@ -609,3 +609,38 @@ fn the_pixel_before_the_p_access_shows_no_sprite() {
     assert_eq!(collide(0x161), 3);
     assert_eq!(collide(0x162), 0);
 }
+
+#[test]
+fn bitmap_mode_reaches_the_output_late_on_the_hmos_types() {
+    // First column the bitmap's solid pixels replace the text background.
+    let first = |model| {
+        let (mut v, mut m) = text_setup_for(model);
+        m.ram[0x2000..0x4000].fill(0xff);
+        m.color.fill(1);
+        frame(&mut v, &m);
+        run_to(&mut v, &m, 100, 30);
+        v.phi1(&m);
+        v.write(0x11, 0x3b);
+        v.phi2(&m);
+        run_to(&mut v, &m, 100, 40);
+        (0..16).find(|&i| px(&v, v.timing().cycle_x(30) + i, 100) != 6)
+    };
+    assert_eq!(first(Model::Mos6569), Some(0));
+    assert_eq!(first(Model::Mos8565), Some(4));
+}
+
+#[test]
+fn xscroll_is_compared_when_the_byte_is_due() {
+    let (mut v, mut m) = text_setup();
+    m.ram[0x1000..0x1800].fill(0xff);
+    m.color.fill(1);
+    frame(&mut v, &m);
+    run_to(&mut v, &m, 100, 30);
+    v.phi1(&m);
+    v.write(0x16, 0x0f);
+    v.phi2(&m);
+    run_to(&mut v, &m, 100, 40);
+    // The byte of cycle 30 has passed XSCROLL 0 and waits for 7.
+    assert_eq!(v.ctrl2 & 7, 7);
+    assert_eq!(px(&v, v.timing().cycle_x(35), 100), 1);
+}

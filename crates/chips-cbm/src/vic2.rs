@@ -282,8 +282,8 @@ struct Sprite {
 struct Pending {
     g: u8,
     c: u16,
-    /// Pixels until the load.
-    delay: u8,
+    /// Pixels since the g-access.
+    age: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -370,6 +370,14 @@ pub struct Vic2 {
     /// program VICII/spritesplit/ss-xpos). Equal to the registers between
     /// cycles, so not saved.
     cycle_sprite_x: [u16; 8],
+    /// $D011 and $D016 as they were before this cycle's CPU write (equal to
+    /// the registers between cycles, so not saved).
+    cycle_mode: (u8, u8),
+    /// $D011 as the next g-access sees it.
+    g_ctrl1: u8,
+    /// The first bit of a pair during a change of MCM (only within a cycle,
+    /// so not saved).
+    late_bit: u8,
     /// Sprites whose DMA started in this cycle's phi1 (only between phi1
     /// and phi2, so not saved).
     dma_started: u8,
@@ -477,6 +485,9 @@ impl Vic2 {
             before: [0; 15],
             cycle_regs: [0; 3],
             cycle_sprite_x: [0; 8],
+            cycle_mode: (0, 0),
+            late_bit: 0,
+            g_ctrl1: 0,
             dma_started: 0,
             coll_late: (0, 0),
             fetch_done: None,
@@ -799,8 +810,17 @@ impl Vic2 {
     }
 
     fn g_access(&mut self, mem: &dyn VicMemory) -> u8 {
-        let ecm = self.ctrl1 & 0x40 != 0;
-        let bmm = self.ctrl1 & 0x20 != 0;
+        // ECM and BMM reach the address one cycle after the output: the
+        // access after a write still uses the old mode. On the older types
+        // that holds for switching off only (VICE test program
+        // VICII/vicii_timing).
+        let mode = if self.model.grey_dot() {
+            self.g_ctrl1
+        } else {
+            self.ctrl1 | self.g_ctrl1
+        };
+        let ecm = mode & 0x40 != 0;
+        let bmm = mode & 0x20 != 0;
         let (addr, c) = if self.display_state {
             let c = self.matrix[self.vmli];
             let addr = if bmm {
@@ -833,12 +853,7 @@ impl Vic2 {
             self.vc = (self.vc + 1) & 0x3ff;
             self.vmli = (self.vmli + 1) % 40;
         }
-        // Loaded into the shifter XSCROLL + 4 pixels into this cycle.
-        let p = Pending {
-            g,
-            c,
-            delay: 4 + (self.ctrl2 & 7),
-        };
+        let p = Pending { g, c, age: 0 };
         if self.pending[0].is_none() {
             self.pending[0] = Some(p);
         } else {
@@ -996,7 +1011,7 @@ impl Vic2 {
                 self.no_load = self.vert_border;
             }
 
-            let (gfx_color, gfx_fg) = self.graphics_pixel();
+            let (gfx_color, gfx_fg) = self.graphics_pixel(i);
             let (sprite, colliding) = self.sprite_pixel(x, i);
 
             // Collisions reach the registers with the pixel output, four
@@ -1070,6 +1085,8 @@ impl Vic2 {
         self.fetching = 0;
         self.cycle_regs = [self.sprite_prio, self.sprite_xe, self.sprite_mc];
         self.cycle_sprite_x = self.sprites.map(|s| s.x);
+        self.g_ctrl1 = self.cycle_mode.0;
+        self.cycle_mode = (self.ctrl1, self.ctrl2);
     }
 
     /// Sprite-sprite (`mm`) and sprite-data (`md`) collisions: the first
@@ -1101,9 +1118,19 @@ impl Vic2 {
     }
 
     /// Next pixel of the graphics sequencer: (colour, is foreground).
-    fn graphics_pixel(&mut self) -> (u8, bool) {
-        if let Some(p) = &mut self.pending[0] {
-            if p.delay == 0 {
+    fn graphics_pixel(&mut self, i: usize) -> (u8, bool) {
+        // Loaded into the shifter XSCROLL + 4 pixels after the g-access, with
+        // XSCROLL as it is at that pixel: a byte whose position a change has
+        // passed is lost (VICE test program VICII/vicii_timing).
+        let due = 4 + (self.ctrl2 & 7);
+        if self.pending[0].is_some_and(|p| p.age > due && p.age >= 12) {
+            self.pending[0] = self.pending[1].take();
+        }
+        if self.pending[1].is_some_and(|p| p.age == due) {
+            self.pending[0] = self.pending[1].take();
+        }
+        if let Some(p) = self.pending[0] {
+            if p.age == due {
                 // While the vertical border flip-flop is set the sequencer
                 // loads nothing: the shifter runs empty and the colour data
                 // of the last load stays (visible where the side border is
@@ -1118,12 +1145,34 @@ impl Vic2 {
             }
         }
         for p in self.pending.iter_mut().flatten() {
-            p.delay = p.delay.saturating_sub(1);
+            p.age += 1;
         }
 
-        let ecm = self.ctrl1 & 0x40 != 0;
-        let bmm = self.ctrl1 & 0x20 != 0;
+        // A mode change reaches the output late, in the cycle of the write:
+        // ECM and BMM four pixels on the HMOS-II types, on the others two
+        // when switched off; MCM on all of them four black pixels of a
+        // multicolour cell when switched on, three of high-resolution pairs when switched off (VICE
+        // test programs VICII/vicii_timing, VICII/videomode, references
+        // compared with real chips).
+        let (old1, old2) = self.cycle_mode;
+        let mode_bit = |new: u8, old: u8, bit: u8, grey: bool| {
+            let (n, o) = (new & bit != 0, old & bit != 0);
+            let late = match (grey, o && !n) {
+                (true, _) => 4,
+                (false, true) => 2,
+                (false, false) => 0,
+            };
+            if i < late {
+                o
+            } else {
+                n
+            }
+        };
+        let grey = self.model.grey_dot();
+        let ecm = mode_bit(self.ctrl1, old1, 0x40, grey);
+        let bmm = mode_bit(self.ctrl1, old1, 0x20, grey);
         let mcm = self.ctrl2 & 0x10 != 0;
+        let mcm_late = i < 3 + usize::from(mcm) && (self.ctrl2 ^ old2) & 0x10 != 0;
         let c = self.sr_c;
         let cc = (c & 0xff) as u8;
         let color = (c >> 8) as u8 & 0x0f;
@@ -1139,7 +1188,14 @@ impl Vic2 {
         } else {
             let b = self.sr >> 7;
             self.sr <<= 1;
-            (b, b != 0)
+            if i & 1 == 0 {
+                self.late_bit = b;
+            }
+            if mcm_late && (bmm || color & 0x08 != 0) {
+                (self.late_bit, self.late_bit != 0)
+            } else {
+                (b, b != 0)
+            }
         };
 
         let out = match (ecm, bmm, mcm) {
@@ -1189,6 +1245,9 @@ impl Vic2 {
             // Invalid modes output black; collisions still work.
             _ => 0,
         };
+        if mcm_late && multicolor && !bmm {
+            return (0, false);
+        }
         (out, fg)
     }
 
@@ -1623,7 +1682,7 @@ impl Savestate for Vic2 {
                         w.bool(true);
                         w.u8(p.g);
                         w.u16(p.c);
-                        w.u8(p.delay);
+                        w.u8(p.age);
                     }
                     None => {
                         w.bool(false);
@@ -1660,6 +1719,7 @@ impl Savestate for Vic2 {
             w.bool(self.lp_pending);
             w.bool(self.no_load);
             w.u16(self.cmp_held);
+            w.u8(self.g_ctrl1);
         });
     }
 
@@ -1722,11 +1782,17 @@ impl Savestate for Vic2 {
             let some = c.bool()?;
             let g = c.u8()?;
             let cdata = c.u16()? & 0x0fff;
-            let delay = c.u8()?;
-            if delay > 15 {
+            let age = c.u8()?;
+            if age > 15 {
                 return Err(StateError::Invalid("VIC-II sequencer"));
             }
-            *p = some.then_some(Pending { g, c: cdata, delay });
+            // Before version 7 the byte is the pixels until the load.
+            let age = if version < 7 {
+                (4 + (v.ctrl2 & 7)).saturating_sub(age)
+            } else {
+                age
+            };
+            *p = some.then_some(Pending { g, c: cdata, age });
         }
         v.sr = c.u8()?;
         v.sr_c = c.u16()? & 0x0fff;
@@ -1780,13 +1846,16 @@ impl Savestate for Vic2 {
             if version >= 7 {
                 v.no_load = c.bool()?;
                 v.cmp_held = c.u16()? & 0x1ff;
+                v.g_ctrl1 = c.u8()? & 0x7f;
             } else {
                 v.no_load = v.vert_border;
                 v.cmp_held = v.raster_cmp;
+                v.g_ctrl1 = v.ctrl1;
             }
         }
         v.cycle_regs = [v.sprite_prio, v.sprite_xe, v.sprite_mc];
         v.cycle_sprite_x = v.sprites.map(|s| s.x);
+        v.cycle_mode = (v.ctrl1, v.ctrl2);
         // The pen's aim is configuration from the port: keep it.
         v.pen = self.pen;
         v.pen_lit = self.pen_lit;

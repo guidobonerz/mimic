@@ -43,8 +43,8 @@ fn attack_time_matches_the_data_sheet() {
         cycles += 1;
         assert!(cycles < 5_000);
     }
-    // 2 ms at 1 MHz.
-    assert!((1_700..=2_100).contains(&cycles), "{cycles}");
+    // 255 steps of 9 cycles, the data sheet's 2 ms.
+    assert!((2_290..=2_310).contains(&cycles), "{cycles}");
 
     let mut s = sid();
     voice3(&mut s, 0, 0x01, 0xa0, 0xf0); // attack 500 ms
@@ -67,6 +67,65 @@ fn decay_to_sustain_then_release_to_zero() {
         s.clock();
     }
     assert_eq!(s.peek(0x1c), 0);
+}
+
+#[test]
+fn rate_periods_match_real_chips() {
+    let mut s = sid();
+    voice3(&mut s, 0, 0x01, 0x00, 0xf0);
+    let mut steps = vec![];
+    let mut last = s.peek(0x1c);
+    for c in 0..100 {
+        s.clock();
+        if s.peek(0x1c) != last {
+            last = s.peek(0x1c);
+            steps.push(c);
+        }
+    }
+    assert!(steps.windows(2).all(|w| w[1] - w[0] == 9), "{steps:?}");
+}
+
+#[test]
+fn combined_noise_writes_back_unless_the_test_bit_was_already_on() {
+    let wave = |first: u8, second: u8| {
+        let mut s = sid();
+        voice3(&mut s, 0, 0x88, 0, 0);
+        for _ in 0..1_100_000 {
+            s.clock();
+        }
+        s.write(0x12, first);
+        s.clock();
+        s.write(0x12, second);
+        s.clock();
+        s.voices[2].lfsr
+    };
+    // Faded to ones, one shift in: tri in both settings pulls the outputs.
+    assert_eq!(wave(0x98, 0x80), LFSR_ONES & !1);
+    assert_ne!(wave(0x98, 0x90), LFSR_ONES & !1);
+}
+
+#[test]
+fn osc3_keeps_its_value_without_a_waveform_then_leaks() {
+    let mut s = sid();
+    voice3(&mut s, 0, 0x48, 0, 0); // Pulse high with the test bit.
+    s.clock();
+    s.clock();
+    s.write(0x12, 0x00);
+    s.clock();
+    assert_eq!(s.peek(0x1b), 0xff);
+    for _ in 0..2_000_000 {
+        s.clock();
+    }
+    assert_eq!(s.peek(0x1b), 0);
+}
+
+#[test]
+fn reads_of_read_only_registers_refresh_the_bus() {
+    let mut s = sid();
+    s.write(0x00, 0x5a);
+    assert_eq!(s.read(0x19), 0xff);
+    assert_eq!(s.peek(0x00), 0xff);
+    assert_eq!(s.read(0x00), 0xff);
 }
 
 #[test]
@@ -95,7 +154,8 @@ fn hard_sync_resets_the_synced_oscillator() {
     // Voice 2 (source of voice 3's sync) fast, voice 3 slow with sync.
     s.write(0x07, 0x00);
     s.write(0x08, 0x40);
-    voice3(&mut s, 0x0100, 0x22, 0, 0);
+    voice3(&mut s, 0x0100, 0x08, 0, 0);
+    s.write(0x12, 0x22);
     let mut max = 0;
     for _ in 0..20_000 {
         s.clock();
