@@ -54,6 +54,15 @@ impl G64 {
         self.half_tracks[i] = Some(G64Track { data, speed });
     }
 
+    /// Set half track `index` (0 = track 1, 1 = track 1.5 …).
+    pub fn set_half_track(&mut self, index: u8, data: Vec<u8>, speed: u8) {
+        let i = usize::from(index);
+        if self.half_tracks.len() <= i {
+            self.half_tracks.resize(i + 1, None);
+        }
+        self.half_tracks[i] = Some(G64Track { data, speed });
+    }
+
     /// Full track `track` (1-based).
     pub fn track(&self, track: u8) -> Option<&G64Track> {
         let i = usize::from(track.checked_sub(1)?) * 2;

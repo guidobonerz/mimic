@@ -93,13 +93,14 @@ pub struct VicView<'a> {
 impl VicMemory for VicView<'_> {
     fn read(&self, addr: u16) -> u8 {
         let addr = addr & 0x3fff;
-        if self.mem.ultimax() && addr & 0x3000 == 0x3000 {
+        let ultimax = self.mem.ultimax() && self.cart.is_none_or(|c| c.vic_sees_ultimax());
+        if ultimax && addr & 0x3000 == 0x3000 {
             return self
                 .cart
                 .and_then(|c| c.peek_romh(0xf000 | (addr & 0x0fff)))
                 .unwrap_or(0xff);
         }
-        if self.bank & 0x4000 == 0 && addr & 0x3000 == 0x1000 {
+        if !ultimax && self.bank & 0x4000 == 0 && addr & 0x3000 == 0x1000 {
             self.mem.roms.chargen[usize::from(addr & 0x0fff)]
         } else {
             self.mem.ram[usize::from(self.bank | addr)]

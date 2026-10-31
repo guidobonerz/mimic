@@ -39,11 +39,13 @@ pub mod hw {
     pub const OCEAN: u16 = 5;
     pub const FUN_PLAY: u16 = 7;
     pub const SUPER_GAMES: u16 = 8;
+    pub const ATOMIC_POWER: u16 = 9;
     pub const SYSTEM_3: u16 = 15;
     pub const DINAMIC: u16 = 17;
     pub const MAGIC_DESK: u16 = 19;
     pub const EASYFLASH: u16 = 32;
     pub const RETRO_REPLAY: u16 = 36;
+    pub const PAGEFOX: u16 = 53;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

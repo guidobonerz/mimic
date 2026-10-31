@@ -216,6 +216,7 @@ fn cpu_peek(
         _ => None,
     };
     match mem.read(addr) {
+        Some(v) if addr & 0xe000 == 0x8000 => v | cart.map_or(0, |c| c.drives_over_ram(addr)),
         Some(v) => v,
         None => from_cart.unwrap_or_else(|| match mem.bank(addr) {
             Bank::Io if !is_cart_io(addr) => io.peek(mem, addr),
@@ -267,6 +268,11 @@ impl Bus for C64Bus<'_> {
 impl C64Bus<'_> {
     fn read_byte(&mut self, a: u16) -> u8 {
         if let Some(v) = self.mem.read(a) {
+            if a & 0xe000 == 0x8000 {
+                if let Some(c) = &self.cart {
+                    return v | c.drives_over_ram(a);
+                }
+            }
             return v;
         }
         let bank = self.mem.bank(a);
@@ -311,7 +317,11 @@ impl C64Bus<'_> {
                 Bank::RomL => c.write_roml(a, v),
                 Bank::RomH => c.write_romh(a, v),
                 Bank::Io if is_cart_io(a) => c.write_io(a, v),
+                Bank::Ram | Bank::Basic => c.write_under(a, v),
                 _ => {}
+            }
+            if matches!(bank, Bank::RomL | Bank::RomH) && c.blocks_ram_write(a) {
+                return;
             }
         }
         if !self.mem.write(a, v) {

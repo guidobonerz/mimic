@@ -592,7 +592,7 @@ Held back on 2026-10-22; not part of the Phase 7 gate. Done on 2026-10-22 (user 
 
 Held back on 2026-10-21 so Phase 5 can start; pick them up in a later phase. They are not part of the Phase 4 gate.
 
-- **Freezer cartridges (C64/C128):** Action Replay, Retro Replay, Final Cartridge III (later Super Snapshot) as `devices-cartridge` types with a freeze button (NMI + bank switch), triggerable from desktop UI, hotkey and the debug command `press_cartridge_button`; tests for freeze/restart round trips.
+- **Freezer cartridges (C64/C128):** Action Replay, Atomic/Nordic Power, Retro Replay and Nordic Replay exist on the C64 since 2026-11-01 (`devices-cartridge::freezer`, without flash writes; the freeze button is a method, simplified to NMI + Ultimax). Open: Final Cartridge III, Super Snapshot, the C128's bus hooks, the button from desktop UI, hotkey and the debug command `press_cartridge_button`; tests for freeze/restart round trips.
 - **Cheat-file import:** POKE lists and VICE monitor commands into `cheats/<machine>/<game-hash>.toml`.
 - **True-emulated 2031** (IEEE-488 drive with its own CPU, `dos2031` ROM); the PET has the virtual IEEE drive only.
 - **Input replay files** in `tests/replays/` for end-to-end game tests (need game images, user-supplied).

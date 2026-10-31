@@ -13,9 +13,9 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1073 / 1240 (106 failed, 61 errors, 303 skipped) | 86.5 % | 50.2 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1141 / 1240 (94 failed, 5 errors, 303 skipped) | 92.0 % | 48.8 min |
 
-Trend: VICE test programs 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
+Trend: VICE test programs 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
 projected from runs of `VICII/`, `interrupts/` and Lorenz 264 → 264 on 2026-10-31;
 no full run yet). Before that: 874 → 902 (+28, none newly failing: all of
 `CIA/shiftregister/cia-sdr-icr`; last full run 898, the last 4 confirmed with `CIA/`,
@@ -40,8 +40,8 @@ on 2026-10-26.
 | interrupts | 39 | 0 | 0 | 4 | 100 % |
 | VICII | 226 | 47 | 0 | 88 | 82.8 % |
 | SID | 155 | 14 | 0 | 22 | 91.7 % |
-| C64 | 12 | 10 | 48 | 25 | 17.1 % |
-| drive | 6 | 32 | 13 | 4 | 11.8 % |
+| C64 | 60 | 10 | 0 | 25 | 85.7 % |
+| drive | 26 | 20 | 5 | 4 | 51.0 % |
 | testbench (self test) | 8 | 0 | 0 | 0 | 100 % |
 | vdrive | 2 | 0 | 0 | 1 | 100 % |
 | memory-expansions | 1 | 0 | 0 | 5 | 100 % |
@@ -49,17 +49,67 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **1073** | **106** | **61** | **303** | **86.5 %** |
+| **total** | **1141** | **94** | **5** | **303** | **92.0 %** |
 
 Largest open blocks: `VICII/videomode` (27, of which 14 NTSC entries with unusable references, see
-below), `drive/viavarious` (19); the 48 errors under
-`C64` are cartridges of types not supported yet (36 Retro Replay, 1 Action
-Replay, 9 Nordic Power, 53). Skipped: tests that need hardware
+below), `drive/viavarious` (15). The 5 errors are `drive` entries that need
+P64 images or disks missing from the test data. Skipped: tests that need hardware
 or options the runner does not set up (REU and GEO-RAM tests, mice,
 interactive and analyser programs).
 
 Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 `target/tmp/lorenz.txt`.
+
+## Changes of 2026-11-01, cartridges and drive
+
+C64 12 → 60 and drive 6 → 26; all 48 cartridge errors are gone.
+
+Cartridges (`devices-cartridge`): Action Replay (1), Atomic/Nordic Power (9),
+Retro Replay and Nordic Replay (36, by subtype) with `$DE00`/`$DE01`, and
+Pagefox (53). The rules come from the test programs and their readmes:
+
+- Bits 1, 2 and 6 of `$DE01` can be written once until reset.
+- Mode `$22` differs by cartridge: on the Action Replay cartridge RAM sits
+  beside C64 RAM and a read gives the OR of the two; on the Nordic cards ROM
+  reads at `$8000`, cartridge RAM at `$A000`, and writes there miss C64 RAM.
+- The Pagefox decodes `$8000–$BFFF` itself, also with ROM banked out.
+- In Ultimax mode the VIC-II sees RAM at `$1000`; the Retro Replay leaves the
+  VIC-II its normal map (`ultimax/readme.txt`, first RR table).
+
+Simplified: the freeze button pulls NMI and switches to Ultimax directly, flash
+writes and the flash jumper are missing. The C128 has none of the new bus hooks
+(`write_under`, `blocks_ram_write`, `drives_over_ram`), so these cartridges work
+there only as far as plain banking goes. Final Cartridge III and Super Snapshot
+stay open, and no frontend or debug command calls the freeze button yet.
+
+Drive (`drives-cbm/src/c1541.rs`, savestate version 3, version 2 still loads):
+
+- The head reads bit by bit. A revolution takes 200 ms whatever a track holds,
+  so a long or short G64 track simply runs denser or thinner.
+- Sync is ten 1 bits. The write shift register takes port A at byte ready, and
+  leaving write mode cuts off the byte in it (`drive/rpm`).
+- G64 images with half tracks insert and write back.
+- The head keeps its angle over a track change. D64 tracks are rotated by
+  `TRACK_SKEW`, 777 bits, which is this project's choice and not a measurement.
+- IEC lines from the C64 reach the drive 1 µs late, which fixed
+  `drive/selftest`, the scanners and many of `viavarious`.
+
+Still open in `drive`: `viavarious` 15, `openbus` 2, `interrupts/timera`,
+`inertia/drive-emu-check`, `hls-protection/hlstest.g64` (not examined).
+Errors: `rpm1`–`rpm3` need P64, which is not implemented: no specification
+turned up, and deriving the format from VICE would break golden rule 7.
+`1541-testsuite` needs `disks/pc64_1.d64` and `pc64_2.d64`, which are not in
+the test data and must be built with tools that are missing there.
+
+Still open in `C64/carts`: `ef-eapi/test-eapi.crt` (timeout, red before too) and
+`ultimax/ultimax-vic-rr.crt` (about 3500 pixels). Its reference fits neither RR
+table of the readme exactly and differs from the 8K reference in rows the
+mode should not touch; the readme says more real cartridges need testing.
+
+Speed: 6000 C64 frames take 54.9 s before and 54.3 s after this block.
+`cargo bench -p cpu-6502` against 8cedd61 (before the `stall_off_bus` change):
+before 9.83 and 10.22 ms, after 10.31 and 10.26 ms per million cycles. The same
+code moved 4 % between its two runs, so no change can be told from that noise.
 
 ## Changes of 2026-10-31, interrupts during DMA
 
@@ -80,8 +130,9 @@ the end of that cycle, with these exceptions:
   PLP does not (`saved.p` for opcode $28).
 
 `stall_p` holds the flags used for this and is saved (CPU savestate version 5;
-older states take the current P). The speed of the C64 is unchanged (6000
-frames 37.4 s before, 37.5 s after, three runs each).
+older states take the current P). Speed: see the cartridges and drive section;
+an earlier figure here (37.4 s against 37.5 s) came from an outdated binary and
+was wrong.
 
 ## Changes of 2026-10-31, SID
 

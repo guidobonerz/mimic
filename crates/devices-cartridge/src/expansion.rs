@@ -14,6 +14,8 @@ use media::crt::{hw, Crt, CrtMachine};
 
 use crate::banked::{Banked, Scheme};
 use crate::easyflash::EasyFlash;
+use crate::freezer::{Freezer, Kind};
+use crate::pagefox::Pagefox;
 
 /// Lines the cartridge pulls (true = low = asserted).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -50,6 +52,27 @@ pub trait ExpansionCart: Send {
     fn write_roml(&mut self, _addr: u16, _v: u8) {}
 
     fn write_romh(&mut self, _addr: u16, _v: u8) {}
+
+    /// A write to `$8000–$BFFF` that the PLA gives to C64 RAM.
+    fn write_under(&mut self, _addr: u16, _v: u8) {}
+
+    /// What the cartridge drives while C64 RAM answers a read (the data
+    /// bus ORs the two); 0 for a cartridge that keeps quiet.
+    fn drives_over_ram(&self, _addr: u16) -> u8 {
+        0
+    }
+
+    /// In Ultimax mode the VIC-II reads ROMH at `$3000` of each bank and
+    /// RAM instead of the character ROM. A cartridge that holds /GAME only
+    /// in the CPU's half of the cycle leaves the VIC-II its normal map.
+    fn vic_sees_ultimax(&self) -> bool {
+        true
+    }
+
+    /// The cartridge keeps this ROML/ROMH write from C64 RAM.
+    fn blocks_ram_write(&self, _addr: u16) -> bool {
+        false
+    }
 
     /// `$DE00–$DFFF` (/IO1, /IO2).
     fn peek_io(&self, _addr: u16) -> Option<u8> {
@@ -108,6 +131,16 @@ pub fn from_crt(crt: &Crt) -> Result<Box<dyn ExpansionCart>, MediaError> {
         hw::DINAMIC => Scheme::Dinamic,
         hw::MAGIC_DESK => Scheme::MagicDesk,
         hw::EASYFLASH => return Ok(Box::new(EasyFlash::from_crt(crt)?)),
+        hw::PAGEFOX => return Ok(Box::new(Pagefox::from_crt(crt)?)),
+        hw::ACTION_REPLAY => return Ok(Box::new(Freezer::from_crt(crt, Kind::ActionReplay)?)),
+        hw::ATOMIC_POWER => return Ok(Box::new(Freezer::from_crt(crt, Kind::NordicPower)?)),
+        hw::RETRO_REPLAY => {
+            let kind = match crt.subtype {
+                0 => Kind::RetroReplay,
+                _ => Kind::NordicReplay,
+            };
+            return Ok(Box::new(Freezer::from_crt(crt, kind)?));
+        }
         other => {
             return Err(MediaError::Format(format!(
                 "cartridge type {other} is not supported yet"

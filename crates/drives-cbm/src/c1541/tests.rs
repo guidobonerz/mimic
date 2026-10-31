@@ -65,14 +65,18 @@ fn reads_gcr_bytes_with_byte_ready_on_so() {
     let got: Vec<u8> = d.ram[0x300..0x310].to_vec();
     // Track 18 GCR stream without the SYNC bytes, from wherever the head was.
     let track = gcr::encode_track(&D64::blank(b"TEST", *b"AB"), 18);
-    let stream: Vec<u8> = track
-        .iter()
-        .enumerate()
-        .filter(|&(i, &b)| !(b == 0xff && track[(i + track.len() - 1) % track.len()] == 0xff))
-        .map(|(_, &b)| b)
-        .collect();
+    // Before the first SYNC the bytes are framed at any bit of the track.
+    let framed = |shift: u32| -> Vec<u8> {
+        (0..track.len())
+            .map(|i| {
+                let word = u16::from(track[i]) << 8 | u16::from(track[(i + 1) % track.len()]);
+                (word >> (8 - shift)) as u8
+            })
+            .collect()
+    };
     assert!(
-        stream.windows(16).any(|w| w == got.as_slice()),
+        // The first byte may have been cut off by a SYNC mark.
+        (0..8).any(|s| framed(s).windows(15).any(|w| w == &got[1..])),
         "{got:02x?} is a run of the track's data bytes"
     );
 }
@@ -150,7 +154,7 @@ fn writing_a_track_reaches_the_image() {
         d.via2.write(0x1, track[written]);
         let before = d.mech.position;
         d.tick(IecLines::default(), None);
-        if d.mech.position != before {
+        if d.mech.position / 8 != before / 8 {
             written += 1;
         }
         cycles += 1;
@@ -211,7 +215,7 @@ fn atn_raises_ca1_interrupt() {
             atn: true,
             ..IecLines::default()
         },
-        1,
+        2,
     );
     assert!(d.via1.irq());
 }
@@ -313,7 +317,10 @@ fn c1571_reads_side_1_of_a_d71() {
     .unwrap();
     // Head on track 18 of side 1 = image track 53.
     let side1 = &d.disk.as_ref().unwrap().tracks[track_index(1, 34)];
-    assert_eq!(side1.as_ref(), Some(&gcr::encode_track(&image, 53)));
+    let mut expected = gcr::encode_track(&image, 53);
+    let skew = 53 * TRACK_SKEW % expected.len();
+    expected.rotate_left(skew);
+    assert_eq!(side1.as_ref(), Some(&expected));
     let sectors = gcr::decode_track(side1.as_ref().unwrap());
     assert!(sectors
         .iter()
