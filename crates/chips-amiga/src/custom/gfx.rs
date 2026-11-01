@@ -645,6 +645,7 @@ mod tests {
         ] {
             c.write(r, v);
         }
+        c.settle_bplcon0();
         for p in 0..depth {
             c.write(reg::BPL1PTH + 4 * p, 0x0001);
             c.write(reg::BPL1PTH + 4 * p + 2, 0x2000 * p);
@@ -722,6 +723,7 @@ mod tests {
         assert_eq!(p.param("count"), Some(64), "half-brite colours follow");
         // HAM6: pixel 0 = modify blue with 3 (control 01 in planes 5–6).
         c.write(reg::BPLCON0, 0x6a00);
+        c.settle_bplcon0();
         chip.set_word(0x1_8000, 0x8000);
         chip.set_word(0x1_a000, 0x0000);
         c.write(reg::COLOR00, 0x12f);
@@ -731,6 +733,7 @@ mod tests {
         assert_eq!(v.frame().rgb_at(0, 0), Some(rgb(0x123)));
         // Hires: 640 pixels from the same window ($3C/$D4).
         c.write(reg::BPLCON0, 0x9200);
+        c.settle_bplcon0();
         c.write(reg::DDFSTRT, 0x3c);
         c.write(reg::DDFSTOP, 0xd4);
         let v = view(&c, &chip, "bitplanes", &GfxOptions::new());
@@ -849,6 +852,7 @@ mod tests {
         assert!(matches!(p.pixels, GfxPixels::Rgb(_)));
         // Eight planes, 64-bit fetches.
         c.write(reg::BPLCON0, 0x0211);
+        c.settle_bplcon0();
         c.write(reg::FMODE, 0x0003);
         c.write(reg::DDFSTRT, 0x38);
         c.write(reg::DDFSTOP, 0xb8);

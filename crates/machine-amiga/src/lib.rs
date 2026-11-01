@@ -381,6 +381,9 @@ const PORT_SAMPLE_CCK: u64 = custom::PAL_LINE as u64;
 /// Everything on the boards' buses except the CPU and the port devices.
 #[derive(Clone, Debug)]
 struct Board {
+    /// A CPU write on its way to a custom register: register, value, ticks
+    /// left ([`CPU_WRITE_DELAY`]).
+    cpu_write: Option<(u16, u16, u8)>,
     /// A printer hangs on the parallel port: not busy, paper in, selected.
     printer_on: bool,
     /// Bytes strobed to the printer since the last frame.
@@ -437,7 +440,17 @@ struct Board {
 /// this: it polls VHPOSR for line 0 in a loop whose branch waits for the
 /// Copper's burst at the line start, and reads the 0 only because the
 /// vertical blank interrupt is taken one instruction later.
-const IPL_DELAY: u64 = 7;
+///
+/// Measured with vAmigaTS (`Paula/Interrupts/inttim`, whose pictures match
+/// with no delay beyond the sample at the last bus cycle): the estimate of
+/// seven colour clocks above was too long.
+const IPL_DELAY: u64 = 0;
+
+/// Ticks of [`Board::tick`] until a 68000 write reaches a custom register:
+/// the first one only passes, so a write shows a colour clock after its
+/// slot, on the column of the vAmiga suite's pictures; see `VHPOSR_AHEAD`
+/// in `chips-amiga`.
+const CPU_WRITE_DELAY: u8 = 2;
 
 /// [`IPL_DELAY`] for the A1200's 68EC020: Paula's four colour clocks
 /// plus one for the synchroniser, which on the 68020 wants the level on
@@ -462,7 +475,20 @@ const LED_ONE: i64 = 1 << 24;
 
 impl Board {
     /// One colour clock. Returns true if a waiting CPU got the slot.
+    /// A write still under way reaches its register now.
+    fn flush_cpu_write(&mut self) {
+        if let Some((r, v, _)) = self.cpu_write.take() {
+            self.custom.write(r, v);
+        }
+    }
+
     fn tick(&mut self, cpu_wants: bool) -> bool {
+        if let Some((r, v, n)) = self.cpu_write {
+            self.cpu_write = (n > 1).then_some((r, v, n - 1));
+            if n <= 1 {
+                self.custom.write(r, v);
+            }
+        }
         let out = self.custom.tick(&mut self.mem.chip, cpu_wants);
         if self.cck.is_multiple_of(5) {
             self.keyboard.tick(&mut self.cia_a);
@@ -734,7 +760,15 @@ impl Board {
                     f.write(addr & 0xffff, (v >> 8) as u8);
                 }
             }
-            Region::Custom => self.custom.write(addr as u16, v),
+            Region::Custom => {
+                // The 68020's timing is not measured: it writes at once.
+                if self.bus_clocks == 4 {
+                    self.flush_cpu_write();
+                    self.cpu_write = Some((addr as u16, v, CPU_WRITE_DELAY));
+                } else {
+                    self.custom.write(addr as u16, v);
+                }
+            }
             Region::Cia => {
                 self.write_cia(addr & !1, (v >> 8) as u8);
                 self.write_cia(addr | 1, v as u8);
@@ -859,6 +893,12 @@ impl TimedBus68 for AmigaBus<'_> {
         self.bus_start = at;
         let (clk, bus) = (self.b.clk, self.b.bus_clocks);
         if access == Access::IntAck {
+            // On the 68000 the acknowledge is a plain bus cycle: a handler's
+            // start does not move with the E clock on the suite's pictures
+            // and photographs. The 68020's is not measured.
+            if bus == 4 {
+                return 0;
+            }
             let w = e_clock_waits(at, clk, bus);
             self.b.run_to((at + bus + u64::from(w)) / clk);
             return w;
@@ -1112,6 +1152,7 @@ impl Amiga {
             cpu: M68000::with_model(model.cpu()),
             printer: Printer::from_config(config, devices_printer::Model::Fx80),
             board: Board {
+                cpu_write: None,
                 printer_on: config.options.get("printer").is_some_and(|v| v != "off"),
                 printed: Vec::new(),
                 mem,
@@ -1812,6 +1853,13 @@ impl Machine for Amiga {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some((r, v, n)) = self.board.cpu_write {
+            w.chunk(*b"CPUW", 1, |w| {
+                w.u16(r);
+                w.u16(v);
+                w.u8(n);
+            });
+        }
         if let Some(p) = &self.printer {
             p.save_chunk(&mut w);
         }
@@ -1975,6 +2023,10 @@ impl Machine for Amiga {
         if let Some(p) = &mut self.printer {
             p.load_chunk(s);
         }
+        self.board.cpu_write = StateReader::new(s)
+            .chunk(*b"CPUW", 1)
+            .ok()
+            .and_then(|(_, mut c)| Some((c.u16().ok()?, c.u16().ok()?, c.u8().ok()?)));
         Ok(())
     }
 }

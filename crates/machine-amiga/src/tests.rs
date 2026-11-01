@@ -784,6 +784,9 @@ fn serial_loopback_returns_what_was_sent() {
     b.write(0xdf_f032, Size::Word, 0x0173); // 9600 baud: 3 546 895 / 372
     b.write(0xdf_f09c, Size::Word, 0x0801); // clear RBF, TBE
     b.write(0xdf_f030, Size::Word, 0x0100 | 0x41);
+    // The CPU's write takes a colour clock to arrive.
+    let later = b.cck + 2;
+    b.run_to(later);
     assert_eq!(
         b.read(0xdf_f01e, Size::Word, true) & 0x0001,
         0x0001,
@@ -808,6 +811,8 @@ fn serial_loopback_returns_what_was_sent() {
         "INTREQ RBF"
     );
     b.write(0xdf_f09c, Size::Word, 0x0800);
+    let later = b.cck + 2;
+    b.run_to(later);
     assert_eq!(
         b.read(0xdf_f018, Size::Word, true) & 0xc000,
         0,
@@ -850,9 +855,12 @@ fn graphics_views_decode_chip_ram_without_side_effects() {
     assert_eq!(ids, ["sprites", "bitplanes", "palette"]);
     // One low-resolution plane at $20000, pixel 0 of line 0 set.
     m.board.mem.chip.set_word(0x2_0000, 0x8000);
+    // BPLCON0 takes a moment to reach Denise.
+    m.board.custom.write(chips_amiga::reg::BPLCON0, 0x1200);
+    let later = m.board.cck + 4;
+    m.board.run_to(later);
     let c = &mut m.board.custom;
     for (r, v) in [
-        (chips_amiga::reg::BPLCON0, 0x1200),
         (chips_amiga::reg::DIWSTRT, 0x2c81),
         (chips_amiga::reg::DIWSTOP, 0x2cc1),
         (chips_amiga::reg::DDFSTRT, 0x38),

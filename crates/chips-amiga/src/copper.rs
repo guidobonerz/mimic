@@ -133,8 +133,9 @@ impl Copper {
         self.pc = if second { self.cop2lc } else { self.cop1lc };
         self.state = State::Fetch1;
         // Counted down on the even slot of the restart (if any) and the
-        // next one: the first fetch comes one Copper cycle later.
-        self.wake = 2;
+        // next two: the first fetch comes two Copper cycles later (vAmigaTS
+        // `Agnus/Copper`; the WinUAE bus test holds either way).
+        self.wake = 3;
     }
 
     /// Every colour clock: a WAIT that is satisfied releases the Copper
@@ -293,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_lets_one_copper_cycle_pass() {
+    fn a_restart_lets_two_copper_cycles_pass() {
         let mut c = Copper::new();
         c.jump(false);
         assert!(!c.wants_slot());
@@ -302,7 +303,9 @@ mod tests {
         c.check_wait(0, 1, false);
         assert!(!c.wants_slot());
         c.check_wait(0, 2, false);
-        assert!(c.wants_slot(), "fetching from the second even slot on");
+        assert!(!c.wants_slot());
+        c.check_wait(0, 4, false);
+        assert!(c.wants_slot(), "fetching from the third even slot on");
     }
 
     #[test]

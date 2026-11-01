@@ -729,6 +729,7 @@ fn aga_sprite_dma_fetches_wide_words() {
 fn pen_setup() -> (Custom, ChipRam) {
     let (mut c, chip) = setup();
     c.write(reg::BPLCON0, 0x0208);
+    c.settle_bplcon0();
     c.write(reg::COLOR00, 0xfff);
     c.set_light_pen(Some((200, 100)), 80);
     (c, chip)
@@ -779,19 +780,21 @@ fn light_pen_without_a_trigger_freezes_at_the_end_of_the_field() {
     assert_eq!(c.peek(reg::VHPOSR), (312 & 0xff) << 8 | 226);
     // LPEN off: the running counters.
     c.write(reg::BPLCON0, 0x0200);
-    assert_eq!(c.peek(reg::VHPOSR), 0);
+    c.settle_bplcon0();
+    assert_eq!(c.peek(reg::VHPOSR), VHPOSR_AHEAD);
 }
 
 #[test]
 fn ecs_lpendis_shows_the_running_counters() {
     let (mut c, mut chip) = setup_ecs(Standard::Pal);
     c.write(reg::BPLCON0, 0x0208);
+    c.settle_bplcon0();
     c.write(reg::COLOR00, 0xfff);
     c.set_light_pen(Some((200, 100)), 80);
     field(&mut c, &mut chip);
     assert_eq!(c.peek(reg::VHPOSR), 126 << 8 | 108);
     c.write(0x1dc, beamcon0::PAL | beamcon0::LPENDIS);
-    assert_eq!(c.peek(reg::VHPOSR), 0);
+    assert_eq!(c.peek(reg::VHPOSR), VHPOSR_AHEAD);
 }
 
 #[test]
@@ -831,6 +834,7 @@ fn super_hires_widens_the_field_and_it_narrows_again() {
     assert_eq!(&d.denise, &c.denise);
     // Without 35 ns content the picture narrows after FINE_HOLD fields.
     c.write(reg::BPLCON0, 0x1200);
+    c.settle_bplcon0();
     for _ in 0..FINE_HOLD - 1 {
         field(&mut c, &mut chip);
     }
@@ -846,6 +850,7 @@ fn the_frame_reports_the_field_it_holds() {
     // the field before, which a frontend weaves by its LOF.
     let (mut c, mut chip) = setup();
     c.write(reg::BPLCON0, 0x0204);
+    c.settle_bplcon0();
     field(&mut c, &mut chip);
     for _ in 0..4 {
         let drawn = c.lof;
@@ -871,6 +876,7 @@ fn aga_wide_fetch_runs_in_aligned_blocks_and_sprites_end_at_ddfstrt() {
     ] {
         c.write(r, v);
     }
+    c.settle_bplcon0();
     for ddf in [0x40, 0x44, 0x48] {
         c.write(reg::DDFSTRT, ddf);
         assert_eq!(c.fetch_window().0, 0x40, "DDFSTRT {ddf:#x}");
@@ -890,4 +896,17 @@ fn aga_wide_fetch_runs_in_aligned_blocks_and_sprites_end_at_ddfstrt() {
     assert_eq!(lost(&c), vec![4, 5, 6, 7]);
     c.write(reg::DDFSTRT, 0x18);
     assert_eq!(lost(&c), (1..8).collect::<Vec<_>>());
+}
+
+#[test]
+fn bplcon0_reaches_denise_after_two_colour_clocks() {
+    let mut c = Custom::new(Standard::Pal, 0x7fffe, Chipset::OCS);
+    let mut chip = ChipRam::new(0x8_0000);
+    c.write(reg::BPLCON0, 0x1200);
+    for _ in 0..BPLCON0_DELAY - 1 {
+        assert_eq!(c.denise.bplcon0, 0);
+        c.tick(&mut chip, false);
+    }
+    c.tick(&mut chip, false);
+    assert_eq!(c.denise.bplcon0, 0x1200);
 }

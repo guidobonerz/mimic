@@ -355,6 +355,12 @@ Pages fetched or searched while building (beyond the documents above):
 - Real hardware (2026-10-25): the Greaseweazle repositories' `COPYING` (Unlicense, public domain), `inc/cdc_acm_protocol.h` and `src/greaseweazle/usb.py`; OpenCBM's `opencbm/include/opencbm.h` and the doc comments of `opencbm/lib/cbm.c` (interface only, GPL code not used).
 - Atari 2600 DPC (2026-10-25): Kevin Horton's description of the DPC chip in Pitfall II (register map $1000–$107F, data fetchers with top/bottom flag compare, music mode of DF5–DF7 clocked by an on-board oscillator of about 20 kHz, amplitude mixing of the three voices, random number generator) and his "Cart Information" v6 (https://www.qotile.net/minidig/docs/sizes.txt); the random number generator's taps (XNOR of bits 7, 5, 4, 3, shifting left) were checked against the 255-byte generator dump appended to the 10 495-byte Pitfall II image. No emulator code was used.
 
+## vAmiga test suite
+
+| What | Source | Used in |
+| --- | --- | --- |
+| Reference pictures and photographs of real Amigas, test programs (GPL-3.0, test data only, fetched into `testdata/vamigats`, never committed) | Dirk W. Hoffmann, vAmigaTS (github.com/dirkwhoffmann/vAmigaTS) | `tests/tests/vamigats.rs` |
+
 ## Printers
 
 | What | Source | Used in |

@@ -196,6 +196,16 @@ const DENISE_LAG: u16 = 2;
 pub const PAL_LINE: u16 = 227;
 /// Colour clocks from the vertical strobe to the VERTB request.
 const VERTB_DELAY: u16 = 2;
+/// Ticks until a BPLCON0 write takes effect: the picture goes on two colour
+/// clocks after the Copper turns the planes off (vAmigaTS `Agnus/DDF/DDF`,
+/// the row of `ddf1` with BPLCON0 at $90D9).
+const BPLCON0_DELAY: u8 = 3;
+/// VHPOSR shows the beam this many colour clocks ahead of the slot that
+/// reads it. Measured with vAmigaTS, whose tests poll VHPOSR to synchronise
+/// the CPU: with this value and the CPU's register writes a colour clock
+/// late (`CPU_WRITE_DELAY` in `machine-amiga`) their picture lands on the
+/// column of the reference and of the photographs of real Amigas.
+const VHPOSR_AHEAD: u16 = 3;
 /// DIWHIGH with DIWSTRT/DIWSTOP both 0: stop H8 set, stop V8 set.
 const DIWHIGH_DEFAULT: u16 = 0x2100;
 /// Smallest HTOTAL/VTOTAL the programmable beam accepts (a guest writing
@@ -316,6 +326,8 @@ pub struct Custom {
     /// The CPU asserted its bus request in the coming colour clock (it
     /// cannot take data yet; see [`Custom::cpu_request`]).
     cpu_pending: bool,
+    /// A BPLCON0 write on its way to Denise, with the ticks left.
+    bplcon0_pending: Option<(u16, u8)>,
     spr_dma: [SprDma; 8],
     fetch_cache: FetchCache,
     frame: Vec<Rgb8>,
@@ -384,6 +396,7 @@ impl Custom {
             fetched: false,
             cpu_starved: 0,
             cpu_pending: false,
+            bplcon0_pending: None,
             spr_dma: [SprDma::Off; 8],
             fetch_cache: FetchCache::default(),
             frame: vec![Rgb8::default(); (WIDTH * standard.height()) as usize],
@@ -433,6 +446,29 @@ impl Custom {
     pub fn set_light_pen(&mut self, aim: Option<(u16, u16)>, luma: u32) {
         self.pen = aim;
         self.pen_luma = luma;
+    }
+
+    /// For tests of what follows: a BPLCON0 write takes effect at once.
+    #[cfg(test)]
+    fn settle_bplcon0(&mut self) {
+        if let Some((value, _)) = self.bplcon0_pending.take() {
+            self.denise.bplcon0 = value;
+        }
+    }
+
+    /// The beam as a read sees it, [`VHPOSR_AHEAD`] colour clocks on:
+    /// line, position and LOF, over the end of the line and of the field.
+    fn beam_ahead(&self) -> (u16, u16, bool) {
+        let h = self.h + VHPOSR_AHEAD;
+        if h < self.line_len() {
+            return (self.v, h, self.lof);
+        }
+        let h = h - self.line_len();
+        if self.v + 1 < self.field_lines() {
+            (self.v + 1, h, self.lof)
+        } else {
+            (0, h, self.lof != self.interlaced())
+        }
     }
 
     /// LPEN in BPLCON0 and the ECS LPENDIS: the latch shows in VPOSR/VHPOSR.
@@ -715,16 +751,23 @@ impl Custom {
             let first = start & !(unit - 1);
             return (first, first + units * unit);
         }
-        let stop = stop_raw
-            + if self.denise.hires() || self.denise.shres() {
-                4
-            } else {
-                0
-            };
-        if stop < start {
+        // A unit in progress at DDFSTOP completes and one more follows, in
+        // low resolution too (vAmigaTS `Agnus/DDF/DDF`: DDFSTOP $B4 and $B6
+        // fetch a word more than $B0).
+        if stop_raw < start {
             return (start, start);
         }
-        (start, start + ((stop - start) / 8 + 1) * 8)
+        // In low resolution the units run on a fixed eight-clock grid: a
+        // DDFSTRT between two of them waits for the next, which moves the
+        // fetch and leaves the count of units as it is (`ddf3`: $3C fetches
+        // from $40). High resolution starts at DDFSTRT.
+        let units = (stop_raw - start).div_ceil(8) + 1;
+        let first = if self.denise.hires() || self.denise.shres() {
+            start
+        } else {
+            start.next_multiple_of(8)
+        };
+        (first, first + units * 8)
     }
 
     #[inline(always)]
@@ -823,6 +866,12 @@ impl Custom {
     /// light pen.
     #[inline(always)]
     fn tick_with<const EXTRAS: bool>(&mut self, chip: &mut ChipRam, cpu_wants: bool) -> TickOut {
+        if let Some((value, left)) = self.bplcon0_pending {
+            self.bplcon0_pending = (left > 1).then_some((value, left - 1));
+            if left <= 1 {
+                self.denise.bplcon0 = value;
+            }
+        }
         let (v, h) = (self.v, self.h);
         let mut out = TickOut::default();
         if h == 0 {
@@ -1369,7 +1418,13 @@ impl Custom {
                     dh,
                 );
             }
-            reg::BPLCON0 => self.denise.bplcon0 = v,
+            reg::BPLCON0 => {
+                // A write still under way lands first.
+                if let Some((value, _)) = self.bplcon0_pending.take() {
+                    self.denise.bplcon0 = value;
+                }
+                self.bplcon0_pending = Some((v, BPLCON0_DELAY));
+            }
             reg::BPLCON1 => self.denise.bplcon1 = v,
             reg::BPLCON2 => self.denise.bplcon2 = v,
             reg::BPLCON3 if self.chipset.ecs_denise => self.denise.bplcon3 = v,
@@ -1444,11 +1499,15 @@ impl Custom {
                     (_, true, Standard::Ntsc) => 0x32,
                 };
                 let lol = u16::from(self.chipset.ecs_agnus && self.lol) << 7;
-                let v = self.lpen_shown().map_or(self.v, |(v, _)| v);
-                u16::from(self.lof) << 15 | id << 8 | lol | (v >> 8 & 7)
+                let (v, _, lof) = self
+                    .lpen_shown()
+                    .map_or(self.beam_ahead(), |(v, h)| (v, h, self.lof));
+                u16::from(lof) << 15 | id << 8 | lol | (v >> 8 & 7)
             }
             reg::VHPOSR => {
-                let (v, h) = self.lpen_shown().unwrap_or((self.v, self.h));
+                let (v, h, _) = self
+                    .lpen_shown()
+                    .map_or(self.beam_ahead(), |(v, h)| (v, h, false));
                 (v & 0xff) << 8 | (h & 0xff)
             }
             reg::DENISEID => {
@@ -1511,7 +1570,7 @@ impl Savestate for Custom {
         // version 6: the serial port and the audio attach alternation;
         // version 7: the ECS registers; version 8: AGA (eight planes, FMODE,
         // Denise's 256 colours of 24 bits); version 10: 35 ns output.
-        w.chunk(TAG, 10, |w| {
+        w.chunk(TAG, 11, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1560,12 +1619,16 @@ impl Savestate for Custom {
             w.bool(self.wide);
             w.bool(self.fine_seen);
             w.u16(self.fine_idle);
+            w.bool(self.bplcon0_pending.is_some());
+            let (value, left) = self.bplcon0_pending.unwrap_or_default();
+            w.u16(value);
+            w.u8(left);
         });
     }
 
     /// Atomic; the standard and pointer width are configuration.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (version, mut c) = r.chunk(TAG, 10)?;
+        let (version, mut c) = r.chunk(TAG, 11)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -1633,6 +1696,11 @@ impl Savestate for Custom {
                 n.wide = c.bool()?;
                 n.fine_seen = c.bool()?;
                 n.fine_idle = c.u16()?.min(FINE_HOLD);
+            }
+            if version >= 11 {
+                let pending = c.bool()?;
+                let (value, left) = (c.u16()?, c.u8()?);
+                n.bplcon0_pending = pending.then_some((value, left.min(BPLCON0_DELAY)));
             }
         } else {
             n.diwhigh = Self::diwhigh_default(n.diwstop);
