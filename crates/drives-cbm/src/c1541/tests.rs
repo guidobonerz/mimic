@@ -90,6 +90,7 @@ fn sync_flag_and_write_protect_on_via2() {
     ];
     let mut d = drive_with(&code);
     d.insert(disk()).unwrap();
+    d.mech.notch_covered = 0;
     let mut saw_sync = false;
     for _ in 0..20_000 {
         d.tick(IecLines::default(), None);
@@ -124,6 +125,20 @@ impl MediaBackend for Shared {
     fn commit(&mut self) -> Result<(), MediaError> {
         Ok(())
     }
+}
+
+#[test]
+fn a_disk_going_in_or_out_covers_the_sensor_for_a_moment() {
+    let mut d = drive_with(&[]);
+    let notch = |d: &CbmDrive| d.via2_pins().1 & 0x10 != 0;
+    assert!(notch(&d), "no disk: the light gets through");
+    d.insert(disk()).unwrap();
+    assert!(!notch(&d), "covered: the DOS sees the change");
+    d.mech.notch_covered = 1;
+    run(&mut d, IecLines::default(), 2);
+    assert!(notch(&d), "the disk's notch: not protected");
+    d.eject();
+    assert!(!notch(&d), "covered on the way out too");
 }
 
 #[test]

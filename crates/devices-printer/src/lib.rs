@@ -260,6 +260,27 @@ impl Translation {
         }
     }
 
+    /// The screen code of `b` if it is a graphics character here: it then
+    /// prints from the character ROM, set `lower` of the two. In the
+    /// capitals' set the shifted letters are graphics too (C64
+    /// Programmer's Reference Guide, screen codes and PETSCII tables).
+    pub fn graphic(self, b: u8) -> Option<(u8, bool)> {
+        let letter = matches!(b, 0x61..=0x7a | 0xc1..=0xda);
+        let code = match b {
+            0x5c | 0x5e | 0x5f => b - 0x40,
+            0x60..=0x7f => b - 0x20,
+            0xa1..=0xbf => b - 0x40,
+            0xc0..=0xfe => b - 0x80,
+            0xff => 0x5e,
+            _ => return None,
+        };
+        match self {
+            Self::Upper => Some((code, false)),
+            Self::Lower if !letter => Some((code, true)),
+            _ => None,
+        }
+    }
+
     /// `b` for the printer: a character, a line end or nothing.
     pub fn apply(self, b: u8, mut out: impl FnMut(u8)) {
         match (self, b) {
@@ -269,13 +290,13 @@ impl Translation {
                 out(0x0a);
             }
             (_, 0x08..=0x0c | 0x0e | 0x0f | 0x12 | 0x14 | 0x1b) => out(b),
-            (_, 0x20..=0x40 | 0x5b..=0x5f) => out(b),
+            (_, 0x20..=0x40 | 0x5b | 0x5d) => out(b),
             (Self::Upper, 0x41..=0x5a) => out(b),
             (Self::Lower, 0x41..=0x5a) => out(b | 0x20),
-            (_, 0x61..=0x7a | 0xc1..=0xda) => out(b & 0x5f),
+            (Self::Lower, 0x61..=0x7a | 0xc1..=0xda) => out(b & 0x5f),
             (_, 0xa0) => out(0x20),
-            // PETSCII graphics have no ASCII.
-            (_, 0x60 | 0x7b..=0x7f | 0xa1..=0xbf | 0xdb..=0xff) => out(b'?'),
+            // Without a character ROM: PETSCII graphics have no ASCII.
+            (_, 0x5c | 0x5e | 0x5f | 0x60..=0x7f | 0xa1..=0xbf | 0xc0..=0xff) => out(b'?'),
             // Colour and cursor codes do not print.
             _ => {}
         }
@@ -311,6 +332,9 @@ pub struct CbmPrinter {
     eoi: bool,
     prev_atn: bool,
     atn: bool,
+    /// Character ROM: two sets of eight-byte characters, for PETSCII
+    /// graphics. Taken from the machine's ROMs, not state.
+    charset: Vec<u8>,
     /// The one serial line a listener pulls.
     pull_data: bool,
     /// IEEE-488: the lines it pulls, and a byte taken until DAV ends.
@@ -332,7 +356,26 @@ impl CbmPrinter {
         let five = config.options.get("printer").is_some_and(|v| v == "5");
         let mut p = Self::new(if five { 5 } else { 4 });
         p.printer = Printer::with_model(model);
+        // Their own ROM, or (C16, Plus/4) the part of the KERNAL at $D000.
+        let charset = match (config.roms.get("chargen"), config.roms.get("kernal")) {
+            (Some(rom), _) => rom.get(..rom.len().min(0x1000)),
+            (None, Some(rom)) => rom.get(0x1000..0x1800),
+            _ => None,
+        };
+        p.charset = charset.unwrap_or_default().to_vec();
         Some(p)
+    }
+
+    /// Print a graphics character from the character ROM.
+    fn graphic(&mut self, code: u8, lower: bool) -> bool {
+        let set = self.charset.len() / 2;
+        let start = usize::from(code) * 8 + if lower { set } else { 0 };
+        let Some(rows) = self.charset.get(start..start + 8) else {
+            return false;
+        };
+        let bytes = self.printer.epson().model().glyph_bytes(rows);
+        bytes.into_iter().for_each(|b| self.printer.feed(b));
+        true
     }
 
     pub fn save_chunk(&self, w: &mut StateWriter) {
@@ -347,6 +390,7 @@ impl CbmPrinter {
         let mut fresh = Self::new(self.device);
         if fresh.load(&mut c).is_ok() {
             fresh.printer.files = self.printer.files.take();
+            fresh.charset = std::mem::take(&mut self.charset);
             *self = fresh;
         }
     }
@@ -366,6 +410,7 @@ impl CbmPrinter {
             eoi: false,
             prev_atn: false,
             atn: false,
+            charset: Vec::new(),
             pull_data: false,
             pull_ndac: false,
             pull_nrfd: false,
@@ -414,8 +459,14 @@ impl CbmPrinter {
         if self.atn {
             self.command(b);
         } else if self.listening && self.data_phase {
+            let translation = Translation::of_secondary(self.secondary);
+            if let Some((code, lower)) = translation.graphic(b) {
+                if self.graphic(code, lower) {
+                    return;
+                }
+            }
             let printer = &mut self.printer;
-            Translation::of_secondary(self.secondary).apply(b, |c| printer.feed(c));
+            translation.apply(b, |c| printer.feed(c));
         }
     }
 

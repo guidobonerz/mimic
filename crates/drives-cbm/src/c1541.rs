@@ -207,6 +207,8 @@ impl Disk {
 /// Mechanism state: head, rotation, byte latch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Mechanism {
+    /// Microseconds a disk going in or out still covers the sensor.
+    notch_covered: u32,
     half_track: u8,
     phase: u8,
     /// Bit index on the current track.
@@ -475,8 +477,11 @@ impl CbmDrive {
     }
 
     fn via2_pins(&self) -> (u8, u8) {
-        // No disk lets the light through the write-protect notch sensor.
-        let protected = self.disk.as_ref().is_some_and(|d| d.protected);
+        // No disk lets the light through the write-protect notch sensor;
+        // a disk going in or out covers it for a moment, which is how the
+        // DOS finds out that the disk has changed.
+        let protected =
+            self.mech.notch_covered > 0 || self.disk.as_ref().is_some_and(|d| d.protected);
         let pb = 0x6f | if protected { 0 } else { 0x10 } | if self.mech.sync { 0 } else { 0x80 };
         (self.mech.last_byte, pb)
     }
@@ -645,6 +650,7 @@ impl CbmDrive {
         mut dbg: Option<&mut DebugHooks>,
     ) -> CycleResult {
         let bus = IecLines::combine(&[host, self.iec_out(host.atn)]);
+        self.mech.notch_covered = self.mech.notch_covered.saturating_sub(1);
         self.via1.tick();
         self.via2.tick();
         if self.model == DriveModel::C1571 {
@@ -836,6 +842,7 @@ impl MediaSlot for CbmDrive {
             dirty: vec![false; slots],
             protected: false,
         });
+        self.mech.notch_covered = NOTCH_COVERED_US;
         Ok(())
     }
 
@@ -844,6 +851,7 @@ impl MediaSlot for CbmDrive {
         self.mech.sync = false;
         let mut d = self.disk.take()?;
         let _ = d.flush();
+        self.mech.notch_covered = NOTCH_COVERED_US;
         Some(d.media)
     }
 
@@ -876,7 +884,10 @@ impl MediaSlot for CbmDrive {
     }
 }
 
-const VERSION: u16 = 3;
+const VERSION: u16 = 4;
+
+/// How long a disk going in or out covers the write-protect sensor.
+const NOTCH_COVERED_US: u32 = 100_000;
 
 impl Savestate for CbmDrive {
     /// The disk itself is media, not state: a savestate restores the drive
@@ -908,6 +919,7 @@ impl Savestate for CbmDrive {
             if self.model == DriveModel::C1571 {
                 w.bool(self.byte_ready);
             }
+            w.u32(self.mech.notch_covered);
         });
         self.cpu.save(w);
         self.via1.save(w);
@@ -965,6 +977,7 @@ impl Savestate for CbmDrive {
         // Version 1 states (1541 only) predate writing.
         let motor_was_on = version >= 2 && c.bool()?;
         let byte_ready = c1571 && c.bool()?;
+        mech.notch_covered = if version >= 4 { c.u32()? } else { 0 };
         let mut cpu = self.cpu.clone();
         let mut via1 = self.via1.clone();
         let mut via2 = self.via2.clone();

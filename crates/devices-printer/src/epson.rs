@@ -73,6 +73,34 @@ impl Model {
         }
     }
 
+    /// The bytes that print a 8 × 8 picture (`rows` top first, MSB left)
+    /// in a character cell of ten to the inch: 80 columns an inch on the
+    /// Epson, 90 with a blank one on the NEC, ESC N's pitch on the
+    /// ImageWriter.
+    pub fn glyph_bytes(self, rows: &[u8]) -> Vec<u8> {
+        let column = |c: usize, top_is_msb: bool| {
+            rows.iter().take(8).enumerate().fold(0u8, |v, (r, row)| {
+                let on = row & (0x80 >> c) != 0;
+                let pin = if top_is_msb { 0x80 >> r } else { 1 << r };
+                if on {
+                    v | pin
+                } else {
+                    v
+                }
+            })
+        };
+        let mut out = match self {
+            Self::Fx80 => vec![ESC, b'*', 4, 8, 0],
+            Self::P6 => vec![ESC, b'*', 6, 9, 0],
+            Self::ImageWriter => vec![ESC, b'G', b'0', b'0', b'0', b'8'],
+        };
+        out.extend((0..8).map(|c| column(c, self != Self::ImageWriter)));
+        if self == Self::P6 {
+            out.push(0);
+        }
+        out
+    }
+
     fn from_code(c: u8) -> Option<Self> {
         [Self::Fx80, Self::P6, Self::ImageWriter]
             .get(usize::from(c))
@@ -822,6 +850,20 @@ mod tests {
         let e = printed_on(Model::ImageWriter, b"\x1bV0003\xff");
         assert_eq!(e.x, 27);
         assert_eq!(printed_on(Model::ImageWriter, b"\x1bF0010").x, 90);
+    }
+
+    #[test]
+    fn a_character_picture_fills_a_text_cell_on_every_model() {
+        let rows = [0xff, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x81];
+        for (model, cell) in [(Model::Fx80, 24), (Model::P6, 36), (Model::ImageWriter, 72)] {
+            let e = printed_on(model, &model.glyph_bytes(&rows));
+            assert_eq!(e.x, cell, "{model:?}");
+            assert_eq!(e.seq, Seq::Text, "{model:?}");
+            assert!(e.dot(0, 0), "{model:?}: top left");
+        }
+        // Bottom right, on the Epson: column 7 of 3 dots, pin 7 of 3.
+        let e = printed_on(Model::Fx80, &Model::Fx80.glyph_bytes(&rows));
+        assert!(e.dot(23, 23) && !e.dot(23, 12));
     }
 
     #[test]

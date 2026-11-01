@@ -122,7 +122,7 @@ fn petscii_becomes_ascii() {
     assert_eq!(translated(Translation::Upper, b"HELLO 1\r"), b"HELLO 1\r\n");
     assert_eq!(translated(Translation::Lower, b"HELLO"), b"hello");
     assert_eq!(translated(Translation::Lower, &[0xc1, 0x42]), b"Ab");
-    assert_eq!(translated(Translation::Upper, &[0xc1]), b"A");
+    assert_eq!(translated(Translation::Upper, &[0xc1]), b"?", "no ROM");
     assert_eq!(translated(Translation::Upper, &[0xa0, 0xa6]), b" ?");
     assert_eq!(translated(Translation::Upper, &[0x93, 0x05]), b"");
     assert_eq!(
@@ -265,6 +265,40 @@ fn savestate_round_trip() {
     assert!(CbmPrinter::new(4)
         .load(&mut StateReader::new(&bytes[..9]))
         .is_err());
+}
+
+#[test]
+fn petscii_graphics_map_to_screen_codes() {
+    let up = Translation::Upper;
+    assert_eq!(up.graphic(0xc1), Some((0x41, false)), "spade");
+    assert_eq!(up.graphic(0x61), Some((0x41, false)));
+    assert_eq!(up.graphic(0xa6), Some((0x66, false)));
+    assert_eq!(up.graphic(0xe6), Some((0x66, false)));
+    assert_eq!(up.graphic(0x5c), Some((0x1c, false)), "pound");
+    assert_eq!(up.graphic(0xff), Some((0x5e, false)), "pi");
+    assert_eq!(up.graphic(0x41), None);
+    assert_eq!(up.graphic(0xa0), None, "shifted space");
+    let low = Translation::Lower;
+    assert_eq!(low.graphic(0xc1), None, "a capital here");
+    assert_eq!(low.graphic(0xa6), Some((0x66, true)));
+    assert_eq!(Translation::Transparent.graphic(0xc1), None);
+}
+
+#[test]
+fn graphics_print_from_the_character_rom() {
+    let mut p = CbmPrinter::new(4);
+    let mut rom = vec![0u8; 0x1000];
+    rom[0x41 * 8] = 0xff; // the capitals' set: a top bar
+    rom[0x800 + 0x66 * 8 + 7] = 0xff; // the other set: a bottom bar
+    p.charset = rom;
+    p.command(0x24);
+    p.command(0x60);
+    p.received(0xc1);
+    assert!(p.printer.epson().dot(0, 0) && p.printer.epson().dot(23, 2));
+    assert!(!p.printer.epson().dot(0, 3));
+    p.command(0x67);
+    p.received(0xa6);
+    assert!(p.printer.epson().dot(24, 21) && !p.printer.epson().dot(24, 0));
 }
 
 #[test]
