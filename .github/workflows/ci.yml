@@ -13,7 +13,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Dependency direction (golden rules 1 and 10)
         run: python3 tools/check-deps.py
       - name: Python debug client unit tests
@@ -33,7 +33,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: System libraries for the desktop frontend (ALSA, udev)
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
@@ -42,7 +42,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
       - name: Cache CPU test data
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: testdata
           key: testdata-${{ hashFiles('tools/fetch-testdata.sh') }}
@@ -69,7 +69,7 @@ jobs:
   wasm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@v2

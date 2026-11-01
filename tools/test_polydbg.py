@@ -166,6 +166,19 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(server.requests[1], {"id": 2, "cmd": "break_remove", "bp": 9})
         self.assertNotIn("device", server.requests[2], "None arguments are left out")
 
+    def test_the_echo_of_a_pause_is_not_a_new_stop(self):
+        state = {"reason": {"kind": "step"}, "pc": 5}
+        server = FakeServer([
+            lambda r: [{"id": r["id"], "ok": True, "result": state}],
+            lambda r: [dict(state, event="stopped"),
+                       {"event": "stopped", "reason": {"kind": "jam"}, "pc": 6},
+                       {"id": r["id"], "ok": True, "result": {}}],
+        ])
+        with polydbg.Client(port=server.port) as c:
+            self.assertEqual(c.pause(), state)
+            c.call("info")
+            self.assertEqual([ev["pc"] for ev in c.new_stops()], [6])
+
 
 if __name__ == "__main__":
     unittest.main()

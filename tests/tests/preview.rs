@@ -126,7 +126,9 @@ fn ws_open(addr: SocketAddr, target: &str) -> WebSocket<TcpStream> {
     }
     // The example key and accept value from RFC 6455, section 1.3.
     assert_eq!(accept.as_deref(), Some("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
-    WebSocket::from_raw_socket(s, Role::Client, None)
+    // The server may send its first message right behind the handshake, and
+    // the reader may already hold it: losing those bytes loses the key frame.
+    WebSocket::from_partially_read(s, reader.buffer().to_vec(), Role::Client, None)
 }
 
 /// A decoded stream message: header fields and the RGB image (if any).

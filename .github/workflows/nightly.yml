@@ -12,12 +12,12 @@ jobs:
   cpu-full:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Cache CPU test data
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: testdata
           key: testdata-${{ hashFiles('tools/fetch-testdata.sh') }}

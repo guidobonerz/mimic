@@ -172,6 +172,7 @@ class Client:
         self.file = self.sock.makefile("rwb")
         self.next_id = 1
         self.pending = collections.deque()
+        self.pause_state = None
         self.hello = self._read()
         if self.hello.get("event") != "hello":
             raise DebugError("unexpected greeting: %r" % self.hello)
@@ -261,7 +262,24 @@ class Client:
         self.call("resume")
 
     def pause(self):
-        return self.call("pause")
+        self.pause_state = self.call("pause")
+        return self.pause_state
+
+    def new_stops(self):
+        """Stopped events received so far, without the echo of our own pause.
+
+        A pause of a running machine answers with the stop state, and the
+        same state follows as a `stopped` event for clients of the run.
+        """
+        out = []
+        for ev in self.take_events():
+            if ev.get("event") != "stopped":
+                continue
+            if {k: v for k, v in ev.items() if k != "event"} == self.pause_state:
+                self.pause_state = None
+                continue
+            out.append(ev)
+        return out
 
     def step(self, count=1):
         return self.call("step_instr", count=count)
@@ -727,9 +745,8 @@ def cmd_shell(c, args):
             pass
         except (DebugError, ValueError, OSError) as e:
             print("error: %s" % e)
-        for ev in c.take_events():
-            if ev.get("event") == "stopped":
-                print("stopped " + format_stop(ev))
+        for ev in c.new_stops():
+            print("stopped " + format_stop(ev))
 
 
 def build_parser(shell=False):
