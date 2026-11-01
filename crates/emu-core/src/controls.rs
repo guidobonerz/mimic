@@ -27,6 +27,10 @@ pub struct ControlInfo {
     pub kind: ControlKind,
     /// Current state: a button's 0/1, a switch's position index.
     pub value: u8,
+    /// The machine's picture shows this control and clicks on it work it
+    /// (the IMSAI's front panel), so frontends with clicks leave it off
+    /// their control strip. The debug protocol still offers it.
+    pub on_picture: bool,
 }
 
 impl ControlInfo {
@@ -36,6 +40,7 @@ impl ControlInfo {
             name,
             kind: ControlKind::Button,
             value: held as u8,
+            on_picture: false,
         }
     }
 
@@ -50,7 +55,14 @@ impl ControlInfo {
             name,
             kind: ControlKind::Switch(positions),
             value,
+            on_picture: false,
         }
+    }
+
+    /// See [`ControlInfo::on_picture`].
+    pub const fn shown_on_picture(mut self) -> Self {
+        self.on_picture = true;
+        self
     }
 
     /// Values the control accepts.

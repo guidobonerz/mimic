@@ -1,0 +1,12 @@
+[package]
+name = "cpu-8080"
+description = "Intel 8080 (MITS Altair 8800)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

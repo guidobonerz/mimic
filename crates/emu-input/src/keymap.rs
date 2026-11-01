@@ -1116,6 +1116,13 @@ pub static APPLE2: Keymap = Keymap {
     entries: APPLE2_POSITIONAL,
 };
 
+/// IMSAI 8080: the keys of its serial terminal, with the Apple II's codes
+/// (what a key sends unshifted, see `machine-imsai::keys`).
+pub static IMSAI: Keymap = Keymap {
+    machine: "imsai",
+    entries: APPLE2_POSITIONAL,
+};
+
 /// Macintosh: machine keys are the Mac key codes (Inside Macintosh; the
 /// ADB keyboard's codes, see `machine-mac::keyboard`). The PC's keys map
 /// by position on a US layout; Alt is Command (next to the space bar, as
@@ -1231,6 +1238,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "zx81" => Some(&ZX81),
         "spectrum" => Some(&SPECTRUM),
         "apple2" => Some(&APPLE2),
+        "imsai" => Some(&IMSAI),
         "mac" => Some(&MAC),
         _ => None,
     }

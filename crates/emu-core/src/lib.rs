@@ -12,6 +12,7 @@ pub mod controls;
 pub mod cpu;
 pub mod cycle;
 pub mod debug;
+pub mod font;
 pub mod frame;
 pub mod freeze;
 pub mod gfx;

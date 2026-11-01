@@ -786,6 +786,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpu-8080"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "cpu-m68k"
 version = "0.1.0"
 dependencies = [
@@ -1119,6 +1126,7 @@ dependencies = [
  "machine-c64",
  "machine-coleco",
  "machine-cpc",
+ "machine-imsai",
  "machine-mac",
  "machine-nes",
  "machine-pet",
@@ -1173,6 +1181,7 @@ dependencies = [
  "machine-c128",
  "machine-c64",
  "machine-cpc",
+ "machine-imsai",
  "machine-mac",
  "machine-pet",
  "machine-spectrum",
@@ -2126,6 +2135,14 @@ dependencies = [
  "drives-other",
  "emu-core",
  "media",
+]
+
+[[package]]
+name = "machine-imsai"
+version = "0.1.0"
+dependencies = [
+ "cpu-8080",
+ "emu-core",
 ]
 
 [[package]]

@@ -118,6 +118,30 @@ for name in $M68K_FILES; do
 done
 echo "$M68K_COMMIT" > "$DEST/680x0/COMMIT"
 
+# 8080 CPU tests: TST8080 (Microcosm), 8080PRE/8080EXM (Ian Bartholomew),
+# CPUTEST (Supersoft), as collected in superzazu/8080; run, never committed.
+I8080_COMMIT=274ffd700b81baabea99b0963bc1260b67132185
+I8080_URL="https://raw.githubusercontent.com/superzazu/8080/$I8080_COMMIT/cpu_tests"
+echo "8080 CPU tests -> $DEST/8080"
+mkdir -p "$DEST/8080"
+for pair in \
+  "TST8080.COM 9561c6fb6c99efe3de00eb77e4044fd102151058b39ac2d7bce10483838a08e7" \
+  "8080PRE.COM 18eb3c79cba42c0718f160be6a1853cb64cdce7aa47d65780189a57bdd98c4e0" \
+  "CPUTEST.COM e61a9a75348c774486c2207080ea4effbf6c2367fdace31b0731081a4144030b" \
+  "8080EXM.COM 6e3286e11bb1a8f47b8ee1280b4a067be813193363e3223c99b0d21912f44aeb"; do
+  set -- $pair
+  fetch "$I8080_URL/$1" "$DEST/8080/$1"
+  [ "$(sha256 "$DEST/8080/$1")" = "$2" ] || { echo "error: $1: checksum" >&2; exit 1; }
+done
+
+# Altair BASIC 3.2 (4K) for the IMSAI's console as a paper tape image (Bruce
+# Hall's port, bhall66/IMSAI-8080); run, never committed.
+IMSAI_COMMIT=ba429db43c93137d63d99c7f972881803ee19580
+echo "IMSAI BASIC -> $DEST/imsai"
+mkdir -p "$DEST/imsai"
+fetch "https://raw.githubusercontent.com/bhall66/IMSAI-8080/$IMSAI_COMMIT/Altair-Basic/basic-tape.hex" "$DEST/imsai/basic-tape.hex"
+[ "$(sha256 "$DEST/imsai/basic-tape.hex")" = "d342f6978f9d5840bb629469dd38ca9652d231cab097b75bebb5ffe912dd6b1a" ] || { echo "error: basic-tape.hex: checksum" >&2; exit 1; }
+
 # ZEXDOC/ZEXALL Z80 instruction exercisers (Frank Cringle, GPL-2.0 test
 # programs; run, never committed), CP/M .COM files, checked by SHA-256.
 ZEX_COMMIT=8f71d418bae69a476a5a0e5c6e122c8801b8d9f4

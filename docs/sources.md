@@ -392,3 +392,13 @@ ROMs (C64, VIC-20, PET, C16/Plus/4, C128), drive DOS ROMs (1541, 1571,
 system ROM (8 KB, or the 4 KB executive alone), the Apple II ROMs, the
 Macintosh ROMs (128K, 512K, Plus, SE). Users put them
 into `roms/<machine>/` and `roms/drives/`.
+| Intel 8080: status word, instruction timing and flags, machine cycle sequences | Intel, "8080 Microcomputer Systems User's Manual" (1975); "8080/8085 Assembly Language Programming Manual" (1977) | `cpu-8080` |
+| 8080 CPU tests TST8080 (Microcosm), 8080PRE and 8080EXM (Ian Bartholomew), CPUTEST (Supersoft) with their T-state totals | collection at https://github.com/superzazu/8080 (`cpu_tests`, fetched by `tools/fetch-testdata.sh`, never committed) | `cpu-8080/tests/cpm.rs` |
+| IMSAI 8080 front panel use, status lamps after RESET, test programs 1 and 2 | Thomas Fischer's edition of the IMSAI manual, "IMSAI 8080 System General Assembly and Test Instructions", https://deramp.com/downloads/mfe_archive/010-S100%20Computers%20and%20Boards/00-Imsai/40-Imsai%20Software/Kill-the-bit%20test_game.pdf (read 2026-11-01) | `machine-imsai` |
+| Programmed output shows the inverse of OUT 255, sense switches on IN FFh, control switches | "The IMSAI 8080 front panel", RetroComputerInstructionManual, https://www.retrocmp.de/imsai/The-IMSAI-8080-front-panel_RetroComputerInstructionManual.pdf (read 2026-11-01) | `machine-imsai` |
+| Panel layout and colours | photograph IMSAI-8080--Museum-Enter-6095057, Wikimedia Commons, https://upload.wikimedia.org/wikipedia/commons/6/65/IMSAI-8080--Museum-Enter-6095057%2C_cropped.jpg (named by the user 2026-11-01); looked at, not copied | `machine-imsai/src/panel.rs` |
+| 88-SIO status bits (bits 0 and 7 active low) | altairclone.com forum, https://altairclone.com/forum/viewtopic.php?p=1128 (search summary, 2026-11-01) | `machine-imsai` |
+| IMSAI SIO board built around two 8251s | S100 Computers, https://s100computers.com/Hardware%20Folder/IMSAI/SIO/SIO.htm (search summary, 2026-11-01); the port addresses $02/$03 and $04/$05 are unverified | `machine-imsai` |
+| IMSAI console ports $02/$03, MPU-A/B ROM mapping (ROM at 0 and $D800, port $F3), Altair BASIC 3.2 for the IMSAI, the FOR bug in FindNextStatement | Bruce Hall's commented disassemblies, https://github.com/bhall66/IMSAI-8080 (MIT; named by the user 2026-11-01; ROMs and BASIC fetched, never committed) | `machine-imsai`, `tests/tests/imsai.rs` |
+| ADM-3A control codes | Lear Siegler, "ADM-3A Operator's Manual" | `machine-imsai/src/terminal.rs` |
+| Kill the Bit | Dean McDaniel, 1975, as widely published | `machine-imsai/src/tests.rs` |

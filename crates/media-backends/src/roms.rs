@@ -521,7 +521,13 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("macse-h", &["342-0701"], 0x2_0000),
         optional("macse-l", &["342-0702"], 0x2_0000),
     ];
+    // The MPU's monitor; the machine runs without it (`--option mpu=a|b`).
+    const IMSAI: &[RomSpec] = &[
+        optional("mpu-a", &["mpu-a"], 0x800),
+        optional("mpu-b", &["mpu-b"], 0x800),
+    ];
     match machine {
+        "imsai" => IMSAI,
         "mac" => MAC,
         "apple2" => APPLE2,
         "zx81" => ZX81,
@@ -554,6 +560,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "atari8" => &["atari8", "atari800xl", "atari"],
         "cpc" => &["cpc", "amstrad"],
         "amiga" => &["amiga"],
+        "imsai" => &["imsai"],
         "zx81" => &["zx81", "sinclair"],
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],

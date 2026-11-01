@@ -944,7 +944,8 @@ pub fn spawn(
                 });
             }
             if shared.panel_on.load(Ordering::Relaxed) {
-                let controls = session.machine().controls();
+                let mut controls = session.machine().controls();
+                controls.retain(|c| !c.on_picture);
                 if let Ok(mut c) = shared.controls.lock() {
                     *c = controls;
                 }

@@ -163,12 +163,6 @@ impl Tracker {
         let mut drives = Vec::new();
         let mut slots = Vec::new();
         for info in m.media_slots() {
-            if !matches!(
-                info.kind,
-                MediaKind::Disk | MediaKind::Tape | MediaKind::Cartridge
-            ) {
-                continue;
-            }
             let now = m
                 .media_slot(info.id)
                 .map(|s| s.status())
@@ -182,7 +176,7 @@ impl Tracker {
                 status,
                 file: None,
             });
-            if info.kind != MediaKind::Cartridge {
+            if matches!(info.kind, MediaKind::Disk | MediaKind::Tape) {
                 drives.push(Drive {
                     name: info.name,
                     inserted: info.inserted,

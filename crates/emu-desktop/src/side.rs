@@ -242,11 +242,13 @@ pub fn extensions(kind: MediaKind) -> &'static [&'static str] {
             "hfv",
             "mdr",
         ],
-        MediaKind::Tape => &["tap", "cas", "cdt", "tzx", "p", "81", "prg", "wav"],
+        MediaKind::Tape => &["tap", "cas", "cdt", "tzx", "p", "81", "prg", "wav", "ptp"],
+        MediaKind::Program => &[
+            "prg", "p00", "t64", "xex", "com", "exe", "sna", "z80", "bin", "hex",
+        ],
         MediaKind::Cartridge => &[
             "crt", "car", "a26", "vec", "bin", "rom", "col", "nes", "sfc", "smc",
         ],
-        _ => &[],
     }
 }
 
@@ -254,6 +256,12 @@ pub fn extensions(kind: MediaKind) -> &'static [&'static str] {
 mod tests {
     use super::*;
     use emu_core::media::DriveStatus;
+
+    #[test]
+    fn program_slots_offer_their_files() {
+        assert!(extensions(MediaKind::Program).contains(&"hex"));
+        assert!(extensions(MediaKind::Tape).contains(&"ptp"));
+    }
 
     const SIZE: RasterHeight = RasterHeight::Size16;
     /// Lines of a slot: state, image, buttons.

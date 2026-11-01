@@ -195,7 +195,10 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
         "mdr" => Some(MediaKind::Disk),
         // ZX Spectrum snapshots.
         "prg" | "p00" | "t64" | "xex" | "com" | "exe" | "sna" | "z80" => Some(MediaKind::Program),
-        "tap" | "cas" | "cdt" | "tzx" | "p" | "81" => Some(MediaKind::Tape),
+        // Binaries and Intel HEX for machines loaded straight into memory.
+        "bin" | "hex" => Some(MediaKind::Program),
+        // "ptp": paper tape.
+        "tap" | "cas" | "cdt" | "tzx" | "p" | "81" | "ptp" => Some(MediaKind::Tape),
         "crt" | "car" | "a26" | "vec" => Some(MediaKind::Cartridge),
         _ => None,
     }

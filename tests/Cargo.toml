@@ -24,6 +24,7 @@ machine-spectrum.workspace = true
 machine-amiga.workspace = true
 machine-apple2.workspace = true
 machine-mac.workspace = true
+machine-imsai.workspace = true
 
 [dev-dependencies]
 emu-debug.workspace = true

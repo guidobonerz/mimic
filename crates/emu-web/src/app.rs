@@ -503,6 +503,7 @@ fn controls_json(m: &dyn Machine) -> Value {
     let list: Vec<Value> = m
         .controls()
         .iter()
+        .filter(|c| !c.on_picture)
         .map(|c| {
             let (kind, positions): (&str, &[&str]) = match c.kind {
                 emu_core::ControlKind::Button => ("button", &[]),

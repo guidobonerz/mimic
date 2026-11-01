@@ -235,6 +235,10 @@ impl Profile {
                 p.pointer.push(PointerMap { port });
             }
         }
+        // The IMSAI's picture is its front panel: clicks work the paddles.
+        if machine == "imsai" {
+            p.pointer.push(PointerMap { port: 0 });
+        }
         let pointer_ports: Vec<u8> = p.pointer.iter().map(|m| m.port).collect();
         p.mouse.retain(|m| !pointer_ports.contains(&m.port));
         p

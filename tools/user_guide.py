@@ -277,6 +277,7 @@ table(["Machine id", "Machine", "Models (--model)"], [
     ["`nes`", "Nintendo Entertainment System / Famicom", "`ntsc` (default), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "`ntsc` (default), `pal`"],
     ["`vectrex`", "Vectrex (vector display)", "`vectrex`"],
+    ["`imsai`", "IMSAI 8080 (front panel; terminal on F12)", "`8080`"],
     ["`apple2`", "Apple II, II+, IIe", "`iie` (enhanced IIe, default), `iie-unenhanced`, "
      "`iiplus`, `ii`"],
     ["`mac`", "Apple Macintosh 128K, 512K, Plus, SE", "`plus` (default), `128k`, `512k`, `se`"],

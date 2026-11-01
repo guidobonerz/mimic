@@ -1877,15 +1877,9 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
     if let Ok(mut id) = shared.machine_id.lock() {
         id.clone_from(&args.machine);
     }
-    shared.has_media.store(
-        machine.media_slots().iter().any(|s| {
-            matches!(
-                s.kind,
-                MediaKind::Disk | MediaKind::Tape | MediaKind::Cartridge
-            )
-        }),
-        Ordering::Relaxed,
-    );
+    shared
+        .has_media
+        .store(!machine.media_slots().is_empty(), Ordering::Relaxed);
     let emu = emu::spawn(machine, mapper, rx, shared.clone(), debug, tap);
 
     // Wait briefly for the first frame so the window opens at the right size.

@@ -164,6 +164,7 @@ pub fn registry() -> Registry {
     r.register(machine_vectrex::entry());
     r.register(machine_apple2::entry());
     r.register(machine_mac::entry());
+    r.register(machine_imsai::entry());
     r
 }
 
