@@ -55,6 +55,10 @@ usage: mimic-headless [options]
   --uci-dir DIR         the folder the Ultimate command interface's DOS
                         targets work in (default ./ultimate, created on the
                         first write; paths cannot leave it)
+  --printer-dir DIR     where --option printer=on writes its jobs (default
+                        ./printer): print-001.prn, print-001-1.png
+  --host-printer NAME   also send each finished page to this printer of
+                        the host; default = the default printer
   --uci-mount NAME=DIR  hang host folder DIR into the UCI file system as
                         /NAME, like the Ultimate's drives: SD, Usb0, Usb1,
                         Flash, Temp (repeatable)
@@ -123,6 +127,8 @@ struct Args {
     net_off: bool,
     uci_dir: Option<String>,
     uci_mounts: Vec<(String, std::path::PathBuf)>,
+    printer_dir: Option<std::path::PathBuf>,
+    host_printer: Option<String>,
 }
 
 const DEFAULT_DEBUG_ADDR: &str = "127.0.0.1:6510";
@@ -223,6 +229,8 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 }
             }
             "--uci-dir" => args.uci_dir = Some(value("--uci-dir")?),
+            "--printer-dir" => args.printer_dir = Some(value("--printer-dir")?.into()),
+            "--host-printer" => args.host_printer = Some(value("--host-printer")?),
             "--uci-mount" => args
                 .uci_mounts
                 .push(media_backends::parse_mount(&value("--uci-mount")?)?),
@@ -476,7 +484,17 @@ fn run(args: Args) -> Result<ExitCode, String> {
     if args.config.options.get("uci").is_some_and(|v| v == "on") {
         media_backends::create_host_folders(Some(&uci_dir), &args.uci_mounts)?;
     }
-    let journal = media_backends::host_journal(!args.net_off, Some(uci_dir), &args.uci_mounts)?;
+    let printer = media_backends::host_print::PrinterOutput::for_options(
+        args.config.options.get("printer").map(String::as_str),
+        args.printer_dir.clone(),
+        args.host_printer.clone(),
+    );
+    let journal = media_backends::host_journal_with_printer(
+        !args.net_off,
+        Some(uci_dir),
+        &args.uci_mounts,
+        printer,
+    )?;
     machine.attach_host(journal.services());
     if let Some(path) = &args.load_state {
         machine

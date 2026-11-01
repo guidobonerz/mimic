@@ -46,6 +46,7 @@ use chips_cbm::sid::SidModel;
 use chips_cbm::{vdc, vic2};
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use cpu_z80::{IO_BASE, Z80};
+use devices_printer::CbmPrinter;
 use emu_core::frame::{FrameRef, PixelData, Rgb8, ScreenId, ScreenInfo};
 use emu_core::gfx::{GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
@@ -330,6 +331,8 @@ pub struct C128 {
     input: InputQueue,
     ports: [Option<Box<dyn PortDevice>>; 2],
     drive: Option<Drive8>,
+    /// `printer` option: a printer on the serial bus.
+    printer: Option<CbmPrinter>,
     program: ProgramSlot,
     /// The datasette on the cassette port.
     tape: Datasette,
@@ -430,6 +433,7 @@ impl C128 {
             input: InputQueue::new(),
             ports: [port1, port2],
             drive,
+            printer: CbmPrinter::from_config(config),
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C64, cpu_hz),
             cart: devices_cartridge::slot::expansion_slot(),
@@ -612,10 +616,13 @@ impl C128 {
         // Serial bus: the drive sees what CIA2 (and CIA1 as fast serial
         // sender) drives now.
         let fsdir = self.mem.mmu.mcr & 0x08 != 0;
-        let host = IecLines::combine(&[
+        let mut host = IecLines::combine(&[
             drive::c64_lines(self.io.cia2.port_a_out()),
             drive::fast_serial_lines(&self.io.cia1, fsdir),
         ]);
+        if let Some(p) = &self.printer {
+            host.data |= p.iec_data();
+        }
         let mut drive_stop = None;
         self.io.iec = match &mut self.drive {
             Some(d) => {
@@ -625,6 +632,10 @@ impl C128 {
             }
             None => host,
         };
+        if let Some(p) = &mut self.printer {
+            let bus = self.io.iec;
+            p.iec_tick(bus.atn, bus.clk, bus.data);
+        }
         // FSDIR clear: CIA1 receives on DATA/SRQ.
         let iec = self.io.iec;
         self.io.cia1.set_sp(fsdir || !iec.data);
@@ -763,6 +774,9 @@ impl C128 {
 
     /// Program injection and autostart, once BASIC has booted.
     fn frame_tasks(&mut self) {
+        if let Some(p) = &mut self.printer {
+            p.printer.frame();
+        }
         if !self.booted {
             if self.io.vic.beam().frame.saturating_sub(self.boot_frame) < BOOT_FRAMES {
                 return;
@@ -912,6 +926,9 @@ impl Machine for C128 {
     /// RESET reaches both CPUs, the MMU (back to the Z80), CIAs, SID and
     /// drive 8; the VIC-IIe and the VDC restart only on power-up.
     fn reset(&mut self, kind: ResetKind) {
+        if let Some(p) = &mut self.printer {
+            p.reset();
+        }
         let hard = kind == ResetKind::Hard;
         self.cpu.reset();
         self.z80.reset();
@@ -1227,6 +1244,12 @@ impl Machine for C128 {
         dev
     }
 
+    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+        if let Some(p) = &mut self.printer {
+            p.printer.attach(&host);
+        }
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         let mut slots = Vec::new();
         if let Some(d) = &self.drive {
@@ -1270,6 +1293,9 @@ impl Machine for C128 {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some(p) = &self.printer {
+            p.save_chunk(&mut w);
+        }
         w.chunk(*b"C128", 3, |w| {
             w.u8(self.ints.0);
             w.u8(self.ints.1);
@@ -1428,6 +1454,9 @@ impl Machine for C128 {
         self.boot_frame = boot_frame;
         self.booted = booted;
         self.sync_light_pen();
+        if let Some(p) = &mut self.printer {
+            p.load_chunk(s);
+        }
         Ok(())
     }
 }

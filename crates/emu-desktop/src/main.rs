@@ -17,6 +17,7 @@ mod host;
 mod panel;
 mod picker;
 mod render;
+mod side;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -36,7 +37,9 @@ use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer};
 use video_crt::field::Deinterlace;
 use video_crt::Profile;
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Icon, Window, WindowId};
@@ -138,7 +141,12 @@ usage: mimic-desktop [options]
   --input FILE          joystick mapping profile (TOML); default: the one
                         saved with SAVE MAPPING (<user folder>/input/<machine>.toml)
   --footer              start with the status footer shown (Ctrl+Space)
+  --printer-dir DIR     where --option printer=on writes its jobs (default
+                        ./printer): print-001.prn, print-001-1.png …
+  --host-printer NAME   also send each finished page to this printer of
+                        the host; default = the default printer
   --no-panel            start with the console panel hidden (Ctrl+P)
+  --media-panel         start with the media side panel open (Ctrl+M)
   --joykeys KEYS        keys that play the joystick: cursor (cursor keys,
                         Space fires; default on the Atari 2600), numpad
                         (8/2/4/6, 0 or right Ctrl fire; default elsewhere)
@@ -170,6 +178,10 @@ Ctrl+R (held) runs the machine backwards at twice real speed through the
 last frames kept in memory (--rewind-mb); on release it runs on from there.
 Disks: Ctrl+D puts the next disk of the --disk list into the first drive;
 dropping an image file onto the window inserts it there.
+Ctrl+M or a click on the handle at the right edge opens the media panel:
+every drive, datasette and cartridge slot with its image and the buttons
+Mount (file dialog), Eject and Save. Writes stay in memory until Save puts
+them into the image file; without it they end with the program.
 Ctrl+P shows or hides the console panel: the machine's buttons and
 switches (power, reset, Atari console switches, RESTORE …); click a button
 (held while the mouse button is down) or a switch position. Its PAUSE
@@ -204,6 +216,8 @@ struct Args {
     /// Disks the first drive swaps through (Ctrl+D), filled by
     /// `build_machine`.
     disk_swap: Vec<String>,
+    /// Images put into slots at start, for the side panel.
+    mounted: Vec<(u8, String)>,
     tape: Option<String>,
     cart: Option<String>,
     crt: Option<String>,
@@ -216,6 +230,8 @@ struct Args {
     uci_dir: Option<PathBuf>,
     /// `--uci-mount NAME=DIR`.
     uci_mounts: Vec<(String, PathBuf)>,
+    printer_dir: Option<PathBuf>,
+    host_printer: Option<String>,
     /// Filled by `build_machine`: the machine's host-service journal.
     host_journal: Option<emu_core::host::Journal>,
     cheat: Vec<String>,
@@ -226,6 +242,7 @@ struct Args {
     preview: Option<SocketAddr>,
     footer: bool,
     panel: bool,
+    media_panel: bool,
     joykeys: Option<JoyKeys>,
     joyport: Option<u8>,
     /// Single ROM files by role (`--rom`).
@@ -248,6 +265,7 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         prg: None,
         disk: Vec::new(),
         disk_swap: Vec::new(),
+        mounted: Vec::new(),
         tape: None,
         cart: None,
         crt: None,
@@ -257,6 +275,8 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         net_off: false,
         uci_dir: None,
         uci_mounts: Vec::new(),
+        printer_dir: None,
+        host_printer: None,
         host_journal: None,
         cheat: Vec::new(),
         input: None,
@@ -266,6 +286,7 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         preview: None,
         footer: false,
         panel: true,
+        media_panel: false,
         joykeys: None,
         joyport: None,
         rom: Vec::new(),
@@ -284,6 +305,7 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
             "--cart" => a.cart = Some(value("--cart")?),
             "--footer" => a.footer = true,
             "--no-panel" => a.panel = false,
+            "--media-panel" => a.media_panel = true,
             "--net" => {
                 a.net_off = match value("--net")?.as_str() {
                     "on" => false,
@@ -292,6 +314,8 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
                 }
             }
             "--uci-dir" => a.uci_dir = Some(PathBuf::from(value("--uci-dir")?)),
+            "--printer-dir" => a.printer_dir = Some(PathBuf::from(value("--printer-dir")?)),
+            "--host-printer" => a.host_printer = Some(value("--host-printer")?),
             "--uci-mount" => a
                 .uci_mounts
                 .push(media_backends::parse_mount(&value("--uci-mount")?)?),
@@ -506,7 +530,17 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
     if args.config.options.get("uci").is_some_and(|v| v == "on") {
         media_backends::create_host_folders(Some(&uci_dir), &args.uci_mounts)?;
     }
-    let journal = media_backends::host_journal(!args.net_off, Some(uci_dir), &args.uci_mounts)?;
+    let printer = media_backends::host_print::PrinterOutput::for_options(
+        args.config.options.get("printer").map(String::as_str),
+        args.printer_dir.clone(),
+        args.host_printer.clone(),
+    );
+    let journal = media_backends::host_journal_with_printer(
+        !args.net_off,
+        Some(uci_dir),
+        &args.uci_mounts,
+        printer,
+    )?;
     m.attach_host(journal.services());
     args.host_journal = Some(journal);
     if let Some(p) = &args.prg {
@@ -535,7 +569,10 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             let pos = free
                 .iter()
                 .position(|&slot| match insert_into(m.as_mut(), slot, path) {
-                    Ok(()) => true,
+                    Ok(()) => {
+                        args.mounted.push((slot.0, path.clone()));
+                        true
+                    }
                     Err(e) => {
                         first_err.get_or_insert(e);
                         false
@@ -565,6 +602,7 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             .ok_or("no such slot")?
             .insert(media)
             .map_err(|e| format!("{t}: {e}"))?;
+        args.mounted.push((slot.0, t.clone()));
     }
     if let Some(c) = &args.cart {
         let slot = m
@@ -579,6 +617,7 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             .ok_or("no such slot")?
             .insert(media)
             .map_err(|e| format!("{c}: {e}"))?;
+        args.mounted.push((slot.0, c.clone()));
     }
     Ok(m)
 }
@@ -640,6 +679,19 @@ struct App {
     swallow_i: bool,
     /// The D of a Ctrl+D is down; its release is not sent either.
     swallow_d: bool,
+    /// The M of a Ctrl+M is down; its release is not sent either.
+    swallow_m: bool,
+    /// The media side panel is open.
+    side_open: bool,
+    /// Its clickable areas and left edge (window pixels); width 0: none.
+    side_hits: Vec<side::Hit>,
+    side_left: f64,
+    side_width: u32,
+    /// Lines scrolled off its top, and how many can be.
+    side_scroll: usize,
+    side_max_scroll: usize,
+    /// The picture last sent, to send only a changed one.
+    side_shown: Vec<u8>,
     /// The R of a Ctrl+R is held (rewinding); its release is not sent either.
     swallow_r: bool,
     panel_on: bool,
@@ -696,6 +748,7 @@ struct Started {
     has_pad: bool,
     footer: bool,
     panel: bool,
+    media_panel: bool,
     running: Running,
 }
 
@@ -744,6 +797,20 @@ impl App {
             }
             None => (768, 576),
         };
+        // The side panel takes its width next to the picture.
+        let mut size = size;
+        if self.shared.has_media.load(Ordering::Relaxed) {
+            let scale = event_loop
+                .primary_monitor()
+                .map_or(1.0, |m| m.scale_factor());
+            let font = footer::font_size(scale);
+            let width = if self.side_open {
+                side::open_width(font)
+            } else {
+                side::handle_width(font)
+            };
+            size.0 += (f64::from(width) / scale).round() as u32;
+        }
         size
     }
 
@@ -825,6 +892,7 @@ impl App {
         self.pointer_buttons = 0;
         self.footer_on = st.footer;
         self.panel_on = st.panel;
+        self.side_open = st.media_panel;
         self.running = Some(st.running);
         self.picker = None;
         let size = self.window_size(event_loop);
@@ -1002,6 +1070,120 @@ impl App {
         }
     }
 
+    /// Is the pointer over the side panel?
+    fn over_side(&self) -> bool {
+        self.side_width > 0
+            && self
+                .cursor
+                .is_some_and(|(x, y)| x >= self.side_left && y < self.panel_top)
+    }
+
+    /// Open or close the side panel; the window grows by what the panel
+    /// takes, so the picture keeps its size.
+    fn toggle_side(&mut self) {
+        self.side_open = !self.side_open;
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let font = footer::font_size(window.scale_factor());
+        let extra = side::open_width(font) - side::handle_width(font);
+        let size = window.inner_size();
+        let width = if self.side_open {
+            size.width + extra
+        } else {
+            size.width.saturating_sub(extra)
+        };
+        let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(width, size.height));
+    }
+
+    /// A click on the side panel.
+    fn side_click(&mut self) {
+        let Some((x, y)) = self.cursor else { return };
+        let action = side::hit(&self.side_hits, (x - self.side_left) as usize, y as usize);
+        let command = match action {
+            Some(side::Action::Toggle) => return self.toggle_side(),
+            Some(side::Action::Mount(slot, kind)) => return self.choose_image(slot, kind),
+            Some(side::Action::Eject(slot)) => emu::MediaCommand::Eject { slot },
+            Some(side::Action::Save(slot)) => emu::MediaCommand::Save { slot },
+            None => return,
+        };
+        if let Ok(mut c) = self.shared.media_commands.lock() {
+            c.push(command);
+        }
+    }
+
+    /// The file dialog for a slot, on a thread of its own: the window and
+    /// the machine go on meanwhile.
+    fn choose_image(&self, slot: u8, kind: emu_core::media::MediaKind) {
+        if self.shared.dialog_open.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let shared = self.shared.clone();
+        std::thread::spawn(move || {
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Mount an image")
+                .add_filter("images", side::extensions(kind))
+                .add_filter("all files", &["*"]);
+            if let Some(folder) = shared.last_folder.lock().ok().and_then(|f| f.clone()) {
+                dialog = dialog.set_directory(folder);
+            }
+            let picked = dialog.pick_file();
+            shared.dialog_open.store(false, Ordering::Relaxed);
+            let Some(path) = picked else { return };
+            if let Ok(mut folder) = shared.last_folder.lock() {
+                *folder = path.parent().map(Path::to_path_buf);
+            }
+            if let Ok(mut c) = shared.media_commands.lock() {
+                c.push(emu::MediaCommand::Mount {
+                    slot,
+                    kind,
+                    path: path.to_string_lossy().into_owned(),
+                });
+            }
+        });
+    }
+
+    /// Draw the side panel for the render thread, `rows` above the window's
+    /// bottom.
+    fn update_side(&mut self, window: &Window, rows: u32) {
+        let Some(render) = &self.render else { return };
+        if !self.shared.has_media.load(Ordering::Relaxed) {
+            if self.side_width > 0 {
+                render.set_side(None);
+                self.side_width = 0;
+            }
+            return;
+        }
+        let font = footer::font_size(window.scale_factor());
+        let size = window.inner_size();
+        let height = size.height.saturating_sub(rows).max(1);
+        let mut slots = self
+            .shared
+            .footer
+            .lock()
+            .map(|f| f.slots.clone())
+            .unwrap_or_default();
+        if let Ok(names) = self.shared.media_names.lock() {
+            for s in &mut slots {
+                s.file = names.get(&s.id).cloned();
+            }
+        }
+        let p = side::render(&slots, self.side_open, self.side_scroll, height, font);
+        self.side_hits = p.hits;
+        self.side_max_scroll = p.max_scroll;
+        self.side_scroll = self.side_scroll.min(p.max_scroll);
+        self.side_width = p.width;
+        self.side_left = f64::from(size.width.saturating_sub(p.width));
+        if p.rgba != self.side_shown {
+            self.side_shown.clone_from(&p.rgba);
+            render.set_side(Some(Strip {
+                rgba: p.rgba,
+                width: p.width,
+                rows: p.height,
+            }));
+        }
+    }
+
     /// Compose the panel and footer rows under the picture for the render
     /// thread and refresh the title bar.
     fn update_strip(&mut self) {
@@ -1097,6 +1279,7 @@ impl App {
         if !self.panel_on {
             self.panel_rows = 0;
         }
+        self.update_side(&window, rows);
         if let (Some(w), Ok(status)) = (&self.window, self.shared.status.lock()) {
             let title = match status.as_ref() {
                 Some(s) => format!("{} — {s}", self.title),
@@ -1232,6 +1415,23 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { .. } if self.picker.is_some() => {}
+            // The media side panel takes its clicks and the wheel.
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if !self.mouse_captured && self.over_side() => self.side_click(),
+            WindowEvent::MouseWheel { delta, .. } if self.over_side() => {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => f64::from(y),
+                    MouseScrollDelta::PixelDelta(p) => p.y / 20.0,
+                };
+                let down = (-lines * 2.0).round() as isize;
+                self.side_scroll = self
+                    .side_scroll
+                    .saturating_add_signed(down)
+                    .min(self.side_max_scroll);
+            }
             // The footer's snapshot button: save the picture on a click.
             WindowEvent::MouseInput {
                 state,
@@ -1401,6 +1601,20 @@ impl ApplicationHandler for App {
                         self.swallow_d = true;
                     } else {
                         self.swallow_d = false;
+                    }
+                    return;
+                }
+                // Ctrl+M opens or closes the media side panel.
+                if event.physical_key == PhysicalKey::Code(KeyCode::KeyM)
+                    && (self.ctrl || self.swallow_m)
+                {
+                    if event.state == ElementState::Pressed {
+                        if !event.repeat && self.side_width > 0 {
+                            self.toggle_side();
+                        }
+                        self.swallow_m = true;
+                    } else {
+                        self.swallow_m = false;
                     }
                     return;
                 }
@@ -1652,6 +1866,26 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
     if let Ok(mut l) = shared.disk_swap.lock() {
         l.clone_from(&args.disk_swap);
     }
+    if let Ok(mut names) = shared.media_names.lock() {
+        for (slot, path) in &args.mounted {
+            let name = Path::new(path)
+                .file_name()
+                .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+            names.insert(*slot, name);
+        }
+    }
+    if let Ok(mut id) = shared.machine_id.lock() {
+        id.clone_from(&args.machine);
+    }
+    shared.has_media.store(
+        machine.media_slots().iter().any(|s| {
+            matches!(
+                s.kind,
+                MediaKind::Disk | MediaKind::Tape | MediaKind::Cartridge
+            )
+        }),
+        Ordering::Relaxed,
+    );
     let emu = emu::spawn(machine, mapper, rx, shared.clone(), debug, tap);
 
     // Wait briefly for the first frame so the window opens at the right size.
@@ -1694,6 +1928,7 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
         has_pad,
         footer: args.footer,
         panel: args.panel,
+        media_panel: args.media_panel,
         running: Running {
             emu,
             _audio: audio_stream,
@@ -1791,6 +2026,7 @@ fn run() -> Result<(), String> {
                 has_pad: false,
                 footer: false,
                 panel: false,
+                media_panel: false,
                 running: Running {
                     emu: std::thread::spawn(|| {}),
                     _audio: None,
@@ -1838,6 +2074,14 @@ fn run() -> Result<(), String> {
         swallow_p: false,
         swallow_i: false,
         swallow_d: false,
+        swallow_m: false,
+        side_open: st.media_panel,
+        side_hits: Vec::new(),
+        side_left: 0.0,
+        side_width: 0,
+        side_scroll: 0,
+        side_max_scroll: 0,
+        side_shown: Vec::new(),
         swallow_r: false,
         panel_on: st.panel,
         panel_hits: Vec::new(),

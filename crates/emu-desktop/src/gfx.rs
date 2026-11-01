@@ -38,7 +38,9 @@ pub struct Gfx {
     footer_layout: wgpu::BindGroupLayout,
     footer_sampler: wgpu::Sampler,
     /// Footer texture, its bind group and size in window pixels.
-    footer: Option<(wgpu::Texture, wgpu::BindGroup, u32, u32)>,
+    footer: Option<Picture>,
+    /// The side panel at the right edge.
+    side: Option<Picture>,
 }
 
 /// Two render targets of the picture rectangle's size: the shader draws into
@@ -51,6 +53,9 @@ struct History {
     blits: [wgpu::BindGroup; 2],
     current: usize,
 }
+
+/// A picture at window resolution: texture, bind group, width, height.
+type Picture = (wgpu::Texture, wgpu::BindGroup, u32, u32);
 
 /// Draws a texture over the whole viewport, nearest-neighbour.
 const FOOTER_SHADER: &str = "
@@ -288,6 +293,14 @@ impl Gfx {
             footer_layout,
             footer_sampler,
             footer: None,
+            side: None,
+        })
+    }
+
+    /// Width the side panel takes from the window, in window pixels.
+    fn side_width(&self) -> u32 {
+        self.side.as_ref().map_or(0, |(_, _, w, _)| {
+            (*w).min(self.config.width.saturating_sub(1))
         })
     }
 
@@ -301,11 +314,25 @@ impl Gfx {
     /// Show `rgba` (`width` × `height` window pixels) as the footer, or
     /// hide it with `None`.
     pub fn set_footer(&mut self, rgba: Option<(&[u8], u32, u32)>) {
+        let mut slot = self.footer.take();
+        self.put_picture(&mut slot, rgba);
+        self.footer = slot;
+    }
+
+    /// The same for the side panel at the window's right edge.
+    pub fn set_side(&mut self, rgba: Option<(&[u8], u32, u32)>) {
+        let mut slot = self.side.take();
+        self.put_picture(&mut slot, rgba);
+        self.side = slot;
+    }
+
+    /// Put `rgba` into `slot`'s texture, made anew when the size changed.
+    fn put_picture(&self, slot: &mut Option<Picture>, rgba: Option<(&[u8], u32, u32)>) {
         let Some((rgba, width, height)) = rgba else {
-            self.footer = None;
+            *slot = None;
             return;
         };
-        let fresh = !matches!(&self.footer, Some((_, _, w, h)) if (*w, *h) == (width, height));
+        let fresh = !matches!(slot, Some((_, _, w, h)) if (*w, *h) == (width, height));
         if fresh {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("footer"),
@@ -336,9 +363,9 @@ impl Gfx {
                     },
                 ],
             });
-            self.footer = Some((texture, bind, width, height));
+            *slot = Some((texture, bind, width, height));
         }
-        if let Some((texture, ..)) = &self.footer {
+        if let Some((texture, ..)) = slot {
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture,
@@ -446,7 +473,10 @@ impl Gfx {
     /// The largest rectangle with the output's aspect ratio in the window.
     /// The picture's rectangle in the window: x, y, width, height.
     pub fn viewport(&self) -> (u32, u32, u32, u32) {
-        let (sw, sh) = (self.config.width, self.config.height - self.footer_height());
+        let (sw, sh) = (
+            self.config.width - self.side_width(),
+            self.config.height - self.footer_height(),
+        );
         let (ow, oh) = (self.out_size.0.max(1), self.out_size.1.max(1));
         let (w, h) = if u64::from(sw) * u64::from(oh) > u64::from(sh) * u64::from(ow) {
             ((u64::from(sh) * u64::from(ow) / u64::from(oh)) as u32, sh)
@@ -633,6 +663,21 @@ impl Gfx {
                 // The finished picture, 1:1 into its rectangle.
                 pass.set_pipeline(&self.footer_pipeline);
                 pass.set_bind_group(0, &hist.blits[hist.current], &[]);
+                pass.draw(0..3, 0..1);
+            }
+            if let Some((_, side, ..)) = &self.side {
+                let sw = self.side_width();
+                let sh = self.config.height - self.footer_height();
+                pass.set_pipeline(&self.footer_pipeline);
+                pass.set_bind_group(0, side, &[]);
+                pass.set_viewport(
+                    (self.config.width - sw) as f32,
+                    0.0,
+                    sw as f32,
+                    sh as f32,
+                    0.0,
+                    1.0,
+                );
                 pass.draw(0..3, 0..1);
             }
             if let Some((_, footer, fw, _)) = &self.footer {

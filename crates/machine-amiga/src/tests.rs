@@ -147,6 +147,27 @@ fn joystick_in_port_1() {
 }
 
 #[test]
+fn the_parallel_port_prints_and_acknowledges() {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("printer".into(), "on".into());
+    let mut m = Amiga::new(&config).unwrap();
+    // Ready: BUSY and POUT low on CIA-B port A.
+    assert_eq!(m.board.parallel_status() & 3, 0);
+    assert_eq!(stub().board.parallel_status() & 3, 3, "no printer");
+    // Port B as outputs, then a byte: its strobe comes back on /FLAG.
+    m.board.write_cia(0xbfe301, 0xff);
+    m.board.printed.clear();
+    m.board.cia_a.read(0x0d, 0xff, 0xff);
+    m.board.write_cia(0xbfe101, b'A');
+    assert_eq!(m.board.printed, [b'A']);
+    assert_ne!(m.board.cia_a.read(0x0d, 0xff, 0xff) & 0x10, 0, "ACK");
+    m.printer_frame();
+    assert!(m.board.printed.is_empty());
+    assert!(m.printer.as_ref().unwrap().epson().page().is_some());
+}
+
+#[test]
 fn savestate_round_trip() {
     let mut m = stub();
     frames(&mut m, 2);

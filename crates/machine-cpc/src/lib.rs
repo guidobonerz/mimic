@@ -51,6 +51,7 @@ use chips_amstrad::fdc::Fdc;
 use chips_amstrad::gate_array::{self, GateArray};
 use chips_amstrad::ppi::Ppi;
 use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
+use devices_printer::Printer;
 use emu_core::audio::Decimator;
 use emu_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
@@ -289,6 +290,12 @@ fn load_roms(config: &MachineConfig, model: Model) -> Result<Roms, ConfigError> 
 /// The chips on the I/O bus.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Io {
+    /// A printer hangs on the Centronics port: it is ready.
+    printer_on: bool,
+    /// Bytes strobed to the printer since the last frame.
+    printed: Vec<u8>,
+    /// Port &EFxx bit 7, the strobe.
+    strobe: bool,
     crtc: Crtc,
     ga: GateArray,
     ppi: Ppi,
@@ -346,7 +353,8 @@ impl Io {
     }
 
     fn port_b(&self) -> u8 {
-        PORT_B | u8::from(self.vsync) | u8::from(self.cas_in) << 7
+        let busy = if self.printer_on { 0 } else { PORT_B & 0x40 };
+        (PORT_B & !0x40) | busy | u8::from(self.vsync) | u8::from(self.cas_in) << 7
     }
 
     /// An I/O read (no side effects on the CPC's chips).
@@ -395,6 +403,14 @@ impl Io {
         }
         if port & 0x2000 == 0 {
             mem.upper = v;
+        }
+        // Centronics (&EFxx): seven data bits, bit 7 the strobe.
+        if self.printer_on && port & 0x1000 == 0 {
+            let strobe = v & 0x80 != 0;
+            if strobe && !self.strobe {
+                self.printed.push(v & 0x7f);
+            }
+            self.strobe = strobe;
         }
         if self.has_fdc && fdc_port(port) == Some(0) {
             self.fdc.motor = v & 1 != 0;
@@ -651,6 +667,8 @@ impl Bus for PeekBus<'_> {
 }
 
 pub struct Cpc {
+    /// `printer` option: the paper end of the printer port.
+    printer: Option<Printer>,
     model: Model,
     cpu: Z80,
     mem: Memory,
@@ -705,9 +723,13 @@ impl Cpc {
         let ram_kb = if model == Model::Cpc6128 { 128 } else { 64 };
         let mut m = Self {
             model,
+            printer: Printer::from_config(config, devices_printer::Model::Fx80),
             cpu: Z80::new(),
             mem: Memory::new(load_roms(config, model)?, ram_kb),
             io: Io {
+                printer_on: config.options.get("printer").is_some_and(|v| v != "off"),
+                printed: Vec::new(),
+                strobe: false,
                 crtc: Crtc::new(crtc),
                 ga: GateArray::new(),
                 ppi: Ppi::with_c_pulls(PORT_C_PULLS),
@@ -975,9 +997,20 @@ fn regs(name: &'static str, base: Option<u32>, values: &[(&'static str, u8)]) ->
     }
 }
 
+impl Cpc {
+    /// A frame ended: what the machine sent goes to the paper.
+    fn printer_frame(&mut self) {
+        if let Some(p) = &mut self.printer {
+            self.io.printed.drain(..).for_each(|b| p.feed(b));
+            p.frame();
+        }
+    }
+}
+
 impl Machine for Cpc {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
         if std::mem::take(&mut self.field_done_pending) {
+            self.printer_frame();
             return StopReason::FrameDone;
         }
         let b = self.beam_pos();
@@ -986,6 +1019,9 @@ impl Machine for Cpc {
         }
         loop {
             if let Some(stop) = self.instruction(Some(dbg)) {
+                if matches!(stop, StopReason::FrameDone) {
+                    self.printer_frame();
+                }
                 return stop;
             }
         }
@@ -1236,6 +1272,12 @@ impl Machine for Cpc {
         dev
     }
 
+    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+        if let Some(p) = &mut self.printer {
+            p.attach(&host);
+        }
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         let mut slots = Vec::new();
         if self.io.has_fdc {
@@ -1272,6 +1314,9 @@ impl Machine for Cpc {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some(p) = &self.printer {
+            p.save_chunk(&mut w);
+        }
         w.chunk(*b"CPCM", 1, |w| {
             w.u8(self.model.id());
             w.bool(self.field_done_pending);
@@ -1380,6 +1425,7 @@ impl Machine for Cpc {
         }
         self.cpu = next.cpu;
         self.mem = next.mem;
+        next.io.printer_on = self.io.printer_on;
         self.io = next.io;
         self.sched = next.sched;
         self.input = next.input;
@@ -1388,6 +1434,9 @@ impl Machine for Cpc {
         self.field_done_pending = field_done_pending;
         self.ports_due = ports_due;
         self.sync_light_pen();
+        if let Some(p) = &mut self.printer {
+            p.load_chunk(s);
+        }
         Ok(())
     }
 }

@@ -84,6 +84,7 @@ mod tests;
 use adb::Adb;
 use chips_cbm::via::Via;
 use cpu_m68k::{Access, Step, TimedBus68, M68000};
+use devices_printer::Printer;
 use drives_other::iwm::Iwm;
 use emu_core::audio::Decimator;
 use emu_core::frame::{
@@ -313,7 +314,14 @@ impl Board {
     }
 
     fn ipl(&self) -> u8 {
-        u8::from(self.via.irq()) | u8::from(self.scc.irq()) << 1 | u8::from(self.nmi) << 2
+        // The SCC outranks the VIA: the ROM's level 3 autovector is a bare
+        // RTE, so VIA + SCC as level 3 would loop on it for ever.
+        let level = match (self.scc.irq(), self.via.irq()) {
+            (true, _) => 2,
+            (false, true) => 1,
+            _ => 0,
+        };
+        level | u8::from(self.nmi) << 2
     }
 
     /// The VIA's outputs changed: the clock chip, the drives, ADB.
@@ -805,6 +813,10 @@ impl Bus for PeekBus<'_> {
 }
 
 pub struct Mac {
+    /// `printer` option: an ImageWriter on the printer port (SCC channel
+    /// B). RR0's CTS bit clear says the printer is ready: the System 6
+    /// driver reports "not responding" with it set.
+    printer: Option<Printer>,
     model: Model,
     cpu: M68000,
     board: Board,
@@ -860,9 +872,11 @@ impl Mac {
         for c in &mut scc.ch {
             c.loopback = loopback;
         }
+        let printer = Printer::from_config(config, devices_printer::Model::ImageWriter);
         let audio = Decimator::new(CPU_HZ / E_CLOCKS as u32, emu_core::SAMPLE_RATE)
             .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?;
         let mut m = Self {
+            printer,
             model,
             cpu: M68000::new(),
             board: Board {
@@ -892,9 +906,11 @@ impl Mac {
                 dc: [0; 2],
                 samples: Vec::new(),
             },
-            // One quadrature step per 1000 clocks at most (128 µs), so
-            // sampling once a line (45 µs) sees every phase.
-            port: Some(Box::new(devices_input::AmigaMouse::mac(1000))),
+            // One quadrature step per 4000 clocks at most (510 µs). The
+            // ROM's handler reads X2/Y2 when it runs, and on a diagonal the
+            // Y edge waits for X's handler: with 1000 clocks Y2 had moved
+            // on by then and the cursor ran backwards.
+            port: Some(Box::new(devices_input::AmigaMouse::mac(4000))),
             input: InputQueue::new(),
             jam_reported: false,
             palette: [
@@ -1094,9 +1110,20 @@ impl Mac {
     }
 }
 
+impl Mac {
+    /// A frame ended: what the machine sent goes to the paper.
+    fn printer_frame(&mut self) {
+        if let Some(p) = &mut self.printer {
+            self.board.scc.ch[1].sent.drain(..).for_each(|b| p.feed(b));
+            p.frame();
+        }
+    }
+}
+
 impl Machine for Mac {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
         if std::mem::take(&mut self.board.frame_done) {
+            self.printer_frame();
             return StopReason::FrameDone;
         }
         let b = self.beam_pos();
@@ -1105,6 +1132,9 @@ impl Machine for Mac {
         }
         loop {
             if let Some(stop) = self.instruction(Some(dbg)) {
+                if matches!(stop, StopReason::FrameDone) {
+                    self.printer_frame();
+                }
                 return stop;
             }
         }
@@ -1338,6 +1368,12 @@ impl Machine for Mac {
         }
     }
 
+    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+        if let Some(p) = &mut self.printer {
+            p.attach(&host);
+        }
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         let b = &self.board;
         let mut v = vec![
@@ -1399,6 +1435,9 @@ impl Machine for Mac {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some(p) = &self.printer {
+            p.save_chunk(&mut w);
+        }
         let b = &self.board;
         w.chunk(*b"MAC ", 1, |w| {
             w.u8(self.model.code());
@@ -1544,6 +1583,9 @@ impl Machine for Mac {
         b.scc = scc;
         self.cpu = cpu;
         self.input = input;
+        if let Some(p) = &mut self.printer {
+            p.load_chunk(s);
+        }
         Ok(())
     }
 }

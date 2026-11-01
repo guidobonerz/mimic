@@ -23,6 +23,10 @@
 //! drives' 2:1 sector interleave, plus one sector to read it; writes with
 //! verify take an extra revolution; a status answers in 1 ms.
 //!
+//! The printer P1: (device $40) takes `W` with its record in a data frame,
+//! 40 bytes in normal mode, 29 sideways, 20 double width (AUX: `N`, `S`,
+//! `D`), and `S` status (Atari 400/800 OS Manual, "Printer handler").
+//!
 //! A drive without a disk does not answer at all, like a drive that is
 //! switched off: the OS then boots on without it.
 
@@ -33,6 +37,8 @@ use emu_core::{StateError, StateReader, StateWriter};
 use media::atr::{self, Atr};
 
 pub const BAUD: u64 = 19_200;
+/// `Pending::unit` of a printer record.
+const PRINTER_UNIT: usize = 4;
 const ACK: u8 = b'A';
 const NAK: u8 = b'N';
 const COMPLETE: u8 = b'C';
@@ -359,6 +365,10 @@ pub struct Sio {
     frame: Vec<u8>,
     pending: Option<Pending>,
     tx: SerialTx,
+    /// A printer answers as P1:.
+    pub printer: bool,
+    /// Records it took, for the machine to fetch.
+    pub printed: Vec<Vec<u8>>,
 }
 
 impl Sio {
@@ -371,6 +381,8 @@ impl Sio {
             frame: Vec::new(),
             pending: None,
             tx: SerialTx::new(hz),
+            printer: false,
+            printed: Vec::new(),
         }
     }
 
@@ -419,7 +431,11 @@ impl Sio {
         p.got.push(v);
         if p.got.len() == p.need {
             let p = self.pending.take().expect("pending");
-            self.data_frame(p, now);
+            if p.unit == PRINTER_UNIT {
+                self.printer_record(&p.got, now);
+            } else {
+                self.data_frame(p, now);
+            }
         }
     }
 
@@ -440,7 +456,57 @@ impl Sio {
         }
     }
 
+    /// A command to P1:.
+    fn printer_command(&mut self, f: &[u8], now: u64) {
+        let ack_at = now + self.ms(1);
+        if checksum(&f[..4]) != f[4] {
+            self.tx.send(ack_at, &[NAK]);
+            return;
+        }
+        match f[1] {
+            b'S' => {
+                let done = self.tx.send(ack_at, &[ACK]);
+                self.send_frame(done + self.ms(1), COMPLETE, &[0, 0, 16, 0]);
+            }
+            b'W' => {
+                let size = match (f[2], f[3]) {
+                    (b'S', _) | (_, b'S') => 29,
+                    (b'D', _) | (_, b'D') => 20,
+                    _ => 40,
+                };
+                self.tx.send(ack_at, &[ACK]);
+                self.pending = Some(Pending {
+                    unit: PRINTER_UNIT,
+                    command: b'W',
+                    sector: 0,
+                    need: size + 1,
+                    got: Vec::new(),
+                });
+            }
+            _ => {
+                self.tx.send(ack_at, &[NAK]);
+            }
+        }
+    }
+
+    /// The data frame of a `W` to P1:.
+    fn printer_record(&mut self, frame: &[u8], now: u64) {
+        let (data, sum) = frame.split_at(frame.len() - 1);
+        let at = now + self.ms(1);
+        if checksum(data) != sum[0] {
+            self.tx.send(at, &[NAK]);
+            return;
+        }
+        self.printed.push(data.to_vec());
+        let done = self.tx.send(at, &[ACK]);
+        self.tx.send(done + self.ms(1), &[COMPLETE]);
+    }
+
     fn command_frame(&mut self, f: &[u8], now: u64) {
+        if self.printer && f.len() == 5 && f[0] == 0x40 {
+            self.printer_command(f, now);
+            return;
+        }
         if f.len() != 5 || !(0x31..=0x34).contains(&f[0]) {
             return;
         }

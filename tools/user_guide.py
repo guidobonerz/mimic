@@ -434,6 +434,7 @@ table(["Option", "Meaning"], [
 h2("Hotkeys")
 table(["Key", "Action"], [
     ["Ctrl+P", "show or hide the console panel"],
+    ["Ctrl+M", "open or close the media panel: mount, eject and save disks, tapes and cartridges"],
     ["Ctrl+Space", "show or hide the status footer"],
     ["Ctrl+D", "put the next disk of the `--disk` list into the first drive"],
     ["Ctrl+I", "Amiga: switch the deinterlacing between weave and bob"],

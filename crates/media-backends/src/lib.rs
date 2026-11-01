@@ -21,6 +21,8 @@ pub mod greaseweazle;
 pub mod host_dir;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod host_fs;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod host_print;
 pub mod image;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod net;
@@ -39,15 +41,31 @@ pub fn host_journal(
     folder: Option<std::path::PathBuf>,
     mounts: &[(String, std::path::PathBuf)],
 ) -> Result<emu_core::host::Journal, String> {
+    host_journal_with_printer(net, folder, mounts, None)
+}
+
+/// [`host_journal`] with a folder for the emulated printer's jobs.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn host_journal_with_printer(
+    net: bool,
+    folder: Option<std::path::PathBuf>,
+    mounts: &[(String, std::path::PathBuf)],
+    printer: Option<host_print::PrinterOutput>,
+) -> Result<emu_core::host::Journal, String> {
     use emu_core::host::{FileHost, MountFileHost};
     let root = folder.map(|f| Box::new(host_fs::FsFolder::new(f)) as Box<dyn FileHost>);
-    let files = if mounts.is_empty() {
+    let files = if mounts.is_empty() && printer.is_none() {
         root
     } else {
         let mut m = MountFileHost::new(root);
         for (name, dir) in mounts {
             m.mount(name, Box::new(host_fs::FsFolder::new(dir)))
                 .map_err(|e| format!("mount {name}: {e}"))?;
+        }
+        if let Some(output) = printer {
+            let folder = output.into_file_host()?;
+            m.mount(host_print::MOUNT, folder)
+                .map_err(|e| format!("mount {}: {e}", host_print::MOUNT))?;
         }
         Some(Box::new(m) as Box<dyn FileHost>)
     };

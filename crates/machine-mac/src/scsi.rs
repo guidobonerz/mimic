@@ -329,9 +329,18 @@ impl Scsi {
         self.tcr & 7 == u8::from(msg) << 2 | u8::from(cd) << 1 | u8::from(io)
     }
 
+    /// DMA request. Receiving, a phase change stops the transfer (data
+    /// sheet, "Phase Match"): no byte is latched, so the end of a data
+    /// phase shows as REQ without DRQ and status and message stay on the
+    /// bus. Sending, DRQ says the output register is free, whatever the
+    /// phase: the Plus ROM waits for it after a block's last byte, when the
+    /// target has gone on to status.
+    fn drq(&self) -> bool {
+        self.mode & 2 != 0 && self.req && (self.dma_send || (self.dma_recv && self.phase_match()))
+    }
+
     fn bsr(&self) -> u8 {
-        let drq = self.mode & 2 != 0 && (self.dma_send || self.dma_recv) && self.req;
-        u8::from(drq) << 6
+        u8::from(self.drq()) << 6
             | u8::from(self.phase_match()) << 3
             | u8::from(self.icr & icr::ATN != 0) << 1
             | u8::from(self.icr & icr::ACK != 0)
@@ -358,7 +367,9 @@ impl Scsi {
     pub fn read(&mut self, reg: u8, dack: bool) -> u8 {
         if dack && self.dma_recv && self.mode & 2 != 0 {
             let v = self.bus_data();
-            self.handshake();
+            if self.phase_match() {
+                self.handshake();
+            }
             return v;
         }
         // Register 7 (reset parity/interrupt) has nothing latched here.
@@ -368,10 +379,12 @@ impl Scsi {
     pub fn write(&mut self, reg: u8, v: u8, dack: bool) {
         if dack && self.dma_send && self.mode & 2 != 0 {
             self.odr = v;
-            let keep = self.icr;
-            self.icr |= icr::DATA;
-            self.handshake();
-            self.icr = keep;
+            if self.phase_match() {
+                let keep = self.icr;
+                self.icr |= icr::DATA;
+                self.handshake();
+                self.icr = keep;
+            }
             return;
         }
         match reg & 7 {
@@ -617,8 +630,10 @@ impl Scsi {
                 d[2] = 1;
                 d[3] = 1;
                 d[4] = 31;
+                // Apple's disk tools only take drives they have in a table
+                // (HD SC Setup 2.0.3: read off its program).
                 d[8..16].copy_from_slice(b"QUANTUM ");
-                d[16..32].copy_from_slice(b"MIMIC SCSI DISK ");
+                d[16..32].copy_from_slice(b"P40S 940-40-94xx");
                 d[32..36].copy_from_slice(b"1.0 ");
                 self.data_in(d, usize::from(c[4]));
             }
@@ -626,6 +641,12 @@ impl Scsi {
                 let mut d = vec![11, 0, if protected { 0x80 } else { 0 }, 8, 0];
                 d.extend_from_slice(&blocks.to_be_bytes()[1..]);
                 d.extend_from_slice(&[0, 0, (BLOCK >> 8) as u8, 0]);
+                // Page $30: how a drive tells it has Apple's firmware.
+                if c[2] & 0x3f == 0x30 {
+                    d.extend_from_slice(&[0x30, 19]);
+                    d.extend_from_slice(b"APPLE COMPUTER, INC");
+                    d[0] = d.len() as u8 - 1;
+                }
                 self.data_in(d, usize::from(c[4]));
             }
             0x25 => {
@@ -878,6 +899,7 @@ mod tests {
         for i in 0..BLOCK {
             s.write(0, 0xa0 ^ i as u8, true);
         }
+        assert_ne!(s.read(5, false) & 0x40, 0, "DRQ after the last byte");
         s.write(2, 0, false);
         assert_eq!(phase(&mut s), 0b011);
         assert_eq!(byte(&mut s, None), 0);
@@ -886,6 +908,33 @@ mod tests {
         assert_eq!(blk[3], 0xa3);
         // Out of range.
         assert_eq!(command(&mut s, &[8, 0, 0, 64, 1, 0]).1, 2);
+    }
+
+    /// A program asking for more bytes than the target has (HD SC Setup
+    /// does): the transfer stops at the phase change with REQ and no DRQ,
+    /// status and message stay on the bus.
+    #[test]
+    fn a_phase_change_stops_pseudo_dma() {
+        let mut s = bus();
+        select(&mut s);
+        for b in [0x12, 0, 0, 0, 4, 0] {
+            byte(&mut s, Some(b));
+        }
+        s.write(3, 1, false); // expect data in
+        s.write(2, 2, false);
+        s.write(7, 0, false);
+        for _ in 0..4 {
+            assert_ne!(s.read(5, false) & 0x40, 0, "DRQ");
+            s.read(0, true);
+        }
+        assert_eq!(s.read(5, false) & 0x48, 0, "no DRQ, no phase match");
+        assert_ne!(s.read(4, false) & 0x20, 0, "REQ");
+        s.read(0, true);
+        s.write(2, 0, false);
+        assert_eq!(phase(&mut s), 0b011, "status not swallowed");
+        assert_eq!(byte(&mut s, None), 0);
+        assert_eq!(byte(&mut s, None), 0);
+        assert_eq!(s.read(4, false) & 0x40, 0, "bus free");
     }
 
     #[test]

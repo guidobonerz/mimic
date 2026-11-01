@@ -27,5 +27,6 @@ gilrs.workspace = true
 noto-sans-mono-bitmap.workspace = true
 png.workspace = true
 pollster.workspace = true
+rfd.workspace = true
 wgpu.workspace = true
 winit.workspace = true

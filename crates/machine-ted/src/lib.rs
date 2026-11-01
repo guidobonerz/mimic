@@ -39,6 +39,7 @@ pub mod stub;
 
 use chips_cbm::ted::{self, Ted};
 use cpu_6502::{Config as CpuConfig, Cpu6502, IoPort, Variant};
+use devices_printer::CbmPrinter;
 use drives_cbm::IecLines;
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
 use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
@@ -374,6 +375,8 @@ pub struct TedMachine {
     input: InputQueue,
     ports: [Option<Box<dyn PortDevice>>; 2],
     drive: Option<Drive8>,
+    /// `printer` option: a printer on the serial bus.
+    printer: Option<CbmPrinter>,
     program: ProgramSlot,
     /// The datasette (1531) on the cassette port.
     tape: Datasette,
@@ -468,6 +471,7 @@ impl TedMachine {
             input: InputQueue::new(),
             ports: [port1, None],
             drive,
+            printer: CbmPrinter::from_config(config),
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C16, double_hz),
             cart: devices_cartridge::ted::slot(),
@@ -537,7 +541,10 @@ impl TedMachine {
         self.io.cassette_read = self.tape.read();
         self.io.cassette_sense = self.tape.sense();
         // Serial bus: the drive sees what the machine drives now.
-        let host = self.iec_out();
+        let mut host = self.iec_out();
+        if let Some(p) = &self.printer {
+            host.data |= p.iec_data();
+        }
         let mut drive_stop = None;
         self.io.iec = match &mut self.drive {
             Some(d) => {
@@ -547,6 +554,13 @@ impl TedMachine {
             }
             None => host,
         };
+        // Time here is double clocks, the printer counts about microseconds.
+        if self.sched.now().0 & 1 == 0 {
+            if let Some(p) = &mut self.printer {
+                let bus = self.io.iec;
+                p.iec_tick(bus.atn, bus.clk, bus.data);
+            }
+        }
         self.sched.tick();
         let new_field = out.frame_end;
         if new_field {
@@ -644,6 +658,9 @@ impl TedMachine {
 
     /// Program injection and autostart, once BASIC has booted.
     fn frame_tasks(&mut self) {
+        if let Some(p) = &mut self.printer {
+            p.printer.frame();
+        }
         if self.io.ted.beam().frame.saturating_sub(self.boot_frame) < BOOT_FRAMES {
             return;
         }
@@ -743,6 +760,9 @@ impl Machine for TedMachine {
     /// serial bus) drive 8. The TED has no reset input; it is new only on
     /// power-up.
     fn reset(&mut self, kind: ResetKind) {
+        if let Some(p) = &mut self.printer {
+            p.reset();
+        }
         let hard = kind == ResetKind::Hard;
         self.cpu.reset();
         self.port = IoPort::new(Variant::Mos7501.io_port_mask().unwrap_or(0xff));
@@ -948,6 +968,12 @@ impl Machine for TedMachine {
         dev
     }
 
+    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+        if let Some(p) = &mut self.printer {
+            p.printer.attach(&host);
+        }
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         let mut slots = Vec::new();
         if let Some(d) = &self.drive {
@@ -991,6 +1017,9 @@ impl Machine for TedMachine {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some(p) = &self.printer {
+            p.save_chunk(&mut w);
+        }
         w.chunk(*b"TEDS", 2, |w| {
             w.bool(self.field_done_pending);
             w.u8(self.autostart.to_u8());
@@ -1138,6 +1167,9 @@ impl Machine for TedMachine {
         self.field_done_pending = field_done_pending;
         self.autostart = autostart;
         self.boot_frame = boot_frame;
+        if let Some(p) = &mut self.printer {
+            p.load_chunk(s);
+        }
         Ok(())
     }
 }

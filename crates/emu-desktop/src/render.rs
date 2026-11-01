@@ -42,6 +42,8 @@ struct Commands {
     profile: Option<Profile>,
     /// `Some(None)` hides the strip.
     strip: Option<Option<Strip>>,
+    /// The same for the side panel (`rows` is its height).
+    side: Option<Option<Strip>>,
 }
 
 struct Inner {
@@ -103,6 +105,11 @@ impl Renderer {
 
     pub fn set_profile(&self, profile: Profile) {
         self.command(|c| c.profile = Some(profile));
+    }
+
+    /// The side panel, or `None` for none.
+    pub fn set_side(&self, side: Option<Strip>) {
+        self.command(|c| c.side = Some(side));
     }
 
     /// The strip under the picture, or `None` for none.
@@ -206,6 +213,9 @@ fn apply_commands(gfx: &mut Gfx, inner: &Inner, before_acquire: bool) {
     }
     if let Some(strip) = c.strip.take() {
         gfx.set_footer(strip.as_ref().map(|s| (s.rgba.as_slice(), s.width, s.rows)));
+    }
+    if let Some(side) = c.side.take() {
+        gfx.set_side(side.as_ref().map(|s| (s.rgba.as_slice(), s.width, s.rows)));
     }
 }
 

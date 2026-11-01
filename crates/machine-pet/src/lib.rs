@@ -41,6 +41,7 @@ pub mod video;
 use chips_cbm::pia::Pia;
 use chips_cbm::via::Via;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
+use devices_printer::CbmPrinter;
 use drives_cbm::{IeeeDrive, IeeeLines};
 use drives_other::Datasette;
 use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
@@ -526,6 +527,8 @@ pub struct Pet {
     tape: Datasette,
     /// The virtual disk drive on the IEEE-488 bus.
     drive: Option<IeeeDrive>,
+    /// `printer` option: a printer on the IEEE-488 bus.
+    printer: Option<CbmPrinter>,
     resampler: Decimator,
     /// Audio produced but not yet taken (output, not machine state).
     samples: Vec<i16>,
@@ -618,6 +621,7 @@ impl Pet {
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::Pet, 1_000_000),
             drive,
+            printer: CbmPrinter::from_config(config),
             resampler: Decimator::new(CPU_HZ, SAMPLE_RATE).expect("valid rates"),
             samples: Vec::new(),
             field_done_pending: false,
@@ -651,7 +655,12 @@ impl Pet {
         self.io.pia1.set_cb1(!video.vsync);
         // IEEE-488: the drive sees what the PET drives now; ATN in on
         // PIA2 CA1.
-        let pet = self.io.ieee_out();
+        let mut pet = self.io.ieee_out();
+        if let Some(p) = &self.printer {
+            let (ndac, nrfd) = p.ieee_lines();
+            pet.ndac |= ndac;
+            pet.nrfd |= nrfd;
+        }
         self.io.ieee = match &mut self.drive {
             Some(d) => {
                 d.tick(IeeeLines::combine(&[pet, d.ieee_out()]));
@@ -659,6 +668,10 @@ impl Pet {
             }
             None => pet,
         };
+        if let Some(p) = &mut self.printer {
+            let bus = self.io.ieee;
+            p.ieee_tick(bus.atn, bus.dav, bus.data);
+        }
         self.io.pia2.set_ca1(!self.io.ieee.atn);
         let irq = self.io.pia1.irq() || self.io.pia2.irq() || self.io.via.irq();
         self.cpu.set_irq(irq);
@@ -762,6 +775,9 @@ impl Pet {
 
     /// Program injection once BASIC has booted.
     fn frame_tasks(&mut self) {
+        if let Some(p) = &mut self.printer {
+            p.printer.frame();
+        }
         if self.sched.now().0.saturating_sub(self.boot_cycle) < BOOT_CYCLES {
             return;
         }
@@ -868,6 +884,9 @@ impl Machine for Pet {
     /// The RESET line reaches the 6502, the PIAs, the VIA and the CRTC
     /// (which has no reset input on the 6545 and keeps its registers).
     fn reset(&mut self, kind: ResetKind) {
+        if let Some(p) = &mut self.printer {
+            p.reset();
+        }
         self.cpu.reset();
         self.io.pia1.reset();
         self.io.pia2.reset();
@@ -1014,6 +1033,12 @@ impl Machine for Pet {
         None
     }
 
+    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+        if let Some(p) = &mut self.printer {
+            p.printer.attach(&host);
+        }
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         let mut slots = vec![
             MediaSlotInfo {
@@ -1051,6 +1076,9 @@ impl Machine for Pet {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some(p) = &self.printer {
+            p.save_chunk(&mut w);
+        }
         w.chunk(*b"PETS", 3, |w| {
             w.bool(self.field_done_pending);
             w.u64(self.boot_cycle);
@@ -1166,6 +1194,9 @@ impl Machine for Pet {
         self.resampler = next.resampler;
         self.field_done_pending = field_done_pending;
         self.boot_cycle = boot_cycle;
+        if let Some(p) = &mut self.printer {
+            p.load_chunk(s);
+        }
         Ok(())
     }
 }

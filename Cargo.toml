@@ -31,6 +31,7 @@ drives-other = { path = "crates/drives-other" }
 devices-input = { path = "crates/devices-input" }
 devices-cartridge = { path = "crates/devices-cartridge" }
 devices-net = { path = "crates/devices-net" }
+devices-printer = { path = "crates/devices-printer" }
 media = { path = "crates/media" }
 media-backends = { path = "crates/media-backends" }
 emu-input = { path = "crates/emu-input" }
@@ -69,6 +70,7 @@ gilrs = "0.11"
 noto-sans-mono-bitmap = { version = "0.3.2", default-features = false, features = ["regular", "size_16", "size_20", "size_24", "unicode-basic-latin", "unicode-specials"] }
 png = "0.17"
 pollster = "0.4"
+rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 flate2 = "1"

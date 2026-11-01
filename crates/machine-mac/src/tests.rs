@@ -196,6 +196,31 @@ fn rom_chip_pairs_interleave() {
 /// Development aid: boot a real ROM (EMU_ROM_DIR, EMU_MAC_MODEL,
 /// EMU_FRAMES) and print where the CPU spends the last frame.
 #[test]
+fn the_scc_outranks_the_via_and_level_3_never_happens() {
+    let config = MachineConfig {
+        model: Some("plus".into()),
+        ..MachineConfig::default()
+    };
+    let mut config = config;
+    config.options.insert("roms".into(), "stub".into());
+    let mut m = Mac::new(&config).unwrap();
+    let b = &mut m.board;
+    b.scc.ch[0].wr[9] = 0x08; // MIE
+    b.scc.ch[0].wr[1] = 0x01;
+    b.scc.ch[0].wr[15] = 0x08;
+    b.scc.set_dcd(0, true);
+    assert!(b.scc.irq());
+    b.via.write(0xe, 0x80 | 0x02); // IER: CA1
+    b.via.set_ca1(true, 0);
+    b.via.set_ca1(false, 0);
+    b.via.set_ca1(true, 0);
+    assert!(b.via.irq());
+    assert_eq!(b.ipl(), 2, "VIA + SCC is the SCC's level");
+    b.scc.reset();
+    assert_eq!(b.ipl(), 1, "the VIA alone");
+}
+
+#[test]
 #[ignore]
 fn trace_rom() {
     let Some(dir) = std::env::var_os("EMU_ROM_DIR") else {

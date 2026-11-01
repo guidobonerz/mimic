@@ -54,6 +54,18 @@ pub struct Drive {
     pub status: DriveStatus,
 }
 
+/// A media slot as the side panel shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Slot {
+    pub id: u8,
+    pub name: &'static str,
+    pub kind: MediaKind,
+    pub inserted: bool,
+    pub status: DriveStatus,
+    /// The image's file name, filled in by the window.
+    pub file: Option<String>,
+}
+
 /// What the emulation thread publishes for the footer.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Footer {
@@ -63,6 +75,8 @@ pub struct Footer {
     pub frame: u64,
     pub joys: Vec<Joy>,
     pub drives: Vec<Drive>,
+    /// Every drive, datasette and cartridge slot.
+    pub slots: Vec<Slot>,
     /// A short message (the snapshot's file name).
     pub note: Option<String>,
 }
@@ -147,25 +161,41 @@ impl Tracker {
             })
             .collect();
         let mut drives = Vec::new();
+        let mut slots = Vec::new();
         for info in m.media_slots() {
-            if !matches!(info.kind, MediaKind::Disk | MediaKind::Tape) {
+            if !matches!(
+                info.kind,
+                MediaKind::Disk | MediaKind::Tape | MediaKind::Cartridge
+            ) {
                 continue;
             }
             let now = m
                 .media_slot(info.id)
                 .map(|s| s.status())
                 .unwrap_or_default();
-            drives.push(Drive {
+            let status = held(self.hold.entry(info.id.0).or_default(), now);
+            slots.push(Slot {
+                id: info.id.0,
                 name: info.name,
+                kind: info.kind,
                 inserted: info.inserted,
-                status: held(self.hold.entry(info.id.0).or_default(), now),
+                status,
+                file: None,
             });
+            if info.kind != MediaKind::Cartridge {
+                drives.push(Drive {
+                    name: info.name,
+                    inserted: info.inserted,
+                    status,
+                });
+            }
         }
         Footer {
             elapsed_ms,
             frame,
             joys,
             drives,
+            slots,
             note: None,
         }
     }
@@ -196,7 +226,7 @@ pub type Rgb = [u8; 3];
 pub const TEXT: Rgb = [0xC8, 0xC8, 0xC8];
 pub const DIM: Rgb = [0x70, 0x70, 0x70];
 pub const BUSY: Rgb = [0x50, 0xE0, 0x50];
-const ERROR: Rgb = [0xFF, 0x50, 0x50];
+pub const ERROR: Rgb = [0xFF, 0x50, 0x50];
 pub const BACKGROUND: Rgb = [0x18, 0x18, 0x18];
 
 fn joy_text(j: &Joy) -> String {
@@ -309,7 +339,7 @@ impl Button {
 
 /// The snapshot button's label.
 const SNAPSHOT: &str = " snapshot ";
-const BUTTON: Rgb = [0x3A, 0x3A, 0x3A];
+pub const BUTTON: Rgb = [0x3A, 0x3A, 0x3A];
 
 /// Knob and track colours of the speed slider.
 const TRACK: Rgb = [0x50, 0x50, 0x50];
@@ -466,6 +496,7 @@ mod tests {
                     status: DriveStatus::default(),
                 },
             ],
+            slots: Vec::new(),
             note: Some("saved c64-001.png".into()),
         };
         let s = segments(&f, Mouse::At(12, 34));

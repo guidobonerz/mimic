@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+devices-printer.workspace = true
 emu-core.workspace = true
 cpu-6502.workspace = true
 chips-atari.workspace = true

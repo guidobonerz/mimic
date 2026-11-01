@@ -36,6 +36,7 @@ pub mod stub;
 use chips_cbm::via::Via;
 use chips_cbm::vic;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
+use devices_printer::CbmPrinter;
 use emu_core::frame::{FrameRef, PixelData, Rgb8};
 use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
@@ -207,6 +208,8 @@ pub struct Vic20 {
     input: InputQueue,
     port: Option<Box<dyn PortDevice>>,
     drive: Option<Drive8>,
+    /// `printer` option: a printer on the serial bus.
+    printer: Option<CbmPrinter>,
     program: ProgramSlot,
     /// The datasette on the cassette port.
     tape: Datasette,
@@ -286,6 +289,7 @@ impl Vic20 {
             input: InputQueue::new(),
             port,
             drive,
+            printer: CbmPrinter::from_config(config),
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::Vic20, cpu_hz),
             cart: devices_cartridge::vic20::slot(),
@@ -343,7 +347,10 @@ impl Vic20 {
         // The VIC fetches in φ1 of the next cycle; it never stops the CPU.
         let new_field = self.io.vic.tick(&VicView(&self.mem));
         // Serial bus: the drive sees what the VIC-20 drives now.
-        let host = self.io.iec_out();
+        let mut host = self.io.iec_out();
+        if let Some(p) = &self.printer {
+            host.data |= p.iec_data();
+        }
         let mut drive_stop = None;
         self.io.iec = match &mut self.drive {
             Some(d) => {
@@ -353,6 +360,10 @@ impl Vic20 {
             }
             None => host,
         };
+        if let Some(p) = &mut self.printer {
+            let bus = self.io.iec;
+            p.iec_tick(bus.atn, bus.clk, bus.data);
+        }
         self.sched.tick();
         if new_field {
             self.frame_tasks();
@@ -457,6 +468,9 @@ impl Vic20 {
 
     /// Program injection and autostart, once BASIC has booted.
     fn frame_tasks(&mut self) {
+        if let Some(p) = &mut self.printer {
+            p.printer.frame();
+        }
         if self.io.vic.beam().frame.saturating_sub(self.boot_frame) < BOOT_FRAMES {
             return;
         }
@@ -588,6 +602,9 @@ impl Machine for Vic20 {
     /// The RESET line reaches the 6502, both VIAs and (through the serial
     /// bus) drive 8, but not the VIC.
     fn reset(&mut self, kind: ResetKind) {
+        if let Some(p) = &mut self.printer {
+            p.reset();
+        }
         let hard = kind == ResetKind::Hard;
         self.cpu.reset();
         self.mem.reset(hard);
@@ -766,6 +783,12 @@ impl Machine for Vic20 {
         dev
     }
 
+    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+        if let Some(p) = &mut self.printer {
+            p.printer.attach(&host);
+        }
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         let mut slots = Vec::new();
         if let Some(d) = &self.drive {
@@ -809,6 +832,9 @@ impl Machine for Vic20 {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some(p) = &self.printer {
+            p.save_chunk(&mut w);
+        }
         w.chunk(*b"V20S", 2, |w| {
             w.bool(self.field_done_pending);
             w.u8(self.autostart.to_u8());
@@ -920,6 +946,9 @@ impl Machine for Vic20 {
         self.boot_frame = boot_frame;
         // The VIC's pot inputs come from the device in the port.
         self.refresh_port();
+        if let Some(p) = &mut self.printer {
+            p.load_chunk(s);
+        }
         Ok(())
     }
 }

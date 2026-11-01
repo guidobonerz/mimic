@@ -54,6 +54,7 @@ use chips_atari::gtia::{self, Gtia};
 use chips_atari::pokey::Pokey;
 use chips_cbm::pia::Pia;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
+use devices_printer::Printer;
 use emu_core::audio::Decimator;
 use emu_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
@@ -418,6 +419,8 @@ pub struct Atari8 {
     /// The OPTION key as the user holds it (separate from the boot hold).
     option_key: bool,
     sio: Sio,
+    /// `printer` option: the paper end of the SIO printer P1:.
+    printer: Option<Printer>,
     program: ProgramSlot,
     loader: Option<Loader>,
     recorder: Recorder,
@@ -511,6 +514,7 @@ impl Atari8 {
             })?,
         };
         let mut sio = Sio::new(cpu_hz(standard));
+        sio.printer = config.options.get("printer").is_some_and(|v| v != "off");
         for d in sio.drives.iter_mut().take(drives) {
             *d = Some(SioDrive::new(drive_model));
         }
@@ -567,6 +571,7 @@ impl Atari8 {
             basic_off: basic_off && !model.is_old(),
             option_key: false,
             sio,
+            printer: Printer::from_config(config, devices_printer::Model::Fx80),
             program: ProgramSlot::default(),
             loader: None,
             recorder: Recorder::new(hz),
@@ -1005,9 +1010,22 @@ fn regs(
     }
 }
 
+impl Atari8 {
+    /// A frame ended: what the machine sent goes to the paper.
+    fn printer_frame(&mut self) {
+        if let Some(p) = &mut self.printer {
+            for record in self.sio.printed.drain(..) {
+                devices_printer::atari_line(&record, |b| p.feed(b));
+            }
+            p.frame();
+        }
+    }
+}
+
 impl Machine for Atari8 {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
         if std::mem::take(&mut self.field_done_pending) {
+            self.printer_frame();
             return StopReason::FrameDone;
         }
         let b = self.beam_pos();
@@ -1016,6 +1034,9 @@ impl Machine for Atari8 {
         }
         loop {
             if let Some(stop) = self.cycle(Some(dbg)) {
+                if matches!(stop, StopReason::FrameDone) {
+                    self.printer_frame();
+                }
                 return stop;
             }
         }
@@ -1348,6 +1369,12 @@ impl Machine for Atari8 {
         dev
     }
 
+    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+        if let Some(p) = &mut self.printer {
+            p.attach(&host);
+        }
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         let mut slots: Vec<MediaSlotInfo> = self
             .sio
@@ -1398,6 +1425,9 @@ impl Machine for Atari8 {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some(p) = &self.printer {
+            p.save_chunk(&mut w);
+        }
         // Version 4: the model and PIA port B inputs; one port chunk per
         // joystick port (four on the 400/800).
         w.chunk(*b"A8XL", 4, |w| {
@@ -1556,6 +1586,9 @@ impl Machine for Atari8 {
             rec.clear();
         }
         self.refresh_ports();
+        if let Some(p) = &mut self.printer {
+            p.load_chunk(s);
+        }
         Ok(())
     }
 }

@@ -103,6 +103,7 @@ use devices_cartridge::reu::{self, Reu};
 use devices_cartridge::slot::ExpansionSlot;
 use devices_cartridge::{CartLines, ExpansionCart};
 use devices_net::uci::{is_uci, Uci};
+use devices_printer::CbmPrinter;
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms};
 use drives_other::Datasette;
@@ -507,6 +508,8 @@ pub struct C64 {
     input: InputQueue,
     ports: [Option<Box<dyn PortDevice>>; 2],
     drive: Option<Drive8>,
+    /// `printer` option: a printer on the serial bus.
+    printer: Option<CbmPrinter>,
     program: ProgramSlot,
     /// The datasette on the cassette port.
     tape: Datasette,
@@ -661,6 +664,7 @@ impl C64 {
             input: InputQueue::new(),
             ports: [port1, port2],
             drive,
+            printer: CbmPrinter::from_config(config),
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C64, cpu_hz),
             cart: devices_cartridge::slot::expansion_slot(),
@@ -861,7 +865,10 @@ impl C64 {
         });
         self.cartridge_cycle();
         // Serial bus: the drive sees what the C64 drives now.
-        let c64 = drive::c64_lines(self.io.cia2.port_a_out());
+        let mut c64 = drive::c64_lines(self.io.cia2.port_a_out());
+        if let Some(p) = &self.printer {
+            c64.data |= p.iec_data();
+        }
         let mut drive_stop = None;
         self.io.iec = match &mut self.drive {
             Some(d) if self.drive_power => {
@@ -871,6 +878,10 @@ impl C64 {
             }
             _ => c64,
         };
+        if let Some(p) = &mut self.printer {
+            let bus = self.io.iec;
+            p.iec_tick(bus.atn, bus.clk, bus.data);
+        }
         // Datasette: port bit 3 WRITE, bit 5 MOTOR (output low = on), bit 4
         // SENSE; READ on CIA1 /FLAG.
         let port = &self.mem.port;
@@ -994,6 +1005,9 @@ impl C64 {
 
     /// Program injection and autostart, once BASIC has booted.
     fn frame_tasks(&mut self) {
+        if let Some(p) = &mut self.printer {
+            p.printer.frame();
+        }
         if self.io.vic.beam().frame.saturating_sub(self.boot_frame) < BOOT_FRAMES {
             return;
         }
@@ -1143,6 +1157,9 @@ impl Machine for C64 {
     /// The RESET line reaches the 6510, both CIAs, the SID and (through the
     /// serial bus) drive 8, but not the VIC-II.
     fn reset(&mut self, kind: ResetKind) {
+        if let Some(p) = &mut self.printer {
+            p.reset();
+        }
         let hard = kind == ResetKind::Hard;
         self.cpu.reset();
         self.mem.reset(hard);
@@ -1519,6 +1536,9 @@ impl Machine for C64 {
     fn attach_host(&mut self, host: HostServices) {
         self.host = host;
         let host = self.device_host();
+        if let Some(p) = &mut self.printer {
+            p.printer.attach(&host);
+        }
         if let Some(u) = &mut self.uci {
             u.attach_host(host.clone());
         }
@@ -1529,6 +1549,9 @@ impl Machine for C64 {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some(p) = &self.printer {
+            p.save_chunk(&mut w);
+        }
         w.chunk(*b"C64S", 7, |w| {
             w.u8(self.ints.irq);
             w.u8(self.ints.nmi);
@@ -1846,6 +1869,9 @@ impl Machine for C64 {
         self.boot_frame = boot_frame;
         self.fast_serving = fast_serving;
         self.sync_light_pen();
+        if let Some(p) = &mut self.printer {
+            p.load_chunk(s);
+        }
         Ok(())
     }
 }

@@ -24,6 +24,8 @@ use emu_input::{HostEvent, JoyKeys, Mapper};
 use emu_preview::server::FrameTap;
 use video_crt::field::FieldStage;
 
+use std::collections::BTreeMap;
+
 use crate::footer::{Footer, Tracker};
 
 /// A frame converted to RGBA for upload.
@@ -80,6 +82,19 @@ pub struct Shared {
     /// The disks the first drive swaps through (from `--disk`), the first
     /// one inserted at start.
     pub disk_swap: Mutex<Vec<String>>,
+    /// The machine has a drive, datasette or cartridge slot: the side
+    /// panel's handle shows.
+    pub has_media: AtomicBool,
+    /// The machine's registry id (a tape PRG is recorded in its format).
+    pub machine_id: Mutex<String>,
+    /// Clicks in the side panel, for the emulation thread.
+    pub media_commands: Mutex<Vec<MediaCommand>>,
+    /// The image file in each media slot, by slot id.
+    pub media_names: Mutex<BTreeMap<u8, String>>,
+    /// The side panel's file dialog is open.
+    pub dialog_open: AtomicBool,
+    /// Where the last file dialog ended.
+    pub last_folder: Mutex<Option<std::path::PathBuf>>,
     /// Set by the window (Ctrl+D): put the next disk of
     /// [`Shared::disk_swap`] into the first drive.
     pub next_disk: AtomicBool,
@@ -208,6 +223,12 @@ impl Shared {
             disk_swap: Mutex::default(),
             next_disk: AtomicBool::new(false),
             dropped_disks: Mutex::default(),
+            has_media: AtomicBool::new(false),
+            machine_id: Mutex::default(),
+            media_commands: Mutex::default(),
+            media_names: Mutex::default(),
+            dialog_open: AtomicBool::new(false),
+            last_folder: Mutex::default(),
             rewinding: AtomicBool::new(false),
             pad_fire: AtomicU8::new(0),
             save_mapping: AtomicBool::new(false),
@@ -342,6 +363,175 @@ fn swap_disk(m: &mut dyn Machine, path: &str) -> String {
     match slot.insert(media) {
         Ok(()) => format!("{} {name}", info.name),
         Err(e) => format!("{name}: {e}"),
+    }
+}
+
+/// What the side panel asks of a media slot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MediaCommand {
+    Mount {
+        slot: u8,
+        kind: emu_core::media::MediaKind,
+        path: String,
+    },
+    Eject {
+        slot: u8,
+    },
+    /// Write the slot's changes through to its image file.
+    Save {
+        slot: u8,
+    },
+}
+
+/// An image opened the way a slot of `kind` takes it.
+fn open_media(
+    kind: emu_core::media::MediaKind,
+    path: &str,
+    machine_id: &str,
+) -> Result<emu_core::media::Media, String> {
+    use emu_core::media::MediaKind;
+    let p = std::path::Path::new(path);
+    let media = match kind {
+        MediaKind::Tape => media_backends::image::open_tape(p, machine_id),
+        MediaKind::Cartridge => media_backends::image::open_cart(p),
+        _ => media_backends::image::open(p),
+    }
+    .map_err(|e| e.to_string())?;
+    if media.kind != kind {
+        return Err(format!("not a {kind:?} image").to_lowercase());
+    }
+    Ok(media)
+}
+
+fn slot_info(m: &dyn Machine, slot: u8) -> Option<emu_core::media::MediaSlotInfo> {
+    m.media_slots().into_iter().find(|s| s.id.0 == slot)
+}
+
+/// Remember or forget the image in the first slot of `kind`.
+fn note_first(
+    shared: &Shared,
+    m: &dyn Machine,
+    kind: emu_core::media::MediaKind,
+    path: Option<&str>,
+) {
+    let Some(info) = m.media_slots().into_iter().find(|s| s.kind == kind) else {
+        return;
+    };
+    if let Ok(mut names) = shared.media_names.lock() {
+        match path {
+            Some(p) => {
+                names.insert(info.id.0, file_name(p));
+            }
+            None => {
+                names.remove(&info.id.0);
+            }
+        }
+    }
+}
+
+/// An image on its way into a full slot: it goes in once the slot has been
+/// empty for a moment ([`SWAP_FRAMES`]).
+struct PendingMount {
+    slot: u8,
+    media: emu_core::media::Media,
+    path: String,
+    due: u64,
+}
+
+/// Put `media` into its slot; returns the message for the title bar.
+fn finish_mount(
+    shared: &Shared,
+    m: &mut dyn Machine,
+    slot: u8,
+    media: emu_core::media::Media,
+    path: &str,
+) -> String {
+    let name = file_name(path);
+    let Some(info) = slot_info(m, slot) else {
+        return format!("{name}: no such slot");
+    };
+    let Some(target) = m.media_slot(info.id) else {
+        return format!("{name}: no such slot");
+    };
+    match target.insert(media) {
+        Ok(()) => {
+            if let Ok(mut names) = shared.media_names.lock() {
+                names.insert(slot, name.clone());
+            }
+            format!("{} {name}", info.name)
+        }
+        Err(e) => format!("{name}: {e}"),
+    }
+}
+
+/// Carry out a side panel command; a mount into a full slot comes back
+/// pending. Returns the message for the title bar.
+fn media_command(
+    shared: &Shared,
+    m: &mut dyn Machine,
+    command: MediaCommand,
+    frame: u64,
+) -> (String, Option<PendingMount>) {
+    match command {
+        MediaCommand::Mount { slot, kind, path } => {
+            let machine_id = shared
+                .machine_id
+                .lock()
+                .map(|s| s.clone())
+                .unwrap_or_default();
+            let name = file_name(&path);
+            // Open first: a file that is no image leaves the old one in.
+            let media = match open_media(kind, &path, &machine_id) {
+                Ok(media) => media,
+                Err(e) => return (format!("{name}: {e}"), None),
+            };
+            let Some(info) = slot_info(m, slot) else {
+                return (format!("{name}: no such slot"), None);
+            };
+            if !info.inserted {
+                return (finish_mount(shared, m, slot, media, &path), None);
+            }
+            if let Some(target) = m.media_slot(info.id) {
+                let _ = target.eject();
+            }
+            if let Ok(mut names) = shared.media_names.lock() {
+                names.remove(&slot);
+            }
+            let pending = PendingMount {
+                slot,
+                media,
+                path,
+                due: frame + SWAP_FRAMES,
+            };
+            (
+                format!("{} empty, inserting {name} …", info.name),
+                Some(pending),
+            )
+        }
+        MediaCommand::Eject { slot } => {
+            let Some(info) = slot_info(m, slot) else {
+                return ("no such slot".into(), None);
+            };
+            if let Some(target) = m.media_slot(info.id) {
+                let _ = target.eject();
+            }
+            if let Ok(mut names) = shared.media_names.lock() {
+                names.remove(&slot);
+            }
+            (format!("{} empty", info.name), None)
+        }
+        MediaCommand::Save { slot } => {
+            let Some(info) = slot_info(m, slot) else {
+                return ("no such slot".into(), None);
+            };
+            let done = m.media_slot(info.id).map(|target| target.flush());
+            let msg = match done {
+                Some(Ok(())) => format!("{}: saved to its file", info.name),
+                Some(Err(e)) => format!("{}: not saved: {e}", info.name),
+                None => "no such slot".into(),
+            };
+            (msg, None)
+        }
     }
 }
 
@@ -591,6 +781,7 @@ pub fn spawn(
         // A disk on its way into the first drive and the frame it goes in;
         // frames run so far (the swap pause counts emulated frames).
         let mut pending_disk: Option<(String, u64)> = None;
+        let mut pending_mount: Option<PendingMount> = None;
         let mut frames_run = 0u64;
         // Frames left at warp after a disk drive was last seen working.
         let mut warp_hold = 0u32;
@@ -612,6 +803,30 @@ pub fn spawn(
                         *shared.status.lock().unwrap_or_else(|p| p.into_inner()) =
                             Some(format!("tape: {e}"));
                     }
+                }
+            }
+            let commands = shared
+                .media_commands
+                .lock()
+                .map(|mut c| std::mem::take(&mut *c))
+                .unwrap_or_default();
+            for command in commands {
+                // A second mount replaces one still waiting for its slot.
+                let (msg, pending) =
+                    media_command(&shared, session.machine_mut(), command, frames_run);
+                if pending.is_some() {
+                    pending_mount = pending;
+                }
+                *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+            }
+            if pending_mount.as_ref().is_some_and(|p| frames_run >= p.due) {
+                if let Some(p) = pending_mount.take() {
+                    let mut msg =
+                        finish_mount(&shared, session.machine_mut(), p.slot, p.media, &p.path);
+                    if let Some(c) = cheats_for_path(&mut session, &p.path) {
+                        msg = format!("{msg}; {c}");
+                    }
+                    *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
                 }
             }
             let mut disk = None;
@@ -642,6 +857,12 @@ pub fn spawn(
             });
             if let Some(path) = carts.last() {
                 let mut msg = insert_cart(session.machine_mut(), path);
+                note_first(
+                    &shared,
+                    session.machine(),
+                    emu_core::media::MediaKind::Cartridge,
+                    Some(path),
+                );
                 if let Some(c) = cheats_for_path(&mut session, path) {
                     msg = format!("{msg}; {c}");
                 }
@@ -665,12 +886,24 @@ pub fn spawn(
                     Some(drive) => format!("{drive} empty, inserting {} …", file_name(&path)),
                     None => "no disk drive".into(),
                 };
+                note_first(
+                    &shared,
+                    session.machine(),
+                    emu_core::media::MediaKind::Disk,
+                    None,
+                );
                 *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
                 pending_disk = Some((path, frames_run + SWAP_FRAMES));
             }
             if let Some((path, due)) = &pending_disk {
                 if frames_run >= *due {
                     let mut msg = swap_disk(session.machine_mut(), path);
+                    note_first(
+                        &shared,
+                        session.machine(),
+                        emu_core::media::MediaKind::Disk,
+                        Some(path),
+                    );
                     if let Some(c) = cheats_for_path(&mut session, path) {
                         msg = format!("{msg}; {c}");
                     }
@@ -761,7 +994,8 @@ pub fn spawn(
                     *s = Some((msg, Instant::now()));
                 }
             }
-            if shared.footer_on.load(Ordering::Relaxed) {
+            // The side panel's handle shows whether or not the footer does.
+            {
                 let mut f = tracker.snapshot(session.machine_mut(), frame_time.as_secs_f64() * 1e3);
                 // The snapshot's file name stays in the footer for 4 s.
                 if let Ok(s) = shared.snapshot_done.lock() {

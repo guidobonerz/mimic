@@ -194,6 +194,11 @@ impl Adb {
             if !reply.is_empty() {
                 self.reply = reply.into();
                 self.in_at = Some((self.cmd, true, now + BYTE_CLOCKS));
+            } else if self.srq() {
+                // Another device asks for service: the Mac only hears of
+                // it through a byte from the transceiver, and then walks
+                // the bus with Talks until the device answers.
+                self.in_at = Some((self.cmd, true, now + BYTE_CLOCKS));
             }
         }
         if let Some(t) = self.out_at {
@@ -413,6 +418,24 @@ mod tests {
         let t = send(&mut adb, &mut via, 0x5c, t);
         let (v, int, _) = byte(&mut adb, &mut via, 1, t);
         assert_eq!((v, int), (0xff, false));
+    }
+
+    #[test]
+    fn auto_poll_reports_a_service_request_of_another_device() {
+        let mut via = Via::new();
+        let mut adb = Adb::new();
+        let t = send(&mut adb, &mut via, 0x2c, 0); // Talk keyboard: nothing
+        adb.set_state(3, t);
+        via.write(0xb, 0x0c);
+        via.read(0xa, 0, 0);
+        adb.run(t + POLL_CLOCKS, &mut via);
+        assert!(adb.in_at.is_none(), "quiet bus: no byte");
+        adb.mouse_move(1, 0, false);
+        let t = t + 2 * POLL_CLOCKS;
+        adb.run(t, &mut via);
+        adb.run(t + BYTE_CLOCKS, &mut via);
+        assert_eq!(via.read(0xa, 0, 0), 0x2c, "the polled command, shifted in");
+        assert!(!adb.int_line(), "/INT low: no data from the polled device");
     }
 
     #[test]

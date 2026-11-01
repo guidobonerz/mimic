@@ -24,6 +24,7 @@ RULES = [
     ("devices-input", ["emu-core"]),
     ("devices-cartridge", ["emu-core", "media"]),
     ("devices-net", ["emu-core"]),                # UCI, WiC64: host only via emu-core::host
+    ("devices-printer", ["emu-core"]),            # output only via emu-core::host
     ("video-crt", ["emu-core"]),
     ("emu-input", ["emu-core"]),
     ("emu-profile", []),

@@ -9,6 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+devices-printer.workspace = true
 emu-core.workspace = true
 cpu-z80.workspace = true
 chips-amstrad.workspace = true

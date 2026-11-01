@@ -107,6 +107,7 @@ use chips_amiga::custom::{self, Chipset, Custom, Standard, FIRST_CCK};
 use chips_cbm::cia::{Cia, CiaModel};
 use cpu_m68k::Model as CpuModel;
 use cpu_m68k::{Access, Step, TimedBus68, M68000};
+use devices_printer::Printer;
 use drives_other::amiga_drive::AmigaDrive;
 use emu_core::audio::Decimator;
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
@@ -380,6 +381,10 @@ const PORT_SAMPLE_CCK: u64 = custom::PAL_LINE as u64;
 /// Everything on the boards' buses except the CPU and the port devices.
 #[derive(Clone, Debug)]
 struct Board {
+    /// A printer hangs on the parallel port: not busy, paper in, selected.
+    printer_on: bool,
+    /// Bytes strobed to the printer since the last frame.
+    printed: Vec<u8>,
     mem: Memory,
     custom: Custom,
     cia_a: Cia,
@@ -606,10 +611,20 @@ impl Board {
                 return 0xff;
             }
             if peek {
-                self.cia_b.peek(reg, 0xff, 0xff)
+                self.cia_b.peek(reg, self.parallel_status(), 0xff)
             } else {
-                self.cia_b.read(reg, 0xff, 0xff)
+                self.cia_b.read(reg, self.parallel_status(), 0xff)
             }
+        }
+    }
+
+    /// CIA-B port A with the parallel port's status: 0 BUSY, 1 POUT low,
+    /// 2 SEL high with a printer; all high without one.
+    fn parallel_status(&self) -> u8 {
+        if self.printer_on {
+            0xfc
+        } else {
+            0xff
         }
     }
 
@@ -617,6 +632,13 @@ impl Board {
         let reg = ((addr >> 8) & 15) as u8;
         if addr & 0x1000 == 0 {
             self.cia_a.write(reg, v);
+            // A write to port B pulses /STROBE (the CIA's /PC); the printer
+            // answers with /ACK on /FLAG.
+            if self.printer_on && reg == 1 {
+                self.printed.push(self.cia_a.port_b_out());
+                self.cia_a.set_flag(false);
+                self.cia_a.set_flag(true);
+            }
         }
         if addr & 0x2000 == 0 {
             self.cia_b.write(reg, v);
@@ -987,6 +1009,8 @@ impl Bus for PeekBus<'_> {
 }
 
 pub struct Amiga {
+    /// `printer` option: the paper end of the printer port.
+    printer: Option<Printer>,
     model: Model,
     standard: Standard,
     cpu: M68000,
@@ -1086,7 +1110,10 @@ impl Amiga {
             model,
             standard,
             cpu: M68000::with_model(model.cpu()),
+            printer: Printer::from_config(config, devices_printer::Model::Fx80),
             board: Board {
+                printer_on: config.options.get("printer").is_some_and(|v| v != "off"),
+                printed: Vec::new(),
                 mem,
                 custom,
                 cia_a: Cia::new(CiaModel::Mos8520),
@@ -1394,9 +1421,20 @@ fn cia_info(name: &'static str, cia: &Cia, base: u32, step: u32) -> ChipInfo {
     chip_regs(name, &regs)
 }
 
+impl Amiga {
+    /// A frame ended: what the machine sent goes to the paper.
+    fn printer_frame(&mut self) {
+        if let Some(p) = &mut self.printer {
+            self.board.printed.drain(..).for_each(|b| p.feed(b));
+            p.frame();
+        }
+    }
+}
+
 impl Machine for Amiga {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
         if std::mem::take(&mut self.board.field_done) {
+            self.printer_frame();
             return StopReason::FrameDone;
         }
         let c = &self.board.custom;
@@ -1405,6 +1443,9 @@ impl Machine for Amiga {
         }
         loop {
             if let Some(stop) = self.instruction(Some(dbg)) {
+                if matches!(stop, StopReason::FrameDone) {
+                    self.printer_frame();
+                }
                 return stop;
             }
         }
@@ -1741,6 +1782,12 @@ impl Machine for Amiga {
         dev
     }
 
+    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+        if let Some(p) = &mut self.printer {
+            p.attach(&host);
+        }
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         const NAMES: [&str; 4] = ["DF0:", "DF1:", "DF2:", "DF3:"];
         self.board
@@ -1765,6 +1812,9 @@ impl Machine for Amiga {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
+        if let Some(p) = &self.printer {
+            p.save_chunk(&mut w);
+        }
         let b = &self.board;
         // Version 5: the LED filter is a biquad (five states per side);
         // version 6: Gayle's id shift (A1200).
@@ -1916,11 +1966,15 @@ impl Machine for Amiga {
         }
         self.cpu = cpu;
         self.board = board;
+        self.board.printer_on = self.printer.is_some();
         self.sched = sched;
         self.input = input;
         self.jam_reported = jam_reported;
         self.ports_due = ports_due;
         self.sync_light_pen();
+        if let Some(p) = &mut self.printer {
+            p.load_chunk(s);
+        }
         Ok(())
     }
 }

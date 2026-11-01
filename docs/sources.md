@@ -254,6 +254,7 @@ own section.
 | What | Source | Used in |
 | --- | --- | --- |
 | Memory map (RAM, ROM, overlay, SCC $9FFFF8/$BFFFF9, IWM $DFE1FF, VIA $EFE1FE, SCSI $580000 with DACK at A9), VIA port bits, interrupt levels, screen and sound buffer addresses, mouse wiring, 5380 register addresses | Linux/m68k "Mac Plus hardware" notes (https://linux-mac68k.sourceforge.net/devel/plushw.php.html); Apple, *Inside Macintosh* III, "The Macintosh Hardware" (1985); Wikipedia, "Macintosh 128K/512K technical details" | `machine-mac` |
+| 5380 phase mismatch stopping DMA; the drive table of Apple HD SC Setup 2.0.3 (INQUIRY identities, "APPLE COMPUTER, INC" read off the program on the System 6.0.8 disk Utilities 1) | NCR 5380 data sheet; observed behaviour of the user's disk | `machine-mac/src/scsi.rs` |
 | Video timing (704 × 370 at 15.6672 MHz), video taking every other RAM slot (SE: one in four) | Wikipedia, "Macintosh 128K/512K technical details"; Big Mess o' Wires, Mac Plus/SE memory timing (bigmessowires.com/?p=391, citing MacTech) | `machine-mac/src/video.rs` |
 | Real-time clock protocol (command bytes, seconds, 20/256-byte parameter RAM, write protect) | *Inside Macintosh* III, "The Real-Time Clock"; Linux/m68k notes | `machine-mac/src/rtc.rs` |
 | M0110/M0110A keyboard: commands (Inquiry $10, Instant $14, Model $16, Test $36), Null/ACK/NAK, transition bytes, $79 keypad prefix, $71 shift, raw codes, bit timing | *Inside Macintosh* III, "The Keyboard and Keypad"; tmk, "Apple M0110 Keyboard Protocol" (github.com/tmk/tmk_keyboard/wiki); the two disagree on the command codes, Inside Macintosh's are used | `machine-mac/src/keyboard.rs` |
@@ -354,13 +355,25 @@ Pages fetched or searched while building (beyond the documents above):
 - Real hardware (2026-10-25): the Greaseweazle repositories' `COPYING` (Unlicense, public domain), `inc/cdc_acm_protocol.h` and `src/greaseweazle/usb.py`; OpenCBM's `opencbm/include/opencbm.h` and the doc comments of `opencbm/lib/cbm.c` (interface only, GPL code not used).
 - Atari 2600 DPC (2026-10-25): Kevin Horton's description of the DPC chip in Pitfall II (register map $1000–$107F, data fetchers with top/bottom flag compare, music mode of DF5–DF7 clocked by an on-board oscillator of about 20 kHz, amplitude mixing of the three voices, random number generator) and his "Cart Information" v6 (https://www.qotile.net/minidig/docs/sizes.txt); the random number generator's taps (XNOR of bits 7, 5, 4, 3, shifting left) were checked against the 255-byte generator dump appended to the 10 495-byte Pitfall II image. No emulator code was used.
 
+## Printers
+
+| What | Source | Used in |
+| --- | --- | --- |
+| Epson ESC/P codes, 9-pin graphics | Epson, *FX Series Printer User's Manual* (1983), from memory; the HelpPC 2.10 table of Epson printer codes (panthema.net/2006/helppc21/HelpPC-2.10-HTML/hw-Epson_printer_codes.html) | `devices-printer::epson` |
+| NEC Pinwriter P6+/P7+: `FS 3` n/360 inch line pitch, 360 dpi | RISC OS 3.6 printer definition notes (4corn.co.uk/archive/acornftp/riscos3/36/36DiscImage/Printing/Printers/NEC/Read_Me); the 24-pin ESC/P modes taken from Epson's LQ series, the printer's own code table ("P6 and P7 Control and Escape Codes", NEC doc 273912) could not be read | `devices-printer::epson` |
+| ImageWriter codes | Apple, *ImageWriter User's Manual*, from memory; checked against the byte stream of System 6.0.8's ImageWriter 2.7 driver | `devices-printer::epson` |
+| The Mac's CTS level for a ready printer | Observed: the System 6.0.8 driver says "not responding" with RR0 bit 5 set | `machine-mac` |
+| Atari SIO printer | Atari 400/800 OS Manual; checked through the OS's SIOV | `drives-other::sio` |
+| CPC printer port &EFxx, bit 7 strobe, PPI port B bit 6 busy | CPCWiki, "Amstrad/Schneider Printer Control Codes" and port notes; checked through the firmware's MC PRINT CHAR | `machine-cpc` |
+| Amiga parallel port on CIA-A port B, /PC strobe, /FLAG ack, CIA-B PA0–2 | Amiga Hardware Reference Manual | `machine-amiga` |
+
 ## Software dependencies
 
 Third-party Rust crates (see `Cargo.toml` for exact versions): `winit`
 (windowing), `wgpu` (GPU rendering), `naga` (WGSL validation in tests),
 `cpal` (audio), `gilrs` (gamepads), `tokio` and `tokio-tungstenite` (debug
 and preview servers), `futures-util`, `serde`, `serde_json`, `toml`, `png`, `flate2` (gzip test data),
-`qoi`, `pollster`, `criterion` (benchmarks); optional for real hardware:
+`qoi`, `pollster`, `rfd` (native file dialog of the desktop's media panel), `criterion` (benchmarks); optional for real hardware:
 `serialport` (Greaseweazle) and `libloading` (OpenCBM at run time). The Python debug client uses
 the Python standard library only.
 
