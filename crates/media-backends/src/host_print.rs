@@ -7,8 +7,8 @@
 //! (CUPS). The machine only writes files (`devices-printer`), so it sees
 //! nothing of the host, and an input replay, which the journal answers,
 //! prints no paper. Sending is fire-and-forget on a child process: a
-//! printer that is off or missing shows in the host's queue, never in the
-//! emulation.
+//! printer that is off or missing shows in the host's queue and with the
+//! child's error on the frontend's terminal, never in the emulation.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -120,7 +120,6 @@ impl PrintFolder {
         let spawned = print_command(&file, self.printer.as_deref())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
             .spawn();
         if let Err(e) = spawned {
             eprintln!("printer: {}: {e}", file.display());
