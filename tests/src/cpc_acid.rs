@@ -22,6 +22,7 @@
 //! plus the CPC's key codes.
 
 use emu_core::input::{InputEvent, InputTarget, TimedInput};
+use emu_core::media::Media;
 use emu_core::registry::{MachineConfig, Registry};
 use emu_core::{
     BreakpointKind, Cycle, DebugHooks, DeviceId, Machine, MemSpaceId, Size, StopReason,
@@ -172,18 +173,26 @@ pub fn patch_crtc_type(program: &mut Binary, digit: u8) -> bool {
 /// runner loads BC as intended.
 const ENTRY_FIXES: [(&str, &str, &str); 1] = [("ga_io_decode", "BC", "ga_io_restore_extra")];
 
-/// Run one test program; `crtc_type` is the digit `crtctest` gets.
+/// Run one test program; `crtc_type` is the digit `crtctest` gets,
+/// `disc` the image in drive A.
 pub fn run(
     registry: &Registry,
     config: &MachineConfig,
     bin: &[u8],
     symbols: &str,
     crtc_type: u8,
+    disc: Option<Media>,
     max_frames: u32,
 ) -> Result<Outcome, String> {
     let mut program = parse_amsdos(bin).ok_or("no valid AMSDOS header")?;
     patch_crtc_type(&mut program, crtc_type);
     let mut m = registry.create("cpc", config).map_err(|e| e.to_string())?;
+    if let Some(disc) = disc {
+        m.media_slot(machine_cpc::SLOT_A)
+            .ok_or("no drive A")?
+            .insert(disc)
+            .map_err(|e| e.to_string())?;
+    }
     run_fields(m.as_mut(), 150);
     let space = cpu_space(m.as_ref());
     {
@@ -192,6 +201,15 @@ pub fn run(
             let addr = u32::from(program.load) + i as u32;
             if !cpu.poke(space, addr & 0xffff, Size::Byte, u32::from(b)) {
                 return Err(format!("cannot write {addr:#06x}"));
+            }
+        }
+        // The disc tests' question for the drive: 0 (`xor a; ld (drive),a; ret`).
+        if let (Some(choose), Some(drive)) =
+            (symbol(symbols, "choose_drive"), symbol(symbols, "drive"))
+        {
+            let code = [0xaf, 0x32, drive as u8, (drive >> 8) as u8, 0xc9];
+            for (i, &b) in code.iter().enumerate() {
+                cpu.poke(space, choose + i as u32, Size::Byte, u32::from(b));
             }
         }
         // No "press a key" every 25 lines.

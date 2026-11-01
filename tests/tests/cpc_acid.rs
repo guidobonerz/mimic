@@ -17,8 +17,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use emu_core::media::{Media, MediaKind};
 use emu_core::registry::MachineConfig;
 use emu_tests::cpc_acid::{self, Outcome};
+use media_backends::image::MemoryBackend;
 
 /// Emulated time limit per program: 15 minutes (some decode tests wait
 /// for a VSYNC on each of the 65536 ports; the emulation runs about nine
@@ -27,6 +29,11 @@ const MAX_FRAMES: u32 = 50 * 60 * 15;
 /// Programs for other CRTC types than the configured one (the CPC Plus
 /// ASIC's types 3 and 4 are not emulated).
 const ONLY_FOR_CRTC: [(&str, &str); 1] = [("crtc/crtc34st", "34")];
+/// `crtctest` writes &FF to every port: at &4000 that banks the 6128's RAM
+/// over the running program, so it needs a machine with 64 KB. Its I/O
+/// decode test alone takes about an emulated hour.
+const ON_664: &str = "crtc/crtctest";
+const ON_664_MAX_FRAMES: u32 = 50 * 60 * 100;
 /// Share of result lines that must pass, over the programs that finish.
 const GATE: f64 = 0.90;
 
@@ -46,6 +53,10 @@ fn cpc_acid_suite() {
         ..MachineConfig::default()
     };
     config.options.insert("crtc".into(), crtc.clone());
+    let config_664 = MachineConfig {
+        model: Some("664".into()),
+        ..config.clone()
+    };
     let root = testdata();
     let mut programs: Vec<(String, PathBuf)> = Vec::new();
     for suite in
@@ -94,7 +105,20 @@ fn cpc_acid_suite() {
                 };
                 let bin = std::fs::read(path).expect("bin");
                 let sym = std::fs::read_to_string(path.with_extension("sym")).unwrap_or_default();
-                let r = cpc_acid::run(&registry, &config, &bin, &sym, crtc_digit, max_frames);
+                let (config, max_frames) = if name == ON_664 {
+                    (&config_664, max_frames.max(ON_664_MAX_FRAMES))
+                } else {
+                    (&config, max_frames)
+                };
+                // `disc/fdc` needs a disc in drive A.
+                let disc = name.starts_with("disc_fdc/").then(|| Media {
+                    name: "blank".into(),
+                    kind: MediaKind::Disk,
+                    backend: Box::new(MemoryBackend {
+                        data: media::dsk::blank_data(40),
+                    }),
+                });
+                let r = cpc_acid::run(&registry, config, &bin, &sym, crtc_digit, disc, max_frames);
                 results.lock().unwrap().push((name.clone(), r));
             });
         }

@@ -32,7 +32,19 @@
 //! [`Crtc::tick`] is one character clock (1 µs on the CPC). Type 1 reloads
 //! the start address at the start of every line of row 0; types 0 and 2
 //! only at the start of the frame. Type 0's R8 DISPTMG skew value 3 turns
-//! the display off; the smaller skews and interlace are not modelled.
+//! the display off; the smaller skews are not modelled.
+//!
+//! Type 1 interlaces (R8 bit 0; Arnold acid test `crtctest`, "R8 - count
+//! lines" with its table for the UM6845R): every second field starts VSYNC
+//! half a line late and ends with one extra line, so VSYNC comes every
+//! N + ½ lines. With bits 1 and 0 set (interlace sync and video) the scan
+//! line counter steps by 2, from 0 or 1 by field. A row ends one short of
+//! R9 too, and with an odd number of lines per row the next row starts on
+//! the other parity, so rows of 5 and 4 lines alternate at R9 = 8. Types 0
+//! and 2 are not interlaced here.
+//!
+//! In the vertical total adjust the row counter goes on every R9 + 1 lines
+//! and VSYNC can start there (`crtctest`, "minimum VADJ value").
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -106,6 +118,13 @@ pub struct Crtc {
     vblank: bool,
     /// Type 1 status bit 6 (light pen register full).
     lpen_full: bool,
+    /// The second field of an interlaced frame.
+    odd_field: bool,
+    /// That field's extra line has begun.
+    extra_line: bool,
+    /// VSYNC runs half a line late, and has yet to start.
+    vsync_half: bool,
+    vsync_pending: bool,
 }
 
 impl Crtc {
@@ -127,6 +146,27 @@ impl Crtc {
             ma_next: 0,
             vblank: false,
             lpen_full: true,
+            odd_field: false,
+            extra_line: false,
+            vsync_half: false,
+            vsync_pending: false,
+        }
+    }
+
+    fn interlaced(&self) -> bool {
+        self.kind == CrtcType::T1 && self.regs[8] & 1 != 0
+    }
+
+    fn video_interlaced(&self) -> bool {
+        self.interlaced() && self.regs[8] & 2 != 0
+    }
+
+    /// The scan line counter is at the row's last line.
+    fn last_line(&self) -> bool {
+        if self.video_interlaced() {
+            self.vlc >= self.regs[9].saturating_sub(1)
+        } else {
+            self.vlc == self.regs[9]
         }
     }
 
@@ -234,18 +274,32 @@ impl Crtc {
         }
         if self.hcc == self.regs[1] {
             self.h_disp = false;
-            if self.vlc == self.regs[9] {
+            if self.last_line() {
                 self.ma_next = self.ma_row.wrapping_add(u16::from(self.regs[1])) & 0x3fff;
             }
         }
         if self.hcc == self.regs[2] && self.hsync == 0 {
             self.hsync = self.hsync_width();
         }
+        if self.vsync_half && self.hcc == (self.regs[0] >> 1).wrapping_add(1) {
+            self.half_line();
+        }
         out
     }
 
+    /// The middle of a line, in place of the line end for a late VSYNC.
+    fn half_line(&mut self) {
+        if self.vsync_pending {
+            self.vsync_pending = false;
+            self.vsync = self.vsync_width();
+        } else {
+            self.vsync = self.vsync.saturating_sub(1);
+            self.vsync_half = self.vsync > 0;
+        }
+    }
+
     fn end_of_line(&mut self) {
-        if self.vsync > 0 {
+        if self.vsync > 0 && !self.vsync_half {
             self.vsync -= 1;
         }
         let mut new_row = false;
@@ -253,26 +307,33 @@ impl Crtc {
             self.adj += 1;
             self.vlc = (self.vlc + 1) & 0x1f;
             if self.adj >= self.regs[5] {
-                self.new_frame();
+                new_row = self.end_of_frame();
+            } else if self.adj.is_multiple_of(self.regs[9] + 1) {
+                self.vcc = (self.vcc + 1) & 0x7f;
                 new_row = true;
             }
-        } else if self.vlc == self.regs[9] {
-            self.vlc = 0;
+        } else if self.last_line() {
+            self.vlc = if self.video_interlaced() {
+                (self.vlc + 2).wrapping_sub(self.regs[9].wrapping_add(1)) & 1
+            } else {
+                0
+            };
             self.ma_row = self.ma_next;
             if self.vcc == self.regs[4] {
                 if self.regs[5] > 0 {
                     self.adjusting = true;
                     self.adj = 0;
                     self.vcc = (self.vcc + 1) & 0x7f;
-                } else {
-                    self.new_frame();
+                } else if !self.end_of_frame() {
+                    self.vcc = (self.vcc + 1) & 0x7f;
                 }
             } else {
                 self.vcc = (self.vcc + 1) & 0x7f;
             }
             new_row = true;
         } else {
-            self.vlc = (self.vlc + 1) & 0x1f;
+            let step = if self.video_interlaced() { 2 } else { 1 };
+            self.vlc = (self.vlc + step) & 0x1f;
         }
         if self.kind == CrtcType::T1 && self.vcc == 0 && !self.adjusting {
             // Type 1 reads R12/R13 again on every line of row 0.
@@ -283,16 +344,36 @@ impl Crtc {
             self.v_disp = false;
             self.vblank = true;
         }
-        if new_row && !self.adjusting && self.vcc == self.regs[7] && self.vsync == 0 {
-            self.vsync = self.vsync_width();
+        if new_row && self.vcc == self.regs[7] && self.vsync == 0 && !self.vsync_pending {
+            if self.interlaced() && self.odd_field {
+                self.vsync_half = true;
+                self.vsync_pending = true;
+            } else {
+                self.vsync = self.vsync_width();
+            }
         }
+    }
+
+    /// The last line of a frame is over: the next frame starts (true), or
+    /// the extra line of an interlaced second field comes first.
+    fn end_of_frame(&mut self) -> bool {
+        if self.interlaced() && self.odd_field && !self.extra_line {
+            self.extra_line = true;
+            self.adjusting = true;
+            self.adj = self.regs[5];
+            return false;
+        }
+        self.new_frame();
+        true
     }
 
     fn new_frame(&mut self) {
         self.adjusting = false;
         self.adj = 0;
         self.vcc = 0;
-        self.vlc = 0;
+        self.extra_line = false;
+        self.odd_field = self.interlaced() && !self.odd_field;
+        self.vlc = u8::from(self.video_interlaced() && self.odd_field);
         self.ma_row = self.start_address();
         self.ma_next = self.ma_row;
         self.v_disp = true;
@@ -301,7 +382,7 @@ impl Crtc {
 }
 
 const TAG: [u8; 4] = *b"CRTC";
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 
 impl Savestate for Crtc {
     fn save(&self, w: &mut StateWriter) {
@@ -319,6 +400,10 @@ impl Savestate for Crtc {
                 self.v_disp,
                 self.vblank,
                 self.lpen_full,
+                self.odd_field,
+                self.extra_line,
+                self.vsync_half,
+                self.vsync_pending,
             ] {
                 w.bool(v);
             }
@@ -328,7 +413,7 @@ impl Savestate for Crtc {
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut n = self.clone();
         if c.u8()? != self.kind.number() {
             return Err(StateError::Invalid("CRTC type differs"));
@@ -354,6 +439,17 @@ impl Savestate for Crtc {
         ] {
             *v = c.bool()?;
         }
+        (n.odd_field, n.extra_line, n.vsync_half, n.vsync_pending) = (false, false, false, false);
+        if version >= 3 {
+            for v in [
+                &mut n.odd_field,
+                &mut n.extra_line,
+                &mut n.vsync_half,
+                &mut n.vsync_pending,
+            ] {
+                *v = c.bool()?;
+            }
+        }
         n.ma_row = c.u16()? & 0x3fff;
         n.ma_next = c.u16()? & 0x3fff;
         n.addr &= 0x1f;
@@ -377,6 +473,81 @@ mod tests {
             c.write(v);
         }
         c
+    }
+
+    /// Lines between VSYNC starts, in half lines, over `n` frames.
+    fn vsync_periods(c: &mut Crtc, n: usize) -> Vec<u32> {
+        let (mut at, mut last, mut prev, mut out) = (0u32, None, false, Vec::new());
+        while out.len() < n {
+            let v = c.tick().vsync;
+            if v && !prev {
+                if let Some(l) = last {
+                    out.push((at - l) / 32);
+                }
+                last = Some(at);
+            }
+            prev = v;
+            at += 1;
+        }
+        out
+    }
+
+    fn set(c: &mut Crtc, r: u8, v: u8) {
+        c.select(r);
+        c.write(v);
+    }
+
+    #[test]
+    fn interlaced_type_1_has_vsync_every_n_and_a_half_lines() {
+        let mut c = cpc(CrtcType::T1);
+        set(&mut c, 8, 1);
+        // 39 rows of 8 lines: 312.5 lines from VSYNC to VSYNC.
+        assert_eq!(vsync_periods(&mut c, 6)[2..], [625, 625, 625, 625]);
+        let mut c = cpc(CrtcType::T0);
+        set(&mut c, 8, 1);
+        assert_eq!(vsync_periods(&mut c, 4)[2..], [624, 624]);
+    }
+
+    #[test]
+    fn video_interlace_steps_the_scan_lines_by_field() {
+        let mut c = cpc(CrtcType::T1);
+        set(&mut c, 8, 3);
+        let mut rows = std::collections::BTreeSet::new();
+        for _ in 0..64 * 700 {
+            rows.insert(c.tick().ra);
+        }
+        assert_eq!(rows.len(), 8, "both fields' lines appear: {rows:?}");
+        while c.counters() != (0, 0, 0) {
+            c.tick();
+        }
+        let first: Vec<u8> = (0..64 * 4)
+            .step_by(64)
+            .map(|_| {
+                let ra = c.tick().ra;
+                for _ in 0..63 {
+                    c.tick();
+                }
+                ra
+            })
+            .collect();
+        assert_eq!(first, [0, 2, 4, 6]);
+    }
+
+    #[test]
+    fn vsync_can_start_in_the_vertical_adjust() {
+        let mut c = cpc(CrtcType::T1);
+        set(&mut c, 7, 40);
+        set(&mut c, 5, 8);
+        assert!(
+            vsync_periods_none(&mut c),
+            "row 40 is out of reach with 8 lines"
+        );
+        set(&mut c, 5, 9);
+        assert_eq!(vsync_periods(&mut c, 2)[1], 2 * (312 + 9));
+    }
+
+    fn vsync_periods_none(c: &mut Crtc) -> bool {
+        (0..64 * 2000).all(|_| !c.tick().vsync)
     }
 
     /// Run one frame from its start; returns the characters per line, the
