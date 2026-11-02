@@ -268,6 +268,20 @@ fn sprite_expansion_doubles_size() {
 }
 
 #[test]
+fn sprite_start_sees_y_expansion_written_in_cycle_55() {
+    let (mut v, mut m) = text_setup();
+    sprite_setup(&mut v, &mut m, 0, 100, 100, 2);
+    frame(&mut v, &m);
+    run_to(&mut v, &m, 100, 55);
+    v.phi1(&m);
+    v.write(0x17, 0x01);
+    v.phi2(&m);
+    frame(&mut v, &m);
+    assert_eq!(px(&v, 100, 142), 2, "42 lines from a cleared flip-flop");
+    assert_eq!(px(&v, 100, 143), 6);
+}
+
+#[test]
 fn sprite_collisions_latch_and_clear_on_read() {
     let (mut v, mut m) = text_setup();
     sprite_setup(&mut v, &mut m, 0, 100, 100, 2);

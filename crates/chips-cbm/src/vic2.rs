@@ -876,8 +876,11 @@ impl Vic2 {
         if c == t.dma_check {
             let started = std::mem::take(&mut self.dma_started);
             for (n, s) in self.sprites.iter_mut().enumerate() {
-                if self.sprite_ye & (1 << n) != 0 && started & (1 << n) == 0 {
-                    s.exp = !s.exp;
+                if self.sprite_ye & (1 << n) != 0 {
+                    // A start clears it with the same $D017: Edge of
+                    // Disgrace restarts its stretched sprites with $D017
+                    // written back in this cycle (raster 107).
+                    s.exp = started & (1 << n) == 0 && !s.exp;
                 }
             }
         }
