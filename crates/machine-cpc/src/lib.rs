@@ -138,8 +138,11 @@ const T_PER_US: u64 = 4;
 const CHIP_PHASE: u64 = 0;
 
 /// PPI port B inputs other than VSYNC and the cassette (7): printer not
-/// ready (6), no expansion (5), 50 Hz (4), distributor Amstrad (3–1).
+/// ready (6), /EXP (5), 50 Hz (4), distributor Amstrad (3–1).
 const PORT_B: u8 = 0x7e;
+/// Port B bit 5 reads low on the models with a disc interface: the Arnold
+/// acid test `ppi` records &5E on a 664 and a 6128 and &7E on a 464.
+const PORT_B_EXP: u8 = 0x20;
 /// PPI port C pins when nothing drives them (Arnold acid test `ppi`).
 const PORT_C_PULLS: u8 = 0x2f;
 
@@ -354,7 +357,8 @@ impl Io {
 
     fn port_b(&self) -> u8 {
         let busy = if self.printer_on { 0 } else { PORT_B & 0x40 };
-        (PORT_B & !0x40) | busy | u8::from(self.vsync) | u8::from(self.cas_in) << 7
+        let exp = if self.has_fdc { PORT_B_EXP } else { 0 };
+        (PORT_B & !0x40 & !exp) | busy | u8::from(self.vsync) | u8::from(self.cas_in) << 7
     }
 
     /// An I/O read (no side effects on the CPC's chips).

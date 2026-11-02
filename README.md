@@ -4,6 +4,51 @@ A cycle-accurate multi-machine emulator in Rust. Every machine gets the same rem
 
 The user guide is `docs/mimic-user-guide.pdf` (regenerate it with `python tools/user_guide.py`, needs `reportlab`).
 
+## Screenshots
+
+Pictures from the emulator itself (`mimic-headless --snapshot`). ROMs and software are not part of this repository.
+
+<table>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/c64-lazy-santa.png" alt="Commodore 64: Lazy Santa (drazil, 2021)"><br><b>Commodore 64</b><br><i>Lazy Santa</i> (drazil, 2021)</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/c64-basic.png" alt="Commodore 64: BASIC V2"><br><b>Commodore 64</b><br>BASIC V2</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/c128-vdc.png" alt="Commodore 128: 80 columns on the VDC"><br><b>Commodore 128</b><br>80 columns on the VDC</td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/vic20.png" alt="VIC-20: BASIC V2"><br><b>VIC-20</b><br>BASIC V2</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/pet-8032.png" alt="PET 8032: BASIC 4.0, 80 columns"><br><b>PET 8032</b><br>BASIC 4.0, 80 columns</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/plus4.png" alt="Plus/4: BASIC 3.5"><br><b>Plus/4</b><br>BASIC 3.5</td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/amiga-workbench.png" alt="Amiga 500: Workbench 1.3"><br><b>Amiga 500</b><br>Workbench 1.3</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/amiga-1200.png" alt="Amiga 1200: Kickstart 3.1"><br><b>Amiga 1200</b><br>Kickstart 3.1</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/atari-800xl.png" alt="Atari 800XL: Self test"><br><b>Atari 800XL</b><br>Self test</td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/atari-2600.png" alt="Atari 2600: Pitfall II"><br><b>Atari 2600</b><br><i>Pitfall II</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/cpc-6128.png" alt="Amstrad CPC 6128: BASIC 1.1"><br><b>Amstrad CPC 6128</b><br>BASIC 1.1</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/colecovision.png" alt="ColecoVision: BIOS title"><br><b>ColecoVision</b><br>BIOS title</td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/apple2-zork.png" alt="Apple IIe: Zork I"><br><b>Apple IIe</b><br><i>Zork I</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/mac-finder.png" alt="Macintosh Plus: System 6.0.8 Finder"><br><b>Macintosh Plus</b><br>System 6.0.8 Finder</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/archimedes-desktop.png" alt="Archimedes A310: RISC OS 3.11 Desktop"><br><b>Archimedes A310</b><br>RISC OS 3.11 Desktop</td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/archimedes-corruption.png" alt="Archimedes A310: Corruption (Magnetic Scrolls)"><br><b>Archimedes A310</b><br><i>Corruption</i> (Magnetic Scrolls)</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/spectrum-128.png" alt="ZX Spectrum 128K: Start menu"><br><b>ZX Spectrum 128K</b><br>Start menu</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/zx81.png" alt="ZX81: BASIC prompt"><br><b>ZX81</b><br>BASIC prompt</td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/nes.png" alt="NES: Track &amp; Field II"><br><b>NES</b><br><i>Track &amp; Field II</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/snes.png" alt="SNES: Sonic the Hedgehog 4"><br><b>SNES</b><br><i>Sonic the Hedgehog 4</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/vectrex.png" alt="Vectrex: Berzerk"><br><b>Vectrex</b><br><i>Berzerk</i></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/imsai-8080.png" alt="IMSAI 8080: Front panel, clickable"><br><b>IMSAI 8080</b><br>Front panel, clickable</td>
+</tr>
+</table>
+
 ## Status
 
 **Completeness** estimates how much of the planned scope of a component works and is covered by tests. 100 % means the full scope is done and checked against hardware test suites. Below that, the notes name what is missing or unverified. The figures are estimates, made from the test results and open items recorded in `CLAUDE.md` (as of 2026-10-24); they are not measurements.

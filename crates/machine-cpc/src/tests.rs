@@ -301,3 +301,10 @@ fn light_pen_on_the_expansion_port_latches_r16_r17() {
     frames(&mut m, 2);
     assert_eq!(lpen(&mut m), (0x30, 0x7d));
 }
+
+#[test]
+fn port_b_shows_the_disc_interface_on_bit_5() {
+    assert_eq!(stub("464").io.port_b() & 0xfe, 0x7e);
+    assert_eq!(stub("664").io.port_b() & 0xfe, 0x5e);
+    assert_eq!(stub("6128").io.port_b() & 0xfe, 0x5e);
+}
