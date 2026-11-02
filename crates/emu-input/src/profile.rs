@@ -278,7 +278,7 @@ impl Profile {
             joystick,
             // The Amiga's mouse sits in game port 0, the Mac's in its
             // mouse port.
-            mouse: if matches!(machine, "amiga" | "mac") {
+            mouse: if matches!(machine, "amiga" | "mac" | "archimedes") {
                 vec![MouseMap { port: 0 }]
             } else {
                 Vec::new()

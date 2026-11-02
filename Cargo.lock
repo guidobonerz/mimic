@@ -526,6 +526,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
+name = "chips-acorn"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "chips-amiga"
 version = "0.1.0"
 dependencies = [
@@ -787,6 +794,13 @@ dependencies = [
 
 [[package]]
 name = "cpu-8080"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
+name = "cpu-arm"
 version = "0.1.0"
 dependencies = [
  "emu-core",
@@ -1120,6 +1134,7 @@ dependencies = [
  "emu-core",
  "machine-amiga",
  "machine-apple2",
+ "machine-archimedes",
  "machine-atari2600",
  "machine-atari8",
  "machine-c128",
@@ -1177,6 +1192,7 @@ dependencies = [
  "emu-preview",
  "machine-amiga",
  "machine-apple2",
+ "machine-archimedes",
  "machine-atari8",
  "machine-c128",
  "machine-c64",
@@ -2053,6 +2069,15 @@ dependencies = [
  "drives-other",
  "emu-core",
  "media",
+]
+
+[[package]]
+name = "machine-archimedes"
+version = "0.1.0"
+dependencies = [
+ "chips-acorn",
+ "cpu-arm",
+ "emu-core",
 ]
 
 [[package]]

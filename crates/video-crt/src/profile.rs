@@ -327,7 +327,7 @@ impl Profile {
             "cpc" => "ctm644",
             // The SNES has an RGB output (a composite TV shows colour
             // fringes on its hard edges: `--crt tv`).
-            "amiga" | "snes" => "1084s-rgb",
+            "amiga" | "snes" | "archimedes" => "1084s-rgb",
             "mac" => "mac",
             _ => "raw",
         };

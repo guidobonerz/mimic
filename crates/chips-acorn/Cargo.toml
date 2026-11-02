@@ -1,0 +1,12 @@
+[package]
+name = "chips-acorn"
+description = "Acorn Archimedes chips: MEMC, IOC, VIDC, PCF8583"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

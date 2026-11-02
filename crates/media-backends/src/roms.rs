@@ -526,8 +526,17 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("mpu-a", &["mpu-a"], 0x800),
         optional("mpu-b", &["mpu-b"], 0x800),
     ];
+    // RISC OS and Arthur: the machine takes the newest it finds.
+    const ARCHIMEDES: &[RomSpec] = &[
+        optional("os311", &["rom311", "riscos311", "riscos-311"], 0x20_0000),
+        optional("os310", &["rom310", "riscos310", "riscos-310"], 0x20_0000),
+        optional("os300", &["rom300", "riscos300", "riscos-300"], 0x20_0000),
+        optional("os200", &["rom200", "riscos200", "riscos-200"], 0x8_0000),
+        optional("os120", &["rom120", "arthur120", "arthur-120"], 0x8_0000),
+    ];
     match machine {
         "imsai" => IMSAI,
+        "archimedes" => ARCHIMEDES,
         "mac" => MAC,
         "apple2" => APPLE2,
         "zx81" => ZX81,
@@ -561,6 +570,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "cpc" => &["cpc", "amstrad"],
         "amiga" => &["amiga"],
         "imsai" => &["imsai"],
+        "archimedes" => &["archimedes", "riscos", "acorn"],
         "zx81" => &["zx81", "sinclair"],
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
