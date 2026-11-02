@@ -41,7 +41,7 @@ fn lorom(code: &[u8], nmi: &[u8], irq: &[u8], data: &[u8]) -> Vec<u8> {
 
 fn machine(options: &[(&str, &str)], model: &str, image: Vec<u8>) -> Snes {
     let mut config = MachineConfig {
-        model: Some(model.into()),
+        video_format: emu_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     for (k, v) in options {

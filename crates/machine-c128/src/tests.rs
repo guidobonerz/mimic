@@ -7,7 +7,7 @@ fn stub_with(model: &str, options: &[(&str, &str)]) -> C128 {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    config.model = Some(model.into());
+    config.video_format = emu_core::frame::VideoStandard::parse(model);
     C128::new(&config).unwrap()
 }
 

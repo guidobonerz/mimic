@@ -36,7 +36,7 @@ fn nrom(code: &[u8], nmi: &[u8]) -> Vec<u8> {
 
 fn machine(options: &[(&str, &str)], model: &str) -> Nes {
     let mut config = MachineConfig {
-        model: Some(model.into()),
+        video_format: emu_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     for (k, v) in options {

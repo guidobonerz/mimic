@@ -9,7 +9,7 @@
 //! "130xe" (128 KB, PORTB bank switching for CPU and ANTIC separately),
 //! "800" and "400" (OS-A/OS-B ROM, 8–48 KB RAM, four joystick ports, no
 //! built-in BASIC, RESET key as an NMI). Each as PAL (1 773 447 Hz, 312
-//! lines) or with "-ntsc" (1 789 773 Hz, 262 lines); 114 cycles per line.
+//! lines) or with `--videoformat ntsc` (1 789 773 Hz, 262 lines); 114 cycles per line.
 //!
 //! Options:
 //! - `port1`–`port4`: "joystick" (default port 1), "paddles", "lightpen"
@@ -111,18 +111,8 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "atari8",
         name: "Atari 400/800/800XL/65XE/130XE",
-        models: &[
-            "800xl",
-            "800xl-ntsc",
-            "65xe",
-            "65xe-ntsc",
-            "130xe",
-            "130xe-ntsc",
-            "800",
-            "800-ntsc",
-            "400",
-            "400-ntsc",
-        ],
+        models: &["800xl", "65xe", "130xe", "800", "400"],
+        video_formats: emu_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Atari8::new(config)?)),
     }
 }
@@ -137,23 +127,15 @@ pub enum Model {
 }
 
 impl Model {
-    fn parse(model: Option<&str>) -> Result<(Model, VideoStandard), ConfigError> {
-        let Some(model) = model else {
-            return Ok((Model::A800Xl, VideoStandard::Pal));
-        };
-        let (name, standard) = match model.strip_suffix("-ntsc") {
-            Some(n) => (n, VideoStandard::Ntsc),
-            None => (model, VideoStandard::Pal),
-        };
-        let m = match name {
-            "400" => Model::A400,
-            "800" => Model::A800,
-            "800xl" => Model::A800Xl,
-            "65xe" => Model::A65Xe,
-            "130xe" => Model::A130Xe,
-            _ => return Err(ConfigError::UnknownModel(model.into())),
-        };
-        Ok((m, standard))
+    fn parse(model: Option<&str>) -> Result<Model, ConfigError> {
+        match model {
+            None | Some("800xl") => Ok(Model::A800Xl),
+            Some("400") => Ok(Model::A400),
+            Some("800") => Ok(Model::A800),
+            Some("65xe") => Ok(Model::A65Xe),
+            Some("130xe") => Ok(Model::A130Xe),
+            Some(other) => Err(ConfigError::UnknownModel(other.into())),
+        }
     }
 
     /// 400/800: the old board without PORTB banking.
@@ -417,6 +399,10 @@ pub struct Atari8 {
     /// Joystick ports: two, or four on the 400/800.
     ports: Vec<Option<Box<dyn PortDevice>>>,
     palette: [Rgb8; 256],
+    /// The palette as luma and chroma, and the last finished picture in it
+    /// for the composite path (not machine state).
+    palette_lc: [emu_core::frame::LumaChroma; 256],
+    picture_lc: Vec<emu_core::frame::LumaChroma>,
     audio: Decimator,
     samples: Vec<i16>,
     field_done_pending: bool,
@@ -463,8 +449,17 @@ struct Snapshot {
 }
 
 impl Atari8 {
+    /// The finished picture as luma and chroma.
+    fn keep_picture_lc(&mut self) {
+        let table = &self.palette_lc;
+        self.picture_lc.clear();
+        self.picture_lc
+            .extend(self.io.gtia.pixels().iter().map(|&i| table[usize::from(i)]));
+    }
+
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let (model, standard) = Model::parse(config.model.as_deref())?;
+        let model = Model::parse(config.model.as_deref())?;
+        let standard = config.video_format.unwrap_or(VideoStandard::Pal);
         let basic_off = match config.options.get("basic").map(String::as_str) {
             None | Some("on") => false,
             Some("off") => true,
@@ -491,8 +486,29 @@ impl Atari8 {
                 };
                 Kind::Old { ram }
             }
-            Model::A800Xl | Model::A65Xe => Kind::Xl,
-            Model::A130Xe => Kind::Xe130,
+            Model::A800Xl | Model::A65Xe | Model::A130Xe => {
+                let base = if model == Model::A130Xe {
+                    "128k"
+                } else {
+                    "64k"
+                };
+                match config
+                    .options
+                    .get("ram")
+                    .map(String::as_str)
+                    .unwrap_or(base)
+                {
+                    "64k" if model != Model::A130Xe => Kind::Xl,
+                    "128k" => Kind::Xe130,
+                    "320k" => Kind::Rambo320,
+                    "320k-compy" => Kind::Compy320,
+                    other => {
+                        return Err(ConfigError::Invalid(format!(
+                            "ram option '{other}' (64k, 128k, 320k or 320k-compy; 130XE from 128k)"
+                        )))
+                    }
+                }
+            }
         };
         let mut ports: Vec<Option<Box<dyn PortDevice>>> = Vec::new();
         for (i, key) in ["port1", "port2", "port3", "port4"]
@@ -564,6 +580,8 @@ impl Atari8 {
             input: InputQueue::new(),
             ports,
             palette: chips_atari::palette::palette(standard),
+            palette_lc: chips_atari::palette::luma_chroma(standard),
+            picture_lc: Vec::new(),
             audio: Decimator::new(hz, emu_core::SAMPLE_RATE)
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
             samples: Vec::new(),
@@ -1042,6 +1060,7 @@ impl Machine for Atari8 {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
         if std::mem::take(&mut self.field_done_pending) {
             self.printer_frame();
+            self.keep_picture_lc();
             return StopReason::FrameDone;
         }
         let b = self.beam_pos();
@@ -1052,6 +1071,7 @@ impl Machine for Atari8 {
             if let Some(stop) = self.cycle(Some(dbg)) {
                 if matches!(stop, StopReason::FrameDone) {
                     self.printer_frame();
+                    self.keep_picture_lc();
                 }
                 return stop;
             }
@@ -1107,7 +1127,7 @@ impl Machine for Atari8 {
                 pixels: self.io.gtia.pixels(),
                 palette: &self.palette,
             },
-            luma_chroma: None,
+            luma_chroma: (!self.picture_lc.is_empty()).then_some(self.picture_lc.as_slice()),
             signal: self.signal(),
         }
     }

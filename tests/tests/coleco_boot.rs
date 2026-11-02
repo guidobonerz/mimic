@@ -17,7 +17,7 @@ fn machine(model: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let config = MachineConfig {
         roms: media_backends::roms::load(&dir, "coleco").expect("ROMs"),
-        model: Some(model.into()),
+        video_format: emu_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     emu_machines::registry().create("coleco", &config).unwrap()

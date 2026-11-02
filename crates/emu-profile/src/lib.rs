@@ -162,6 +162,9 @@ pub struct Profile {
     pub machine: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// `--videoformat`: pal, ntsc or auto.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub videoformat: Option<String>,
     /// ROM folder.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roms: Option<String>,
@@ -218,6 +221,7 @@ impl Profile {
         set(&mut self.description, &top.description);
         set(&mut self.machine, &top.machine);
         set(&mut self.model, &top.model);
+        set(&mut self.videoformat, &top.videoformat);
         set(&mut self.roms, &top.roms);
         self.rom
             .extend(top.rom.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -298,6 +302,7 @@ impl Profile {
             match flag.as_str() {
                 "--machine" => p.machine = Some(value(flag)?),
                 "--model" => p.model = Some(value(flag)?),
+                "--videoformat" => p.videoformat = Some(value(flag)?),
                 "--rom-dir" => p.roms = Some(value(flag)?),
                 "--rom" => {
                     let kv = value(flag)?;
@@ -371,6 +376,9 @@ impl Profile {
         }
         if let Some(m) = &self.model {
             push("--model", Some(m));
+        }
+        if let Some(v) = &self.videoformat {
+            push("--videoformat", Some(v));
         }
         if let Some(r) = &self.roms {
             push("--rom-dir", Some(r));
@@ -896,14 +904,17 @@ profiles:
         // Replace an existing one.
         prepare(
             &args(&format!(
-                "--profiles {f} --machine c64 --model ntsc --save-profile c64"
+                "--profiles {f} --machine c64 --videoformat ntsc --save-profile c64"
             )),
             Frontend::Desktop,
             &mut msgs,
         )
         .unwrap();
         let back = ProfileFile::load(&file).unwrap();
-        assert_eq!(back.get("c64").unwrap().model.as_deref(), Some("ntsc"));
+        assert_eq!(
+            back.get("c64").unwrap().videoformat.as_deref(),
+            Some("ntsc")
+        );
         assert_eq!(back.names().len(), 3);
         assert_eq!(msgs.len(), 2);
         let Prepared::Done(list) = prepare(

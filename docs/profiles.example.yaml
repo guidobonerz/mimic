@@ -31,7 +31,7 @@ profiles:
   c64-game:
     description: C64 NTSC with a 1351 mouse and a disk that starts itself
     machine: c64
-    model: ntsc
+    videoformat: ntsc
     roms: c64roms            # this profile's own ROM folder
     options:
       port1: mouse1351

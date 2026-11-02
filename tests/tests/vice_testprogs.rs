@@ -166,7 +166,7 @@ fn config(base: &MachineConfig, e: &Entry) -> Result<MachineConfig, String> {
             return Err(format!("{u} not emulated"));
         }
         match o.as_str() {
-            "vicii-ntsc" => c.model = Some("ntsc".into()),
+            "vicii-ntsc" => c.video_format = Some(emu_core::frame::VideoStandard::Ntsc),
             "cia-old" => {
                 c.options.insert("cia".into(), "6526".into());
             }
@@ -182,7 +182,7 @@ fn config(base: &MachineConfig, e: &Entry) -> Result<MachineConfig, String> {
             _ => {}
         }
     }
-    let ntsc = c.model.as_deref() == Some("ntsc");
+    let ntsc = c.video_format == Some(emu_core::frame::VideoStandard::Ntsc);
     let vic = match (ntsc, old_vic) {
         (false, false) => "8565",
         (false, true) => "6569",
@@ -416,7 +416,7 @@ fn judge(base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
         Err(why) => Verdict::Error(why),
         Ok(None) => Verdict::Timeout,
         Ok(Some(code)) if e.kind == "screenshot" => {
-            let ntsc = config.model.as_deref() == Some("ntsc");
+            let ntsc = config.video_format == Some(emu_core::frame::VideoStandard::Ntsc);
             match reference(e, data, ntsc) {
                 None => Verdict::Skipped("reference picture missing".into()),
                 Some(r) => match compare(m.as_ref(), &r) {

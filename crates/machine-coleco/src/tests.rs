@@ -5,7 +5,7 @@ use emu_core::overlay::{colors, Shape};
 
 fn stub_with(model: Option<&str>, options: &[(&str, &str)]) -> Coleco {
     let mut config = MachineConfig {
-        model: model.map(str::to_string),
+        video_format: model.and_then(emu_core::frame::VideoStandard::parse),
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());

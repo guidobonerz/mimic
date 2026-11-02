@@ -223,6 +223,7 @@ mod tests {
             width,
             height,
             pixels,
+            luma_chroma: None,
             signal: SignalInfo {
                 pixel_clock_hz: 1,
                 active_pixels: width,

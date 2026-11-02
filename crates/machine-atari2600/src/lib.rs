@@ -127,7 +127,8 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "atari2600",
         name: "Atari 2600",
-        models: &["auto", "ntsc", "pal"],
+        models: &[],
+        video_formats: emu_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Atari2600::new(config)?)),
     }
 }
@@ -380,11 +381,12 @@ struct Snapshot {
 
 impl Atari2600 {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let (standard, auto) = match config.model.as_deref() {
-            None | Some("auto") => (VideoStandard::Ntsc, true),
-            Some("ntsc") => (VideoStandard::Ntsc, false),
-            Some("pal") => (VideoStandard::Pal, false),
-            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        if let Some(other) = config.model.as_deref() {
+            return Err(ConfigError::UnknownModel(other.into()));
+        }
+        let (standard, auto) = match config.video_format {
+            None => (VideoStandard::Ntsc, true),
+            Some(standard) => (standard, false),
         };
         // "auto": the TIA keeps the PAL limits (see the module comment).
         let tia_standard = if auto { VideoStandard::Pal } else { standard };

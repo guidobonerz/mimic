@@ -133,6 +133,7 @@ pub fn entry() -> MachineEntry {
         id: "imsai",
         name: "IMSAI 8080",
         models: &["8080"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Imsai::new(config)?)),
     }
 }

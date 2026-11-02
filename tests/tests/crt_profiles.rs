@@ -158,11 +158,12 @@ fn pet_card() -> Pattern {
 /// The Atari 800XL (built-in stub OS, no ROMs) showing a mode F screen:
 /// 50 lines of `$AA` (pixels on at even positions), then 50 of `$55`, white
 /// luminance on black — as the machine itself renders it.
-fn atari_card(model: &str) -> Pattern {
+fn atari_card(format: emu_core::frame::VideoStandard) -> Pattern {
     use emu_core::machine::Machine;
     use emu_core::{DebugHooks, DeviceId, Size};
     let mut config = emu_core::registry::MachineConfig {
-        model: Some(model.into()),
+        model: Some("800xl".into()),
+        video_format: Some(format),
         ..Default::default()
     };
     config.options.insert("roms".into(), "stub".into());
@@ -236,7 +237,7 @@ fn uv((r, g, b): (f64, f64, f64)) -> (f64, f64) {
 
 #[test]
 fn atari_ntsc_hires_stripes_show_artifact_colours() {
-    let card = atari_card("800xl-ntsc");
+    let card = atari_card(emu_core::frame::VideoStandard::Ntsc);
     // Mode F starts at scan line 32 = frame row 24.
     let (aa, x55) = (24 + 25, 24 + 75);
     // The raw frame is white on black only.
@@ -271,8 +272,8 @@ fn atari_ntsc_hires_stripes_show_artifact_colours() {
 fn atari_pal_has_no_stable_artifact_colours() {
     // PAL machines' hires pixels are not locked to the colour carrier and
     // the delay line averages what cross-colour remains.
-    let ntsc = atari_card("800xl-ntsc");
-    let pal = atari_card("800xl");
+    let ntsc = atari_card(emu_core::frame::VideoStandard::Ntsc);
+    let pal = atari_card(emu_core::frame::VideoStandard::Pal);
     let tv = Profile::preset("tv").unwrap();
     let n = signal::process(&ntsc.frame(), &tv).unwrap();
     let p = signal::process(&pal.frame(), &tv).unwrap();
@@ -408,8 +409,8 @@ fn profiles_match_reference_images() {
     let c64_ntsc = c64_card(VideoStandard::Ntsc);
     let vdc = vdc_card();
     let pet = pet_card();
-    let atari_ntsc = atari_card("800xl-ntsc");
-    let atari_pal = atari_card("800xl");
+    let atari_ntsc = atari_card(emu_core::frame::VideoStandard::Ntsc);
+    let atari_pal = atari_card(emu_core::frame::VideoStandard::Pal);
     let cases: [(&str, &Pattern, &str); 12] = [
         ("raw", &c64_pal, "c64-pal-raw"),
         ("1702", &c64_pal, "c64-pal-1702"),

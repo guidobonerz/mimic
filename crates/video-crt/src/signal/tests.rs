@@ -388,9 +388,12 @@ fn rgba_matches_the_frame_path() {
         .iter()
         .flat_map(|c| [c.r, c.g, c.b, 255])
         .collect();
-    assert_eq!(process_rgba(f.w, f.h, &rgba, f.signal, &p), Some(want));
     assert_eq!(
-        process_rgba(f.w, f.h, &rgba, f.signal, &Profile::default()),
+        process_rgba(f.w, f.h, &rgba, None, f.signal, &p),
+        Some(want)
+    );
+    assert_eq!(
+        process_rgba(f.w, f.h, &rgba, None, f.signal, &Profile::default()),
         None
     );
 }

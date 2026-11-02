@@ -27,6 +27,7 @@ fn machine(model: &str, options: &[(&str, &str)]) -> (Box<dyn Machine>, Vec<u8>)
     let font = rom[rom.len() - 0x4000 + 0x3d00..rom.len() - 0x4000 + 0x4000].to_vec();
     let config = MachineConfig {
         model: Some(model.into()),
+        video_format: None,
         roms,
         options: options
             .iter()

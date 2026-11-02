@@ -6,6 +6,20 @@ fn sid() -> Sid {
     Sid::new(SidModel::Mos8580, CLOCK)
 }
 
+#[test]
+fn three_full_voices_on_a_6581_fit_the_16_bit_range() {
+    let mut s = Sid::new(SidModel::Mos6581, CLOCK);
+    s.write(0x18, 0x0f);
+    for v in 0..3 {
+        // Pulse at width 0: the output stands at its maximum.
+        s.write(v * 7 + 1, 0x10);
+        s.write(v * 7 + 6, 0xf0);
+        s.write(v * 7 + 4, 0x41);
+    }
+    let peak = (0..50_000).map(|_| s.clock()).max().unwrap();
+    assert!((28_000..=i32::from(i16::MAX)).contains(&peak), "{peak}");
+}
+
 /// Voice 3 (registers $0E–$14) with `ctrl`, freq and ADSR.
 fn voice3(s: &mut Sid, freq: u16, ctrl: u8, ad: u8, sr: u8) {
     s.write(0x0e, freq as u8);

@@ -151,6 +151,7 @@ pub fn entry() -> MachineEntry {
         id: "cpc",
         name: "Amstrad CPC",
         models: &["6128", "664", "464"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Cpc::new(config)?)),
     }
 }

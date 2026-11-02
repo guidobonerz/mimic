@@ -69,6 +69,7 @@ impl Picker {
             width: WIDTH,
             height,
             rgba,
+            luma_chroma: None,
             signal: SignalInfo {
                 pixel_clock_hz: WIDTH * height * 60,
                 active_pixels: WIDTH,

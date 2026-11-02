@@ -64,6 +64,8 @@ pub struct OwnedFrame {
     pub width: u32,
     pub height: u32,
     pub pixels: OwnedPixels,
+    /// The machine's luma and chroma, for the signal stage.
+    pub luma_chroma: Option<Vec<emu_core::frame::LumaChroma>>,
     pub signal: SignalInfo,
     pub beam: Option<BeamPos>,
     /// False while a debugger holds the machine: the field may be partial
@@ -104,6 +106,7 @@ impl OwnedFrame {
             width: f.width,
             height: f.height,
             pixels,
+            luma_chroma: f.luma_chroma.filter(|lc| lc.len() >= n).map(<[_]>::to_vec),
             signal: f.signal,
             beam,
             running,
@@ -118,7 +121,7 @@ impl OwnedFrame {
                 OwnedPixels::Indexed { pixels, palette } => PixelData::Indexed { pixels, palette },
                 OwnedPixels::Rgb(pixels) => PixelData::Rgb(pixels),
             },
-            luma_chroma: None,
+            luma_chroma: self.luma_chroma.as_deref(),
             signal: self.signal,
         }
     }
@@ -496,6 +499,7 @@ mod tests {
             width: 2,
             height: 1,
             pixels: OwnedPixels::Rgb(vec![Rgb8::default(); 2]),
+            luma_chroma: None,
             signal: signal(),
             beam: Some(BeamPos {
                 frame: 7,

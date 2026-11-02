@@ -28,6 +28,7 @@ usage: mimic-headless [options]
   --save-profile NAME   store this command line's setup as a profile
   --machine ID          machine id (default: sim6502); see --list
   --model NAME          model variant
+  --videoformat FORMAT  pal, ntsc or auto (machine default; Atari 2600: detect)
   --prg FILE            program (PRG/T64, Atari XEX) into the machine's program slot,
                         or as its \"program\" ROM role (sim6502)
   --disk FILE           disk image into the first disk drive (drive 8, Atari D1: ATR;
@@ -158,6 +159,10 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
         match flag.as_str() {
             "--machine" => args.machine = value("--machine")?,
             "--model" => args.config.model = Some(value("--model")?),
+            "--videoformat" => {
+                args.config.video_format =
+                    emu_core::frame::VideoStandard::from_arg(&value("--videoformat")?)?;
+            }
             "--prg" => args.prg = Some(value("--prg")?),
             "--disk" => args.disk.push(value("--disk")?),
             "--tape" => args.tape = Some(value("--tape")?),
@@ -374,7 +379,13 @@ fn run(args: Args) -> Result<ExitCode, String> {
     let registry = emu_machines::registry();
     if args.list {
         for e in registry.entries() {
-            println!("{:<10} {} (models: {})", e.id, e.name, e.models.join(", "));
+            println!(
+                "{:<10} {} (models: {}; video formats: {})",
+                e.id,
+                e.name,
+                e.models.join(", "),
+                e.video_formats.join(", ")
+            );
         }
         return Ok(ExitCode::SUCCESS);
     }

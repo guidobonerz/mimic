@@ -8,7 +8,7 @@ fn stub_with(variant: Variant16, model: &str, options: &[(&str, &str)]) -> TedMa
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    config.model = Some(model.into());
+    config.video_format = emu_core::frame::VideoStandard::parse(model);
     TedMachine::new(variant, &config).unwrap()
 }
 

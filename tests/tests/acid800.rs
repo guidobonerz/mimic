@@ -6,8 +6,9 @@
 //!         cargo test -p emu-tests --release --test acid800 -- --ignored --nocapture
 //!
 //! Runs every standalone test of the suite on an 800XL with the real OS.
-//! `EMU_ACID_FILTER=antic` runs only matching tests, `EMU_ACID_MODEL=ntsc`
-//! the NTSC machine. The report goes to `target/tmp/acid800-<model>.txt`.
+//! `EMU_ACID_FILTER=antic` runs only matching tests, `EMU_ACID_MODEL=130xe`
+//! another model, `EMU_ACID_VIDEO=ntsc` the NTSC machine. The report goes to
+//! `target/tmp/acid800-<model>[-ntsc].txt`.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,11 +36,20 @@ fn testdata() -> PathBuf {
 #[ignore = "needs EMU_TESTDATA_DIR (tools/fetch-testdata.sh) and Atari ROMs in EMU_ROM_DIR"]
 fn acid800_suite() {
     let model = std::env::var("EMU_ACID_MODEL").unwrap_or_else(|_| "800xl".into());
+    let ntsc = std::env::var("EMU_ACID_VIDEO").is_ok_and(|v| v == "ntsc");
     let filter = std::env::var("EMU_ACID_FILTER").unwrap_or_default();
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
+    // Names the report and the trend, as before the video format had its
+    // own setting.
+    let setup = if ntsc {
+        format!("{model}-ntsc")
+    } else {
+        model.clone()
+    };
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, "atari8").expect("ROMs"),
         model: Some(model.clone()),
+        video_format: ntsc.then_some(emu_core::frame::VideoStandard::Ntsc),
         ..MachineConfig::default()
     };
     // The standalone tests boot from the program slot; the serial tests
@@ -107,7 +117,7 @@ fn acid800_suite() {
     let total = results.len() - skip;
     let ratio = pass as f64 / total.max(1) as f64;
     let summary = format!(
-        "Acid800 ({model}): {pass}/{total} passed ({:.1} %), {skip} skipped",
+        "Acid800 ({setup}): {pass}/{total} passed ({:.1} %), {skip} skipped",
         ratio * 100.0
     );
     println!("{summary}");
@@ -124,11 +134,11 @@ fn acid800_suite() {
             )
         })
         .collect();
-    let trend = emu_tests::trend::record(&tmp, &format!("acid800-{model}"), &outcomes);
+    let trend = emu_tests::trend::record(&tmp, &format!("acid800-{setup}"), &outcomes);
     println!("{trend}");
     report.push_str(&trend);
     report.push('\n');
-    let out = tmp.join(format!("acid800-{model}.txt"));
+    let out = tmp.join(format!("acid800-{setup}.txt"));
     std::fs::write(&out, report).unwrap();
     if filter.is_empty() {
         assert!(ratio >= GATE, "{summary}; report: {}", out.display());

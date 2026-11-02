@@ -37,7 +37,7 @@ use chips_cbm::via::Via;
 use chips_cbm::vic;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use devices_printer::CbmPrinter;
-use emu_core::frame::{FrameRef, PixelData, Rgb8};
+use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
 use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
@@ -76,7 +76,8 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "vic20",
         name: "Commodore VIC-20",
-        models: &["pal", "ntsc"],
+        models: &[],
+        video_formats: emu_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Vic20::new(config)?)),
     }
 }
@@ -233,10 +234,12 @@ struct Snapshot {
 
 impl Vic20 {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let model = match config.model.as_deref() {
-            None | Some("pal") => vic::Model::Mos6561,
-            Some("ntsc") => vic::Model::Mos6560,
-            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        if let Some(other) = config.model.as_deref() {
+            return Err(ConfigError::UnknownModel(other.into()));
+        }
+        let model = match config.video_format {
+            None | Some(VideoStandard::Pal) => vic::Model::Mos6561,
+            Some(VideoStandard::Ntsc) => vic::Model::Mos6560,
         };
         let cpu_hz = model.timing().cpu_hz();
         let mut cpu = Cpu6502::new(CpuConfig {

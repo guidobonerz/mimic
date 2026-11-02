@@ -588,7 +588,7 @@ impl Sid {
             // volume: writing $D418 alone produces sound ("digis").
             sum += volume * 0x6000;
         }
-        sum / 48
+        sum / 64
     }
 
     /// Side-effect-free read.

@@ -35,7 +35,7 @@ fn stub_with(options: &[(&str, &str)], model: &str) -> Vic20 {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    config.model = Some(model.into());
+    config.video_format = emu_core::frame::VideoStandard::parse(model);
     Vic20::new(&config).unwrap()
 }
 

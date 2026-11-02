@@ -81,6 +81,7 @@ pub fn entry() -> MachineEntry {
         id: "pet",
         name: "Commodore PET",
         models: &["4032", "2001", "3032", "8032"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Pet::new(config)?)),
     }
 }

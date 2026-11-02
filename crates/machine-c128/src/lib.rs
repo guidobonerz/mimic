@@ -47,7 +47,7 @@ use chips_cbm::{vdc, vic2};
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use cpu_z80::{IO_BASE, Z80};
 use devices_printer::CbmPrinter;
-use emu_core::frame::{FrameRef, PixelData, Rgb8, ScreenId, ScreenInfo};
+use emu_core::frame::{FrameRef, PixelData, Rgb8, ScreenId, ScreenInfo, VideoStandard};
 use emu_core::gfx::{GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
@@ -108,7 +108,8 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "c128",
         name: "Commodore 128",
-        models: &["pal", "ntsc"],
+        models: &[],
+        video_formats: emu_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(C128::new(config)?)),
     }
 }
@@ -363,10 +364,12 @@ struct Snapshot {
 
 impl C128 {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let vic = match config.model.as_deref() {
-            None | Some("pal") => vic2::Model::Mos6569,
-            Some("ntsc") => vic2::Model::Mos6567R8,
-            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        if let Some(other) = config.model.as_deref() {
+            return Err(ConfigError::UnknownModel(other.into()));
+        }
+        let vic = match config.video_format {
+            None | Some(VideoStandard::Pal) => vic2::Model::Mos6569,
+            Some(VideoStandard::Ntsc) => vic2::Model::Mos6567R8,
         };
         let cpu_hz = vic.timing().cpu_hz();
         let option = |name: &str| config.options.get(name).map(String::as_str);

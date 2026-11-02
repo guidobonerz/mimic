@@ -524,8 +524,17 @@ mod debugger {
 }
 
 fn stub_with(model: Option<&str>, options: &[(&str, &str)]) -> Amiga {
+    stub_as(model, None, options)
+}
+
+fn stub_as(
+    model: Option<&str>,
+    format: Option<emu_core::frame::VideoStandard>,
+    options: &[(&str, &str)],
+) -> Amiga {
     let mut config = MachineConfig {
         model: model.map(str::to_string),
+        video_format: format,
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());
@@ -541,7 +550,11 @@ fn models_fit_their_memory() {
     assert_eq!((m.model(), m.standard()), (Model::A500, Standard::Pal));
     assert_eq!(m.board.mem.chip.len_bytes(), 0x8_0000);
     assert_eq!(m.board.mem.slow.len() * 2, 0x8_0000);
-    let m = stub_with(Some("1000-ntsc"), &[]);
+    let m = stub_as(
+        Some("1000"),
+        Some(emu_core::frame::VideoStandard::Ntsc),
+        &[],
+    );
     assert_eq!((m.model(), m.standard()), (Model::A1000, Standard::Ntsc));
     assert_eq!(m.board.mem.chip.len_bytes(), 0x4_0000);
     assert!(m.board.mem.slow.is_empty());

@@ -2,12 +2,48 @@ use super::*;
 use emu_core::input::{Dirs, MachineKey};
 
 fn stub(model: &str) -> Atari8 {
+    stub_as(model, VideoStandard::Pal)
+}
+
+fn stub_as(model: &str, format: VideoStandard) -> Atari8 {
     let mut config = MachineConfig {
         model: Some(model.into()),
+        video_format: Some(format),
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());
     Atari8::new(&config).unwrap()
+}
+
+fn stub_ram(ram: &str) -> Atari8 {
+    let mut config = MachineConfig {
+        model: Some("800xl".into()),
+        ..MachineConfig::default()
+    };
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("ram".into(), ram.into());
+    Atari8::new(&config).unwrap()
+}
+
+#[test]
+fn ram_expansions_of_the_800xl() {
+    assert_eq!(stub("800xl").mem.kind, Kind::Xl);
+    for (ram, kind, size) in [
+        ("64k", Kind::Xl, 0),
+        ("128k", Kind::Xe130, 0x1_0000),
+        ("320k", Kind::Rambo320, 0x4_0000),
+        ("320k-compy", Kind::Compy320, 0x4_0000),
+    ] {
+        let m = stub_ram(ram);
+        assert_eq!((m.mem.kind, m.mem.extended.len()), (kind, size), "{ram}");
+    }
+    let mut config = MachineConfig {
+        model: Some("130xe".into()),
+        ..MachineConfig::default()
+    };
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("ram".into(), "64k".into());
+    assert!(Atari8::new(&config).is_err());
 }
 
 fn frames(m: &mut Atari8, n: usize) {
@@ -27,13 +63,13 @@ fn poke(m: &mut Atari8, addr: u16, v: u8) {
 
 #[test]
 fn stub_boots_and_counts_fields() {
-    for (model, lines) in [("800xl", 312u64), ("800xl-ntsc", 262)] {
-        let mut m = stub(model);
+    for (format, lines) in [(VideoStandard::Pal, 312u64), (VideoStandard::Ntsc, 262)] {
+        let mut m = stub_as("800xl", format);
         frames(&mut m, 10);
         // RTCLOK ($14) counts VBIs: one per field.
         let count = byte(&m, 0x14);
-        assert!((9..=10).contains(&count), "{model}: {count}");
-        assert_eq!(m.now().0, 10 * lines * 114, "{model}: cycles per field");
+        assert!((9..=10).contains(&count), "{format:?}: {count}");
+        assert_eq!(m.now().0, 10 * lines * 114, "{format:?}: cycles per field");
         assert_eq!(m.cpu.regs().get("PC"), Some(u32::from(stub::IDLE)));
         let f = m.framebuffer();
         assert_eq!((f.width, f.height), (384, 240));
@@ -178,13 +214,13 @@ fn joystick_reaches_pia_and_gtia() {
 
 #[test]
 fn savestate_round_trip() {
-    let mut a = stub("800xl-ntsc");
+    let mut a = stub_as("800xl", VideoStandard::Ntsc);
     frames(&mut a, 3);
     for _ in 0..12_345 {
         a.step_cycle();
     }
     let state = a.save_state();
-    let mut b = stub("800xl-ntsc");
+    let mut b = stub_as("800xl", VideoStandard::Ntsc);
     b.load_state(&state).unwrap();
     frames(&mut a, 3);
     frames(&mut b, 3);
@@ -364,7 +400,7 @@ fn models_choose_memory_ports_and_reset_behaviour() {
     assert_eq!(m.model(), Model::A65Xe);
     assert_eq!(m.ports().len(), 2);
     assert!(m.mem.banks_with_portb());
-    let m = stub("130xe-ntsc");
+    let m = stub_as("130xe", VideoStandard::Ntsc);
     assert_eq!(
         (m.model(), m.standard),
         (Model::A130Xe, VideoStandard::Ntsc)

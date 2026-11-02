@@ -175,6 +175,7 @@ pub fn entry() -> MachineEntry {
         id: "mac",
         name: "Apple Macintosh",
         models: &["plus", "128k", "512k", "se"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Mac::new(config)?)),
     }
 }

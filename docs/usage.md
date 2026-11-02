@@ -115,20 +115,20 @@ Programm statt der echten ROMs, nur für Tests.
 
 | ID | Maschine | Modelle (`--model`) |
 | --- | --- | --- |
-| `c64` | Commodore 64 | `pal` (Standard), `ntsc` |
-| `vic20` | VIC-20 | `pal`, `ntsc` |
+| `c64` | Commodore 64 | – (`--videoformat`: `pal` Standard, `ntsc`) |
+| `vic20` | VIC-20 | – (`--videoformat`: `pal` Standard, `ntsc`) |
 | `pet` | PET | `4032` (Standard), `2001`, `3032`, `8032` |
-| `c16`, `plus4` | C16, Plus/4 | `pal`, `ntsc` |
-| `c128` | C128 | `pal`, `ntsc` |
-| `atari8` | Atari 400/800/800XL/65XE/130XE | `800xl` (Standard), `65xe`, `130xe`, `800`, `400`, jeweils auch mit `-ntsc` (z. B. `130xe-ntsc`) |
-| `atari2600` | Atari 2600 (VCS) | `auto` (Standard: NTSC oder PAL nach der Bildlänge des Programms, nach etwa 20 Bildern entschieden), `ntsc`, `pal` (erzwungen) |
+| `c16`, `plus4` | C16, Plus/4 | – (`--videoformat`: `pal` Standard, `ntsc`) |
+| `c128` | C128 | – (`--videoformat`: `pal` Standard, `ntsc`) |
+| `atari8` | Atari 400/800/800XL/65XE/130XE | `800xl` (Standard), `65xe`, `130xe`, `800`, `400`; `--videoformat`: `pal` Standard, `ntsc`; RAM der XL/XE: `--option ram=64k\|128k\|320k\|320k-compy` (`128k` wie ein 130XE, `320k` RAMBO, `320k-compy` Compy Shop) |
+| `atari2600` | Atari 2600 (VCS) | – (`--videoformat`: `auto` Standard, NTSC oder PAL nach der Bildlänge des Programms, nach etwa 20 Bildern entschieden; `ntsc`, `pal` erzwungen) |
 | `cpc` | Amstrad CPC | `6128` (Standard), `664`, `464` |
-| `amiga` | Commodore Amiga 500/1000/2000 (OCS), 500+ (ECS), 1200 (AGA) | `500` (Standard), `500-ntsc`, `1000`, `1000-ntsc`, `2000`, `2000-ntsc`, `500plus` (ECS-Chipsatz, 1 MB Chip-RAM, Kickstart 2.0), `500plus-ntsc`, `1200` (68EC020 mit 14 MHz, AGA, 2 MB Chip-RAM, Gayle ohne IDE, Kickstart 3.1), `1200-ntsc` |
+| `amiga` | Commodore Amiga 500/1000/2000 (OCS), 500+ (ECS), 1200 (AGA) | `500` (Standard), `1000`, `2000`, `500plus` (ECS-Chipsatz, 1 MB Chip-RAM, Kickstart 2.0), `1200` (68EC020 mit 14 MHz, AGA, 2 MB Chip-RAM, Gayle ohne IDE, Kickstart 3.1); `--videoformat`: `pal` Standard, `ntsc` |
 | `zx81` | Sinclair ZX81 / Timex Sinclair 1000 | `zx81` (Standard, PAL), `ts1000` (NTSC, 60 Hz) |
 | `spectrum` | Sinclair ZX Spectrum | `48k` (Standard), `128k`, `plus2` (der Amstrad-+2: 128K-Hardware mit eigenen ROMs) |
-| `coleco` | ColecoVision | `ntsc` (Standard, TMS9918A), `pal` (TMS9929A) |
-| `nes` | Nintendo Entertainment System / Famicom | `ntsc` (Standard, 2C02), `pal` (2C07) |
-| `snes` | Super Nintendo / Super Famicom | `ntsc` (Standard), `pal` |
+| `coleco` | ColecoVision | – (`--videoformat`: `ntsc` Standard, TMS9918A; `pal` TMS9929A) |
+| `nes` | Nintendo Entertainment System / Famicom | – (`--videoformat`: `ntsc` Standard, 2C02; `pal` 2C07) |
+| `snes` | Super Nintendo / Super Famicom | – (`--videoformat`: `ntsc` Standard, `pal`) |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
 
 Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
@@ -177,11 +177,11 @@ cargo run --release -p emu-desktop -- --machine atari8 --model 130xe --disk spie
 cargo run --release -p emu-desktop -- --machine atari8 --model 800 --option port3=joystick --cart spiel.car
 cargo run --release -p emu-desktop -- --machine snes --cart spiel.sfc
 cargo run --release -p emu-desktop -- --machine nes --cart spiel.nes
-cargo run --release -p emu-desktop -- --machine nes --model pal --cart spiel.nes --option port2=zapper
+cargo run --release -p emu-desktop -- --machine nes --videoformat pal --cart spiel.nes --option port2=zapper
 cargo run --release -p emu-desktop -- --machine coleco --rom-dir roms --cart spiel.col
-cargo run --release -p emu-desktop -- --machine coleco --model pal --rom-dir roms --cart spiel.rom --option port1=roller
+cargo run --release -p emu-desktop -- --machine coleco --videoformat pal --rom-dir roms --cart spiel.rom --option port1=roller
 cargo run --release -p emu-desktop -- --machine atari2600 --cart spiel.a26
-cargo run --release -p emu-desktop -- --machine atari2600 --model pal --cart spiel.bin --option port1=paddles
+cargo run --release -p emu-desktop -- --machine atari2600 --videoformat pal --cart spiel.bin --option port1=paddles
 cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
 cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
 cargo run --release -p emu-desktop -- --machine zx81 --rom-dir roms --tape programm.p
@@ -266,8 +266,10 @@ ein Klick auf eine Stufe oder Ziehen des Knopfs stellt 10 %, 25 %, 50 %,
 100 %, 150 %, 200 %, 400 % oder 800 % der Echtzeit ein (ist der Rechner zu
 langsam für eine Stufe, läuft die Emulation so schnell sie kann); außerhalb von 100 %
 ist der Ton stumm. Bei 100 % läuft die Emulation, solange ein
-Diskettenlaufwerk arbeitet (LED oder Motor, z. B. beim LOAD), so schnell
-sie kann und stumm, wie VICE beim Autostart; die Statuszeile zeigt dann
+Diskettenlaufwerk arbeitet (LED oder Motor, z. B. beim LOAD) und die Maschine
+seit einer Sekunde keinen Ton ausgibt, so schnell sie kann und stumm, wie VICE
+beim Autostart (Musik, die während des Ladens einer Demo spielt, läuft also
+normal weiter); die Statuszeile zeigt dann
 „warp: loading“. `--warp-load off` schaltet das ab. Dahinter folgen die emulierte Zeit seit dem Einschalten
 (`m:ss.t`) mit der Bildnummer (dieselbe, die der Debugger in `beam` meldet),
 die Mausposition, die Joystick-Richtungen und der Zustand der Laufwerke.
@@ -330,7 +332,7 @@ zusammengesetzte Vollbilder.
 Modelle (`--model`): `500` (Standard), `1000` (256 KB Chip-RAM, Kickstart im
 „Writable Control Store“; mit `--option wcs=disk` und dem Bootstrap-ROM
 lädt sie das ROM wie das Original von der Kickstart-Diskette in DF0:) und
-`2000` (1 MB Chip-RAM); jeweils auch `-ntsc` (`500-ntsc`). Speicher über
+`2000` (1 MB Chip-RAM); jeweils auch mit `--videoformat ntsc`. Speicher über
 `--option chip=`, `slow=`, `fast=` (Fast-RAM meldet sich wie eine
 Zorro-II-Karte per Autoconfig, Kickstart 1.2 und neuer finden es).
 

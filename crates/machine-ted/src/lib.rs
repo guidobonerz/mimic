@@ -41,7 +41,7 @@ use chips_cbm::ted::{self, Ted};
 use cpu_6502::{Config as CpuConfig, Cpu6502, IoPort, Variant};
 use devices_printer::CbmPrinter;
 use drives_cbm::IecLines;
-use emu_core::frame::{FrameRef, PixelData, Rgb8};
+use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
 use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
@@ -111,7 +111,8 @@ fn entry_for(id: &'static str, name: &'static str) -> MachineEntry {
     MachineEntry {
         id,
         name,
-        models: &["pal", "ntsc"],
+        models: &[],
+        video_formats: emu_core::registry::PAL_NTSC,
         create: match id {
             "c16" => |config| Ok(Box::new(TedMachine::new(Variant16::C16, config)?)),
             _ => |config| Ok(Box::new(TedMachine::new(Variant16::Plus4, config)?)),
@@ -401,10 +402,12 @@ struct Snapshot {
 
 impl TedMachine {
     pub fn new(variant: Variant16, config: &MachineConfig) -> Result<Self, ConfigError> {
-        let model = match config.model.as_deref() {
-            None | Some("pal") => ted::Model::Mos8360,
-            Some("ntsc") => ted::Model::Mos7360,
-            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        if let Some(other) = config.model.as_deref() {
+            return Err(ConfigError::UnknownModel(other.into()));
+        }
+        let model = match config.video_format {
+            None | Some(VideoStandard::Pal) => ted::Model::Mos8360,
+            Some(VideoStandard::Ntsc) => ted::Model::Mos7360,
         };
         let double_hz = model.timing().double_hz();
         let ram_mask = match (config.options.get("ram").map(String::as_str), variant) {

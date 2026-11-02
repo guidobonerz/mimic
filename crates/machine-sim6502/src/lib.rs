@@ -47,6 +47,7 @@ pub fn entry() -> MachineEntry {
         id: "sim6502",
         name: "6502 reference machine",
         models: &["default"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Sim6502::new(config)?)),
     }
 }

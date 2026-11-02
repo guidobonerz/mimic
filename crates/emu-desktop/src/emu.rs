@@ -33,6 +33,8 @@ pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// The machine's luma and chroma, for colours RGB cannot hold.
+    pub luma_chroma: Option<Vec<emu_core::frame::LumaChroma>>,
     pub signal: SignalInfo,
 }
 
@@ -661,6 +663,7 @@ fn to_frame(m: &dyn Machine, screen: ScreenId, fields: &mut FieldStage) -> Frame
             width,
             height,
             rgba,
+            luma_chroma: None,
             signal: f.signal,
         };
     }
@@ -675,6 +678,7 @@ fn to_frame(m: &dyn Machine, screen: ScreenId, fields: &mut FieldStage) -> Frame
         width: f.width,
         height: f.height,
         rgba,
+        luma_chroma: f.luma_chroma.map(<[_]>::to_vec),
         signal: f.signal,
     }
 }
@@ -785,6 +789,8 @@ pub fn spawn(
         let mut frames_run = 0u64;
         // Frames left at warp after a disk drive was last seen working.
         let mut warp_hold = 0u32;
+        // Frames since the machine last made a sound.
+        let mut quiet_frames = 0u32;
         let mut tracker = Tracker::default();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
@@ -1091,7 +1097,10 @@ pub fn spawn(
             }
 
             let percent = crate::footer::speed_percent(shared.speed.load(Ordering::Relaxed));
-            let warp = warp_hold > 0 && percent == 100 && shared.warp_load.load(Ordering::Relaxed);
+            let warp = warp_hold > 0
+                && quiet_frames >= WARP_QUIET
+                && percent == 100
+                && shared.warp_load.load(Ordering::Relaxed);
             shared.warping.store(warp, Ordering::Relaxed);
             let period = shared.display_period_ns.load(Ordering::Relaxed);
             if warp {
@@ -1137,6 +1146,11 @@ pub fn spawn(
             }
             samples.clear();
             let format = session.machine_mut().audio(&mut samples);
+            quiet_frames = if audible(&samples) {
+                0
+            } else {
+                quiet_frames.saturating_add(1)
+            };
             if let Some(tap) = &preview {
                 tap.publish_audio(&samples, format);
             }
@@ -1179,6 +1193,24 @@ pub fn spawn(
 /// Frames the warp lasts after a disk drive was last seen working (the
 /// LED goes out between files for a moment).
 const WARP_HOLD: u32 = 25;
+
+/// Frames without sound before a working disk drive may start the warp:
+/// a demo's music plays on while its trackloader runs, and warp mutes it.
+const WARP_QUIET: u32 = 50;
+
+/// Peak-to-peak level from which a frame's samples count as sound; a
+/// constant output of any height (a SID's DC level) stays below it.
+const AUDIBLE_RANGE: i32 = 64;
+
+/// Does this frame's output carry sound?
+fn audible(samples: &[i16]) -> bool {
+    let (low, high) = samples
+        .iter()
+        .fold((i16::MAX, i16::MIN), |(low, high), &s| {
+            (low.min(s), high.max(s))
+        });
+    i32::from(high) - i32::from(low) >= AUDIBLE_RANGE
+}
 
 /// Is a disk drive working (activity LED or motor)?
 fn disk_working(m: &mut dyn Machine) -> bool {
@@ -1347,6 +1379,14 @@ mod tests {
         assert!(eventually(|| !shared.audio.lock().unwrap().is_empty()));
         shared.quit.store(true, Ordering::Relaxed);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn only_a_changing_output_counts_as_sound() {
+        assert!(!audible(&[]));
+        assert!(!audible(&[7000; 960]), "a DC level is silence");
+        assert!(!audible(&[7000, 7063, 7000]), "below the floor");
+        assert!(audible(&[7000, 7064, 7000]));
     }
 
     #[test]

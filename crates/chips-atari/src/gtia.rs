@@ -525,7 +525,18 @@ impl Gtia {
                 _ => 0,
             };
             self.collide(p, m, pf_mask);
-            let pl = p | m;
+            // Fifth player: missiles take COLPF3's colour, in mode 9 with
+            // the pixel's luminance ORed in (from Numen's strip of four
+            // missiles over a mode 9 plasma, PRIOR $58, GRAFM $FF). A player
+            // on top keeps its colour: Numen masks the strip with player 2.
+            let fifth = self.prior & 0x10 != 0;
+            if p == 0 && fifth {
+                return match mode {
+                    1 => self.colpf[3] | nibble,
+                    _ => self.colpf[3],
+                };
+            }
+            let pl = if fifth { p } else { p | m };
             if let Some(n) = (0..4).find(|n| pl & (1 << n) != 0) {
                 return self.colpm[n];
             }

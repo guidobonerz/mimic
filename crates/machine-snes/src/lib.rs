@@ -100,7 +100,8 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "snes",
         name: "Super Nintendo Entertainment System",
-        models: &["ntsc", "pal"],
+        models: &[],
+        video_formats: emu_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Snes::new(config)?)),
     }
 }
@@ -1050,10 +1051,12 @@ pub struct Snes {
 
 impl Snes {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let model = match config.model.as_deref() {
-            None | Some("ntsc") => Model::Ntsc,
-            Some("pal") => Model::Pal,
-            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        if let Some(other) = config.model.as_deref() {
+            return Err(ConfigError::UnknownModel(other.into()));
+        }
+        let model = match config.video_format {
+            None | Some(VideoStandard::Ntsc) => Model::Ntsc,
+            Some(VideoStandard::Pal) => Model::Pal,
         };
         let multitap = match config.options.get("multitap").map(String::as_str) {
             None | Some("off") => false,

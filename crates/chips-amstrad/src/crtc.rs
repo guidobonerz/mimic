@@ -52,6 +52,14 @@
 //! and VSYNC can start there (`crtctest`, "minimum VADJ value"); type 0
 //! counts once on entering it, so only R7 = R4 + 1 still starts one.
 //!
+//! Type 1 ends a row when the line counter has reached R9 or passed it, and
+//! a frame when the row counter has reached R4 or passed it: registers
+//! lowered below a running counter take effect at the next line end instead
+//! of letting it run round. Inferred, not from a data sheet: the demo "From
+//! Scratch" (CNGSOFT, 2014) writes R9 = 0 at line 7 and then R4 = 0 at row
+//! 8; with equality the row counter runs on through R7 = 61, a second VSYNC
+//! halves the field and the music runs at twice its speed.
+//!
 //! Type 2 starts no VSYNC while HSYNC is still on in the line's last
 //! character (`crtctest`, "hsync length measure (type 2)": R2 + width must
 //! stay below R0 + 1).
@@ -182,8 +190,19 @@ impl Crtc {
                 _ => self.regs[9].saturating_sub(1),
             };
             self.vlc >= last
+        } else if self.kind == CrtcType::T1 {
+            self.vlc >= self.regs[9]
         } else {
             self.vlc == self.regs[9]
+        }
+    }
+
+    /// The row is the frame's last.
+    fn last_row(&self) -> bool {
+        if self.kind == CrtcType::T1 {
+            self.vcc >= self.regs[4]
+        } else {
+            self.vcc == self.regs[4]
         }
     }
 
@@ -340,7 +359,7 @@ impl Crtc {
                 0
             };
             self.ma_row = self.ma_next;
-            if self.vcc == self.regs[4] {
+            if self.last_row() {
                 if self.regs[5] > 0 {
                     self.adjusting = true;
                     self.adj = 0;
@@ -652,6 +671,26 @@ mod tests {
             "ends in the line's last character but one"
         );
         assert!(!vsync(64 - 14), "still on in the last character");
+    }
+
+    #[test]
+    fn type_1_ends_rows_and_frames_when_the_counters_are_past_the_registers() {
+        // Two rows of eight lines, then R9 and R4 go to 0 in row 1, line 3.
+        let lowered = |kind| {
+            let mut c = cpc(kind);
+            set(&mut c, 7, 61);
+            while c.counters() != (0, 3, 1) {
+                c.tick();
+            }
+            set(&mut c, 9, 0);
+            set(&mut c, 4, 0);
+            (0..64 * 2).for_each(|_| {
+                c.tick();
+            });
+            c.counters()
+        };
+        assert_eq!(lowered(CrtcType::T1).2, 0, "a new frame at once");
+        assert_eq!(lowered(CrtcType::T0).1, 5, "line counter runs on");
     }
 
     #[test]

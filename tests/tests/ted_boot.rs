@@ -19,7 +19,7 @@ fn boot_with(machine: &str, model: &str, autostart: bool, drive: &str) -> Box<dy
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, machine).expect("ROMs"),
-        model: Some(model.into()),
+        video_format: emu_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     if autostart {

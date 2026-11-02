@@ -449,11 +449,12 @@ pub fn process(frame: &FrameRef<'_>, profile: &Profile) -> Option<Vec<Rgb8>> {
 }
 
 /// [`process`] for an RGBA8 field (the desktop's GPU upload format).
-/// `None` when the frame passes unchanged.
+/// `None` when the frame passes unchanged. `luma_chroma` as in [`FrameRef`].
 pub fn process_rgba(
     width: u32,
     height: u32,
     rgba: &[u8],
+    luma_chroma: Option<&[LumaChroma]>,
     signal: SignalInfo,
     profile: &Profile,
 ) -> Option<Vec<u8>> {
@@ -477,7 +478,7 @@ pub fn process_rgba(
         width,
         height,
         pixels: PixelData::Rgb(&pixels),
-        luma_chroma: None,
+        luma_chroma,
         signal,
     };
     let out = process(&frame, profile)?;

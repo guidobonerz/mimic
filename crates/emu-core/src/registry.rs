@@ -4,15 +4,21 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::frame::VideoStandard;
 use crate::machine::Machine;
 
-/// Configuration for creating a machine. Model variants (PAL/NTSC, Kernal
-/// revisions, RAM sizes) are configuration, not separate machines. ROMs are
+/// The formats of a machine with a PAL and an NTSC version.
+pub const PAL_NTSC: &[&str] = &["pal", "ntsc"];
+
+/// Configuration for creating a machine. Model variants (Kernal revisions,
+/// RAM sizes) and the video format are configuration, not separate machines. ROMs are
 /// passed as bytes: machines never touch the host file system.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MachineConfig {
     /// Model name, `None` for the machine's default.
     pub model: Option<String>,
+    /// `--videoformat`, `None` for the machine's default.
+    pub video_format: Option<VideoStandard>,
     /// ROM images by role, e.g. "kernal", "basic", "chargen".
     pub roms: BTreeMap<String, Vec<u8>>,
     pub options: BTreeMap<String, String>,
@@ -47,6 +53,8 @@ pub struct MachineEntry {
     pub id: &'static str,
     pub name: &'static str,
     pub models: &'static [&'static str],
+    /// Values of `--videoformat`; empty: the machine has only one.
+    pub video_formats: &'static [&'static str],
     pub create: MachineFactory,
 }
 
@@ -95,6 +103,18 @@ impl Registry {
         let entry = self
             .get(id)
             .ok_or_else(|| ConfigError::UnknownMachine(id.to_owned()))?;
+        if config.video_format.is_some() && entry.video_formats.is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "{id} has no video format to choose"
+            )));
+        }
+        if let Some(model) = config.model.as_deref() {
+            if matches!(model, "pal" | "ntsc") {
+                return Err(ConfigError::Invalid(format!(
+                    "model '{model}': the video format is set with --videoformat"
+                )));
+            }
+        }
         (entry.create)(config)
     }
 }
@@ -111,7 +131,8 @@ mod tests {
         MachineEntry {
             id,
             name,
-            models: &["pal", "ntsc"],
+            models: &[],
+            video_formats: PAL_NTSC,
             create: needs_kernal,
         }
     }
@@ -136,5 +157,37 @@ mod tests {
             reg.create("amiga", &cfg).err(),
             Some(ConfigError::UnknownMachine("amiga".into()))
         );
+    }
+
+    #[test]
+    fn the_video_format_is_checked_against_the_machine() {
+        let mut reg = Registry::new();
+        reg.register(entry("c64", "Commodore 64"));
+        reg.register(MachineEntry {
+            video_formats: &[],
+            ..entry("cpc", "CPC")
+        });
+        let cfg = MachineConfig {
+            video_format: Some(VideoStandard::Ntsc),
+            ..MachineConfig::default()
+        };
+        assert_eq!(
+            reg.create("c64", &cfg).err(),
+            Some(ConfigError::MissingRom("kernal".into()))
+        );
+        assert!(matches!(
+            reg.create("cpc", &cfg).err(),
+            Some(ConfigError::Invalid(_))
+        ));
+        for model in ["ntsc", "pal"] {
+            let cfg = MachineConfig {
+                model: Some(model.into()),
+                ..MachineConfig::default()
+            };
+            assert!(matches!(
+                reg.create("c64", &cfg).err(),
+                Some(ConfigError::Invalid(m)) if m.contains("--videoformat")
+            ));
+        }
     }
 }

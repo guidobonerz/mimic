@@ -17,7 +17,7 @@
 //! `options["fastload"] = "on"`: the virtual drive serves the KERNAL's
 //! serial routines without bus time (see [`fastload`]).
 //!
-//! Models: "pal" (default; 6569, 985 248 Hz, 312 lines × 63 cycles, TOD 50 Hz)
+//! Video formats (`--videoformat`): "pal" (default; 6569, 985 248 Hz, 312 lines × 63 cycles, TOD 50 Hz)
 //! and "ntsc" (6567R8, 1 022 727 Hz, 263 lines × 65 cycles, TOD 60 Hz). The
 //! KERNAL tells them apart by itself (raster line count at boot); the stub
 //! KERNAL always sets up PAL timer values.
@@ -84,7 +84,7 @@ use chips_cbm::cia::CiaModel;
 use chips_cbm::sid::SidModel;
 use chips_cbm::vic2;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use emu_core::frame::{FrameRef, PixelData, Rgb8};
+use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
 use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::input::{InputQueue, InputTarget, TimedInput};
 use emu_core::machine::ChipReg;
@@ -137,7 +137,8 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "c64",
         name: "Commodore 64",
-        models: &["pal", "ntsc"],
+        models: &[],
+        video_formats: emu_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(C64::new(config)?)),
     }
 }
@@ -554,21 +555,19 @@ impl C64 {
         // `options["vicii"]`: the VIC-II type, "6569"/"8565" (PAL) or
         // "6567"/"8562" (NTSC; the 6567R8); without it the model's old
         // type. The HMOS-II types 8565/8562 (C64C) show the grey dot.
+        if let Some(other) = config.model.as_deref() {
+            return Err(ConfigError::UnknownModel(other.into()));
+        }
         let vic = match (
-            config.model.as_deref(),
+            config.video_format,
             config.options.get("vicii").map(String::as_str),
         ) {
-            (None | Some("pal"), None | Some("6569")) => vic2::Model::Mos6569,
-            (None | Some("pal"), Some("8565")) => vic2::Model::Mos8565,
-            (None | Some("ntsc"), Some("6567")) | (Some("ntsc"), None) => vic2::Model::Mos6567R8,
-            (None | Some("ntsc"), Some("8562")) => vic2::Model::Mos8562,
-            (None, Some(v)) => return Err(ConfigError::Invalid(format!("vicii option '{v}'"))),
-            (Some(m @ ("pal" | "ntsc")), Some(v)) => {
-                return Err(ConfigError::Invalid(format!(
-                    "vicii option '{v}' for model '{m}'"
-                )))
-            }
-            (Some(other), _) => return Err(ConfigError::UnknownModel(other.into())),
+            (None | Some(VideoStandard::Pal), None | Some("6569")) => vic2::Model::Mos6569,
+            (None | Some(VideoStandard::Pal), Some("8565")) => vic2::Model::Mos8565,
+            (None | Some(VideoStandard::Ntsc), Some("6567"))
+            | (Some(VideoStandard::Ntsc), None) => vic2::Model::Mos6567R8,
+            (None | Some(VideoStandard::Ntsc), Some("8562")) => vic2::Model::Mos8562,
+            (_, Some(v)) => return Err(ConfigError::Invalid(format!("vicii option '{v}'"))),
         };
         let cpu_hz = vic.timing().cpu_hz();
         let mut cpu = Cpu6502::new(CpuConfig {

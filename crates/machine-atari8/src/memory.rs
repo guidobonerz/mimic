@@ -30,10 +30,19 @@
 //! for ANTIC's DMA, independently (so ANTIC can show a bank the CPU
 //! does not see). With both bits 1 the main RAM is there for both.
 //!
+//! **320 KB expansions** of an XL/XE (`--option ram=`), 256 KB in 16 banks
+//! at the same place. `Kind::Rambo320`: bank in PORTB bits 2, 3, 5, 6; bit 4
+//! switches the bank in for the CPU and ANTIC alike. `Kind::Compy320`
+//! (Compy Shop): bank in bits 2, 3, 6, 7; bits 4 and 5 as on the 130XE, and
+//! bit 7 selects the self-test only while the bank is off.
+//!
 //! Sources: Atari 800XL Field Service Manual; Atari 130XE Field Service
 //! Manual (PORTB bit assignment); Altirra Hardware Reference Manual,
 //! "Memory map" and "PORTB"; Atari 400/800 Operating System User's Manual
-//! (OS ROM placement, cartridge slots).
+//! (OS ROM placement, cartridge slots); the 320 KB bit assignments from the
+//! srambo project (https://github.com/piotr-wiszowaty/srambo_1) and AtariAge
+//! (topic 210856), which agree; the bit 7/self-test rule is this project's
+//! assumption.
 
 use devices_cartridge::atari::AtariCart;
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
@@ -55,6 +64,19 @@ pub enum Kind {
     },
     Xl,
     Xe130,
+    Rambo320,
+    Compy320,
+}
+
+impl Kind {
+    /// Banks of 16 KB of extended RAM.
+    fn banks(self) -> usize {
+        match self {
+            Kind::Old { .. } | Kind::Xl => 0,
+            Kind::Xe130 => XE_BANKS,
+            Kind::Rambo320 | Kind::Compy320 => 16,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,7 +91,7 @@ pub struct Roms {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Area {
     Ram,
-    /// 130XE extended RAM: bank, offset.
+    /// Extended RAM: bank, offset.
     Extended(u8, u16),
     /// Offset into the OS ROM image.
     Os(u16),
@@ -84,7 +106,7 @@ pub enum Area {
 pub struct Memory {
     pub kind: Kind,
     pub ram: Box<[u8; 0x10000]>,
-    /// 130XE extended RAM (empty on the other models).
+    /// Extended RAM (empty without any).
     pub extended: Vec<u8>,
     pub roms: Roms,
     /// PIA port B pin levels (inputs pulled up): the banking bits on the
@@ -99,10 +121,7 @@ impl Memory {
         Self {
             kind,
             ram: Box::new([0; 0x10000]),
-            extended: match kind {
-                Kind::Xe130 => vec![0; XE_BANKS * XE_BANK_SIZE],
-                _ => Vec::new(),
-            },
+            extended: vec![0; kind.banks() * XE_BANK_SIZE],
             roms,
             portb: 0xff,
             cart: None,
@@ -133,14 +152,18 @@ impl Memory {
         self.portb & 0x01 != 0
     }
 
-    /// The 130XE bank CPU (`antic = false`) or ANTIC accesses see at
+    /// The bank CPU (`antic = false`) or ANTIC accesses see at
     /// `$4000–$7FFF`, if the extended RAM is switched in for it.
     fn xe_bank(&self, antic: bool) -> Option<u8> {
-        if self.kind != Kind::Xe130 {
-            return None;
-        }
+        let b = self.portb;
+        let low = (b >> 2) & 3;
         let enable = if antic { 0x20 } else { 0x10 };
-        (self.portb & enable == 0).then_some((self.portb >> 2) & 3)
+        match self.kind {
+            Kind::Old { .. } | Kind::Xl => None,
+            Kind::Xe130 => (b & enable == 0).then_some(low),
+            Kind::Rambo320 => (b & 0x10 == 0).then_some(low | ((b >> 3) & 0x0c)),
+            Kind::Compy320 => (b & enable == 0).then_some(low | ((b >> 4) & 0x0c)),
+        }
     }
 
     /// The area an access by the CPU (`antic = false`) or ANTIC hits.
@@ -156,7 +179,13 @@ impl Memory {
             };
         }
         match addr {
-            0x5000..=0x57ff if self.os_on() && self.portb & 0x80 == 0 => Area::Os(addr - 0x4000),
+            0x5000..=0x57ff
+                if self.os_on()
+                    && self.portb & 0x80 == 0
+                    && !(self.kind == Kind::Compy320 && self.xe_bank(antic).is_some()) =>
+            {
+                Area::Os(addr - 0x4000)
+            }
             0x4000..=0x7fff => match self.xe_bank(antic) {
                 Some(bank) => Area::Extended(bank, addr - 0x4000),
                 None => Area::Ram,
@@ -366,5 +395,49 @@ mod tests {
         assert_eq!(back.extended, m.extended);
         let mut xl = mem();
         assert!(xl.load(&mut StateReader::new(&s)).is_err());
+    }
+
+    #[test]
+    fn the_320k_expansions_decode_their_banks() {
+        // PORTB value with the CPU bank on: a distinct bank per bit pattern.
+        let distinct = |kind: Kind, bits: [u8; 4]| {
+            let mut m = Memory::new(kind, xl_roms());
+            let mut seen = Vec::new();
+            for n in 0..16u8 {
+                let mut portb = 0xef;
+                for (i, bit) in bits.iter().enumerate() {
+                    if n >> i & 1 == 0 {
+                        portb &= !bit;
+                    }
+                }
+                m.portb = portb;
+                seen.push(m.area(0x4000));
+            }
+            seen.sort_by_key(|a| match a {
+                Area::Extended(b, _) => *b,
+                _ => 255,
+            });
+            seen.dedup();
+            assert_eq!(seen.len(), 16, "{kind:?}");
+            assert!(!seen.contains(&Area::Ram));
+        };
+        distinct(Kind::Rambo320, [0x04, 0x08, 0x20, 0x40]);
+        distinct(Kind::Compy320, [0x04, 0x08, 0x40, 0x80]);
+
+        // RAMBO: bit 4 is ANTIC's too, bit 5 only a bank bit.
+        let mut m = Memory::new(Kind::Rambo320, xl_roms());
+        m.portb = 0xef;
+        assert!(matches!(m.area_for(0x4000, true), Area::Extended(..)));
+        m.portb = 0xdf | 0x10;
+        assert_eq!(m.area_for(0x4000, true), Area::Ram);
+        // Compy Shop: separate as on the 130XE, bit 7 is a bank bit while on.
+        let mut m = Memory::new(Kind::Compy320, xl_roms());
+        m.portb = 0xdf;
+        assert!(matches!(m.area_for(0x4000, true), Area::Extended(..)));
+        assert_eq!(m.area_for(0x4000, false), Area::Ram);
+        m.portb = 0x6f;
+        assert!(matches!(m.area_for(0x5000, false), Area::Extended(..)));
+        m.portb = 0x7f;
+        assert!(matches!(m.area_for(0x5000, false), Area::Os(_)));
     }
 }

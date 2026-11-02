@@ -30,7 +30,7 @@ fn stub() -> C64 {
 fn stub_model(model: &str) -> C64 {
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
-    config.model = Some(model.into());
+    config.video_format = emu_core::frame::VideoStandard::parse(model);
     C64::new(&config).unwrap()
 }
 

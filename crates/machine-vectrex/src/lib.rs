@@ -156,6 +156,7 @@ pub fn entry() -> MachineEntry {
         id: "vectrex",
         name: "Vectrex",
         models: &["vectrex"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Vectrex::new(config)?)),
     }
 }

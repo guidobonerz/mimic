@@ -115,6 +115,9 @@ function showModels() {
   const m = machines.find((x) => x.id === $("machine").value);
   if (!m) return;
   $("model").replaceChildren(new Option("default model", ""), ...m.models.map((x) => new Option(x, x)));
+  $("model").hidden = !m.models.length;
+  $("videoformat").replaceChildren(new Option("default video", ""), ...m.videoFormats.map((x) => new Option(x.toUpperCase(), x)));
+  $("videoformat").hidden = !m.videoFormats.length;
   const needed = m.roms.filter((r) => !r.optional).map((r) => `${r.role} (${r.size} bytes)`);
   $("romneeds").textContent = needed.length
     ? `ROMs needed: ${needed.join(", ")} — add the files or a ROM folder.`
@@ -161,7 +164,7 @@ function start(config) {
 function startFromForm() {
   const options = parseOptions($("options").value);
   if ($("stub").checked) options.roms = "stub";
-  start({ machine: $("machine").value, model: $("model").value, options, crt: crtValue() });
+  start({ machine: $("machine").value, model: $("model").value, videoFormat: $("videoformat").value, options, crt: crtValue() });
 }
 
 function crtValue() { return $("crt").value; }
@@ -496,7 +499,7 @@ function download(name, bytes) {
 // A start profile's command line (from profile_args) as a start config;
 // image arguments name uploaded files by their base name.
 function configFromArgs(args) {
-  const cfg = { machine: "", model: "", options: {}, media: [], crt: crtValue() };
+  const cfg = { machine: "", model: "", videoFormat: "", options: {}, media: [], crt: crtValue() };
   const files = call("files").map((f) => f.path);
   const file = (name) => files.find((p) => p === name || p.endsWith("/" + name.split(/[\\/]/).pop())) || name;
   for (let i = 0; i < args.length; i++) {
@@ -504,6 +507,7 @@ function configFromArgs(args) {
     switch (a) {
       case "--machine": cfg.machine = v; i++; break;
       case "--model": cfg.model = v; i++; break;
+      case "--videoformat": cfg.videoFormat = v === "auto" ? "" : v; i++; break;
       case "--option": { const [k, ...r] = v.split("="); cfg.options[k] = r.join("="); i++; break; }
       case "--disk": cfg.media.push({ file: file(v), kind: "disk" }); i++; break;
       case "--tape": cfg.media.push({ file: file(v), kind: "tape" }); i++; break;
@@ -596,12 +600,13 @@ function wire() {
   showFiles();
   say("choose a machine, add its ROMs (or use the built-in test ROMs) and press Start");
   requestAnimationFrame(loop);
-  // ?machine=c64&model=ntsc&options=roms=stub,ram=8k&crt=raw&start=1 starts at once.
+  // ?machine=c64&videoformat=ntsc&options=roms=stub,ram=8k&crt=raw&start=1 starts at once.
   const q = new URLSearchParams(location.search);
   if (q.get("machine")) {
     $("machine").value = q.get("machine");
     showModels();
     if (q.get("model")) $("model").value = q.get("model");
+    if (q.get("videoformat")) $("videoformat").value = q.get("videoformat");
     if (q.get("options")) $("options").value = q.get("options").split(",").join(" ");
     if (q.get("crt")) $("crt").value = q.get("crt");
     if (q.get("start") === "1") startFromForm();

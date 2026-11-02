@@ -140,6 +140,7 @@ pub fn entry() -> MachineEntry {
         id: "apple2",
         name: "Apple II",
         models: &["iie", "iie-unenhanced", "iiplus", "ii"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Apple2::new(config)?)),
     }
 }

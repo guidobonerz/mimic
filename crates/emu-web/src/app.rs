@@ -92,7 +92,7 @@ impl WebEmu {
                                "names": s.prefixes})
                     })
                     .collect();
-                json!({"id": e.id, "name": e.name, "models": e.models, "roms": roms})
+                json!({"id": e.id, "name": e.name, "models": e.models, "videoFormats": e.video_formats, "roms": roms})
             })
             .collect();
         json!(list)
@@ -125,7 +125,7 @@ impl WebEmu {
             .ok_or_else(|| format!("no uploaded file '{path}'"))
     }
 
-    /// Start a machine: `{"machine", "model", "options": {k: v}, "crt":
+    /// Start a machine: `{"machine", "model", "videoFormat", "options": {k: v}, "crt":
     /// profile|null, "media": [{"file", "kind"}]}`. ROMs come from the
     /// uploaded files (matched by name and size as in a ROM folder) unless
     /// `options.roms` is `stub`.
@@ -139,6 +139,9 @@ impl WebEmu {
                 .as_str()
                 .filter(|m| !m.is_empty())
                 .map(str::to_string),
+            video_format: cfg["videoFormat"]
+                .as_str()
+                .and_then(emu_core::frame::VideoStandard::parse),
             ..MachineConfig::default()
         };
         if let Some(opts) = cfg["options"].as_object() {

@@ -5,7 +5,7 @@ use emu_core::media::MediaKind;
 
 fn stub(model: &str) -> Atari2600 {
     let mut config = MachineConfig {
-        model: Some(model.into()),
+        video_format: emu_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());
@@ -67,7 +67,7 @@ fn empty_console_idles_and_free_runs() {
     // "auto" keeps the TIA's PAL limits until (and after) it decides.
     for (model, standard) in [("ntsc", VideoStandard::Ntsc), ("auto", VideoStandard::Pal)] {
         let mut m = Atari2600::new(&MachineConfig {
-            model: Some(model.into()),
+            video_format: emu_core::frame::VideoStandard::parse(model),
             ..MachineConfig::default()
         })
         .unwrap();
@@ -166,7 +166,7 @@ fn with_program(program: &[u8]) -> Atari2600 {
     rom[..program.len()].copy_from_slice(program);
     rom[0xffc..].copy_from_slice(&[0x00, 0xf0, 0x00, 0xf0]);
     let mut m = Atari2600::new(&MachineConfig {
-        model: Some("ntsc".into()),
+        video_format: Some(emu_core::frame::VideoStandard::Ntsc),
         ..MachineConfig::default()
     })
     .unwrap();
@@ -702,7 +702,7 @@ fn auto_model_detects_the_tv_standard_from_the_field_length() {
 fn forced_models_do_not_switch() {
     let mut m = with_cart(frames_of(255), &[]);
     let mut config = MachineConfig {
-        model: Some("pal".into()),
+        video_format: Some(emu_core::frame::VideoStandard::Pal),
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());

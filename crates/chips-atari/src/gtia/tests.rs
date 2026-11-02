@@ -125,6 +125,55 @@ fn gtia_mode_9_luminances() {
 }
 
 #[test]
+fn fifth_player_in_mode_9_takes_colpf3_with_the_pixels_luminance() {
+    let mut g = gtia();
+    g.write(0x0d, 0);
+    g.write(0x12, 0x24); // COLPM0: not this colour
+    g.write(0x19, 0x90); // COLPF3 hue 9
+    g.write(0x1a, 0x80);
+    g.write(0x1b, 0x58);
+    g.write(0x11, 0xff); // GRAFM
+    g.write(0x04, 0x80); // HPOSM0
+    let mut found = false;
+    for cycle in 0..114 {
+        g.render_cycle(
+            LINE,
+            cycle,
+            [Playfield::Hires(0b10), Playfield::Hires(0b11)],
+        );
+    }
+    for cc in FIRST_CC..LAST_CC {
+        found |= pixel(&g, cc) == [0x9b, 0x9b];
+    }
+    assert!(found, "no missile pixel in COLPF3 with luminance $B");
+}
+
+#[test]
+fn a_player_covers_fifth_player_missiles_in_its_own_colour() {
+    let mut g = gtia();
+    g.write(0x0d, 0);
+    g.write(0x13, 0xf6); // COLPM1: must not show
+    g.write(0x14, 0x00); // COLPM2: the mask
+    g.write(0x19, 0x90);
+    g.write(0x1b, 0x58);
+    g.write(0x11, 0xff); // GRAFM
+    g.write(0x05, 0x80); // HPOSM1
+    g.write(0x02, 0x80); // HPOSP2
+    g.write(0x0f, 0xff); // GRAFP2
+    g.write(0x0a, 0x03); // quadruple width
+    for cycle in 0..114 {
+        g.render_cycle(
+            LINE,
+            cycle,
+            [Playfield::Hires(0b10), Playfield::Hires(0b11)],
+        );
+    }
+    for cc in FIRST_CC..LAST_CC {
+        assert_ne!(pixel(&g, cc)[0], 0xf6, "COLPM1 at {cc}");
+    }
+}
+
+#[test]
 fn inputs_and_pal_register() {
     let mut g = gtia();
     assert_eq!(g.peek(0x10), 1, "TRIG0 up");

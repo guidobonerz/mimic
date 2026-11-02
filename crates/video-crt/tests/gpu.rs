@@ -270,7 +270,7 @@ fn source_rgba(px: &[u8], profile: &Profile) -> Vec<u8> {
             [c.r, c.g, c.b, 255]
         })
         .collect();
-    signal::process_rgba(f.width, f.height, &rgba, f.signal, profile).unwrap_or(rgba)
+    signal::process_rgba(f.width, f.height, &rgba, None, f.signal, profile).unwrap_or(rgba)
 }
 
 fn adapter() -> Option<Gpu> {

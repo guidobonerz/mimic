@@ -16,6 +16,27 @@ pub enum VideoStandard {
     Ntsc,
 }
 
+impl VideoStandard {
+    /// The name on the command line (`--videoformat`): "pal" or "ntsc".
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "pal" => Some(Self::Pal),
+            "ntsc" => Some(Self::Ntsc),
+            _ => None,
+        }
+    }
+
+    /// The value of `--videoformat`: "auto" is the machine's default.
+    pub fn from_arg(value: &str) -> Result<Option<Self>, String> {
+        match value {
+            "auto" => Ok(None),
+            _ => Self::parse(value)
+                .map(Some)
+                .ok_or_else(|| format!("--videoformat {value}: pal, ntsc or auto")),
+        }
+    }
+}
+
 /// The connection the machine's video output is designed for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OutputType {

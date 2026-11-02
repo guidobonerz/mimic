@@ -137,6 +137,7 @@ pub fn entry() -> MachineEntry {
         id: "spectrum",
         name: "Sinclair ZX Spectrum",
         models: &["48k", "128k", "plus2"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Spectrum::new(config)?)),
     }
 }

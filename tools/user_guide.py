@@ -260,22 +260,22 @@ debugging tools.""")
 
 h2("Supported machines")
 table(["Machine id", "Machine", "Models (--model)"], [
-    ["`c64`", "Commodore 64", "`pal` (default), `ntsc`"],
-    ["`vic20`", "Commodore VIC-20", "`pal`, `ntsc`"],
+    ["`c64`", "Commodore 64", "none; `--videoformat`: `pal` (default), `ntsc`"],
+    ["`vic20`", "Commodore VIC-20", "none; `--videoformat`: `pal` (default), `ntsc`"],
     ["`pet`", "Commodore PET", "`4032` (default), `2001`, `3032`, `8032`"],
-    ["`c16`, `plus4`", "Commodore 16, Plus/4", "`pal`, `ntsc`"],
-    ["`c128`", "Commodore 128 (40 and 80 columns, Z80)", "`pal`, `ntsc`"],
+    ["`c16`, `plus4`", "Commodore 16, Plus/4", "none; `--videoformat`: `pal` (default), `ntsc`"],
+    ["`c128`", "Commodore 128 (40 and 80 columns, Z80)", "none; `--videoformat`: `pal` (default), `ntsc`"],
     ["`atari8`", "Atari 400/800/800XL/65XE/130XE",
-     "`800xl` (default), `65xe`, `130xe`, `800`, `400`; each also `-ntsc`"],
-    ["`atari2600`", "Atari 2600 (VCS)", "`auto` (default: NTSC or PAL from the program's field length), `ntsc`, `pal`"],
+     "`800xl` (default), `65xe`, `130xe`, `800`, `400`; `--videoformat`: `pal` (default), `ntsc`; XL/XE RAM: `--option ram=64k|128k|320k|320k-compy` (130XE banking, RAMBO, Compy Shop)"],
+    ["`atari2600`", "Atari 2600 (VCS)", "none; `--videoformat`: `auto` (default: NTSC or PAL from the program's field length), `ntsc`, `pal`"],
     ["`cpc`", "Amstrad CPC", "`6128` (default), `664`, `464`"],
     ["`amiga`", "Commodore Amiga 500/1000/2000 (OCS), 500+ (ECS), 1200 (AGA)",
-     "`500` (default), `1000`, `2000`, `500plus`, `1200`; each also `-ntsc`"],
+     "`500` (default), `1000`, `2000`, `500plus`, `1200`; `--videoformat`: `pal` (default), `ntsc`"],
     ["`zx81`", "Sinclair ZX81 / Timex Sinclair 1000", "`zx81` (default, PAL), `ts1000` (NTSC)"],
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (default), `128k`, `plus2`"],
-    ["`coleco`", "ColecoVision", "`ntsc` (default), `pal`"],
-    ["`nes`", "Nintendo Entertainment System / Famicom", "`ntsc` (default), `pal`"],
-    ["`snes`", "Super Nintendo / Super Famicom", "`ntsc` (default), `pal`"],
+    ["`coleco`", "ColecoVision", "none; `--videoformat`: `ntsc` (default), `pal`"],
+    ["`nes`", "Nintendo Entertainment System / Famicom", "none; `--videoformat`: `ntsc` (default), `pal`"],
+    ["`snes`", "Super Nintendo / Super Famicom", "none; `--videoformat`: `ntsc` (default), `pal`"],
     ["`vectrex`", "Vectrex (vector display)", "`vectrex`"],
     ["`imsai`", "IMSAI 8080 (front panel; terminal on F12)", "`8080`"],
     ["`archimedes`", "Acorn Archimedes", "`a310` (default), `a305`, `a440`, `a3000`"],
@@ -399,7 +399,8 @@ h1("The desktop emulator")
 h2("Command-line options")
 table(["Option", "Meaning"], [
     ["`--machine ID`", "the machine (see the table in section 1; default `c64`)"],
-    ["`--model NAME`", "model variant, e.g. `ntsc`, `130xe`, `1200`"],
+    ["`--model NAME`", "model variant, e.g. `130xe`, `1200`"],
+    ["`--videoformat FORMAT`", "`pal`, `ntsc` or `auto` (the machine's default; Atari 2600: detect from the program)"],
     ["`--rom-dir DIR`", "ROM folder (default: `EMU_ROM_DIR`)"],
     ["`--option KEY=VALUE`", "machine option, repeatable (section 5)"],
     ["`--prg FILE`", "a program (PRG, T64, Atari XEX) to load and run"],
@@ -485,7 +486,7 @@ what applies to every profile: the ROM folder (`roms`), where snapshots go
 `docs/profiles.example.yaml` shows every key.""")
 table(["Command", "Effect"], [
     ["`mimic-desktop --profile mac-se-755`", "start a profile; flags given as well override it "
-     "(`--profile c64 --model ntsc`)"],
+     "(`--profile c64 --videoformat ntsc`)"],
     ["`mimic-desktop`", "no machine and no profile given: the window lists the profiles, "
      "a click starts one"],
     ["`mimic-desktop --list-profiles`", "list the profiles"],
@@ -501,8 +502,9 @@ p("""Ctrl+Space shows a status line below the picture. On the left is a
 **speed control**: click a step or drag the knob for 10 %, 25 %, 50 %,
 100 %, 150 %, 200 %, 400 % or 800 % of real time (sound is muted away from
 100 %). At 100 % the emulator runs as fast as it can, muted, while a disk
-drive works (LED or motor, e.g. during LOAD); the footer then shows "warp:
-loading". `--warp-load off` turns that off. Next to it the **snapshot** button saves the picture as a PNG file
+drive works (LED or motor, e.g. during LOAD) and the machine has been silent
+for a second, so music playing while a demo loads stays in time; the footer
+then shows "warp: loading". `--warp-load off` turns that off. Next to it the **snapshot** button saves the picture as a PNG file
 named after the machine (`mac-001.png`, `mac-002.png` …) in the `snapshots`
 folder of the profile file's settings, else in the folder the emulator was
 started from; the footer shows the file name for a few seconds. It then shows the emulated time since power-on (m:ss.t) with the

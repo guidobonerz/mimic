@@ -114,7 +114,8 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "coleco",
         name: "ColecoVision",
-        models: &["ntsc", "pal"],
+        models: &[],
+        video_formats: emu_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Coleco::new(config)?)),
     }
 }
@@ -444,10 +445,12 @@ pub struct Coleco {
 
 impl Coleco {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let model = match config.model.as_deref() {
-            None | Some("ntsc") => Model::Ntsc,
-            Some("pal") => Model::Pal,
-            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        if let Some(other) = config.model.as_deref() {
+            return Err(ConfigError::UnknownModel(other.into()));
+        }
+        let model = match config.video_format {
+            None | Some(VideoStandard::Ntsc) => Model::Ntsc,
+            Some(VideoStandard::Pal) => Model::Pal,
         };
         let bios = match config.options.get("roms").map(String::as_str) {
             Some("stub") => stub::rom(),

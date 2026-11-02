@@ -10,44 +10,78 @@
 //!
 //! - NTSC: the delay line is set (colour pot) so that hue 15 comes back
 //!   near hue 1: 14 steps of 360°/14 ≈ 25.7°.
-//! - PAL: the 15 hues are spread evenly around the circle, 24° apart,
-//!   starting a step past the burst.
+//! - PAL: the hues are not evenly spaced: hue 15 equals hue 1, the steps
+//!   run about 18° and 36°. `PAL_HUES` holds the angles and `PAL_SATURATION`
+//!   the amplitude as observed on Altirra 4.40's default PAL palette (bars
+//!   at luminance 6, 2026-11-02; hues 11–14 from the red channel, their
+//!   blue clips). The even 24° wheel used before showed the hues up to
+//!   40° off: Numen's blue sky ($7x) purple and its green rooms ($Ax) blue.
 //!
 //! Luminance rises linearly with the four luminance bits (the hardware
 //! has 8 levels, GTIA mode 9 16); chroma has a fixed amplitude. Conversion
 //! is BT.601 YUV → RGB without gamma, like the VIC-II palette; the
 //! monitor's look (and NTSC artifact colours) belong to `video-crt`.
 
-use emu_core::frame::{Rgb8, VideoStandard};
+use emu_core::frame::{LumaChroma, Rgb8, VideoStandard};
 
 /// Chroma amplitude relative to full-scale luma.
 const SATURATION: f64 = 0.19;
+const PAL_SATURATION: f64 = 0.29;
+/// Gain on PAL chroma in the composite signal: the delay line halves the
+/// colour of pictures that alternate grey and hue lines. Fitted to a
+/// reference picture of Numen's title from the user (2026-11-02: its
+/// chroma was 1.2 to 1.5 times ours in six areas), not measured on hardware.
+const PAL_COMPOSITE_GAIN: f64 = 1.3;
+/// Angles of hues 1–15 on PAL (degrees, U = 0°, V = 90°).
+const PAL_HUES: [f64; 15] = [
+    135.2, 116.6, 81.6, 46.5, 28.4, 9.6, -26.7, -44.8, -63.4, -98.2, -151.7, -169.9, 171.8, 153.2,
+    135.2,
+];
 /// Luma of the darkest and brightest level (black has no setup on the
 /// Atari's composite output; level 15 is just below peak white).
 const LUMA_MIN: f64 = 0.0;
 const LUMA_MAX: f64 = 0.96;
 
-/// Angle of hue 1 in the UV plane (degrees; U = 0°, V = 90°) and the step
+/// NTSC: the angle of hue 1 in the UV plane (the burst, −U) and the step
 /// between hues (negative: the delay turns the phase clockwise).
-fn wheel(standard: VideoStandard) -> (f64, f64) {
-    match standard {
-        // The burst is at 180° (−U).
-        VideoStandard::Ntsc => (180.0, -360.0 / 14.0),
-        VideoStandard::Pal => (180.0 - 12.0, -24.0),
-    }
-}
+const NTSC_WHEEL: (f64, f64) = (180.0, -360.0 / 14.0);
 
 /// The colour of register value `i` in YUV.
 pub fn yuv(standard: VideoStandard, i: u8) -> (f64, f64, f64) {
-    let (start, step) = wheel(standard);
     let hue = i >> 4;
     let lum = i & 0x0f;
     let y = LUMA_MIN + (LUMA_MAX - LUMA_MIN) * f64::from(lum) / 15.0;
     if hue == 0 {
         return (y, 0.0, 0.0);
     }
-    let a = (start + step * f64::from(hue - 1)).to_radians();
-    (y, SATURATION * a.cos(), SATURATION * a.sin())
+    let (angle, saturation) = match standard {
+        VideoStandard::Ntsc => (NTSC_WHEEL.0 + NTSC_WHEEL.1 * f64::from(hue - 1), SATURATION),
+        VideoStandard::Pal => (PAL_HUES[usize::from(hue - 1)], PAL_SATURATION),
+    };
+    let a = angle.to_radians();
+    (y, saturation * a.cos(), saturation * a.sin())
+}
+
+/// The palette as luma and chroma: the RGB palette clips what a dark
+/// colour's chroma swings below black (register $30 has no green or blue
+/// left), and the composite path needs that chroma (Numen's title picture
+/// alternates grey lines with hue lines of luminance 0).
+pub fn luma_chroma(standard: VideoStandard) -> [LumaChroma; 256] {
+    let mut out = [LumaChroma::default(); 256];
+    for (i, c) in out.iter_mut().enumerate() {
+        let (y, u, v) = yuv(standard, i as u8);
+        let gain = match standard {
+            VideoStandard::Pal => PAL_COMPOSITE_GAIN,
+            VideoStandard::Ntsc => 1.0,
+        };
+        let phase = v.atan2(u).rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU;
+        *c = LumaChroma {
+            luma: (y * 65535.0).round() as u16,
+            chroma_phase: (phase * 65536.0).round() as u32 as u16,
+            chroma_amplitude: (u.hypot(v) * gain * 65535.0).round() as u16,
+        };
+    }
+    out
 }
 
 pub fn palette(standard: VideoStandard) -> [Rgb8; 256] {
@@ -132,13 +166,27 @@ mod tests {
         assert!(blue.b > blue.r && blue.b > blue.g, "hue 8 {blue:?}");
         let green = p[0xc6];
         assert!(green.g > green.r && green.g > green.b, "hue 12 {green:?}");
-        // NTSC hue 15 comes back to hue 1; PAL steps 24°.
-        let d = (hue_angle(VideoStandard::Ntsc, 0xf6) - hue_angle(VideoStandard::Ntsc, 0x16))
-            .rem_euclid(360.0);
-        assert!(d < 1.0 || d > 359.0, "{d}");
-        let step = (hue_angle(VideoStandard::Pal, 0x26) - hue_angle(VideoStandard::Pal, 0x36))
-            .rem_euclid(360.0);
-        assert!((step - 24.0).abs() < 0.01, "{step}");
+        // Hue 15 comes back to hue 1 on both standards.
+        for standard in [VideoStandard::Ntsc, VideoStandard::Pal] {
+            let d = (hue_angle(standard, 0xf6) - hue_angle(standard, 0x16)).rem_euclid(360.0);
+            assert!(d < 1.0 || d > 359.0, "{d}");
+        }
+        // PAL: Numen's sky ($74) is blue, its rooms ($A4) green.
+        let p = palette(VideoStandard::Pal);
+        let (sky, room) = (p[0x74], p[0xa4]);
+        assert!(sky.b > sky.r && sky.b > sky.g, "hue 7 {sky:?}");
+        assert!(room.g > room.r && room.g > room.b, "hue 10 {room:?}");
+    }
+
+    #[test]
+    fn luma_chroma_keeps_the_chroma_of_dark_colours() {
+        let lc = luma_chroma(VideoStandard::Pal);
+        assert_eq!(
+            (lc[0x30].luma, lc[0x30].chroma_amplitude > 18_000),
+            (0, true)
+        );
+        assert_eq!(lc[0x08].chroma_amplitude, 0);
+        assert_eq!(lc[0x38].chroma_phase, lc[0x30].chroma_phase);
     }
 
     #[test]

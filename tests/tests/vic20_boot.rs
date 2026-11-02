@@ -14,7 +14,7 @@ fn boot(model: &str, ram: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, "vic20").expect("ROMs"),
-        model: Some(model.into()),
+        video_format: emu_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     config.options.insert("ram".into(), ram.into());

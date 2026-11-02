@@ -69,6 +69,7 @@ pub fn entry() -> MachineEntry {
         id: "archimedes",
         name: "Acorn Archimedes",
         models: &["a310", "a305", "a440", "a3000"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Archimedes::new(config)?)),
     }
 }

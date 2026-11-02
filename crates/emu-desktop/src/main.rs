@@ -86,7 +86,8 @@ usage: mimic-desktop [options]
   --list-profiles       list the profiles and exit
   --save-profile NAME   store this command line's setup as a profile
   --machine ID          machine id (default: c64)
-  --model NAME          model variant (C64: pal, ntsc)
+  --model NAME          model variant (Atari: 130xe, Amiga: 1200 ...)
+  --videoformat FORMAT  pal, ntsc or auto (machine default; Atari 2600: detect)
   --prg FILE            program (PRG/T64, Atari XEX) to load and run
   --disk FILE           disk image for drive 8 (Atari: ATR for D1:, Amiga: DF0:,
                         Apple II: DSK/DO/PO/NIB/WOZ for slot 6 drive 1; Mac:
@@ -107,7 +108,8 @@ usage: mimic-desktop [options]
   --rom ROLE=FILE       a single ROM image for a role (repeatable)
   --speed PERCENT       start at 10, 25, 50, 100, 150, 200, 400 or 800 % speed
   --warp-load on|off    at 100 % run as fast as possible (muted) while a disk
-                        drive works, e.g. during LOAD (default on)
+                        drive works and the machine has been silent for a
+                        second, e.g. during LOAD (default on)
   --option KEY=VALUE    machine option (repeatable)
   --net on|off          the host network for the C64's WiC64 (--option
                         userport=wic64) and Ultimate command interface
@@ -299,6 +301,10 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         match flag.as_str() {
             "--machine" => a.machine = value("--machine")?,
             "--model" => a.config.model = Some(value("--model")?),
+            "--videoformat" => {
+                a.config.video_format =
+                    emu_core::frame::VideoStandard::from_arg(&value("--videoformat")?)?;
+            }
             "--prg" => a.prg = Some(value("--prg")?),
             "--disk" => a.disk.push(value("--disk")?),
             "--tape" => a.tape = Some(value("--tape")?),

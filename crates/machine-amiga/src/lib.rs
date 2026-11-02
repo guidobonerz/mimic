@@ -7,7 +7,7 @@
 //! fast RAM, the Kickstart ROM (see [`memory`] for the map) and up to four
 //! floppy drives ("DF0:"–"DF3:", ADF images; `drives_other::amiga_drive`).
 //!
-//! **Models** (`--model`, the board; "-ntsc" for the NTSC version of each):
+//! **Models** (`--model`, the board; `--videoformat ntsc` for the NTSC version of each):
 //! - `500` (default): 512 KB chip RAM
 //!   (option `chip=1m` for the 8372 "Fat Agnus" revision), 512 KB slow RAM
 //!   in the trapdoor, Kickstart in ROM.
@@ -162,18 +162,8 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "amiga",
         name: "Commodore Amiga 500/1000/2000/500+/1200",
-        models: &[
-            "500",
-            "500-ntsc",
-            "1000",
-            "1000-ntsc",
-            "2000",
-            "2000-ntsc",
-            "500plus",
-            "500plus-ntsc",
-            "1200",
-            "1200-ntsc",
-        ],
+        models: &["500", "1000", "2000", "500plus", "1200"],
+        video_formats: emu_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Amiga::new(config)?)),
     }
 }
@@ -208,25 +198,17 @@ impl Model {
     }
 }
 
-/// `--machine amiga --model 500|1000|2000|500plus|1200`, "-ntsc" for the
+/// `--machine amiga --model 500|1000|2000|500plus|1200`, `--videoformat ntsc` for the
 /// NTSC version.
-fn parse_model(model: Option<&str>) -> Result<(Model, Standard), ConfigError> {
-    let Some(model) = model else {
-        return Ok((Model::A500, Standard::Pal));
-    };
-    let (board, standard) = match model.strip_suffix("-ntsc") {
-        Some(b) => (b, Standard::Ntsc),
-        None => (model, Standard::Pal),
-    };
-    let board = match board {
-        "500" => Model::A500,
-        "1000" => Model::A1000,
-        "2000" => Model::A2000,
-        "500plus" => Model::A500Plus,
-        "1200" => Model::A1200,
-        _ => return Err(ConfigError::UnknownModel(model.into())),
-    };
-    Ok((board, standard))
+fn parse_model(model: Option<&str>) -> Result<Model, ConfigError> {
+    match model {
+        None | Some("500") => Ok(Model::A500),
+        Some("1000") => Ok(Model::A1000),
+        Some("2000") => Ok(Model::A2000),
+        Some("500plus") => Ok(Model::A500Plus),
+        Some("1200") => Ok(Model::A1200),
+        Some(other) => Err(ConfigError::UnknownModel(other.into())),
+    }
 }
 
 /// `chipset`, `agnus` and `denise` options: the chips fitted.
@@ -1068,7 +1050,11 @@ pub struct Amiga {
 
 impl Amiga {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        let (model, standard) = parse_model(config.model.as_deref())?;
+        let model = parse_model(config.model.as_deref())?;
+        let standard = match config.video_format {
+            None | Some(emu_core::frame::VideoStandard::Pal) => Standard::Pal,
+            Some(emu_core::frame::VideoStandard::Ntsc) => Standard::Ntsc,
+        };
         let (chip_default, slow_default, chipset_default, kick_default) = match model {
             Model::A500 => ("512k", "512k", Chipset::OCS, "1.3"),
             Model::A1000 => ("256k", "0", Chipset::OCS, "1.3"),

@@ -436,6 +436,7 @@ impl Gfx {
             frame.width,
             frame.height,
             &frame.rgba,
+            frame.luma_chroma.as_deref(),
             frame.signal,
             &self.profile,
         );

@@ -85,6 +85,7 @@ pub fn entry() -> MachineEntry {
         id: "zx81",
         name: "Sinclair ZX81",
         models: &["zx81", "ts1000"],
+        video_formats: &[],
         create: |config| Ok(Box::new(Zx81::new(config)?)),
     }
 }

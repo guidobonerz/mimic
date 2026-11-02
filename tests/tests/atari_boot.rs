@@ -7,11 +7,12 @@ use emu_core::machine::Machine;
 use emu_core::registry::MachineConfig;
 use emu_core::{DebugHooks, DeviceId, Size, StopReason};
 
-fn boot(model: &str, basic: &str) -> Box<dyn Machine> {
+fn boot(format: &str, basic: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, "atari8").expect("ROMs"),
-        model: Some(model.into()),
+        model: Some("800xl".into()),
+        video_format: emu_core::frame::VideoStandard::parse(format),
         ..MachineConfig::default()
     };
     config.options.insert("basic".into(), basic.into());
@@ -61,14 +62,14 @@ fn snapshot(m: &dyn Machine, name: &str) -> String {
 #[test]
 #[ignore = "needs Atari XL OS and BASIC ROMs in EMU_ROM_DIR"]
 fn atari800xl_boots_to_basic_and_runs_a_line() {
-    for model in ["800xl", "800xl-ntsc"] {
-        let mut m = boot(model, "on");
+    for format in ["pal", "ntsc"] {
+        let mut m = boot(format, "on");
         let s = screen(m.as_mut());
-        let shot = snapshot(m.as_ref(), &format!("atari_boot_{model}.png"));
+        let shot = snapshot(m.as_ref(), &format!("atari_boot_{format}.png"));
         let ready = find(&s, "READY");
         assert!(
             ready.is_some(),
-            "{model}: READY missing; snapshot at {shot}"
+            "{format}: READY missing; snapshot at {shot}"
         );
 
         // The OS reads the keyboard through POKEY's scan and IRQ.
@@ -80,14 +81,14 @@ fn atari800xl_boots_to_basic_and_runs_a_line() {
             run(m.as_mut(), 1);
         }
         let s = screen(m.as_mut());
-        let shot = snapshot(m.as_ref(), &format!("atari_print_{model}.png"));
+        let shot = snapshot(m.as_ref(), &format!("atari_print_{format}.png"));
         let typed = find(&s, "PRINT 6*7").map(|p| p / 40);
         let result = find(&s, "42").map(|p| p / 40);
         assert!(
             typed.is_some(),
-            "{model}: PRINT not echoed; snapshot at {shot}"
+            "{format}: PRINT not echoed; snapshot at {shot}"
         );
-        assert_eq!(result, typed.map(|l| l + 1), "{model}: 42 below; {shot}");
+        assert_eq!(result, typed.map(|l| l + 1), "{format}: 42 below; {shot}");
     }
 }
 
@@ -96,7 +97,7 @@ fn atari800xl_boots_to_basic_and_runs_a_line() {
 fn without_basic_the_xl_starts_the_self_test() {
     // OPTION held at power-up: no BASIC, no cartridge, no disk — the XL OS
     // runs the self-test from the ROM banked in at $5000.
-    let mut m = boot("800xl", "off");
+    let mut m = boot("pal", "off");
     let shot = snapshot(m.as_ref(), "atari_selftest.png");
     let portb = byte(m.as_mut(), 0xd301);
     assert_eq!(
