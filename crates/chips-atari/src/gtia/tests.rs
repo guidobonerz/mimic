@@ -178,3 +178,20 @@ fn players_collide_in_vertical_blank_only_after_a_hires_line() {
         "P0PF: hires background hits no playfield"
     );
 }
+
+#[test]
+fn a_gtia_mode_past_cycle_15_turns_hires_into_four_playfields() {
+    let mut g = gtia();
+    g.write(0x1b, 0x80);
+    g.render_cycle(LINE, HIRES_LATCH_CYCLE, [Playfield::Background; 2]);
+    g.write(0x1b, 0);
+    render(&mut g, CC, Playfield::Hires(1));
+    assert_eq!(g.p_pf[0], 0x02, "pseudo mode E: PF1");
+
+    let mut g = gtia();
+    g.write(0x1b, 0x80);
+    g.write(0x1b, 0);
+    g.render_cycle(LINE, HIRES_LATCH_CYCLE, [Playfield::Background; 2]);
+    render(&mut g, CC, Playfield::Hires(1));
+    assert_eq!(g.p_pf[0], 0x04, "off in time: hires collides as PF2");
+}

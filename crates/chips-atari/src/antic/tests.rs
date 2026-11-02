@@ -227,7 +227,9 @@ fn a_missed_playfield_stop_runs_the_dma_clock_into_the_next_line() {
     let scan = a.memscan;
     run_on(&mut a, &mem, 40, 113);
     assert_ne!(a.dclk, 0, "not stopped at the end of the line");
-    // A state in the middle of it round-trips.
+    // A state in the middle of it round-trips. The machine takes a fetch
+    // without a bus within its cycle, so a savestate never holds one.
+    a.bus_sample(0);
     let mut w = StateWriter::new();
     a.save(&mut w);
     let bytes = w.into_bytes();
@@ -251,4 +253,31 @@ fn a_stop_on_the_same_phase_ends_the_playfield() {
     run_to(&mut a, &mem, 40, 0);
     run_on(&mut a, &mem, 40, 113);
     assert_eq!(a.dclk, 0, "normal mode F line stops");
+}
+
+#[test]
+fn gtia_latches_the_bus_a_cycle_after_a_free_player_slot() {
+    let (mut a, mem) = setup(0x42);
+    run_to(&mut a, &mem, 40, 3);
+    assert_eq!(a.phantom_slot(), Some(0), "player 0, no DMA");
+    run_to(&mut a, &mem, 40, 1);
+    assert_eq!(a.phantom_slot(), Some(4), "missiles");
+    run_to(&mut a, &mem, 40, 2);
+    assert_eq!(a.phantom_slot(), None);
+    run_to(&mut a, &mem, 260, 3);
+    assert_eq!(a.phantom_slot(), None, "vertical blank");
+
+    a.write(0x00, 0x2e); // player and missile DMA
+    run_to(&mut a, &mem, 40, 3);
+    assert_eq!(a.phantom_slot(), None, "ANTIC fetched in the slot");
+}
+
+#[test]
+fn a_fetch_without_a_bus_takes_the_cpus_byte() {
+    let (mut a, _) = setup(0x42);
+    a.virtual_fetch = Some(Slot::Data(3));
+    assert!(a.wants_bus());
+    a.bus_sample(0x50);
+    assert_eq!(a.data[3], 0x50);
+    assert!(!a.wants_bus());
 }

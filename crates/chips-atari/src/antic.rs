@@ -288,6 +288,9 @@ pub struct Antic {
     /// line only replays the line buffer.
     pf_first: bool,
     pf_replay: bool,
+    /// The playfield fetch of a cycle without a bus (see
+    /// [`Antic::bus_sample`]); lives within one cycle, so not in a savestate.
+    virtual_fetch: Option<Slot>,
     /// A refresh request waits for a free cycle.
     refresh_pending: bool,
     origin: u16,
@@ -349,6 +352,7 @@ impl Antic {
             repeat_first: false,
             pf_first: false,
             pf_replay: false,
+            virtual_fetch: None,
             refresh_pending: false,
             origin: 0,
             window: (0, 0),
@@ -636,9 +640,13 @@ impl Antic {
                 self.pending
                     .copy_within(i + 1..usize::from(self.pending_n), i);
                 self.pending_n -= 1;
-                if dma && !suppressed && slot == Slot::Free {
-                    self.pf_addr = f.addr;
-                    slot = Slot::Data(f.buf);
+                if dma && slot == Slot::Free {
+                    if suppressed {
+                        self.virtual_fetch = Some(Slot::Data(f.buf));
+                    } else {
+                        self.pf_addr = f.addr;
+                        slot = Slot::Data(f.buf);
+                    }
                 }
             } else {
                 i += 1;
@@ -657,9 +665,13 @@ impl Antic {
                 self.memscan = (self.memscan & 0xf000) | (self.memscan.wrapping_add(1) & 0x0fff);
                 self.fetched = self.fetched.wrapping_add(1);
             }
-            if dma && info.chars && self.pf_first && !suppressed && slot == Slot::Free {
-                self.pf_addr = addr;
-                slot = Slot::Name(buf);
+            if dma && info.chars && self.pf_first && slot == Slot::Free {
+                if suppressed {
+                    self.virtual_fetch = Some(Slot::Name(buf));
+                } else {
+                    self.pf_addr = addr;
+                    slot = Slot::Name(buf);
+                }
             }
             if usize::from(self.pending_n) < self.pending.len() {
                 self.pending[usize::from(self.pending_n)] = PendingFetch {
@@ -705,6 +717,39 @@ impl Antic {
             _ => 0,
         };
         width_edges(3).1 + h
+    }
+
+    /// A playfield fetch fell into a cycle where ANTIC holds no bus (the
+    /// cycles of `pf_suppressed`): it still latches the data lines, so the
+    /// byte the CPU moved in this cycle lands in the line buffer (Acid800
+    /// `antic_virtdma`). Call after the CPU's access.
+    pub fn bus_sample(&mut self, v: u8) {
+        match self.virtual_fetch.take() {
+            Some(Slot::Name(i)) => self.names[usize::from(i)] = v,
+            Some(Slot::Data(i)) => self.data[usize::from(i)] = v,
+            _ => {}
+        }
+    }
+
+    /// Whether this cycle's bus byte is wanted (see [`Antic::bus_sample`]).
+    pub fn wants_bus(&self) -> bool {
+        self.virtual_fetch.is_some()
+    }
+
+    /// The player/missile object whose latch GTIA loads from the data lines
+    /// in this cycle because ANTIC left its slot free on a line where it
+    /// could fetch: 4 missiles, 0-3 players. GTIA latches with or without
+    /// DMA, a cycle after the slot: Acid800 `gtia_phantomdma` wants the
+    /// opcode of the CPU's fetch in cycle 3 as player 0. The other objects'
+    /// cycles follow from that, no test covers them.
+    pub fn phantom_slot(&self) -> Option<u8> {
+        let which = match self.cycle {
+            1 => 4,
+            3..=6 => (self.cycle - 3) as u8,
+            _ => return None,
+        };
+        let slot = usize::from(self.cycle - 1);
+        (self.display_line() && self.slots[slot] == Slot::Free).then_some(which)
     }
 
     /// Run the DMA of the current cycle. Call before the CPU's access.

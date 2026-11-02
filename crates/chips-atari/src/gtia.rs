@@ -62,6 +62,11 @@ pub struct Gtia {
     pub sizem: u8,
     pub grafp: [u8; 4],
     pub grafm: u8,
+    /// This line's hires pixels decode as PF0-PF3: the "pseudo mode E" of
+    /// a GTIA mode switched off after cycle 15 (Acid800 `gtia_psuedomodee`,
+    /// which counts a cycle lower: a write in its cycle 14 leaves hires, one in 15 gives all four
+    /// playfield collisions).
+    hires_off: bool,
     pub colpm: [u8; 4],
     pub colpf: [u8; 4],
     pub colbk: u8,
@@ -133,6 +138,7 @@ impl Gtia {
             sizem: 0,
             grafp: [0; 4],
             grafm: 0,
+            hires_off: false,
             colpm: [0; 4],
             colpf: [0; 4],
             colbk: 0,
@@ -332,6 +338,11 @@ impl Gtia {
         if !(FIRST_LINE..VBLANK_LINE).contains(&line) {
             return;
         }
+        // A GTIA mode still on at the end of this cycle keeps the line out
+        // of hires decoding (see `hires_off`). The CPU's access came first.
+        if cycle == HIRES_LATCH_CYCLE {
+            self.hires_off = self.prior & 0xc0 != 0;
+        }
         let nibble = match pf {
             [Playfield::Hires(a), Playfield::Hires(b)] => (a << 2) | b,
             _ => 0,
@@ -366,6 +377,10 @@ impl Gtia {
                 let c = self.gtia_mode_colour(cc, gtia_mode, n);
                 [c, c]
             } else {
+                let p = match p {
+                    Playfield::Hires(n) if self.hires_off => Playfield::Pf(n),
+                    _ => p,
+                };
                 self.colour_clock(cc, p)
             };
             self.pixels[x] = a;
@@ -528,9 +543,13 @@ impl Gtia {
     }
 }
 
+/// Cycle at whose end the line's hires decoding is decided.
+const HIRES_LATCH_CYCLE: u16 = 15;
+
 const TAG: [u8; 4] = *b"GTIA";
-/// Version 2: mode 10 pixel delay, player shift registers.
-const VERSION: u16 = 2;
+/// Version 2: mode 10 pixel delay, player shift registers. Version 3:
+/// `hires_off`.
+const VERSION: u16 = 3;
 
 impl Savestate for Gtia {
     fn save(&self, w: &mut StateWriter) {
@@ -577,6 +596,7 @@ impl Savestate for Gtia {
                 w.raw(a);
             }
             w.u8(self.p_out);
+            w.bool(self.hires_off);
         });
     }
 
@@ -625,6 +645,9 @@ impl Savestate for Gtia {
                 c.raw_into(a)?;
             }
             n.p_out = c.u8()?;
+            if version >= 3 {
+                n.hires_off = c.bool()?;
+            }
         } else {
             n.prev_nibble = 0;
             n.hpos_eff = n.hposp;

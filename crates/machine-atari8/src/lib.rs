@@ -193,6 +193,10 @@ struct Io {
     gtia: Gtia,
     pokey: Pokey,
     pia: Pia,
+    /// The byte last on the data lines: what the CPU read or wrote.
+    /// ANTIC's and GTIA's latches take it when no DMA drives the bus
+    /// (Acid800 `antic_virtdma`, `gtia_phantomdma`).
+    bus: u8,
     /// PIA port A pins: joystick directions (0 = pressed).
     porta: u8,
     /// PIA port B input pins: joystick ports 3 and 4 on the 400/800
@@ -265,7 +269,7 @@ struct AtariBus<'a> {
 impl Bus for AtariBus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
         let a = addr as u16;
-        u32::from(match self.mem.area(a) {
+        let v = match self.mem.area(a) {
             Area::Io if a >> 8 == 0xd5 => {
                 // CCTL: some cartridges switch banks on reads.
                 if let Some(c) = &mut self.mem.cart {
@@ -275,7 +279,9 @@ impl Bus for AtariBus<'_> {
             }
             Area::Io => self.io.read(a),
             _ => self.mem.read_plain(a),
-        })
+        };
+        self.io.bus = v;
+        u32::from(v)
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
@@ -284,6 +290,7 @@ impl Bus for AtariBus<'_> {
 
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
         let a = addr as u16;
+        self.io.bus = v as u8;
         match self.mem.area(a) {
             Area::Io if a >> 8 == 0xd5 => {
                 if let Some(c) = &mut self.mem.cart {
@@ -549,6 +556,7 @@ impl Atari8 {
                 gtia,
                 pokey: Pokey::new(),
                 pia: Pia::new(),
+                bus: 0xff,
                 porta: 0xff,
                 portb_in: 0xff,
             },
@@ -646,6 +654,14 @@ impl Atari8 {
             self.cpu.tick(&mut hooked)
         };
         let entered = self.cpu.take_interrupt();
+        if self.io.antic.wants_bus() {
+            self.io.antic.bus_sample(self.io.bus);
+        }
+        if let Some(which) = self.io.antic.phantom_slot() {
+            let single = self.io.antic.dmactl & 0x10 != 0;
+            let line = self.io.antic.line();
+            self.io.gtia.dma(which, self.io.bus, line, single);
+        }
         // GTIA draws this cycle's two colour clocks.
         let (line, c) = (self.io.antic.line(), self.io.antic.cycle());
         let pf = [
@@ -1430,7 +1446,7 @@ impl Machine for Atari8 {
         }
         // Version 4: the model and PIA port B inputs; one port chunk per
         // joystick port (four on the 400/800).
-        w.chunk(*b"A8XL", 4, |w| {
+        w.chunk(*b"A8XL", 5, |w| {
             w.bool(self.field_done_pending);
             w.u64(self.option_until);
             w.bool(self.option_key);
@@ -1438,6 +1454,7 @@ impl Machine for Atari8 {
             self.audio.save(w);
             w.u8(self.model as u8);
             w.u8(self.io.portb_in);
+            w.u8(self.io.bus);
         });
         self.cpu.save(&mut w);
         self.mem.save(&mut w);
@@ -1483,7 +1500,7 @@ impl Machine for Atari8 {
             audio: self.audio,
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"A8XL", 4)?;
+        let (version, mut c) = r.chunk(*b"A8XL", 5)?;
         let field_done_pending = c.bool()?;
         let option_until = c.u64()?;
         let option_key = c.bool()?;
@@ -1496,6 +1513,9 @@ impl Machine for Atari8 {
             next.io.portb_in = c.u8()?;
         } else if self.model != Model::A800Xl {
             return Err(StateError::Invalid("model differs"));
+        }
+        if version >= 5 {
+            next.io.bus = c.u8()?;
         }
         next.cpu.load(&mut r)?;
         next.mem.load(&mut r)?;
