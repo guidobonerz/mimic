@@ -31,9 +31,9 @@ const MAX_FRAMES: u32 = 50 * 60 * 15;
 const ONLY_FOR_CRTC: [(&str, &str); 1] = [("crtc/crtc34st", "34")];
 /// `crtctest` writes &FF to every port: at &4000 that banks the 6128's RAM
 /// over the running program, so it needs a machine with 64 KB. Its I/O
-/// decode test alone takes about an emulated hour.
+/// decode test alone takes about an emulated hour; type 0 needs 324 000 fields.
 const ON_664: &str = "crtc/crtctest";
-const ON_664_MAX_FRAMES: u32 = 50 * 60 * 100;
+const ON_664_MAX_FRAMES: u32 = 50 * 60 * 150;
 /// Share of result lines that must pass, over the programs that finish.
 const GATE: f64 = 0.90;
 

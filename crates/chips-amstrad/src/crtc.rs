@@ -40,11 +40,21 @@
 //! N + ½ lines. With bits 1 and 0 set (interlace sync and video) the scan
 //! line counter steps by 2, from 0 or 1 by field. A row ends one short of
 //! R9 too, and with an odd number of lines per row the next row starts on
-//! the other parity, so rows of 5 and 4 lines alternate at R9 = 8. Types 0
-//! and 2 are not interlaced here.
+//! the other parity, so rows of 5 and 4 lines alternate at R9 = 8.
+//!
+//! Type 0 (same test, its table): only R8 = 3 changes anything. The counter
+//! steps by 2 until it reaches R9 and the next row starts on the other
+//! parity of the last value: 5 lines a row at R9 = 8, rows of 5 and 4 at
+//! R9 = 7. No field is half a line late. Type 2 is not interlaced here (the
+//! test's table for it is type 3's, its notes say type 2 hangs).
 //!
 //! In the vertical total adjust the row counter goes on every R9 + 1 lines
-//! and VSYNC can start there (`crtctest`, "minimum VADJ value").
+//! and VSYNC can start there (`crtctest`, "minimum VADJ value"); type 0
+//! counts once on entering it, so only R7 = R4 + 1 still starts one.
+//!
+//! Type 2 starts no VSYNC while HSYNC is still on in the line's last
+//! character (`crtctest`, "hsync length measure (type 2)": R2 + width must
+//! stay below R0 + 1).
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -158,13 +168,20 @@ impl Crtc {
     }
 
     fn video_interlaced(&self) -> bool {
-        self.interlaced() && self.regs[8] & 2 != 0
+        match self.kind {
+            CrtcType::T0 => self.regs[8] & 3 == 3,
+            _ => self.interlaced() && self.regs[8] & 2 != 0,
+        }
     }
 
     /// The scan line counter is at the row's last line.
     fn last_line(&self) -> bool {
         if self.video_interlaced() {
-            self.vlc >= self.regs[9].saturating_sub(1)
+            let last = match self.kind {
+                CrtcType::T0 => self.regs[9],
+                _ => self.regs[9].saturating_sub(1),
+            };
+            self.vlc >= last
         } else {
             self.vlc == self.regs[9]
         }
@@ -262,13 +279,14 @@ impl Crtc {
             hsync: self.hsync > 0,
             vsync: self.vsync > 0,
         };
-        if self.hsync > 0 {
+        let hsync_on = self.hsync > 0;
+        if hsync_on {
             self.hsync -= 1;
         }
         if self.hcc == self.regs[0] {
             self.hcc = 0;
             self.h_disp = true;
-            self.end_of_line();
+            self.end_of_line(hsync_on);
         } else {
             self.hcc = self.hcc.wrapping_add(1);
         }
@@ -298,7 +316,8 @@ impl Crtc {
         }
     }
 
-    fn end_of_line(&mut self) {
+    /// `hsync_on`: HSYNC was on in the last character.
+    fn end_of_line(&mut self, hsync_on: bool) {
         if self.vsync > 0 && !self.vsync_half {
             self.vsync -= 1;
         }
@@ -308,12 +327,14 @@ impl Crtc {
             self.vlc = (self.vlc + 1) & 0x1f;
             if self.adj >= self.regs[5] {
                 new_row = self.end_of_frame();
-            } else if self.adj.is_multiple_of(self.regs[9] + 1) {
+            } else if self.kind != CrtcType::T0 && self.adj.is_multiple_of(self.regs[9] + 1) {
                 self.vcc = (self.vcc + 1) & 0x7f;
                 new_row = true;
             }
         } else if self.last_line() {
-            self.vlc = if self.video_interlaced() {
+            self.vlc = if self.kind == CrtcType::T0 && self.video_interlaced() {
+                (self.vlc + 1) & 1
+            } else if self.video_interlaced() {
                 (self.vlc + 2).wrapping_sub(self.regs[9].wrapping_add(1)) & 1
             } else {
                 0
@@ -344,7 +365,13 @@ impl Crtc {
             self.v_disp = false;
             self.vblank = true;
         }
-        if new_row && self.vcc == self.regs[7] && self.vsync == 0 && !self.vsync_pending {
+        let held_off = self.kind == CrtcType::T2 && hsync_on;
+        if new_row
+            && self.vcc == self.regs[7]
+            && self.vsync == 0
+            && !self.vsync_pending
+            && !held_off
+        {
             if self.interlaced() && self.odd_field {
                 self.vsync_half = true;
                 self.vsync_pending = true;
@@ -574,6 +601,57 @@ mod tests {
             }
         }
         (64, chars / 64, disp, vsync_line)
+    }
+
+    /// R4, R9 for a frame of a known length, VSYNC at row 0.
+    fn periods(kind: CrtcType, r4: u8, r9: u8, r8: u8) -> Vec<u32> {
+        let mut c = cpc(kind);
+        set(&mut c, 7, 0);
+        set(&mut c, 4, r4);
+        set(&mut c, 9, r9);
+        set(&mut c, 8, r8);
+        vsync_periods(&mut c, 3)
+    }
+
+    #[test]
+    fn type_0_interlaces_only_with_both_r8_bits() {
+        // Lines from `crtctest`, "R8 - count lines", in half lines.
+        for r8 in [0, 1, 2] {
+            assert_eq!(periods(CrtcType::T0, 16, 8, r8)[2], 0x99 * 2, "R8 = {r8}");
+        }
+        assert_eq!(periods(CrtcType::T0, 16, 8, 3)[2], 0x55 * 2);
+        assert_eq!(periods(CrtcType::T0, 15, 8, 3)[2], 0x50 * 2);
+        assert_eq!(periods(CrtcType::T0, 16, 7, 3)[2], 0x4d * 2);
+        assert_eq!(periods(CrtcType::T0, 15, 7, 3)[2], 0x48 * 2);
+    }
+
+    #[test]
+    fn type_0_counts_one_row_in_the_vertical_adjust() {
+        let vsync_in_adjust = |kind, r7| {
+            let mut c = cpc(kind);
+            set(&mut c, 7, r7);
+            set(&mut c, 5, 31);
+            (0..3 * 64 * 400).any(|_| c.tick().vsync)
+        };
+        assert!(vsync_in_adjust(CrtcType::T0, 39));
+        assert!(!vsync_in_adjust(CrtcType::T0, 40));
+        assert!(vsync_in_adjust(CrtcType::T1, 40));
+        assert!(vsync_in_adjust(CrtcType::T2, 40));
+    }
+
+    #[test]
+    fn type_2_starts_no_vsync_with_hsync_on_at_the_line_end() {
+        let vsync = |r2| {
+            let mut c = cpc(CrtcType::T2);
+            set(&mut c, 3, 0x0e);
+            set(&mut c, 2, r2);
+            (0..3 * 64 * 400).any(|_| c.tick().vsync)
+        };
+        assert!(
+            vsync(64 - 14 - 1),
+            "ends in the line's last character but one"
+        );
+        assert!(!vsync(64 - 14), "still on in the last character");
     }
 
     #[test]
