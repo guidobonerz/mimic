@@ -63,6 +63,10 @@ pub fn key_for_char(c: char) -> Option<(MachineKey, Option<MachineKey>)> {
     if c.is_ascii_uppercase() {
         return find(c).map(|k| (k, Some(keys::CAPS_SHIFT)));
     }
+    // The cursor down key, for menus.
+    if c == '\u{2193}' {
+        return find('6').map(|k| (k, Some(keys::CAPS_SHIFT)));
+    }
     let base = match c {
         '"' => 'P',
         ',' => 'N',

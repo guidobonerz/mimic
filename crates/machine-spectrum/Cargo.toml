@@ -13,6 +13,7 @@ emu-core.workspace = true
 cpu-z80.workspace = true
 chips-sinclair.workspace = true
 chips-amstrad.workspace = true
+chips-acorn.workspace = true
 drives-other.workspace = true
 devices-input.workspace = true
 media.workspace = true

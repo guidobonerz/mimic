@@ -195,8 +195,8 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
         // disk images.
         "do" | "po" | "nib" | "woz" | "img" | "image" | "dc42" | "diskcopy42" | "hda" | "hdv"
         | "hfv" => Some(MediaKind::Disk),
-        // ZX Microdrive cartridges.
-        "mdr" => Some(MediaKind::Disk),
+        // ZX Microdrive cartridges, TR-DOS disks.
+        "mdr" | "trd" => Some(MediaKind::Disk),
         // ZX Spectrum snapshots.
         "prg" | "p00" | "t64" | "xex" | "com" | "exe" | "sna" | "z80" => Some(MediaKind::Program),
         // Binaries and Intel HEX for machines loaded straight into memory.

@@ -23,6 +23,9 @@
 //!   type LOAD "" (48K) or pick the menu's Tape Loader (128K, +2).
 //! - `multiface`: "on" plugs in a Multiface 128 (ROM role "mf128", 8 KB;
 //!   see [`memory`]); its red button is the panel's "MULTIFACE".
+//! - `beta`: "on" plugs in a Beta Disk interface with TR-DOS (ROM role
+//!   "trdos"; [`beta`]); TRD images go into its four drives; `autostart`
+//!   then enters TR-DOS and runs the disk's boot program.
 //! - `if1`: "on" plugs in an Interface 1 (ROM role "if1", 8 KB; [`if1`])
 //!   with `microdrives` drives (1–8, default 2): media slots
 //!   "microdrive 1" … with MDR cartridges.
@@ -58,6 +61,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod beta;
 pub mod gfx;
 pub mod if1;
 pub mod keyboard;
@@ -65,6 +69,7 @@ pub mod memory;
 pub mod snapshot;
 pub mod stub;
 
+use beta::BetaDisk;
 use chips_amstrad::ay::Ay;
 use chips_sinclair::spectrum::{self as ula, SpectrumUla, Timing};
 use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
@@ -99,6 +104,9 @@ pub const SLOT_TAPE: SlotId = SlotId(0);
 pub const SLOT_SNAPSHOT: SlotId = SlotId(1);
 /// Microdrive n (1–8) is slot `SLOT_MICRODRIVE + n − 1`.
 pub const SLOT_MICRODRIVE: u8 = 2;
+/// Beta Disk drive n (0–3) is slot `SLOT_BETA + n`.
+pub const SLOT_BETA: u8 = 10;
+const BETA_NAMES: [&str; beta::DRIVES] = ["TR-DOS A:", "TR-DOS B:", "TR-DOS C:", "TR-DOS D:"];
 const MICRODRIVE_NAMES: [&str; 8] = [
     "microdrive 1",
     "microdrive 2",
@@ -129,6 +137,9 @@ pub const HZ_128K: u32 = 3_546_900;
 /// ROM points of the tape trap: LD-BYTES and SA/LD-RET, and LD-BYTES'
 /// first bytes (INC D; EX AF,AF'; DEC D; DI) to recognise the ROM.
 pub const ROM_LD_BYTES: u16 = 0x0556;
+/// LD-BYTES past its set-up: loaders of their own in RAM jump in here
+/// (the 48K demo "For Peace in YU" does: JP $0562).
+const ROM_LD_BREAK: u16 = 0x0562;
 pub const ROM_SA_LD_RET: u16 = 0x053f;
 const LD_BYTES_CODE: [u8; 4] = [0x14, 0x08, 0x15, 0xf3];
 
@@ -245,6 +256,7 @@ struct Io<'a> {
     keys: &'a [u8; 8],
     ports: &'a mut Ports,
     if1: &'a mut Option<Interface1>,
+    beta: &'a mut Option<BetaDisk>,
 }
 
 /// The Z80's bus for one instruction.
@@ -295,6 +307,11 @@ impl SpecBus<'_> {
         let at = self.at;
         if let Some(v) = self.mem.mf_in(port) {
             return v;
+        }
+        if self.mem.beta_paged && BetaDisk::claims(port) {
+            if let Some(b) = self.io.beta.as_mut() {
+                return b.read(port);
+            }
         }
         if let (Some(if1), true) = (self.io.if1.as_mut(), Interface1::claims(port)) {
             return if1.read(port);
@@ -354,6 +371,11 @@ impl SpecBus<'_> {
     fn io_write(&mut self, port: u16, v: u8) {
         let at = self.at;
         self.mem.mf_out(port);
+        if self.mem.beta_paged && BetaDisk::claims(port) {
+            if let Some(b) = self.io.beta.as_mut() {
+                b.write(port, v);
+            }
+        }
         if let (Some(if1), true) = (self.io.if1.as_mut(), Interface1::claims(port)) {
             if1.write(port, v);
         }
@@ -528,9 +550,12 @@ pub struct Spectrum {
     ports: Ports,
     snap: SnapSlot,
     if1: Option<Interface1>,
+    beta: Option<BetaDisk>,
     field_done_pending: bool,
     /// `autostart=on` and not yet done.
     autostart: bool,
+    /// Autostart into TR-DOS: the next step and its frame.
+    beta_run: (u8, u64),
 }
 
 /// Frame by which the ROMs are ready for input.
@@ -619,6 +644,24 @@ impl Spectrum {
             },
         };
         let if1 = if1_rom.is_some().then(|| Interface1::new(microdrives));
+        let beta_rom = match option(config, "beta") {
+            None | Some("off") => None,
+            Some("on") => {
+                let r = config
+                    .roms
+                    .get("trdos")
+                    .ok_or_else(|| ConfigError::MissingRom("trdos".into()))?;
+                if r.len() != 0x4000 {
+                    return Err(ConfigError::Invalid(format!(
+                        "trdos ROM must be 16384 bytes, got {}",
+                        r.len()
+                    )));
+                }
+                Some(r.clone())
+            }
+            Some(v) => return Err(invalid("beta", v)),
+        };
+        let beta = beta_rom.is_some().then(BetaDisk::new);
         let count = if model.is_128() { 2 } else { 1 };
         let roms = match option(config, "roms") {
             Some("stub") => stub::roms(count),
@@ -661,6 +704,7 @@ impl Spectrum {
         let mut mem = Memory::new(roms, model.is_128());
         mem.mf_rom = multiface;
         mem.if1_rom = if1_rom;
+        mem.beta_rom = beta_rom;
         Ok(Self {
             model,
             cpu,
@@ -682,8 +726,10 @@ impl Spectrum {
             ports,
             snap: SnapSlot::default(),
             if1,
+            beta,
             field_done_pending: false,
             autostart,
+            beta_run: (0, 0),
         })
     }
 
@@ -711,15 +757,17 @@ impl Spectrum {
     }
 
     /// The ROM's LD-BYTES: copy the tape's next block (traps on) or press
-    /// PLAY.
+    /// PLAY; a jump past its set-up presses PLAY, as the trap could not
+    /// know the loader's own routine.
     fn trap(&mut self) {
-        if self.cpu.pc != ROM_LD_BYTES || !self.mem.basic_rom() {
+        let pc = self.cpu.pc;
+        if (pc != ROM_LD_BYTES && pc != ROM_LD_BREAK) || !self.mem.basic_rom() {
             return;
         }
         if (0..4).any(|i| self.mem.read(ROM_LD_BYTES + i) != LD_BYTES_CODE[usize::from(i)]) {
             return;
         }
-        if self.traps {
+        if self.traps && pc == ROM_LD_BYTES {
             if let Some(block) = self.tape.take_block() {
                 self.fast_load(&block);
                 return;
@@ -822,6 +870,7 @@ impl Spectrum {
                     keys: &self.keys,
                     ports: &mut self.ports,
                     if1: &mut self.if1,
+                    beta: &mut self.beta,
                 },
                 start,
                 frame_start: self.frame_start,
@@ -834,6 +883,9 @@ impl Spectrum {
         };
         let end = start + u64::from(t);
         self.sched.advance(u64::from(t));
+        if let Some(b) = &mut self.beta {
+            b.tick(t);
+        }
         let mut field = false;
         if end - self.frame_start >= frame_len {
             let frame_end = self.frame_start + frame_len;
@@ -925,7 +977,14 @@ impl Spectrum {
 
     /// `autostart=on`: start the tape's program once the ROM is up.
     fn autostart(&mut self) {
-        if !self.autostart || self.ula.frames < AUTOSTART_FRAME || !self.tape.has_tape() {
+        if !self.autostart || self.ula.frames < AUTOSTART_FRAME {
+            return;
+        }
+        if self.beta.as_ref().is_some_and(|b| b.inserted(0)) {
+            self.beta_autostart();
+            return;
+        }
+        if !self.tape.has_tape() {
             return;
         }
         self.autostart = false;
@@ -937,6 +996,36 @@ impl Spectrum {
 "
         };
         type_text(self, text);
+    }
+
+    /// Into TR-DOS as by hand, then RUN starts the disk's "boot". The 48K
+    /// BASIC would take RANDOMIZE USR 15616 by keywords, so it jumps; the
+    /// 128K goes through its menu and its typed BASIC.
+    fn beta_autostart(&mut self) {
+        let (stage, at) = self.beta_run;
+        if self.ula.frames < at {
+            return;
+        }
+        let now = self.ula.frames;
+        self.beta_run = match (stage, self.model.is_128()) {
+            (0, false) => {
+                self.cpu.pc = 0x3d00;
+                (2, now + 100)
+            }
+            (0, true) => {
+                type_text(self, "\u{2193}\n");
+                (1, now + 60)
+            }
+            (1, _) => {
+                type_text(self, "randomize usr 15616\n");
+                (2, now + 400)
+            }
+            _ => {
+                type_text(self, "r\n");
+                self.autostart = false;
+                (0, 0)
+            }
+        };
     }
 
     fn take_snapshot(&mut self) {
@@ -1004,6 +1093,9 @@ impl Machine for Spectrum {
         self.ula.reset();
         if let Some(i) = &mut self.if1 {
             i.reset();
+        }
+        if let Some(b) = &mut self.beta {
+            b.reset();
         }
         if let Some(ay) = &mut self.ay {
             ay.reset();
@@ -1201,6 +1293,14 @@ impl Machine for Spectrum {
             },
         ];
         slots.extend(drives);
+        if let Some(b) = &self.beta {
+            slots.extend((0..beta::DRIVES).map(|n| MediaSlotInfo {
+                id: SlotId(SLOT_BETA + n as u8),
+                name: BETA_NAMES[n],
+                kind: MediaKind::Disk,
+                inserted: b.inserted(n),
+            }));
+        }
         slots
     }
 
@@ -1208,6 +1308,15 @@ impl Machine for Spectrum {
         match slot {
             SLOT_TAPE => Some(&mut self.tape as &mut dyn MediaSlot),
             SLOT_SNAPSHOT => Some(&mut self.snap as &mut dyn MediaSlot),
+            SlotId(n) if n >= SLOT_BETA => {
+                let b = self.beta.as_mut()?;
+                let drive = usize::from(n - SLOT_BETA);
+                if drive >= beta::DRIVES {
+                    return None;
+                }
+                b.selected = drive;
+                Some(b as &mut dyn MediaSlot)
+            }
             SlotId(n) if n >= SLOT_MICRODRIVE => self
                 .if1
                 .as_mut()?
@@ -1244,6 +1353,10 @@ impl Machine for Spectrum {
         });
         if let Some(i) = &self.if1 {
             i.save(&mut w);
+        }
+        if let Some(b) = &self.beta {
+            w.u8(u8::from(self.mem.beta_paged));
+            b.save(&mut w);
         }
         w.into_bytes()
     }
@@ -1294,6 +1407,11 @@ impl Machine for Spectrum {
         if let Some(i) = &self.if1 {
             Interface1::new(i.drives.len()).load(&mut r)?;
         }
+        let beta_at = s.len() - r.remaining();
+        if self.beta.is_some() {
+            r.u8()?;
+            BetaDisk::new().load(&mut r)?;
+        }
         let backups: Vec<Option<Vec<u8>>> = self
             .ports
             .iter()
@@ -1315,8 +1433,15 @@ impl Machine for Spectrum {
         if let Some(i) = &mut self.if1 {
             i.load(&mut StateReader::new(&s[if1_at..]))?;
         }
+        let mut beta_paged = false;
+        if let Some(b) = &mut self.beta {
+            let mut r = StateReader::new(&s[beta_at..]);
+            beta_paged = r.u8()? != 0;
+            b.load(&mut r)?;
+        }
         self.cpu = cpu;
         self.mem = mem;
+        self.mem.beta_paged = beta_paged;
         self.ula = ula;
         self.ay = ay;
         self.sched = sched;

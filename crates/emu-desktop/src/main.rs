@@ -147,8 +147,8 @@ usage: mimic-desktop [options]
                         ./printer): print-001.prn, print-001-1.png …
   --host-printer NAME   also send each finished page to this printer of
                         the host; default = the default printer
-  --no-panel            start with the console panel hidden (Ctrl+P)
-  --media-panel         start with the media side panel open (Ctrl+M)
+  --no-panel            start with the console panel closed (Shift+Alt+Left)
+  --media-panel         start with the media side panel open (Shift+Alt+Right)
   --joykeys KEYS        keys that play the joystick: cursor (cursor keys,
                         Space fires; default on the Atari 2600), numpad
                         (8/2/4/6, 0 or right Ctrl fire; default elsewhere)
@@ -180,12 +180,14 @@ Ctrl+R (held) runs the machine backwards at twice real speed through the
 last frames kept in memory (--rewind-mb); on release it runs on from there.
 Disks: Ctrl+D puts the next disk of the --disk list into the first drive;
 dropping an image file onto the window inserts it there.
-Ctrl+M or a click on the handle at the right edge opens the media panel:
+Shift+Alt+Right or a click on the handle at the right edge opens the media panel:
 every drive, datasette and cartridge slot with its image, one button that
 mounts (green, file dialog) or ejects (red), and Save. Writes stay in memory until Save puts
 them into the image file; without it they end with the program.
-Ctrl+P shows or hides the console panel: the machine's buttons and
-switches (power, reset, Atari console switches, RESTORE …); click a button
+The Ctrl hotkeys take the left Ctrl key; the right Ctrl and AltGr reach the
+machine (Spectrum: SYMBOL SHIFT, so AltGr+P types \").
+Shift+Alt+Left or a click on the handle at the left edge opens or closes
+the console panel: the machine's buttons and switches one under the other (power, reset, Atari console switches, RESTORE …); click a button
 (held while the mouse button is down) or a switch position. Its PAUSE
 button stops the whole machine and lets it run again (lit while stopped,
 also by a debugger; the title bar shows where). Its JOY KEYS
@@ -675,18 +677,26 @@ struct App {
     mouse_captured: bool,
     /// Host mouse buttons while captured (bit 0 left, bit 1 right).
     mouse_buttons: u8,
-    /// A control key is down (Ctrl+Space = status footer).
+    /// The left Ctrl key is down without AltGr: the emulator's hotkeys
+    /// (Ctrl+Space = status footer, Ctrl+D, Ctrl+R …). The right Ctrl
+    /// and AltGr (which Windows sends with a left Ctrl of its own) stay
+    /// keys of the machine, e.g. the Spectrum's SYMBOL SHIFT.
     ctrl: bool,
+    /// The left Ctrl key is down.
+    ctrl_left: bool,
+    /// AltGr (right Alt) is down.
+    alt_gr: bool,
+    /// The left Alt key is down (Shift+Alt+← / → open and close the panels).
+    alt_left: bool,
     /// The Space of a Ctrl+Space is down; its release is not sent either.
     swallow_space: bool,
     footer_on: bool,
-    /// The P of a Ctrl+P is down; its release is not sent either.
-    swallow_p: bool,
+    /// The arrow of a Shift+Alt+← / → is down; its release is not sent
+    /// either.
+    swallow_arrow: bool,
     swallow_i: bool,
     /// The D of a Ctrl+D is down; its release is not sent either.
     swallow_d: bool,
-    /// The M of a Ctrl+M is down; its release is not sent either.
-    swallow_m: bool,
     /// The media side panel is open.
     side_open: bool,
     /// Its clickable areas and left edge (window pixels); width 0: none.
@@ -700,13 +710,21 @@ struct App {
     side_shown: Vec<u8>,
     /// The R of a Ctrl+R is held (rewinding); its release is not sent either.
     swallow_r: bool,
+    /// The console panel at the left edge is open.
     panel_on: bool,
-    /// The panel's clickable areas, its top and row height (window
-    /// pixels) and number of rows.
+    /// Its clickable areas (rows as shown), row height, width (0: not
+    /// drawn yet) and where its handle starts (window pixels).
     panel_hits: Vec<panel::Hit>,
-    panel_top: f64,
     panel_row: f64,
-    panel_rows: usize,
+    panel_width: u32,
+    panel_handle_x0: f64,
+    /// Lines scrolled off its top, and how many can be.
+    panel_scroll: usize,
+    panel_max_scroll: usize,
+    /// The picture last sent, to send only a changed one.
+    panel_shown: Vec<u8>,
+    /// The top of the strip under the picture (the footer), window pixels.
+    strip_top: f64,
     /// The panel button held with the mouse.
     panel_held: Option<u16>,
     /// Host pointer in window pixels, while over the window.
@@ -803,13 +821,19 @@ impl App {
             }
             None => (768, 576),
         };
-        // The side panel takes its width next to the picture.
+        // The side panels take their width next to the picture.
         let mut size = size;
+        let scale = event_loop
+            .primary_monitor()
+            .map_or(1.0, |m| m.scale_factor());
+        let font = footer::font_size(scale);
+        let left = if self.panel_on {
+            panel::open_width(font)
+        } else {
+            panel::handle_width(font)
+        };
+        size.0 += (f64::from(left) / scale).round() as u32;
         if self.shared.has_media.load(Ordering::Relaxed) {
-            let scale = event_loop
-                .primary_monitor()
-                .map_or(1.0, |m| m.scale_factor());
-            let font = footer::font_size(scale);
             let width = if self.side_open {
                 side::open_width(font)
             } else {
@@ -899,6 +923,9 @@ impl App {
         self.footer_on = st.footer;
         self.panel_on = st.panel;
         self.side_open = st.media_panel;
+        // A new render thread has none of the panels' pictures yet.
+        self.panel_shown.clear();
+        self.side_shown.clear();
         self.running = Some(st.running);
         self.picker = None;
         let size = self.window_size(event_loop);
@@ -938,16 +965,54 @@ impl App {
         self.picker.as_ref()?.row_at(fy)
     }
 
-    /// The panel control under the pointer, if the panel is shown.
+    /// Is the pointer over the console panel (handle included)?
+    fn over_panel_area(&self) -> bool {
+        self.panel_width > 0
+            && self
+                .cursor
+                .is_some_and(|(x, y)| x < f64::from(self.panel_width) && y < self.strip_top)
+    }
+
+    /// Is the pointer over the console panel's handle?
+    fn over_panel_handle(&self) -> bool {
+        self.over_panel_area() && self.cursor.is_some_and(|(x, _)| x >= self.panel_handle_x0)
+    }
+
+    /// The panel control under the pointer, if the panel is open.
     fn over_panel(&self) -> Option<panel::Hit> {
         let (x, y) = self.cursor?;
-        if !self.panel_on || y < self.panel_top {
+        if !self.panel_on || !self.over_panel_area() {
             return None;
         }
-        let row = ((y - self.panel_top) / self.panel_row) as usize;
-        (row < self.panel_rows)
-            .then(|| panel::hit(&self.panel_hits, row, x as usize))
-            .flatten()
+        let row = (y / self.panel_row) as usize;
+        panel::hit(&self.panel_hits, row, x as usize)
+    }
+
+    /// Open or close the console panel; the window grows to the left by
+    /// what the panel takes, so the picture keeps its size and its place
+    /// on the screen.
+    fn toggle_panel(&mut self) {
+        self.panel_on = !self.panel_on;
+        self.shared.panel_on.store(self.panel_on, Ordering::Relaxed);
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let font = footer::font_size(window.scale_factor());
+        let extra = panel::open_width(font) - panel::handle_width(font);
+        let size = window.inner_size();
+        let (width, shift) = if self.panel_on {
+            (size.width + extra, -(extra as i32))
+        } else {
+            let width = size.width.saturating_sub(extra);
+            (width, (size.width - width) as i32)
+        };
+        // A maximised or full-screen window keeps its place.
+        if !window.is_maximized() && window.fullscreen().is_none() {
+            if let Ok(pos) = window.outer_position() {
+                window.set_outer_position(winit::dpi::PhysicalPosition::new(pos.x + shift, pos.y));
+            }
+        }
+        let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(width, size.height));
     }
 
     /// Is the pointer over the footer's speed slider?
@@ -1081,7 +1146,7 @@ impl App {
         self.side_width > 0
             && self
                 .cursor
-                .is_some_and(|(x, y)| x >= self.side_left && y < self.panel_top)
+                .is_some_and(|(x, y)| x >= self.side_left && y < self.strip_top)
     }
 
     /// Open or close the side panel; the window grows by what the panel
@@ -1190,6 +1255,60 @@ impl App {
         }
     }
 
+    /// Draw the console panel at the left edge for the render thread,
+    /// `rows` above the window's bottom: the machine's controls, then the
+    /// frontend's own (PAUSE first) and the cheats.
+    fn update_left(&mut self, window: &Window, rows: u32) {
+        let Some(render) = &self.render else { return };
+        let mut controls = vec![panel::pause_control(
+            self.shared.paused.load(Ordering::Relaxed),
+        )];
+        if let Ok(c) = self.shared.controls.lock() {
+            controls.extend(c.iter().cloned());
+        }
+        controls.push(panel::joy_keys_control(
+            self.shared.joy_keys.load(Ordering::Relaxed),
+        ));
+        let ports = self.shared.joy_ports.load(Ordering::Relaxed);
+        if ports > 1 {
+            controls.push(panel::joy_port_control(
+                ports,
+                self.shared.joy_port.load(Ordering::Relaxed),
+            ));
+        }
+        if self.has_pad {
+            controls.push(panel::pad_fire_control(
+                self.shared.pad_fire.load(Ordering::Relaxed),
+            ));
+        }
+        controls.push(panel::save_mapping_control());
+        let mut items: Vec<panel::Item> = controls.iter().map(panel::Item::from).collect();
+        if let Ok(cheats) = self.shared.cheats.lock() {
+            items.extend(cheats.iter().enumerate().map(|(i, c)| panel::Item {
+                id: panel::CHEAT_BASE + i as u16,
+                name: c.label.clone(),
+                positions: vec!["OFF".into(), "ON".into()],
+                value: u8::from(c.enabled),
+            }));
+        }
+        let font = footer::font_size(window.scale_factor());
+        let height = window.inner_size().height.saturating_sub(rows).max(1);
+        let p = panel::render_side(&items, self.panel_on, self.panel_scroll, height, font);
+        self.panel_hits = p.hits;
+        self.panel_max_scroll = p.max_scroll;
+        self.panel_scroll = self.panel_scroll.min(p.max_scroll);
+        self.panel_width = p.width;
+        self.panel_handle_x0 = p.handle_x0 as f64;
+        if p.rgba != self.panel_shown {
+            self.panel_shown.clone_from(&p.rgba);
+            render.set_left(Some(Strip {
+                rgba: p.rgba,
+                width: p.width,
+                rows: p.height,
+            }));
+        }
+    }
+
     /// Compose the panel and footer rows under the picture for the render
     /// thread and refresh the title bar.
     fn update_strip(&mut self) {
@@ -1200,47 +1319,9 @@ impl App {
         let size = footer::font_size(window.scale_factor());
         let width = window.inner_size().width.max(1);
         let row = footer::height(size);
-        // The strip under the picture: the panel, then the footer.
+        // The strip under the picture: the footer.
         let mut strip = Vec::new();
         let mut rows = 0;
-        if self.panel_on {
-            let mut controls = vec![panel::pause_control(
-                self.shared.paused.load(Ordering::Relaxed),
-            )];
-            if let Ok(c) = self.shared.controls.lock() {
-                controls.extend(c.iter().cloned());
-            }
-            controls.push(panel::joy_keys_control(
-                self.shared.joy_keys.load(Ordering::Relaxed),
-            ));
-            let ports = self.shared.joy_ports.load(Ordering::Relaxed);
-            if ports > 1 {
-                controls.push(panel::joy_port_control(
-                    ports,
-                    self.shared.joy_port.load(Ordering::Relaxed),
-                ));
-            }
-            if self.has_pad {
-                controls.push(panel::pad_fire_control(
-                    self.shared.pad_fire.load(Ordering::Relaxed),
-                ));
-            }
-            controls.push(panel::save_mapping_control());
-            let mut items: Vec<panel::Item> = controls.iter().map(panel::Item::from).collect();
-            if let Ok(cheats) = self.shared.cheats.lock() {
-                items.extend(cheats.iter().enumerate().map(|(i, c)| panel::Item {
-                    id: panel::CHEAT_BASE + i as u16,
-                    name: c.label.clone(),
-                    positions: vec!["OFF".into(), "ON".into()],
-                    value: u8::from(c.enabled),
-                }));
-            }
-            let (rgba, hits, n) = panel::render_items(&items, width, size);
-            strip.extend_from_slice(&rgba);
-            self.panel_hits = hits;
-            self.panel_rows = n;
-            rows += row * n as u32;
-        }
         if self.footer_on {
             let mouse = if self.mouse_captured {
                 footer::Mouse::Captured(self.mouse_sum.0, self.mouse_sum.1)
@@ -1279,12 +1360,10 @@ impl App {
             }
         }
         let window_height = window.inner_size().height;
-        self.panel_top = f64::from(window_height.saturating_sub(rows));
+        self.strip_top = f64::from(window_height.saturating_sub(rows));
         self.panel_row = f64::from(row);
         self.footer_top = f64::from(window_height.saturating_sub(row));
-        if !self.panel_on {
-            self.panel_rows = 0;
-        }
+        self.update_left(&window, rows);
         self.update_side(&window, rows);
         if let (Some(w), Ok(status)) = (&self.window, self.shared.status.lock()) {
             let title = match status.as_ref() {
@@ -1438,6 +1517,17 @@ impl ApplicationHandler for App {
                     .saturating_add_signed(down)
                     .min(self.side_max_scroll);
             }
+            WindowEvent::MouseWheel { delta, .. } if self.over_panel_area() => {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => f64::from(y),
+                    MouseScrollDelta::PixelDelta(p) => p.y / 20.0,
+                };
+                let down = (-lines * 2.0).round() as isize;
+                self.panel_scroll = self
+                    .panel_scroll
+                    .saturating_add_signed(down)
+                    .min(self.panel_max_scroll);
+            }
             // The footer's snapshot button: save the picture on a click.
             WindowEvent::MouseInput {
                 state,
@@ -1465,11 +1555,11 @@ impl ApplicationHandler for App {
                 state,
                 button: MouseButton::Left,
                 ..
-            } if !self.mouse_captured
-                && (self.panel_held.is_some() || self.over_panel().is_some()) =>
-            {
+            } if !self.mouse_captured && (self.panel_held.is_some() || self.over_panel_area()) => {
                 if state == ElementState::Pressed {
-                    if let Some(h) = self.over_panel() {
+                    if self.over_panel_handle() {
+                        self.toggle_panel();
+                    } else if let Some(h) = self.over_panel() {
                         if h.position.is_none() {
                             self.panel_held = Some(h.id);
                         }
@@ -1510,7 +1600,16 @@ impl ApplicationHandler for App {
                     _ => {}
                 }
             }
-            WindowEvent::Focused(false) if self.mouse_captured => self.capture_mouse(false),
+            // Keys released in another window (Alt+Tab) never arrive here.
+            WindowEvent::Focused(false) => {
+                self.alt_left = false;
+                self.alt_gr = false;
+                self.ctrl_left = false;
+                self.ctrl = false;
+                if self.mouse_captured {
+                    self.capture_mouse(false);
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = Some((position.x, position.y));
                 if self.speed_drag {
@@ -1562,20 +1661,26 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                // Ctrl+P shows or hides the console panel.
-                if event.physical_key == PhysicalKey::Code(KeyCode::KeyP)
-                    && (self.ctrl || self.swallow_p)
+                // Shift+Alt+← opens or closes the console panel at the left,
+                // Shift+Alt+→ the media panel at the right.
+                if let PhysicalKey::Code(arrow @ (KeyCode::ArrowLeft | KeyCode::ArrowRight)) =
+                    event.physical_key
                 {
-                    if event.state == ElementState::Pressed {
-                        if !event.repeat {
-                            self.panel_on = !self.panel_on;
-                            self.shared.panel_on.store(self.panel_on, Ordering::Relaxed);
+                    if (self.shift && self.alt_left) || self.swallow_arrow {
+                        if event.state == ElementState::Pressed {
+                            if !event.repeat {
+                                if arrow == KeyCode::ArrowLeft {
+                                    self.toggle_panel();
+                                } else if self.side_width > 0 {
+                                    self.toggle_side();
+                                }
+                            }
+                            self.swallow_arrow = true;
+                        } else {
+                            self.swallow_arrow = false;
                         }
-                        self.swallow_p = true;
-                    } else {
-                        self.swallow_p = false;
+                        return;
                     }
-                    return;
                 }
                 // Ctrl+I switches between weave and bob deinterlacing.
                 if event.physical_key == PhysicalKey::Code(KeyCode::KeyI)
@@ -1610,20 +1715,6 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                // Ctrl+M opens or closes the media side panel.
-                if event.physical_key == PhysicalKey::Code(KeyCode::KeyM)
-                    && (self.ctrl || self.swallow_m)
-                {
-                    if event.state == ElementState::Pressed {
-                        if !event.repeat && self.side_width > 0 {
-                            self.toggle_side();
-                        }
-                        self.swallow_m = true;
-                    } else {
-                        self.swallow_m = false;
-                    }
-                    return;
-                }
                 // Ctrl+R held rewinds.
                 if event.physical_key == PhysicalKey::Code(KeyCode::KeyR)
                     && (self.ctrl || self.swallow_r)
@@ -1633,11 +1724,19 @@ impl ApplicationHandler for App {
                     self.shared.rewinding.store(down, Ordering::Relaxed);
                     return;
                 }
-                if let PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) =
-                    event.physical_key
-                {
-                    self.ctrl = event.state == ElementState::Pressed;
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::ControlLeft) => {
+                        self.ctrl_left = event.state == ElementState::Pressed;
+                    }
+                    PhysicalKey::Code(KeyCode::AltRight) => {
+                        self.alt_gr = event.state == ElementState::Pressed;
+                    }
+                    PhysicalKey::Code(KeyCode::AltLeft) => {
+                        self.alt_left = event.state == ElementState::Pressed;
+                    }
+                    _ => {}
                 }
+                self.ctrl = self.ctrl_left && !self.alt_gr;
                 // F9–F11 operate the datasette.
                 let tape_key = match event.physical_key {
                     PhysicalKey::Code(KeyCode::F9) if self.shift => Some(TapeKey::Record),
@@ -2069,12 +2168,14 @@ fn run() -> Result<(), String> {
         mouse_captured: false,
         mouse_buttons: 0,
         ctrl: false,
+        ctrl_left: false,
+        alt_gr: false,
         swallow_space: false,
         footer_on: st.footer,
-        swallow_p: false,
+        alt_left: false,
+        swallow_arrow: false,
         swallow_i: false,
         swallow_d: false,
-        swallow_m: false,
         side_open: st.media_panel,
         side_hits: Vec::new(),
         side_left: 0.0,
@@ -2085,9 +2186,13 @@ fn run() -> Result<(), String> {
         swallow_r: false,
         panel_on: st.panel,
         panel_hits: Vec::new(),
-        panel_top: 0.0,
         panel_row: 1.0,
-        panel_rows: 0,
+        panel_width: 0,
+        panel_handle_x0: 0.0,
+        panel_scroll: 0,
+        panel_max_scroll: 0,
+        panel_shown: Vec::new(),
+        strip_top: 0.0,
         panel_held: None,
         cursor: None,
         mouse_sum: (0, 0),

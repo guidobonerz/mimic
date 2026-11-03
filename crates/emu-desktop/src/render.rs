@@ -44,6 +44,8 @@ struct Commands {
     strip: Option<Option<Strip>>,
     /// The same for the side panel (`rows` is its height).
     side: Option<Option<Strip>>,
+    /// The same for the console panel at the left edge.
+    left: Option<Option<Strip>>,
 }
 
 struct Inner {
@@ -110,6 +112,11 @@ impl Renderer {
     /// The side panel, or `None` for none.
     pub fn set_side(&self, side: Option<Strip>) {
         self.command(|c| c.side = Some(side));
+    }
+
+    /// The console panel at the left edge, or `None` for none.
+    pub fn set_left(&self, left: Option<Strip>) {
+        self.command(|c| c.left = Some(left));
     }
 
     /// The strip under the picture, or `None` for none.
@@ -216,6 +223,9 @@ fn apply_commands(gfx: &mut Gfx, inner: &Inner, before_acquire: bool) {
     }
     if let Some(side) = c.side.take() {
         gfx.set_side(side.as_ref().map(|s| (s.rgba.as_slice(), s.width, s.rows)));
+    }
+    if let Some(left) = c.left.take() {
+        gfx.set_left(left.as_ref().map(|s| (s.rgba.as_slice(), s.width, s.rows)));
     }
 }
 

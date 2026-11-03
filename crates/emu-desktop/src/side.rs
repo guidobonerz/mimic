@@ -1,4 +1,4 @@
-//! Media side panel (Ctrl+M or a click on its handle): the machine's disk
+//! Media side panel (Shift+Alt+→ or a click on its handle): the machine's disk
 //! drives, datasette and cartridge slot at the window's right edge, each
 //! with its state, its image, one button that mounts an empty slot (green)
 //! or ejects a full one (red), and one to save.

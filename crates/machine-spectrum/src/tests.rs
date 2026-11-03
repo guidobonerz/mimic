@@ -242,6 +242,58 @@ fn sna_snapshot_loads_at_the_next_instruction() {
 }
 
 #[test]
+fn the_beta_disk_pages_at_3d00_and_survives_a_savestate() {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("beta".into(), "on".into());
+    config.model = Some("48k".into());
+    config.roms.insert("trdos".into(), vec![0; 0x4000]);
+    let mut m = Spectrum::new(&config).unwrap();
+    let mut disk = vec![0u8; 0x1000];
+    disk[0x8e3] = 0x16;
+    m.media_slot(SlotId(SLOT_BETA))
+        .unwrap()
+        .insert(media(MediaKind::Disk, disk))
+        .unwrap();
+    assert!(m
+        .media_slots()
+        .iter()
+        .any(|s| s.name == "TR-DOS A:" && s.inserted));
+    m.cpu.pc = 0x3d00;
+    m.step_cycle();
+    assert!(m.mem.beta_paged, "paged in at $3D00");
+    let state = m.save_state();
+    m.cpu.pc = 0x8000;
+    m.step_cycle();
+    assert!(!m.mem.beta_paged, "paged out at $8000");
+    m.load_state(&state).unwrap();
+    assert!(m.mem.beta_paged);
+}
+
+#[test]
+fn a_jump_into_ld_bytes_presses_play() {
+    let mut m = stub("48k");
+    m.mem.roms[0][usize::from(ROM_LD_BYTES)..usize::from(ROM_LD_BYTES) + 4]
+        .copy_from_slice(&LD_BYTES_CODE);
+    let data = [0xffu8, 1];
+    let mut tap = vec![3, 0];
+    tap.extend_from_slice(&data);
+    tap.push(data[0] ^ data[1]);
+    m.media_slot(SLOT_TAPE)
+        .unwrap()
+        .insert(media(MediaKind::Tape, tap))
+        .unwrap();
+    m.mem.write(0x8000, 0xc3);
+    m.mem.write(0x8001, 0x62);
+    m.mem.write(0x8002, 0x05);
+    m.cpu.pc = 0x8000;
+    assert!(!m.tape.playing());
+    m.step_cycle(); // JP
+    m.step_cycle(); // the instruction at $0562
+    assert!(m.tape.playing());
+}
+
+#[test]
 fn the_tape_trap_copies_a_block() {
     let mut m = stub("48k");
     // The ROM's LD-BYTES entry and a RET at SA/LD-RET.

@@ -416,7 +416,7 @@ table(["Option", "Meaning"], [
     ["`--joykeys cursor|numpad|off`", "which keys play the joystick"],
     ["`--joyport N`", "which joystick port the keys and the gamepad play (1-based)"],
     ["`--footer`", "start with the status footer shown"],
-    ["`--no-panel`", "start with the console panel hidden"],
+    ["`--no-panel`", "start with the console panel at the left closed"],
     ["`--rewind-mb N`", "memory for rewinding with Ctrl+R (default 128 MB; 0 switches it off)"],
     ["`--cheats DIR`", "cheat database: `DIR/<machine>/<crc32>.toml` applies to the images you insert"],
     ["`--cheat FILE`", "a cheat file: `.toml`, a POKE list (`.pokes`), VICE monitor commands "
@@ -435,9 +435,12 @@ table(["Option", "Meaning"], [
 ], [0.30, 0.70])
 
 h2("Hotkeys")
+p("""The Ctrl hotkeys take the left Ctrl key. The right Ctrl and AltGr
+reach the machine, so a Ctrl or SYMBOL SHIFT on the emulated keyboard
+works with any letter.""")
 table(["Key", "Action"], [
-    ["Ctrl+P", "show or hide the console panel"],
-    ["Ctrl+M", "open or close the media panel: mount, eject and save disks, tapes and cartridges"],
+    ["Shift+Alt+Left", "open or close the console panel at the left edge"],
+    ["Shift+Alt+Right", "open or close the media panel at the right edge: mount, eject and save disks, tapes and cartridges"],
     ["Ctrl+Space", "show or hide the status footer"],
     ["Ctrl+D", "put the next disk of the `--disk` list into the first drive"],
     ["Ctrl+I", "Amiga: switch the deinterlacing between weave and bob"],
@@ -452,13 +455,14 @@ p("Dropping an image file onto the window inserts it into the first drive "
   "(disks) or the cartridge slot (`.vec`, `.crt`, `.car`, `.a26`).")
 
 h2("The console panel")
-p("""Below the picture, a bar shows the buttons and switches of the machine's
-case: POWER and RESET, the Atari 2600 console switches, START/SELECT/OPTION
+p("""At the left of the picture, a panel shows the buttons and switches of
+the machine's case one under the other (Shift+Alt+Left or a click on its
+handle opens and closes it): POWER and RESET, the Atari 2600 console switches, START/SELECT/OPTION
 of the 800XL, RESTORE of the C64 and VIC-20, 40/80 and CAPS LOCK of the
 C128, and so on. A button is pressed for as long as you hold the mouse
 button on it; clicking a switch position moves the switch.""")
 bullets(
-    "**PAUSE** (far left) halts the whole machine and lets it run again. It is "
+    "**PAUSE** (at the top) halts the whole machine and lets it run again. It is "
     "lit while the machine stands — also when a debugger halted it — and the "
     "title bar shows where.",
     "**JOY KEYS** chooses the keys that play the joystick: CURSOR (cursor keys, "
@@ -739,8 +743,9 @@ menu's Tape Loader), `joystick=kempston|sinclair1|sinclair2|cursor|none`,
 `microdrives=1..8`, `roms=stub`.""")
 p("""Tapes are TAP or TZX files (`--tape`); `LOAD ""` presses PLAY, and
 the tape stops at TZX "stop" blocks. Snapshots (SNA, Z80) go in with
-`--prg` and take over at once. Keys: Shift = CAPS SHIFT, Ctrl or AltGr =
-SYMBOL SHIFT, Backspace = DELETE, the cursor keys = CAPS SHIFT + 5–8,
+`--prg` and take over at once. Keys: Shift = CAPS SHIFT, right Ctrl or
+AltGr = SYMBOL SHIFT (the left Ctrl too, but Ctrl+D, I, R and Space
+are hotkeys with it; `"` is AltGr+P), Backspace = DELETE, the cursor keys = CAPS SHIFT + 5–8,
 Escape = BREAK, `.` and `,` as on the keys. The Multiface 128's red
 button is the panel's MULTIFACE; the Interface 1's Microdrives take MDR
 cartridges (`--disk`, `FORMAT "m";1;"name"`, `SAVE *"m";1;"file"`,

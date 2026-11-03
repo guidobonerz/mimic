@@ -43,6 +43,8 @@ pub struct Floppy {
     pub tracks: u32,
     pub sectors: u32,
     pub sector_size: u32,
+    /// The first sector's number (ADFS 0, TRD 1).
+    pub first_sector: u32,
     pub write_protected: bool,
     pub dirty: bool,
 }
@@ -65,6 +67,7 @@ impl Floppy {
             tracks,
             sectors,
             sector_size,
+            first_sector: 0,
             write_protected: false,
             dirty: false,
         })
@@ -72,6 +75,7 @@ impl Floppy {
 
     /// Byte offset of a sector, if it exists.
     fn offset(&self, track: u32, side: u32, sector: u32) -> Option<usize> {
+        let sector = sector.checked_sub(self.first_sector)?;
         if track >= self.tracks || side >= self.sides || sector >= self.sectors {
             return None;
         }
@@ -121,6 +125,10 @@ pub struct Wd1772 {
     /// The last command was type I: bit 1 of the status shows the index.
     type_one: bool,
     index: bool,
+    /// A WD1793: status bit 7 is Not Ready instead of Motor On.
+    wd1793: bool,
+    /// The selected drive holds a disc (WD1793, set by the board).
+    pub ready: bool,
 }
 
 impl Default for Wd1772 {
@@ -152,15 +160,33 @@ impl Wd1772 {
             idle_revolutions: 0,
             type_one: true,
             index: false,
+            wd1793: false,
+            ready: false,
+        }
+    }
+
+    /// The same controller as a WD1793.
+    pub fn new_1793() -> Self {
+        Self {
+            wd1793: true,
+            ..Self::new()
         }
     }
 
     pub fn reset(&mut self) {
         let (head, drive, side) = (self.head, self.drive, self.side);
+        let (wd1793, ready) = (self.wd1793, self.ready);
         *self = Self::new();
         self.head = head;
         self.drive = drive;
         self.side = side;
+        self.wd1793 = wd1793;
+        self.ready = ready;
+    }
+
+    /// The head's track on `drive`.
+    pub fn head(&self, drive: usize) -> u8 {
+        self.head[drive & 3]
     }
 
     pub fn busy(&self) -> bool {
@@ -169,8 +195,19 @@ impl Wd1772 {
 
     pub fn peek(&self, reg: u32) -> u8 {
         match reg & 3 {
-            0 if self.type_one && self.index => self.status | ST_INDEX,
-            0 => self.status,
+            0 => {
+                let index = if self.type_one && self.index {
+                    ST_INDEX
+                } else {
+                    0
+                };
+                if self.wd1793 {
+                    let not_ready = if self.ready { 0 } else { ST_MOTOR };
+                    (self.status & !ST_MOTOR) | index | not_ready
+                } else {
+                    self.status | index
+                }
+            }
             1 => self.track,
             2 => self.sector,
             _ => self.data,
@@ -289,9 +326,11 @@ impl Wd1772 {
                 let steps = u32::from(self.track.abs_diff(self.data));
                 self.inwards = self.data > self.track;
                 if let Some(d) = self.drive {
-                    self.head[d & 3] = self.head[d & 3]
-                        .wrapping_add(self.data)
-                        .wrapping_sub(self.track);
+                    // The head stops at track 0, whatever the register says
+                    // (TR-DOS seeks with a track register off by its test).
+                    let to =
+                        i16::from(self.head[d & 3]) + i16::from(self.data) - i16::from(self.track);
+                    self.head[d & 3] = to.clamp(0, 255) as u8;
                 }
                 self.track = self.data;
                 self.phase = Phase::Seek;
@@ -349,7 +388,8 @@ impl Wd1772 {
                         let next = self.angle / slot + 1;
                         let wait = next * slot - self.angle;
                         let head = self.head_now();
-                        self.id = [head, self.side as u8, (next % d.sectors) as u8, size, 0, 0];
+                        let sector = next % d.sectors + d.first_sector;
+                        self.id = [head, self.side as u8, sector as u8, size, 0, 0];
                         self.left = 6;
                         self.phase = Phase::ReadAddress;
                         self.timer = wait;

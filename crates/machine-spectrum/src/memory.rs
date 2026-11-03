@@ -65,6 +65,9 @@ pub struct Memory {
     pub if1_paged: bool,
     /// The fetch from $0700 happened: page out at the next fetch.
     if1_leaving: bool,
+    /// Beta Disk: TR-DOS ROM and whether it is paged in.
+    pub beta_rom: Option<Vec<u8>>,
+    pub beta_paged: bool,
 }
 
 impl Memory {
@@ -83,6 +86,8 @@ impl Memory {
             if1_rom: None,
             if1_paged: false,
             if1_leaving: false,
+            beta_rom: None,
+            beta_paged: false,
         }
     }
 
@@ -101,12 +106,20 @@ impl Memory {
         self.mf_armed = false;
         self.if1_paged = false;
         self.if1_leaving = false;
+        self.beta_paged = false;
     }
 
     /// An opcode fetch from `addr`: the Multiface pages in at its NMI's
     /// fetch from $0066.
     #[inline]
     pub fn m1(&mut self, addr: u16) {
+        if self.beta_rom.is_some() {
+            if addr >= 0x4000 {
+                self.beta_paged = false;
+            } else if addr & 0xff00 == 0x3d00 && self.rom_index() == self.roms.len() - 1 {
+                self.beta_paged = true;
+            }
+        }
         if self.if1_rom.is_some() {
             if std::mem::take(&mut self.if1_leaving) {
                 self.if1_paged = false;
@@ -172,7 +185,10 @@ impl Memory {
 
     /// The 48K BASIC ROM is paged in (with no expansion over it).
     pub fn basic_rom(&self) -> bool {
-        !self.mf_paged && !self.if1_paged && self.rom_index() == self.roms.len() - 1
+        !self.mf_paged
+            && !self.if1_paged
+            && !self.beta_paged
+            && self.rom_index() == self.roms.len() - 1
     }
 
     /// The CPU's address `addr` is in contended RAM.
@@ -202,6 +218,11 @@ impl Memory {
             if self.if1_paged {
                 if let Some(rom) = &self.if1_rom {
                     return rom[off & 0x1fff];
+                }
+            }
+            if self.beta_paged {
+                if let Some(rom) = &self.beta_rom {
+                    return rom[off];
                 }
             }
             return self.roms[self.rom_index()][off];

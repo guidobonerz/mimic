@@ -411,6 +411,8 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             ],
             0x2000,
         ),
+        // Beta Disk: TR-DOS (16 KB).
+        optional("trdos", &["trdos", "tr-dos"], 0x4000),
     ];
     // ColecoVision: the 8 KB BIOS.
     const COLECO: &[RomSpec] = &[rom(

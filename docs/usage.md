@@ -232,16 +232,18 @@ Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
   und `)` des Ziffernblocks, F1–F10 = F1–F10. **Strg + Win + Win** (beide
   Amiga-Tasten) ist der Reset der echten Tastatur.
 
-**Konsolen-Panel:** Unter dem Bild zeigt eine Leiste die Tasten und Schalter
-des Gehäuses (POWER, RESET, beim Atari 2600 die Konsolenschalter, beim 800XL
+**Konsolen-Panel:** Links neben dem Bild zeigt ein Panel die Tasten und
+Schalter des Gehäuses untereinander (POWER, RESET, beim Atari 2600 die Konsolenschalter, beim 800XL
 START/SELECT/OPTION, beim C64/VIC-20 RESTORE, beim C128 auch 40/80 und CAPS
 LOCK). Eine Taste ist gedrückt, solange die Maustaste gehalten wird; ein Klick
-auf eine Schalterstellung stellt den Schalter um. Ganz links steht
+auf eine Schalterstellung stellt den Schalter um. Ganz oben steht
 **PAUSE**: ein Klick hält die ganze Maschine an, der nächste lässt sie
 weiterlaufen; der Knopf leuchtet, solange die Maschine steht (auch wenn ein
 Debugger sie hält), die Titelleiste zeigt die Stelle. Für einen
-angeschlossenen Debugger ist das dasselbe wie `pause`/`resume`. Strg+P
-blendet die Leiste ein/aus, `--no-panel` startet ohne sie. Dieselbe Leiste
+angeschlossenen Debugger ist das dasselbe wie `pause`/`resume`. Shift+Alt+←
+oder ein Klick auf den schmalen Griff am Rand klappt das Panel auf und zu
+(das Medien-Panel rechts mit Shift+Alt+→), `--no-panel` startet es
+zugeklappt. Dieselben Tasten und Schalter
 hat der Browser-Viewer (ohne PAUSE); der Debugger bedient sie mit
 `controls`/`set_control` (`polydbg panel`).
 
@@ -285,12 +287,12 @@ Loslassen von dort weiter.
 `.pokes`/`.bas`, VICE-Monitorbefehle `.mon`, Adresse/Wert-Codes `.txt`),
 `--cheats ORDNER` die Cheat-Datenbank (`ORDNER/<maschine>/<crc32>.toml`
 gilt automatisch für eingelegte Images, auch beim Disk-Wechsel; Standard
-`EMU_CHEATS_DIR` oder `./cheats`). Die Konsolen-Leiste zeigt jeden Cheat
+`EMU_CHEATS_DIR` oder `./cheats`). Das Konsolen-Panel zeigt jeden Cheat
 als Schalter OFF/ON.
 
 **Joystick:** Erster Gamepad und eine Tastatur-Belegung (beim C64/C128
 Port 2, bei VIC-20, C16/Plus/4, Atari und CPC Port 1). Welche Tasten den
-Joystick spielen, stellt der Schalter **JOY KEYS** in der Konsolen-Leiste um
+Joystick spielen, stellt der Schalter **JOY KEYS** im Konsolen-Panel um
 (oder `--joykeys`): **CURSOR** = Cursortasten, Leertaste = Feuer (Standard
 beim Atari 2600, bei der ColecoVision, beim NES und beim SNES, die keine Tastatur haben), **NUMPAD** = Ziffernblock 8/2/4/6,
 Feuer 0 oder rechte Strg (Standard bei den Computern), **OFF** = nur Gamepad

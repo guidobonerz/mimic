@@ -2232,6 +2232,7 @@ dependencies = [
 name = "machine-spectrum"
 version = "0.1.0"
 dependencies = [
+ "chips-acorn",
  "chips-amstrad",
  "chips-sinclair",
  "cpu-z80",

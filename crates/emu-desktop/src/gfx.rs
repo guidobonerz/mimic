@@ -41,6 +41,8 @@ pub struct Gfx {
     footer: Option<Picture>,
     /// The side panel at the right edge.
     side: Option<Picture>,
+    /// The console panel at the left edge.
+    left: Option<Picture>,
 }
 
 /// Two render targets of the picture rectangle's size: the shader draws into
@@ -294,6 +296,7 @@ impl Gfx {
             footer_sampler,
             footer: None,
             side: None,
+            left: None,
         })
     }
 
@@ -301,6 +304,13 @@ impl Gfx {
     fn side_width(&self) -> u32 {
         self.side.as_ref().map_or(0, |(_, _, w, _)| {
             (*w).min(self.config.width.saturating_sub(1))
+        })
+    }
+
+    /// Width the console panel takes from the window, in window pixels.
+    fn left_width(&self) -> u32 {
+        self.left.as_ref().map_or(0, |(_, _, w, _)| {
+            (*w).min(self.config.width.saturating_sub(1 + self.side_width()))
         })
     }
 
@@ -324,6 +334,13 @@ impl Gfx {
         let mut slot = self.side.take();
         self.put_picture(&mut slot, rgba);
         self.side = slot;
+    }
+
+    /// The same for the console panel at the window's left edge.
+    pub fn set_left(&mut self, rgba: Option<(&[u8], u32, u32)>) {
+        let mut slot = self.left.take();
+        self.put_picture(&mut slot, rgba);
+        self.left = slot;
     }
 
     /// Put `rgba` into `slot`'s texture, made anew when the size changed.
@@ -474,8 +491,9 @@ impl Gfx {
     /// The largest rectangle with the output's aspect ratio in the window.
     /// The picture's rectangle in the window: x, y, width, height.
     pub fn viewport(&self) -> (u32, u32, u32, u32) {
+        let left = self.left_width();
         let (sw, sh) = (
-            self.config.width - self.side_width(),
+            self.config.width - self.side_width() - left,
             self.config.height - self.footer_height(),
         );
         let (ow, oh) = (self.out_size.0.max(1), self.out_size.1.max(1));
@@ -484,7 +502,7 @@ impl Gfx {
         } else {
             (sw, (u64::from(sw) * u64::from(oh) / u64::from(ow)) as u32)
         };
-        ((sw - w) / 2, (sh - h) / 2, w.max(1), h.max(1))
+        (left + (sw - w) / 2, (sh - h) / 2, w.max(1), h.max(1))
     }
 
     /// Switch the monitor profile (live editing); takes effect with the
@@ -679,6 +697,14 @@ impl Gfx {
                     0.0,
                     1.0,
                 );
+                pass.draw(0..3, 0..1);
+            }
+            if let Some((_, left, ..)) = &self.left {
+                let lw = self.left_width();
+                let lh = self.config.height - self.footer_height();
+                pass.set_pipeline(&self.footer_pipeline);
+                pass.set_bind_group(0, left, &[]);
+                pass.set_viewport(0.0, 0.0, lw as f32, lh as f32, 0.0, 1.0);
                 pass.draw(0..3, 0..1);
             }
             if let Some((_, footer, fw, _)) = &self.footer {

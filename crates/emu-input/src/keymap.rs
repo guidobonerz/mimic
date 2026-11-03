@@ -974,7 +974,8 @@ pub static ZX81: Keymap = Keymap {
 
 /// ZX Spectrum: row · 5 + column of its 8 × 5 matrix (see
 /// `machine-spectrum::keyboard`). Shift is CAPS SHIFT, Ctrl and AltGr are
-/// SYMBOL SHIFT; for convenience `.` and `,` are SYMBOL SHIFT + M / N,
+/// SYMBOL SHIFT (the desktop keeps the left Ctrl's P, M, D, I, R and Space
+/// for its hotkeys); for convenience `.` and `,` are SYMBOL SHIFT + M / N,
 /// Backspace is DELETE (CAPS SHIFT + 0), the arrows CAPS SHIFT + 5–8 and
 /// Escape BREAK (CAPS SHIFT + SPACE).
 const SPECTRUM_POSITIONAL: &[(&str, &[u16])] = &[

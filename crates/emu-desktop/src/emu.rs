@@ -127,7 +127,7 @@ pub struct Shared {
     /// emulation publishes [`Shared::footer`] after every frame.
     pub footer_on: AtomicBool,
     pub footer: Mutex<Footer>,
-    /// Set by the window (Ctrl+P): the console panel is shown, so the
+    /// Set by the window (Shift+Alt+←): the console panel is open, so the
     /// emulation publishes [`Shared::controls`] after every frame.
     pub panel_on: AtomicBool,
     pub controls: Mutex<Vec<ControlInfo>>,
