@@ -48,6 +48,11 @@ pub trait MediaBackend: Send {
 
     /// Make writes permanent, e.g. apply a copy-on-write overlay to the original.
     fn commit(&mut self) -> Result<(), MediaError>;
+
+    /// Writes waiting for [`commit`](Self::commit).
+    fn dirty(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -81,8 +86,13 @@ pub trait MediaSlot {
     fn insert(&mut self, media: Media) -> Result<(), MediaError>;
     fn eject(&mut self) -> Option<Media>;
     fn write_protect(&mut self, on: bool);
-    /// Write back through the backend.
+    /// Write back through the backend, into the image itself.
     fn flush(&mut self) -> Result<(), MediaError>;
+
+    /// The medium holds changes [`flush`](Self::flush) has not saved.
+    fn dirty(&self) -> bool {
+        false
+    }
 
     /// Operate the drive's own controls, e.g. a datasette's "play",
     /// "record", "stop" and "rewind". Slots without controls refuse.

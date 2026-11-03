@@ -426,6 +426,10 @@ impl MediaSlot for VirtualDrive {
         self.dos.flush()
     }
 
+    fn dirty(&self) -> bool {
+        self.dos.dirty()
+    }
+
     /// From the [`VirtualDos`]: bus, open channels, error channel.
     fn status(&self) -> DriveStatus {
         self.dos.status()

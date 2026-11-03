@@ -1,6 +1,7 @@
 //! Media side panel (Ctrl+M or a click on its handle): the machine's disk
 //! drives, datasette and cartridge slot at the window's right edge, each
-//! with its state, its image and buttons to mount, eject and save.
+//! with its state, its image, one button that mounts an empty slot (green)
+//! or ejects a full one (red), and one to save.
 //!
 //! The list comes from the core traits only (`media_slots`, through
 //! [`crate::footer::Slot`]), so every machine gets the panel without a line
@@ -16,6 +17,13 @@ use crate::footer::{self, Rgb, Slot, Strip, BACKGROUND, BUSY, BUTTON, DIM, ERROR
 /// Characters a line of the open panel holds.
 const COLUMNS: usize = 34;
 const HANDLE: Rgb = [0x30, 0x30, 0x30];
+/// The toggle button: green mounts, red ejects.
+const MOUNT: Rgb = [0x1e, 0x7a, 0x3c];
+const EJECT: Rgb = [0xa8, 0x2c, 0x2c];
+/// The pill on Save: unsaved changes.
+const DIRTY: Rgb = [0xff, 0x30, 0x30];
+const PILL_WIDTH: usize = 8;
+const PILL_HEIGHT: usize = 5;
 const TITLE: &str = "MEDIA";
 
 /// What a click on the panel does.
@@ -96,20 +104,38 @@ fn state(s: &Slot) -> (String, Rgb) {
     }
 }
 
-/// One line of buttons; those of an empty slot other than Mount are grey
-/// and have no hit area.
+/// A small red pill from `x` on at the top of the line, its corners cut.
+fn pill(strip: &mut Strip, x: usize) {
+    for y in 1..1 + PILL_HEIGHT {
+        let corner = y == 1 || y == PILL_HEIGHT;
+        for px in x..x + PILL_WIDTH {
+            if corner && (px == x || px == x + PILL_WIDTH - 1) {
+                continue;
+            }
+            let i = (y * strip.width + px) * 4;
+            strip.px[i..i + 3].copy_from_slice(&DIRTY);
+        }
+    }
+}
+
+/// One line of buttons: Mount or Eject by the slot's state, then Save, grey
+/// and without a hit area on an empty slot.
 fn buttons(strip: &mut Strip, x: usize, line: usize, s: &Slot, hits: &mut Vec<(usize, Hit)>) {
     let mut x = x;
-    let row = [
-        ("Mount", Action::Mount(s.id, s.kind), true),
-        ("Eject", Action::Eject(s.id), s.inserted),
-        ("Save", Action::Save(s.id), s.inserted),
-    ];
-    for (label, action, live) in row {
+    let toggle = if s.inserted {
+        ("Eject", Action::Eject(s.id), true, EJECT)
+    } else {
+        ("Mount", Action::Mount(s.id, s.kind), true, MOUNT)
+    };
+    let row = [toggle, ("Save", Action::Save(s.id), s.inserted, BUTTON)];
+    for (label, action, live, colour) in row {
         let text = format!(" {label} ");
         let w = strip.text_width(&text);
-        strip.fill(x, x + w, 2, BUTTON);
+        strip.fill(x, x + w, 2, colour);
         strip.text(x, &text, if live { TEXT } else { DIM });
+        if s.dirty && matches!(action, Action::Save(_)) {
+            pill(strip, x + w - PILL_WIDTH);
+        }
         if live {
             let hit = Hit {
                 x0: x,
@@ -274,8 +300,14 @@ mod tests {
             kind: MediaKind::Disk,
             inserted: file.is_some(),
             status: DriveStatus::default(),
+            dirty: false,
             file: file.map(String::from),
         }
+    }
+
+    fn pixel(p: &Picture, x: usize, y: usize) -> Rgb {
+        let i = (y * p.width as usize + x) * 4;
+        [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]]
     }
 
     fn line_y(line: usize) -> usize {
@@ -298,32 +330,40 @@ mod tests {
         assert_eq!(p.rgba.len(), (p.width * 400 * 4) as usize);
         let x = handle_width(SIZE) as usize + char_width(SIZE) + 2;
         // Title, then three lines a slot.
-        assert_eq!(
-            hit(&p.hits, x, line_y(3)),
-            Some(Action::Mount(3, MediaKind::Disk))
-        );
-        let eject = p
+        // A full slot's one button ejects, in red.
+        assert_eq!(hit(&p.hits, x, line_y(3)), Some(Action::Eject(3)));
+        assert_eq!(pixel(&p, x, line_y(3) + 3), EJECT);
+        assert!(!p
             .hits
             .iter()
-            .find(|h| h.action == Action::Eject(3))
-            .unwrap();
-        assert_eq!(
-            hit(&p.hits, eject.x0 + 1, line_y(3)),
-            Some(Action::Eject(3))
-        );
+            .any(|h| h.action == Action::Mount(3, MediaKind::Disk)));
         assert!(
             p.hits.iter().any(|h| h.action == Action::Save(3)),
             "a mounted disk can be saved"
         );
-        // An empty slot can only be mounted.
+        // An empty slot's mounts, in green; there is nothing to save.
         assert_eq!(
             hit(&p.hits, x, line_y(6)),
             Some(Action::Mount(10, MediaKind::Disk))
         );
+        assert_eq!(pixel(&p, x, line_y(6) + 3), MOUNT);
         assert!(!p
             .hits
             .iter()
             .any(|h| matches!(h.action, Action::Eject(10) | Action::Save(10))));
+    }
+
+    #[test]
+    fn a_dirty_disk_shows_a_pill_on_save() {
+        let mut slots = [slot(3, "DF0:", Some("a.adf"))];
+        let save = |slots: &[Slot]| {
+            let p = render(slots, true, 0, 400, SIZE);
+            let s = *p.hits.iter().find(|h| h.action == Action::Save(3)).unwrap();
+            pixel(&p, s.x1 - PILL_WIDTH / 2, s.y0 + 2)
+        };
+        assert_ne!(save(&slots), DIRTY);
+        slots[0].dirty = true;
+        assert_eq!(save(&slots), DIRTY);
     }
 
     #[test]

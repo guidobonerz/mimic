@@ -494,9 +494,16 @@ impl MediaSlot for VirtualDos {
         }
     }
 
-    /// Files are written back when they are closed; nothing is pending.
+    /// Files reach the backend when they are closed; this saves them.
     fn flush(&mut self) -> Result<(), MediaError> {
-        Ok(())
+        match &mut self.disk {
+            Some(d) => d.media.backend.commit(),
+            None => Ok(()),
+        }
+    }
+
+    fn dirty(&self) -> bool {
+        self.disk.as_ref().is_some_and(|d| d.media.backend.dirty())
     }
 
     /// Active while addressed on the bus (listening or talking) or while a

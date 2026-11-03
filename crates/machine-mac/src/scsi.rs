@@ -193,6 +193,10 @@ impl MediaSlot for ScsiDisk {
         }
     }
 
+    fn dirty(&self) -> bool {
+        self.media.as_ref().is_some_and(|m| m.backend.dirty())
+    }
+
     fn status(&self) -> DriveStatus {
         DriveStatus {
             active: self.busy,

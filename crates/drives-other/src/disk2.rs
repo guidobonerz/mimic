@@ -368,6 +368,12 @@ impl MediaSlot for Disk2Drive {
         }
     }
 
+    fn dirty(&self) -> bool {
+        self.disk
+            .as_ref()
+            .is_some_and(|d| d.dirty || d.media.backend.dirty())
+    }
+
     fn status(&self) -> DriveStatus {
         DriveStatus {
             active: self.spinning,

@@ -420,9 +420,18 @@ impl MediaSlot for AmigaDrive {
 
     fn flush(&mut self) -> Result<(), MediaError> {
         match &mut self.disk {
-            Some(d) => d.write_back(),
+            Some(d) => {
+                d.write_back()?;
+                d.media.backend.commit()
+            }
             None => Ok(()),
         }
+    }
+
+    fn dirty(&self) -> bool {
+        self.disk
+            .as_ref()
+            .is_some_and(|d| d.dirty.contains(&true) || d.media.backend.dirty())
     }
 
     fn status(&self) -> DriveStatus {

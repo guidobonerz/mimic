@@ -356,6 +356,8 @@ pub struct Vic2 {
     /// (`usize::MAX` off the picture) and colour source ([`src`]), resolved
     /// with the registers as they are after this cycle's CPU write.
     lag: [(usize, u8); 4],
+    /// Colour source of the pixel before `lag`'s first.
+    lag_before: u8,
     /// Colour sources whose register the CPU wrote in this cycle (bit
     /// `src - src::BG0`), and their values before it: the first pixel of
     /// the new colour shows the old one (6569/6567) or light grey
@@ -481,6 +483,7 @@ impl Vic2 {
             phi2_sprite: None,
             pixels: vec![0; (t.width * t.height) as usize],
             lag: [(usize::MAX, 0); 4],
+            lag_before: 0,
             written: 0,
             before: [0; 15],
             cycle_regs: [0; 3],
@@ -1066,22 +1069,27 @@ impl Vic2 {
         // this cycle's first four get the registers after this cycle's
         // write (VICE test programs VICII/colorsplit, spritesplit). The
         // first of them still shows the old colour if its register was just
-        // written; the HMOS-II types show light grey there.
+        // written, but not the first pixel of a border (Edge of Disgrace
+        // turns the border grey in the cycle the border starts over a
+        // sprite: no dot of the old colour on the user's C64; sprite and
+        // background colours do show it, VICII/spritesplit); the HMOS-II
+        // types show light grey there.
         let lag = self.lag;
+        let before_source = self.lag_before;
         for (k, &(index, source)) in lag.iter().chain(&out[..4]).enumerate() {
             if index != usize::MAX {
                 let bit = source.wrapping_sub(src::BG0);
-                self.pixels[index] = if k == 0 && bit < 15 && self.written & 1 << bit != 0 {
-                    if self.model.grey_dot() {
-                        15
-                    } else {
-                        self.before[usize::from(bit)]
-                    }
+                let written = k == 0 && bit < 15 && self.written & 1 << bit != 0;
+                self.pixels[index] = if written && self.model.grey_dot() {
+                    15
+                } else if written && (source != src::BORDER || before_source == source) {
+                    self.before[usize::from(bit)]
                 } else {
                     self.resolve(source)
                 };
             }
         }
+        self.lag_before = out[3].1;
         self.lag.copy_from_slice(&out[4..]);
         self.written = 0;
         self.fetch_done = None;
@@ -1588,8 +1596,9 @@ const TAG: [u8; 4] = *b"6569";
 /// pen's once-a-frame flag and the LP line level. 4: types 8565/8562 and
 /// the four pixels waiting for their colour. 5: collisions waiting for
 /// the registers. 6: a light pen edge waiting for the next cycle. 7: the
-/// sequencer's load gate and the held raster compare value.
-const VERSION: u16 = 7;
+/// sequencer's load gate and the held raster compare value. 8: the colour
+/// source before the waiting pixels.
+const VERSION: u16 = 8;
 
 fn save_sprite(w: &mut StateWriter, s: &Sprite) {
     w.u16(s.x);
@@ -1723,6 +1732,7 @@ impl Savestate for Vic2 {
             w.bool(self.no_load);
             w.u16(self.cmp_held);
             w.u8(self.g_ctrl1);
+            w.u8(self.lag_before);
         });
     }
 
@@ -1855,6 +1865,7 @@ impl Savestate for Vic2 {
                 v.cmp_held = v.raster_cmp;
                 v.g_ctrl1 = v.ctrl1;
             }
+            v.lag_before = if version >= 8 { c.u8()? } else { v.lag[0].1 };
         }
         v.cycle_regs = [v.sprite_prio, v.sprite_xe, v.sprite_mc];
         v.cycle_sprite_x = v.sprites.map(|s| s.x);

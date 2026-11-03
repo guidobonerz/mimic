@@ -173,6 +173,10 @@ impl MediaBackend for CowOverlay {
         }
         self.base.commit()
     }
+
+    fn dirty(&self) -> bool {
+        self.is_dirty()
+    }
 }
 
 /// Media kind from a file name's extension (a name without a folder).

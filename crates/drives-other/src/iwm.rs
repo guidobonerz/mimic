@@ -373,6 +373,12 @@ impl MediaSlot for SonyDrive {
         }
     }
 
+    fn dirty(&self) -> bool {
+        self.disk
+            .as_ref()
+            .is_some_and(|d| d.dirty || d.media.backend.dirty())
+    }
+
     fn status(&self) -> DriveStatus {
         DriveStatus {
             active: self.motor && self.disk.is_some(),

@@ -363,8 +363,26 @@ fn swap_disk(m: &mut dyn Machine, path: &str) -> String {
     };
     let _ = slot.eject();
     match slot.insert(media) {
-        Ok(()) => format!("{} {name}", info.name),
+        Ok(()) => String::new(),
         Err(e) => format!("{name}: {e}"),
+    }
+}
+
+/// Show what a media command has to say in the title bar: only trouble, the
+/// panel and footer name what is mounted. Success clears an old message,
+/// but not the debugger's stop.
+fn report_media(shared: &Shared, msg: String) {
+    if msg.is_empty() && shared.paused.load(Ordering::Relaxed) {
+        return;
+    }
+    *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = (!msg.is_empty()).then_some(msg);
+}
+
+fn join_messages(msg: String, more: String) -> String {
+    if msg.is_empty() {
+        more
+    } else {
+        format!("{msg}; {more}")
     }
 }
 
@@ -460,7 +478,7 @@ fn finish_mount(
             if let Ok(mut names) = shared.media_names.lock() {
                 names.insert(slot, name.clone());
             }
-            format!("{} {name}", info.name)
+            String::new()
         }
         Err(e) => format!("{name}: {e}"),
     }
@@ -505,10 +523,7 @@ fn media_command(
                 path,
                 due: frame + SWAP_FRAMES,
             };
-            (
-                format!("{} empty, inserting {name} …", info.name),
-                Some(pending),
-            )
+            (String::new(), Some(pending))
         }
         MediaCommand::Eject { slot } => {
             let Some(info) = slot_info(m, slot) else {
@@ -520,7 +535,7 @@ fn media_command(
             if let Ok(mut names) = shared.media_names.lock() {
                 names.remove(&slot);
             }
-            (format!("{} empty", info.name), None)
+            (String::new(), None)
         }
         MediaCommand::Save { slot } => {
             let Some(info) = slot_info(m, slot) else {
@@ -615,7 +630,7 @@ fn insert_cart(m: &mut dyn Machine, path: &str) -> String {
     };
     let _ = slot.eject();
     match slot.insert(media) {
-        Ok(()) => format!("{} {name}", info.name),
+        Ok(()) => String::new(),
         Err(e) => format!("{name}: {e}"),
     }
 }
@@ -823,16 +838,16 @@ pub fn spawn(
                 if pending.is_some() {
                     pending_mount = pending;
                 }
-                *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                report_media(&shared, msg);
             }
             if pending_mount.as_ref().is_some_and(|p| frames_run >= p.due) {
                 if let Some(p) = pending_mount.take() {
                     let mut msg =
                         finish_mount(&shared, session.machine_mut(), p.slot, p.media, &p.path);
                     if let Some(c) = cheats_for_path(&mut session, &p.path) {
-                        msg = format!("{msg}; {c}");
+                        msg = join_messages(msg, c);
                     }
-                    *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                    report_media(&shared, msg);
                 }
             }
             let mut disk = None;
@@ -870,9 +885,9 @@ pub fn spawn(
                     Some(path),
                 );
                 if let Some(c) = cheats_for_path(&mut session, path) {
-                    msg = format!("{msg}; {c}");
+                    msg = join_messages(msg, c);
                 }
-                *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                report_media(&shared, msg);
             }
             if let Some(path) = dropped.into_iter().last() {
                 if let Ok(mut list) = shared.disk_swap.lock() {
@@ -889,7 +904,7 @@ pub fn spawn(
             if let Some(path) = disk {
                 // Out now, in after SWAP_FRAMES emulated frames.
                 let msg = match eject_first(session.machine_mut()) {
-                    Some(drive) => format!("{drive} empty, inserting {} …", file_name(&path)),
+                    Some(_) => String::new(),
                     None => "no disk drive".into(),
                 };
                 note_first(
@@ -898,7 +913,7 @@ pub fn spawn(
                     emu_core::media::MediaKind::Disk,
                     None,
                 );
-                *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                report_media(&shared, msg);
                 pending_disk = Some((path, frames_run + SWAP_FRAMES));
             }
             if let Some((path, due)) = &pending_disk {
@@ -911,9 +926,9 @@ pub fn spawn(
                         Some(path),
                     );
                     if let Some(c) = cheats_for_path(&mut session, path) {
-                        msg = format!("{msg}; {c}");
+                        msg = join_messages(msg, c);
                     }
-                    *shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                    report_media(&shared, msg);
                     pending_disk = None;
                 }
             }
@@ -1464,22 +1479,19 @@ mod tests {
             .unwrap()
             .push(b.to_string_lossy().into_owned());
         shared.next_disk.store(true, Ordering::Relaxed);
-        assert!(
-            eventually(|| status().is_some_and(|s| s.contains("empty, inserting b.adf"))),
-            "{:?}",
-            status()
-        );
-        assert!(
-            eventually_for(60, || status().is_some_and(|s| s.ends_with("b.adf"))),
-            "{:?}",
-            status()
-        );
+        let mounted = |name: &str| {
+            shared
+                .media_names
+                .lock()
+                .unwrap()
+                .values()
+                .any(|n| n == name)
+        };
+        assert!(eventually(|| !mounted("a.adf")), "the drive empties first");
+        assert!(eventually_for(60, || mounted("b.adf")));
+        assert_eq!(status(), None, "the title bar names no image");
         shared.next_disk.store(true, Ordering::Relaxed);
-        assert!(
-            eventually_for(60, || status().is_some_and(|s| s.ends_with("a.adf"))),
-            "{:?}",
-            status()
-        );
+        assert!(eventually_for(60, || mounted("a.adf")));
         shared.quit.store(true, Ordering::Relaxed);
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);

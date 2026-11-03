@@ -227,6 +227,10 @@ impl MediaSlot for SioDrive {
         }
     }
 
+    fn dirty(&self) -> bool {
+        self.media.as_ref().is_some_and(|m| m.backend.dirty())
+    }
+
     /// Busy while the bus serves a command for this drive; an error while
     /// the last command failed (status bits 0–2: bad frame or sector, write
     /// error, unreadable disk); the track of the last sector accessed.

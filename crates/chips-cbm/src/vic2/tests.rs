@@ -282,6 +282,21 @@ fn sprite_start_sees_y_expansion_written_in_cycle_55() {
 }
 
 #[test]
+fn a_border_starting_with_its_colour_write_shows_no_old_colour() {
+    let (mut v, m) = text_setup();
+    v.write(0x20, 14);
+    frame(&mut v, &m);
+    // X 344, the border's first pixel, is the fifth of cycle 56.
+    assert_eq!(v.timing().x_at(444), 344);
+    run_to(&mut v, &m, 100, 57);
+    v.phi1(&m);
+    v.write(0x20, 11);
+    v.phi2(&m);
+    frame(&mut v, &m);
+    assert_eq!(px(&v, 344, 100), 11);
+}
+
+#[test]
 fn sprite_collisions_latch_and_clear_on_read() {
     let (mut v, mut m) = text_setup();
     sprite_setup(&mut v, &mut m, 0, 100, 100, 2);

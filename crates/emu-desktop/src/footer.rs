@@ -62,6 +62,8 @@ pub struct Slot {
     pub kind: MediaKind,
     pub inserted: bool,
     pub status: DriveStatus,
+    /// Changes Save would keep.
+    pub dirty: bool,
     /// The image's file name, filled in by the window.
     pub file: Option<String>,
 }
@@ -167,6 +169,7 @@ impl Tracker {
                 .media_slot(info.id)
                 .map(|s| s.status())
                 .unwrap_or_default();
+            let dirty = m.media_slot(info.id).is_some_and(|s| s.dirty());
             let status = held(self.hold.entry(info.id.0).or_default(), now);
             slots.push(Slot {
                 id: info.id.0,
@@ -174,6 +177,7 @@ impl Tracker {
                 kind: info.kind,
                 inserted: info.inserted,
                 status,
+                dirty,
                 file: None,
             });
             if matches!(info.kind, MediaKind::Disk | MediaKind::Tape) {

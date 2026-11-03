@@ -1016,6 +1016,15 @@ impl Machine for Archimedes {
 
 /// Reached through [`Machine::media_slot`]: acts on the drive it chose.
 impl MediaSlot for Archimedes {
+    fn dirty(&self) -> bool {
+        let i = self.slot.unwrap_or(0);
+        self.disks[i].as_ref().is_some_and(|d| d.dirty)
+            || self.drives[i]
+                .media
+                .as_ref()
+                .is_some_and(|m| m.backend.dirty())
+    }
+
     fn insert(&mut self, media: Media) -> Result<(), MediaError> {
         let i = self.slot.unwrap_or(0);
         DiskSlot {

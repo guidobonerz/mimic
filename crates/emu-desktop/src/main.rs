@@ -181,8 +181,8 @@ last frames kept in memory (--rewind-mb); on release it runs on from there.
 Disks: Ctrl+D puts the next disk of the --disk list into the first drive;
 dropping an image file onto the window inserts it there.
 Ctrl+M or a click on the handle at the right edge opens the media panel:
-every drive, datasette and cartridge slot with its image and the buttons
-Mount (file dialog), Eject and Save. Writes stay in memory until Save puts
+every drive, datasette and cartridge slot with its image, one button that
+mounts (green, file dialog) or ejects (red), and Save. Writes stay in memory until Save puts
 them into the image file; without it they end with the program.
 Ctrl+P shows or hides the console panel: the machine's buttons and
 switches (power, reset, Atari console switches, RESTORE …); click a button

@@ -176,7 +176,17 @@ impl MediaSlot for CpcDrive {
     }
 
     fn flush(&mut self) -> Result<(), MediaError> {
-        self.write_back()
+        self.write_back()?;
+        match &mut self.disc {
+            Some(d) => d.media.backend.commit(),
+            None => Ok(()),
+        }
+    }
+
+    fn dirty(&self) -> bool {
+        self.disc
+            .as_ref()
+            .is_some_and(|d| d.dirty || d.media.backend.dirty())
     }
 
     /// Active while the motor turns a disc in this drive (the FDC's

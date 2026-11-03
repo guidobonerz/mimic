@@ -286,7 +286,19 @@ impl MediaSlot for Microdrive {
     }
 
     fn flush(&mut self) -> Result<(), MediaError> {
-        self.write_back()
+        self.write_back()?;
+        match &mut self.cartridge {
+            Some((media, _)) => media.backend.commit(),
+            None => Ok(()),
+        }
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty
+            || self
+                .cartridge
+                .as_ref()
+                .is_some_and(|(media, _)| media.backend.dirty())
     }
 
     /// Active while the motor runs; the "track" is the sector under the
