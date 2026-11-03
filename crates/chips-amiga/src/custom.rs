@@ -196,6 +196,24 @@ const DENISE_LAG: u16 = 2;
 pub const PAL_LINE: u16 = 227;
 /// Colour clocks from the vertical strobe to the VERTB request.
 const VERTB_DELAY: u16 = 2;
+/// The line's last even slot is refused to the Copper, and when the Copper
+/// asks for it nobody gets it (vAmigaTS `Agnus/Copper/CopDma/cycleE0`,
+/// whose README calls it cycle $E0; in our count it is $E2, presumably a
+/// different origin of the horizontal counter). The Copper's word waits for
+/// the next line's slot 0. Placed by the pictures: a MOVE chain may fetch at $E0 (the RULER
+/// of `Agnus/Registers/DMACON/resmod2`), three MOVEs after a WAIT at $D8
+/// end two colour clocks later (`Agnus/Copper/Wait/copwait1`); with $E0
+/// refused instead, resmod2 fails and the Copper family passes 12/103
+/// instead of 18.
+const COPPER_BLOCKED: u16 = 0xe2;
+/// Colour clocks at a line's start in which the Copper's comparator holds
+/// no WAIT: a WAIT for $xx01 holds two colour clocks after our counter
+/// wraps (vAmigaTS `Agnus/Copper/Wait/copwait5`, MOVEs after WAIT $6201 two
+/// colour clocks later than ours), and a WAIT for line $10 fetched at the
+/// end of line 255 does not hold there either (`Agnus/Copper/cross/cross3`),
+/// so neither the old nor the new line is compared. The same offset as the
+/// refused slot ($E0 in the suite's count, $E2 here).
+const COPPER_NO_COMPARE: u16 = 2;
 /// Ticks until a BPLCON0 write takes effect: the picture goes on two colour
 /// clocks after the Copper turns the planes off (vAmigaTS `Agnus/DDF/DDF`,
 /// the row of `ddf1` with BPLCON0 at $90D9).
@@ -911,7 +929,10 @@ impl Custom {
             self.paula.request(int::VERTB);
         }
         self.blitter.tick();
-        self.copper.check_wait(v, h, self.blitter.busy);
+        // The comparator holds no WAIT in the line's first COPPER_NO_COMPARE
+        // colour clocks.
+        self.copper
+            .check_wait(v, h, self.blitter.busy, h >= COPPER_NO_COMPARE);
 
         // The CPU takes any free slot (measured, see the module doc).
         let cpu_turn = cpu_wants;
@@ -937,7 +958,8 @@ impl Custom {
                 self.sprpt[n] = self.sprpt[n].wrapping_add(2 * words) & self.ptr_mask;
                 let control = self.spr_dma[n] == SprDma::Control;
                 let reg = usize::from(!first) + if control { 0 } else { 2 };
-                self.denise.write_sprite_wide(n, reg, w);
+                let dh = self.denise_h(h);
+                self.denise.write_sprite_wide_at(n, reg, w, dh);
                 if control && !first {
                     self.spr_dma[n] = SprDma::Wait;
                 }
@@ -958,11 +980,26 @@ impl Custom {
                 self.fetched = true;
             }
             Slot::Free => {
-                if h & 1 == 0 && self.copper.busy_wake > 0 && self.dma_on(dma::COPEN) {
+                if h & 1 == 0
+                    && h != COPPER_BLOCKED
+                    && self.copper.busy_wake > 0
+                    && self.dma_on(dma::COPEN)
+                {
                     // The Copper's wake-up after a WAIT holds the bus.
                     self.copper.busy_wake -= 1;
                     copper_held = true;
-                } else if h & 1 == 0 && self.copper.wants_slot() && self.dma_on(dma::COPEN) {
+                } else if h == COPPER_BLOCKED
+                    && (self.copper.wants_slot() || self.copper.busy_wake > 0)
+                    && self.dma_on(dma::COPEN)
+                {
+                    // Agnus refuses the Copper this slot, and nobody else
+                    // gets it either (vAmigaTS `Agnus/Copper/CopDma/cycleE0`).
+                    copper_held = true;
+                } else if h & 1 == 0
+                    && h != COPPER_BLOCKED
+                    && self.copper.wants_slot()
+                    && self.dma_on(dma::COPEN)
+                {
                     copper_took = true;
                     if let Some((r, val)) = self.copper.cycle(chip, v, h, self.blitter.busy) {
                         if EXTRAS && self.rec.is_some() {
@@ -1444,7 +1481,8 @@ impl Custom {
             }
             0x140..=0x17e => {
                 let off = usize::from(r - 0x140);
-                self.denise.write_sprite(off / 8, (off % 8) / 2, v);
+                let h = self.denise_h(self.h);
+                self.denise.write_sprite_at(off / 8, (off % 8) / 2, v, h);
             }
             reg::COLOR00..=reg::COLOR31 => {
                 self.denise
@@ -1569,8 +1607,10 @@ impl Savestate for Custom {
         // version 4: four; version 5: the Copper's wake-up after WAIT;
         // version 6: the serial port and the audio attach alternation;
         // version 7: the ECS registers; version 8: AGA (eight planes, FMODE,
-        // Denise's 256 colours of 24 bits); version 10: 35 ns output.
-        w.chunk(TAG, 11, |w| {
+        // Denise's 256 colours of 24 bits); version 10: 35 ns output;
+        // version 12: the Copper's settling after a WAIT fetch; 13: sprite
+        // writes on their way in Denise.
+        w.chunk(TAG, 13, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1628,7 +1668,7 @@ impl Savestate for Custom {
 
     /// Atomic; the standard and pointer width are configuration.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (version, mut c) = r.chunk(TAG, 11)?;
+        let (version, mut c) = r.chunk(TAG, 13)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,

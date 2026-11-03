@@ -910,3 +910,75 @@ fn bplcon0_reaches_denise_after_two_colour_clocks() {
     c.tick(&mut chip, false);
     assert_eq!(c.denise.bplcon0, 0x1200);
 }
+
+#[test]
+fn the_copper_is_refused_the_last_even_slot_of_a_line() {
+    // WAIT $60,$D8, then three MOVEs: the third one's first word is due at
+    // $E2, which Agnus refuses the Copper; the slot is lost to the CPU too,
+    // and the MOVE lands in the next line's slot 2.
+    let (mut c, mut chip) = setup();
+    for (i, w) in [
+        0x60d9u16, 0xfffe, 0x0182, 0x0111, 0x0184, 0x0222, 0x0180, 0x0333, 0xffff, 0xfffe,
+    ]
+    .iter()
+    .enumerate()
+    {
+        chip.set_word(0x2000 + 2 * i as u32, *w);
+    }
+    c.write(reg::COP1LCH, 0);
+    c.write(reg::COP1LCL, 0x2000);
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::COPEN);
+    field(&mut c, &mut chip);
+    // The list ran in that field already: start the colours from black.
+    for r in [reg::COLOR00, reg::COLOR00 + 2, reg::COLOR00 + 4] {
+        c.write(r, 0);
+    }
+    let mut cpu_got_e2 = false;
+    loop {
+        let (v, h) = (c.v, c.h);
+        let out = c.tick(&mut chip, true);
+        if (v, h) == (0x60, COPPER_BLOCKED) {
+            cpu_got_e2 = out.cpu_slot;
+            assert_eq!(c.denise.color12(2), 0x222, "the second MOVE is done");
+            assert_eq!(c.denise.color12(0), 0, "the third is not");
+        }
+        if (v, h) == (0x61, 1) {
+            assert_eq!(c.denise.color12(0), 0, "slot 0 has the first word");
+        }
+        if (v, h) == (0x61, 3) {
+            assert_eq!(c.denise.color12(0), 0x333, "slot 2 the second");
+            break;
+        }
+    }
+    assert!(!cpu_got_e2, "the refused slot is nobody's");
+}
+
+#[test]
+fn a_wait_for_a_line_start_holds_two_colour_clocks_into_the_line() {
+    // WAIT $62,$00 then MOVE COLOR00: the comparator holds nothing in the
+    // line's first two colour clocks, so the Copper wakes at 2 and the MOVE
+    // lands at 6 (not 4).
+    let (mut c, mut chip) = setup();
+    for (i, w) in [0x6201u16, 0xfffe, 0x0180, 0x0333, 0xffff, 0xfffe]
+        .iter()
+        .enumerate()
+    {
+        chip.set_word(0x2000 + 2 * i as u32, *w);
+    }
+    c.write(reg::COP1LCH, 0);
+    c.write(reg::COP1LCL, 0x2000);
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::COPEN);
+    field(&mut c, &mut chip);
+    c.write(reg::COLOR00, 0);
+    loop {
+        let (v, h) = (c.v, c.h);
+        c.tick(&mut chip, false);
+        if (v, h) == (0x62, 5) {
+            assert_eq!(c.denise.color12(0), 0, "not at 4");
+        }
+        if (v, h) == (0x62, 6) {
+            assert_eq!(c.denise.color12(0), 0x333, "at 6");
+            break;
+        }
+    }
+}

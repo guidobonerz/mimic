@@ -127,6 +127,34 @@ struct Load {
     data: [u64; 4],
 }
 
+/// A CPU or Copper write to a sprite register on its way: it takes effect
+/// [`SPRITE_WRITE_DELAY`] after the colour clock it happens in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SpriteWrite {
+    /// Super-hires (35 ns) pixel position (Denise line coordinates).
+    at: u32,
+    sprite: u8,
+    /// SPRxPOS (0), SPRxCTL (1), SPRxDATA (2), SPRxDATB (3).
+    reg: u8,
+    /// Left-aligned (16 bits, or 32 and 64 from a wide DMA fetch).
+    value: u64,
+}
+
+/// Sprite register writes that can wait: the Copper writes a register
+/// every four colour clocks at most.
+const SPRITE_WRITES: usize = 4;
+
+/// 35 ns pixels from the first pixel of a write's colour clock to its
+/// effect on the sprite: three low-resolution pixels (vAmigaTS
+/// `Denise/Sprites/timing/sprtimpos1`, `sprtimctl1`, `sprxpos`, where a
+/// Copper MOVE to SPRxPOS in Agnus colour clock A still moves a sprite
+/// with HSTART H when 2A ≤ H + $106; two pixels (one colour clock) put
+/// the odd sprites a write late, four lose `sprtimctl1`). DATA and DATB
+/// take the same delay (`manual6`, `oldsprtimdat`), and so do the
+/// registers DMA loads (`sprdmadat1`, `interfere4b`: a Copper write and
+/// a DMA load of the same register keep their order on the bus).
+const SPRITE_WRITE_DELAY: u32 = 12;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Denise {
     /// 24-bit colours; the OCS/ECS chips use the first 32.
@@ -170,6 +198,8 @@ pub struct Denise {
     /// HAM: the colour of the previous pixel.
     ham: u32,
     pub sprites: [Sprite; 8],
+    /// Sprite register writes on their way, the earliest first.
+    sprite_writes: [Option<SpriteWrite>; SPRITE_WRITES],
     pub clxcon: u16,
     /// AGA: planes 7 and 8 in collisions.
     pub clxcon2: u16,
@@ -286,6 +316,7 @@ impl Denise {
             armed: false,
             ham: 0,
             sprites: [Sprite::default(); 8],
+            sprite_writes: [None; SPRITE_WRITES],
             clxcon: 0,
             clxcon2: 0,
             clxdat: 0,
@@ -363,6 +394,50 @@ impl Denise {
     /// 16-bit value (CPU or Copper).
     pub fn write_sprite(&mut self, n: usize, reg: usize, v: u16) {
         self.write_sprite_wide(n, reg, u64::from(v) << 48);
+    }
+
+    /// [`Denise::write_sprite`] from the CPU or the Copper in Denise colour
+    /// clock `h`: the register changes [`SPRITE_WRITE_DELAY`] after the
+    /// clock's first pixel. A full queue applies its oldest write at once.
+    pub fn write_sprite_at(&mut self, n: usize, reg: usize, v: u16, h: u32) {
+        self.write_sprite_wide_at(n, reg, u64::from(v) << 48, h);
+    }
+
+    /// [`Denise::write_sprite_wide`] in Denise colour clock `h`, with the
+    /// same delay as a CPU or Copper write: DMA data reaches the register
+    /// over the same bus.
+    pub fn write_sprite_wide_at(&mut self, n: usize, reg: usize, v: u64, h: u32) {
+        if let Some(w) =
+            self.sprite_writes[0].filter(|_| self.sprite_writes[SPRITE_WRITES - 1].is_some())
+        {
+            self.write_sprite_wide(usize::from(w.sprite), usize::from(w.reg), w.value);
+            self.sprite_writes.rotate_left(1);
+            self.sprite_writes[SPRITE_WRITES - 1] = None;
+        }
+        let slot = self
+            .sprite_writes
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or(0);
+        self.sprite_writes[slot] = Some(SpriteWrite {
+            at: 8 * h + SPRITE_WRITE_DELAY,
+            sprite: n as u8,
+            reg: reg as u8,
+            value: v,
+        });
+    }
+
+    /// Apply the sprite writes due at 35 ns pixel `x35`.
+    #[inline(always)]
+    fn apply_sprite_writes(&mut self, x35: u32) {
+        while let Some(w) = self.sprite_writes[0] {
+            if x35 < w.at {
+                break;
+            }
+            self.write_sprite_wide(usize::from(w.sprite), usize::from(w.reg), w.value);
+            self.sprite_writes.rotate_left(1);
+            self.sprite_writes[SPRITE_WRITES - 1] = None;
+        }
     }
 
     /// A sprite register loaded by DMA: POS/CTL from the top 16 bits,
@@ -633,6 +708,8 @@ impl Denise {
     pub fn start_line(&mut self) {
         self.armed = false;
         self.ham = self.colors[0];
+        // A write from the line's end lands before the new one's pixels.
+        self.apply_sprite_writes(u32::MAX);
     }
 
     /// The pixels of colour clock `h` (Denise line coordinates) as 24-bit
@@ -662,7 +739,11 @@ impl Denise {
     /// colour clocks of a field are such (profile of the A1200, 2026-10-26).
     #[inline(always)]
     fn idle(&self, h: u32) -> bool {
-        if self.armed || self.pending[0][0].is_some() || self.pending[1][0].is_some() {
+        if self.armed
+            || self.pending[0][0].is_some()
+            || self.pending[1][0].is_some()
+            || self.sprite_writes[0].is_some()
+        {
             return false;
         }
         !self.sprites_due::<false>(4 * h, 4)
@@ -739,7 +820,8 @@ impl Denise {
         let con3 = self.con3();
         let border_blank = con3 & 0x20 != 0;
         let border_sprites = con3 & 0x02 != 0;
-        let sprites_live = self.sprites_due::<FINE>(N as u32 * h, N as u32);
+        let sprites_live =
+            self.sprite_writes[0].is_some() || self.sprites_due::<FINE>(N as u32 * h, N as u32);
         let plane_mask = ((1u16 << planes) - 1) as u8;
         let xor = if self.aga {
             (self.bplcon4 >> 8) as u8
@@ -750,6 +832,9 @@ impl Denise {
             let x = N as u32 * h + i as u32;
             // Load times are 35 ns pixels; a 70 ns column covers two.
             let x35 = if FINE { x } else { (2 * x) | 1 };
+            if self.sprite_writes[0].is_some() {
+                self.apply_sprite_writes(x35);
+            }
             for g in 0..2 {
                 if let Some(l) = self.pending[g][0] {
                     if x35 >= l.at {
@@ -984,20 +1069,41 @@ impl Denise {
             w.u8(s.step);
         }
         w.bool(self.fine);
+        for s in &self.sprite_writes {
+            w.bool(s.is_some());
+            let s = s.unwrap_or_default();
+            w.u32(s.at);
+            w.u8(s.sprite);
+            w.u8(s.reg);
+            w.u64(s.value);
+        }
     }
 
     /// `version` is the OCS chunk's: version 2 saved one pending load per
     /// group, version 3 two, 4–7 four 16-bit loads for six planes with
     /// 32 colours of 12 bits; 7 added BPLCON3 and DIWHIGH; 8 is the AGA
     /// layout (256 colours of 24 bits, eight planes of 64 bits); 10 keeps
-    /// the load times in 35 ns pixels (before: 70 ns) and the output mode.
+    /// the load times in 35 ns pixels (before: 70 ns) and the output mode;
+    /// 13 the sprite writes on their way.
     pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let mut d = if version >= 8 {
             Self::load_v8(r)?
         } else {
             Self::load_v7(r, version)?
         };
-        if version >= 10 {
+        if version >= 13 {
+            d.fine = r.bool()?;
+            for slot in &mut d.sprite_writes {
+                let some = r.bool()?;
+                let w = SpriteWrite {
+                    at: r.u32()?,
+                    sprite: r.u8()? & 7,
+                    reg: r.u8()? & 3,
+                    value: r.u64()?,
+                };
+                *slot = some.then_some(w);
+            }
+        } else if version >= 10 {
             d.fine = r.bool()?;
         } else {
             for l in d.pending.iter_mut().flatten().flatten() {
@@ -1425,6 +1531,52 @@ mod tests {
         d.write_bpldat(0, w(0xffff), 0x4c);
         let px = line(&mut d, 0x4f, 0x53);
         assert_eq!(&px[6..11], &[RED, RED, 0x0000ff, 0x0000ff, 0x0000ff]);
+    }
+
+    #[test]
+    fn a_sprite_write_takes_effect_three_pixels_into_its_clock() {
+        let setup = || {
+            let mut d = Denise::new();
+            d.write_color(0, 0x000);
+            d.write_color(17, 0xf00);
+            d.diwstrt = 0x2c81;
+            d.diwstop = 0x2cc1;
+            d.bplcon0 = 0x1200;
+            // Sprite 0 at low-resolution pixel $A0: shows from hires $142.
+            d.write_sprite(0, 0, 0x2c50);
+            d.write_sprite(0, 1, 0x2d00);
+            d.write_sprite(0, 3, 0x0000);
+            d.write_sprite(0, 2, 0x8000);
+            d.start_line();
+            d.write_bpldat(0, 0, 0x40);
+            d
+        };
+        // SPRxPOS moved to $C0 in colour clock $4F: in effect from hires
+        // $142 (clock $50, pixel 2), just before the sprite's start, so it
+        // shows at $182 only.
+        let mut d = setup();
+        d.write_sprite_at(0, 0, 0x2c60, 0x4f);
+        let px = line(&mut d, 0x4f, 0x63);
+        assert_eq!(&px[6..8], &[0, 0]);
+        assert_eq!(&px[70..72], &[RED, RED]);
+        // A clock later it comes after the start: the sprite shows at both.
+        let mut d = setup();
+        d.write_sprite_at(0, 0, 0x2c60, 0x50);
+        let px = line(&mut d, 0x4f, 0x63);
+        assert_eq!(&px[6..8], &[RED, RED]);
+        assert_eq!(&px[70..72], &[RED, RED]);
+        // A write still on its way is part of the state.
+        let mut d = setup();
+        d.write_sprite_at(0, 0, 0x2c60, 0x50);
+        let mut w = StateWriter::new();
+        d.save(&mut w);
+        let bytes = w.into_bytes();
+        let loaded = Denise::load(&mut StateReader::new(&bytes), 13).unwrap();
+        assert_eq!(loaded.sprite_writes, d.sprite_writes);
+        assert!(loaded.sprite_writes[0].is_some());
+        // The line's end applies what is left.
+        d.start_line();
+        assert_eq!(d.sprites[0].pos, 0x2c60);
     }
 
     #[test]

@@ -88,6 +88,8 @@ pub struct Copper {
     /// Even slots the Copper takes without fetching after a satisfied
     /// WAIT (its wake-up cycle; it holds the bus, the CPU waits).
     pub busy_wake: u8,
+    /// Colour clocks after a WAIT's fetch before its comparison starts.
+    settle: u8,
 }
 
 impl Default for Copper {
@@ -95,6 +97,9 @@ impl Default for Copper {
         Self::new()
     }
 }
+
+/// Colour clocks from a WAIT's second fetch to its first comparison.
+const WAIT_SETTLE: u8 = 2;
 
 /// Does the beam (`v` line, `h` colour clock) satisfy a WAIT/SKIP?
 pub fn beam_reached(ir1: u16, ir2: u16, v: u16, h: u16, blitter_busy: bool) -> bool {
@@ -121,6 +126,7 @@ impl Copper {
             fetched: Vec::new(),
             wake: 0,
             busy_wake: 0,
+            settle: 0,
         }
     }
 
@@ -140,12 +146,18 @@ impl Copper {
 
     /// Every colour clock: a WAIT that is satisfied releases the Copper
     /// for its next fetch; the wake-up after a restart runs down.
-    pub fn check_wait(&mut self, v: u16, h: u16, blitter_busy: bool) {
+    /// `compare`: the comparator works in this colour clock (not in a
+    /// line's first two).
+    pub fn check_wait(&mut self, v: u16, h: u16, blitter_busy: bool, compare: bool) {
         if h & 1 == 0 && self.wake > 0 {
             self.wake -= 1;
         }
         if let State::Wait(ir1, ir2) = self.state {
-            if beam_reached(ir1, ir2, v, h, blitter_busy) {
+            if self.settle > 0 {
+                self.settle -= 1;
+                return;
+            }
+            if compare && beam_reached(ir1, ir2, v, h, blitter_busy) {
                 self.state = State::Fetch1;
                 // Waking up takes the Copper one even slot of its own.
                 self.busy_wake = 1;
@@ -197,8 +209,12 @@ impl Copper {
                     return Some((reg, word));
                 }
                 if word & 1 == 0 {
-                    // WAIT: checked from the next colour clock on.
+                    // WAIT: the comparison starts a Copper cycle after the
+                    // fetch (it needs no bus), so a WAIT that already holds
+                    // costs a cycle more than one met later (vAmigaTS
+                    // `Agnus/Copper/Wait/copwait1`, WAITs one after another).
                     self.state = State::Wait(ir1, word);
+                    self.settle = WAIT_SETTLE;
                 } else if beam_reached(ir1, word, v, h, blitter_busy) {
                     // SKIP
                     self.pc = self.pc.wrapping_add(4);
@@ -225,10 +241,11 @@ impl Copper {
         w.bool(self.danger);
         w.u8(self.wake);
         w.u8(self.busy_wake);
+        w.u8(self.settle);
     }
 
     /// `version`: the enclosing chunk's; 1 had no wake-up count, before 5
-    /// no wake-up after WAIT.
+    /// no wake-up after WAIT, before 12 no settling of a fetched WAIT.
     pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let cop1lc = r.u32()?;
         let cop2lc = r.u32()?;
@@ -254,6 +271,11 @@ impl Copper {
             fetched: Vec::new(),
             wake: if version >= 2 { r.u8()?.min(2) } else { 0 },
             busy_wake: if version >= 5 { r.u8()?.min(1) } else { 0 },
+            settle: if version >= 12 {
+                r.u8()?.min(WAIT_SETTLE)
+            } else {
+                0
+            },
         })
     }
 }
@@ -298,13 +320,13 @@ mod tests {
         let mut c = Copper::new();
         c.jump(false);
         assert!(!c.wants_slot());
-        c.check_wait(0, 0, false);
+        c.check_wait(0, 0, false, true);
         assert!(!c.wants_slot(), "the restart's own slot passes");
-        c.check_wait(0, 1, false);
+        c.check_wait(0, 1, false, true);
         assert!(!c.wants_slot());
-        c.check_wait(0, 2, false);
+        c.check_wait(0, 2, false, true);
         assert!(!c.wants_slot());
-        c.check_wait(0, 4, false);
+        c.check_wait(0, 4, false, true);
         assert!(c.wants_slot(), "fetching from the third even slot on");
     }
 
@@ -312,12 +334,39 @@ mod tests {
     fn a_satisfied_wait_takes_one_copper_cycle() {
         let mut c = Copper::new();
         c.state = State::Wait(0x2c41, 0xfffe);
-        c.check_wait(0x2c, 0x40, false);
+        c.check_wait(0x2c, 0x40, false, true);
         assert_eq!(c.state, State::Fetch1);
         assert!(!c.wants_slot(), "the wake-up slot comes first");
         assert_eq!(c.busy_wake, 1);
         c.busy_wake = 0; // the custom chips take it on the next even slot
         assert!(c.wants_slot());
+    }
+
+    #[test]
+    fn a_fetched_wait_compares_two_colour_clocks_later() {
+        let mut chip = ChipRam::new(0x1_0000);
+        // WAIT $00,$00: holds from the start.
+        chip.set_word(0x100, 0x0001);
+        chip.set_word(0x102, 0xfffe);
+        let mut c = Copper::new();
+        c.cop1lc = 0x100;
+        c.jump(false);
+        c.cycle(&chip, 5, 0x40, false);
+        c.cycle(&chip, 5, 0x42, false);
+        assert_eq!(c.state, State::Wait(0x0001, 0xfffe));
+        c.check_wait(5, 0x43, false, true);
+        c.check_wait(5, 0x44, false, true);
+        assert!(matches!(c.state, State::Wait(..)), "still settling");
+        c.check_wait(5, 0x45, false, true);
+        assert_eq!(c.state, State::Fetch1);
+        // Settling is part of the state.
+        c.state = State::Wait(0x0001, 0xfffe);
+        c.settle = 1;
+        let mut w = StateWriter::new();
+        c.save(&mut w);
+        let bytes = w.into_bytes();
+        let mut r = StateReader::new(&bytes);
+        assert_eq!(Copper::load(&mut r, 12).unwrap().settle, 1);
     }
 
     #[test]
@@ -337,9 +386,12 @@ mod tests {
         c.cycle(&chip, 0, 4, false);
         c.cycle(&chip, 0, 6, false);
         assert_eq!(c.state, State::Wait(0x0101, 0xff00));
-        c.check_wait(0, 8, false);
+        c.check_wait(0, 7, false, true);
+        c.check_wait(0, 8, false, true);
         assert_eq!(c.state, State::Wait(0x0101, 0xff00));
-        c.check_wait(1, 0, false);
+        c.check_wait(0, 9, false, true);
+        assert_eq!(c.state, State::Wait(0x0101, 0xff00));
+        c.check_wait(1, 0, false, true);
         assert_eq!(c.state, State::Fetch1);
         c.cycle(&chip, 1, 2, false);
         assert_eq!(c.cycle(&chip, 1, 4, false), None, "BLTCON0 needs CDANG");
