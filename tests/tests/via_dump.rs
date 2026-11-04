@@ -171,3 +171,80 @@ fn dump_hls_test() {
         );
     }
 }
+
+/// Development aid for the VICE `SID/env_test` programs: runs one and
+/// prints its 12 × 16 matrix of ENV3 readings (left half of the screen)
+/// next to the expected one (right half), differences marked.
+///
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_ENV_TEST=env_test_adra_1 cargo test -p emu-tests --release --test via_dump env -- --ignored --nocapture
+#[test]
+#[ignore = "development aid"]
+fn dump_env_test() {
+    let Ok(name) = std::env::var("EMU_ENV_TEST") else {
+        return;
+    };
+    let rom_dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR");
+    let data =
+        std::path::PathBuf::from(std::env::var("EMU_TESTDATA_DIR").expect("EMU_TESTDATA_DIR"))
+            .join("vice-testprogs/SID/env_test");
+    let roms = media_backends::roms::load(&rom_dir, "c64").expect("ROMs");
+    let mut config = MachineConfig {
+        roms,
+        ..MachineConfig::default()
+    };
+    config.options.insert("debugcart".into(), "on".into());
+    config.options.insert(
+        "sid".into(),
+        std::env::var("EMU_SID").unwrap_or_else(|_| "8580".into()),
+    );
+    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let prg = std::fs::read(data.join(format!("{name}.prg"))).unwrap();
+    let mut dbg = DebugHooks::new();
+    for _ in 0..lorenz::BOOT_FRAMES {
+        m.run_frame(&mut dbg);
+    }
+    lorenz::load_and_run(m.as_mut(), &prg);
+    let cpu = lorenz::space(m.as_ref(), "cpu");
+    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+        space: cpu,
+        addr: 0xd7ff,
+        len: 1,
+    });
+    while m.now().0 < 400_000_000 {
+        match m.run_frame(&mut dbg) {
+            StopReason::FrameDone => {}
+            StopReason::Watchpoint { .. } => break,
+            other => panic!("{other:?}"),
+        }
+    }
+    let t = m.debug_target(machine_c64::CPU).unwrap();
+    let peek = |a: u32| t.peek(cpu, a, Size::Byte).unwrap() as u8;
+    println!(
+        "{name}: exit {:02x}; rows = readings, columns = tv 15..0",
+        peek(0xd7ff)
+    );
+    let mut bad = 0;
+    for row in 0..12u32 {
+        let base = 0x452 + row * 40;
+        let ours: Vec<u8> = (0..16).map(|c| peek(base + c)).collect();
+        let refs: Vec<u8> = (0..16).map(|c| peek(base + 20 + c)).collect();
+        let marks: String = ours
+            .iter()
+            .zip(&refs)
+            .map(|(a, b)| if a == b { "   " } else { " ^ " })
+            .collect();
+        println!(
+            "row {row:2} ours {}",
+            ours.iter().map(|v| format!("{v:02x} ")).collect::<String>()
+        );
+        println!(
+            "       ref  {}",
+            refs.iter().map(|v| format!("{v:02x} ")).collect::<String>()
+        );
+        if ours != refs {
+            println!("            {marks}");
+            bad += 1;
+        }
+    }
+    println!("{bad} rows differ");
+}
