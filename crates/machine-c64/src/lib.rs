@@ -326,6 +326,11 @@ impl C64Bus<'_> {
                 return;
             }
         }
+        if a < 2 && self.mem.bank(a) == Bank::Ram {
+            // The RAM under the port cell takes the bus's byte, not the value.
+            self.mem.port_write_with_bus(a, v, self.io.vic.last_bus());
+            return;
+        }
         if !self.mem.write(a, v) {
             self.io.write(self.mem, a, v);
         }
@@ -1920,6 +1925,13 @@ impl DebugTarget for C64 {
             match space {
                 CPU_SPACE => {
                     let a = (a & 0xffff) as u16;
+                    if a < 2 {
+                        // The debugger sets the byte itself, port and RAM
+                        // cell alike (a CPU write would leave the bus's
+                        // byte in the cell).
+                        self.mem.port_write(a, b);
+                        continue;
+                    }
                     match self.mem.bank(a) {
                         Bank::Basic | Bank::Kernal | Bank::Char | Bank::RomL | Bank::RomH => {
                             return false

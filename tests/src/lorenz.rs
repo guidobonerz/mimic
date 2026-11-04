@@ -75,8 +75,10 @@ pub fn load_and_run(m: &mut dyn Machine, prg: &[u8]) {
         poke(m, ram, load + i as u32, b);
     }
     let end = load + body.len() as u32;
-    // VARTAB, ARYTAB, STREND: end of the BASIC program.
-    for ptr in [0x2d, 0x2f, 0x31] {
+    // VARTAB, ARYTAB, STREND: end of the BASIC program; EAL ($AE), where
+    // the KERNAL's LOAD leaves the end address (VICE test programs
+    // C64/autostart/basic read it).
+    for ptr in [0x2d, 0x2f, 0x31, 0xae] {
         poke(m, ram, ptr, end as u8);
         poke(m, ram, ptr + 1, (end >> 8) as u8);
     }

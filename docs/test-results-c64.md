@@ -13,9 +13,9 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1163 / 1240 (72 failed, 5 errors, 303 skipped; full run 2026-11-04) | 93.8 % | 48.8 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1173 / 1240 projected (62 failed, 5 errors, 303 skipped; full run 1163 on 2026-11-04, then `C64/` and `general/` runs) | 94.6 % | 48.8 min |
 
-Trend: VICE test programs 1141 → 1163 (full run 2026-11-04, confirming the projection from the runs of `drive/` and `VICII/` the same day: `drive` 26 → 45 with the VIA rules, the 1541 address decoding and the byte-ready delay below, `VICII` 226 → 229 with the graphics sequencer rules, none newly failing; every other area unchanged by the VIA users' tests). Before that: 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
+Trend: VICE test programs 1163 → 1173 projected (runs of `C64/` and `general/` on 2026-11-04 with the power-on RAM pattern, the port write and the autostart changes below: `C64` 60 → 68, `general` 321 → 323, none newly failing). Before that: 1141 → 1163 (full run 2026-11-04, confirming the projection from the runs of `drive/` and `VICII/` the same day: `drive` 26 → 45 with the VIA rules, the 1541 address decoding and the byte-ready delay below, `VICII` 226 → 229 with the graphics sequencer rules, none newly failing; every other area unchanged by the VIA users' tests). Before that: 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
 projected from runs of `VICII/`, `interrupts/` and Lorenz 264 → 264 on 2026-10-31;
 no full run yet). Before that: 874 → 902 (+28, none newly failing: all of
 `CIA/shiftregister/cia-sdr-icr`; last full run 898, the last 4 confirmed with `CIA/`,
@@ -34,13 +34,13 @@ on 2026-10-26.
 
 | Area | Pass | Fail | Error | Skip | Pass rate (pass / pass+fail+error) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| general (incl. Lorenz 2.15: 314/314) | 321 | 3 | 0 | 1 | 99.1 % |
+| general (incl. Lorenz 2.15: 314/314) | 323 | 1 | 0 | 1 | 99.7 % |
 | CPU | 115 | 0 | 0 | 5 | 100 % |
 | CIA | 188 | 0 | 0 | 3 | 100 % |
 | interrupts | 39 | 0 | 0 | 4 | 100 % |
 | VICII | 229 | 44 | 0 | 88 | 83.9 % |
 | SID | 155 | 14 | 0 | 22 | 91.7 % |
-| C64 | 60 | 10 | 0 | 25 | 85.7 % |
+| C64 | 68 | 2 | 0 | 25 | 97.1 % |
 | drive | 45 | 1 | 5 | 4 | 88.2 % |
 | testbench (self test) | 8 | 0 | 0 | 0 | 100 % |
 | vdrive | 2 | 0 | 0 | 1 | 100 % |
@@ -49,7 +49,7 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **1163** | **72** | **5** | **303** | **93.8 %** |
+| **total** | **1173** | **62** | **5** | **303** | **94.6 %** |
 
 Largest open blocks: `VICII/videomode` (27, of which 14 NTSC entries with unusable references, see
 below); `drive/viavarious` is complete. The 5 errors are `drive` entries that need
@@ -60,6 +60,35 @@ interactive and analyser programs).
 
 Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 `target/tmp/lorenz.txt`.
+
+## Changes of 2026-11-04, C64 power-on RAM, the port's RAM and autostart
+
+C64 60 → 68, general 321 → 323.
+
+- RAM comes up as a C64C's DRAMs leave it: four `$00`, four `$FF`,
+  repeating (`machine-c64/src/memory.rs`, `power_on_ram`; the readme of
+  `C64/raminitpattern` lists `00 00 FF FF FF FF 00 00` for C64C boards with
+  HM50464P-15 chips, the phase differs between boards). It was all zeros,
+  which Cyberload, Platoon's Freeload and Darkstar BBS take for a frozen
+  cartridge. The phase puts `$00` at offsets 1 and 2 of every page: Lorenz's
+  trap16/trap17 wait for the raster with the VIC banked out and read those
+  bytes of RAM instead, and "Typical" needs a harmless byte at `$3FFF`.
+- A CPU write to `$00`/`$01` puts the data bus's byte, the VIC-II's last
+  fetch, into the RAM cell under the port, not the written value
+  (`general/ram0001`, `fuxxortest/ef2-inst4a`, both reading the cells back
+  through sprite collisions).
+- The runner's program load also sets EAL (`$AE`) to the end of the
+  program, as the KERNAL's LOAD does (`C64/autostart/basic`), and entries
+  asking to be loaded as "TEST" are loaded from a disk by typing
+  `LOAD"TEST",8` and `RUN` (the program goes on a generated D64 when the
+  entry mounts none): their reference memory dump holds the typed file
+  name (`C64/autostart/defaults`).
+
+Left: `fuxxortest/test-fuxxored` (the combined emu-fuxxor v2 program
+prints "use the real thing" although each of its tests passes on its
+own; which one fails in the combination is not known), `ef-eapi`
+(EasyFlash EAPI, times out), `ultimax-vic-rr` (reference fits no
+documented table).
 
 ## Changes of 2026-11-04, VIC-II graphics sequencer
 

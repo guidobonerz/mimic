@@ -47,10 +47,32 @@ pub struct Memory {
     map: Map,
 }
 
+/// RAM as the 64 KB DRAMs come up: a C64C's repeating four `$00`, four
+/// `$FF` (VICE test program C64/raminitpattern, readme: C64C PAL boards
+/// with HM50464P-15 chips show `00 00 FF FF FF FF 00 00` over the whole
+/// range; the phase differs between boards). Copy protections and loaders
+/// read uninitialised memory to detect cartridges (Cyberload, Platoon,
+/// Darkstar BBS), and "Typical" reads `$3FFF` through the VIC's idle fetch,
+/// which must be `$00` here; all zeros looks like a frozen cartridge to the
+/// first three. The phase puts `$00` at offsets 1 and 2 of every page:
+/// Lorenz's trap16/trap17 wait for the raster with the VIC banked out and
+/// read these bytes of RAM instead.
+fn power_on_ram() -> [u8; 0x10000] {
+    let mut ram = [0u8; 0x10000];
+    for (i, b) in ram.iter_mut().enumerate() {
+        *b = if (3..7).contains(&(i & 7)) {
+            0xff
+        } else {
+            0x00
+        };
+    }
+    ram
+}
+
 impl Memory {
     pub fn new(roms: Roms) -> Self {
         let mut m = Self {
-            ram: Box::new([0; 0x10000]),
+            ram: Box::new(power_on_ram()),
             color: Box::new([0; 0x400]),
             roms,
             port: IoPort::new(0x3f),
@@ -111,12 +133,20 @@ impl Memory {
     }
 
     /// CPU write to `$00`/`$01`: goes to the port and, as on the real board,
-    /// also to the RAM cell underneath.
+    /// also to the RAM cell underneath, which gets the written value.
     pub fn port_write(&mut self, addr: u16, v: u8) {
+        self.port_write_with_bus(addr, v, v);
+    }
+
+    /// CPU write to `$00`/`$01` with what the data bus carried: the 6510
+    /// keeps the value for its port and asserts write enable all the same,
+    /// so the RAM cell takes the byte left on the bus by the VIC-II's last
+    /// fetch (VICE test programs general/ram0001, fuxxortest ef2-inst4a).
+    pub fn port_write_with_bus(&mut self, addr: u16, v: u8, bus: u8) {
         self.port.write(addr as u8, v);
         let driven = self.port.ddr & PORT_FLOATING;
         self.floating = (self.floating & !driven) | (self.port.data & driven);
-        self.ram[usize::from(addr)] = v;
+        self.ram[usize::from(addr)] = bus;
         self.update_map();
     }
 

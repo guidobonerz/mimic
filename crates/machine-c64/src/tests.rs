@@ -47,7 +47,8 @@ fn ddr_before_data_latch_banks_everything_out() {
     let mut m = machine(&code, &[0x40], &[0x40]);
     run_cycles(&mut m, 7 + 2 + 3);
     assert_eq!(m.mem.mode(), 24, "outputs low: all RAM");
-    assert_eq!(m.peek(CPU_SPACE, 0xe004, Size::Byte), Some(0));
+    // RAM as it comes up: $FF at offsets 2-5 of every eight bytes.
+    assert_eq!(m.peek(CPU_SPACE, 0xe004, Size::Byte), Some(0xff));
 }
 
 #[test]

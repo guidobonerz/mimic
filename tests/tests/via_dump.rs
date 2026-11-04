@@ -248,3 +248,105 @@ fn dump_env_test() {
     }
     println!("{bad} rows differ");
 }
+
+/// Development aid: run any C64 program from the VICE test data until it
+/// writes the debug cartridge or EMU_FRAMES frames pass, then print the
+/// CPU registers and the screen's text.
+///
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_PRG=general/Lorenz-2.15/src/trap16.prg cargo test -p emu-tests --release --test via_dump prg -- --ignored --nocapture
+#[test]
+#[ignore = "development aid"]
+fn dump_prg() {
+    let Ok(rel) = std::env::var("EMU_PRG") else {
+        return;
+    };
+    let rom_dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR");
+    let data =
+        std::path::PathBuf::from(std::env::var("EMU_TESTDATA_DIR").expect("EMU_TESTDATA_DIR"))
+            .join("vice-testprogs");
+    let roms = media_backends::roms::load(&rom_dir, "c64").expect("ROMs");
+    let mut config = MachineConfig {
+        roms,
+        ..MachineConfig::default()
+    };
+    config.options.insert("debugcart".into(), "on".into());
+    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let prg = std::fs::read(data.join(&rel)).unwrap();
+    let mut dbg = DebugHooks::new();
+    for _ in 0..lorenz::BOOT_FRAMES {
+        m.run_frame(&mut dbg);
+    }
+    if let Ok(disk) = std::env::var("EMU_LOAD_DISK") {
+        // Mount the disk and type LOAD"TEST",8 and RUN instead.
+        let slot = m
+            .media_slots()
+            .into_iter()
+            .find(|s| s.kind == emu_core::media::MediaKind::Disk)
+            .unwrap()
+            .id;
+        m.media_slot(slot)
+            .unwrap()
+            .insert(media_backends::image::open(std::path::Path::new(&disk)).unwrap())
+            .unwrap();
+        for text in [
+            "load\"test\",8
+",
+            "run
+",
+        ] {
+            let (events, _) = machine_c64::keyboard::typed_events(text, m.now().0);
+            for ev in events {
+                m.input(ev);
+            }
+            for _ in 0..400 {
+                m.run_frame(&mut dbg);
+            }
+        }
+    } else {
+        lorenz::load_and_run(m.as_mut(), &prg);
+    }
+    let cpu = lorenz::space(m.as_ref(), "cpu");
+    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+        space: cpu,
+        addr: 0xd7ff,
+        len: 1,
+    });
+    let frames: usize = std::env::var("EMU_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3000);
+    let mut stopped = false;
+    for _ in 0..frames {
+        match m.run_frame(&mut dbg) {
+            StopReason::FrameDone => {}
+            StopReason::Watchpoint { .. } => {
+                stopped = true;
+                break;
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    let t = m.debug_target(machine_c64::CPU).unwrap();
+    println!(
+        "{rel}: {}",
+        if stopped { "wrote $D7FF" } else { "timed out" }
+    );
+    println!("regs: {:?}", t.regs());
+    for row in 0..25u32 {
+        let line: String = (0..40)
+            .map(|col| {
+                let c = t.peek(cpu, 0x400 + row * 40 + col, Size::Byte).unwrap() as u8 & 0x7f;
+                match c {
+                    1..=26 => (b'A' + c - 1) as char,
+                    0x20..=0x3f => c as char,
+                    0 => '@',
+                    _ => '.',
+                }
+            })
+            .collect();
+        if line.trim_matches(' ').is_empty() {
+            continue;
+        }
+        println!("{row:2}: {line}");
+    }
+}

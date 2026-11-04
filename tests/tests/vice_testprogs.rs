@@ -214,6 +214,39 @@ fn insert(m: &mut dyn Machine, kind: MediaKind, path: &Path) -> Result<(), Strin
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Type `text` on the keyboard; with `ready` run until BASIC shows another
+/// "READY." (or 1500 frames pass), as a LOAD from the drive takes seconds.
+fn type_and_wait(m: &mut dyn Machine, dbg: &mut DebugHooks, text: &str, ready_prompt: bool) {
+    let ready = |m: &mut dyn Machine| -> usize {
+        let cpu = lorenz::space(m, "cpu");
+        let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+        let screen: Vec<u8> = (0..1000)
+            .map(|i| t.peek(cpu, 0x400 + i, emu_core::Size::Byte).unwrap_or(0) as u8)
+            .collect();
+        screen
+            .windows(6)
+            .filter(|w| *w == [18, 5, 1, 4, 25, 46])
+            .count()
+    };
+    let before = ready(m);
+    let (events, _) = machine_c64::keyboard::typed_events(text, m.now().0);
+    for ev in events {
+        m.input(ev);
+    }
+    if ready_prompt {
+        for _ in 0..1500 {
+            m.run_frame(dbg);
+            if ready(m) > before {
+                break;
+            }
+        }
+    }
+    // Let the keys go through before the next line.
+    for _ in 0..5 {
+        m.run_frame(dbg);
+    }
+}
+
 /// The debug cartridge's exit code, once written.
 fn exit_code(m: &dyn Machine) -> Option<u8> {
     let chip = m.chips().into_iter().find(|c| c.name == "debugcart")?;
@@ -244,7 +277,45 @@ fn run(m: &mut dyn Machine, e: &Entry, data: &Path) -> Result<Option<u8>, String
         for _ in 0..lorenz::BOOT_FRAMES {
             m.run_frame(&mut dbg);
         }
-        lorenz::load_and_run(m, &prg);
+        if e.options.iter().any(|o| o.contains("\"TEST\" as filename")) {
+            // The test wants a real LOAD"TEST",8: its reference memory
+            // dump holds the typed file name. Without a disk the program
+            // goes on a disk of its own as "TEST".
+            if !e.options.iter().any(|o| o.starts_with("mountd64:")) {
+                let mut image = media::d64::D64::blank(b"TEST", *b"00");
+                image
+                    .add_prg(b"TEST", &prg)
+                    .map_err(|err| format!("TEST disk: {err}"))?;
+                let media = media_backends::image::from_bytes(
+                    "test.d64",
+                    image.to_bytes(),
+                    MediaKind::Disk,
+                );
+                let slot = m
+                    .media_slots()
+                    .into_iter()
+                    .find(|s| s.kind == MediaKind::Disk)
+                    .ok_or("no drive")?
+                    .id;
+                m.media_slot(slot)
+                    .ok_or("no drive")?
+                    .insert(media)
+                    .map_err(|err| format!("TEST disk: {err}"))?;
+            }
+            type_and_wait(
+                m,
+                &mut dbg,
+                "load\"test\",8
+",
+                true,
+            );
+            type_and_wait(
+                m, &mut dbg, "run
+", false,
+            );
+        } else {
+            lorenz::load_and_run(m, &prg);
+        }
     }
     let cpu = lorenz::space(m, "cpu");
     dbg.add_breakpoint(BreakpointKind::Write {
