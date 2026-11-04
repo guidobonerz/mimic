@@ -13,9 +13,9 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1160 / 1240 projected (75 failed, 5 errors, 303 skipped; last full run 1141 on 2026-11-01) | 93.5 % | 48.8 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1163 / 1240 projected (72 failed, 5 errors, 303 skipped; last full run 1141 on 2026-11-01) | 93.8 % | 48.8 min |
 
-Trend: VICE test programs 1141 → 1160 projected (runs of `drive/` on 2026-11-04 with the VIA rules, the 1541 address decoding and the byte-ready delay below: `drive` 26 → 45, none newly failing; every other area unchanged by the VIA users' tests). Before that: 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
+Trend: VICE test programs 1141 → 1163 projected (runs of `drive/` and `VICII/` on 2026-11-04: `drive` 26 → 45 with the VIA rules, the 1541 address decoding and the byte-ready delay below, `VICII` 226 → 229 with the graphics sequencer rules, none newly failing; every other area unchanged by the VIA users' tests). Before that: 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
 projected from runs of `VICII/`, `interrupts/` and Lorenz 264 → 264 on 2026-10-31;
 no full run yet). Before that: 874 → 902 (+28, none newly failing: all of
 `CIA/shiftregister/cia-sdr-icr`; last full run 898, the last 4 confirmed with `CIA/`,
@@ -38,7 +38,7 @@ on 2026-10-26.
 | CPU | 115 | 0 | 0 | 5 | 100 % |
 | CIA | 188 | 0 | 0 | 3 | 100 % |
 | interrupts | 39 | 0 | 0 | 4 | 100 % |
-| VICII | 226 | 47 | 0 | 88 | 82.8 % |
+| VICII | 229 | 44 | 0 | 88 | 83.9 % |
 | SID | 155 | 14 | 0 | 22 | 91.7 % |
 | C64 | 60 | 10 | 0 | 25 | 85.7 % |
 | drive | 45 | 1 | 5 | 4 | 88.2 % |
@@ -49,7 +49,7 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **1160** | **75** | **5** | **303** | **93.5 %** |
+| **total** | **1163** | **72** | **5** | **303** | **93.8 %** |
 
 Largest open blocks: `VICII/videomode` (27, of which 14 NTSC entries with unusable references, see
 below); `drive/viavarious` is complete. The 5 errors are `drive` entries that need
@@ -63,10 +63,12 @@ Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 
 ## Changes of 2026-11-04, VIC-II graphics sequencer
 
-VICII stays 226/273; `vicii_timing/vicii_reg_timing` goes from 147 to 40
-differing pixels (8565) and 179 to 40 (6569), `videomode` from 4–17 to 2–5
-pixels on PAL, `modesplit` from 683 to 455 (8565) but 761 to 833 (6569); the
-interrupts group and Lorenz are unchanged. Read off the reference pictures
+VICII 226 → 229/273 (`videomode1`, `-w`, `-x` on the 8565 pass, projected
+from the group's run); `vicii_timing/vicii_reg_timing` goes from 147 to 30
+differing pixels (8565) and 179 to 30 (6569), the other `videomode` PAL
+entries from 4–17 to 1–4 pixels on the 8565, `modesplit` from 683 to 455
+(8565) but 761 to 833 (6569); the interrupts group and Lorenz are
+unchanged. Read off the reference pictures
 line by line (`vice_diff.py`, `vice_rows.py` in the session's scratchpad:
 colour indices of ours and the reference side by side) and the test's
 register writes per cycle:
@@ -79,13 +81,27 @@ register writes per cycle:
   on (`XSCROLL_DELAY`; Lines 18/19: the last cell loads at its old point
   when the register rises in the cycle after its g-access; 3 fits as well,
   5 breaks Lines 0–3).
-- The four settling pixels after MCM is switched on show background colour
-  0, black only when the new mode is the invalid ECM + MCM (Line 17 against
-  `videomode-z`).
+- The four settling pixels after MCM is switched on: the first shows
+  background colour 0, the next three the multicolour reading of the bit
+  pair at pixels 2 and 3 of the write cycle (`videomode1`, `-w`, `-x`: pair
+  10 gives background 2; Line 17: pair 00 gives background 0); black when
+  the new mode is the invalid ECM + MCM (`videomode-z`). Why the chip
+  shows that pair is not known; the rule is the reading that fits all
+  five pictures.
 - For the g-access address on the older types (6569, 6567) only BMM's
   switch-off reaches the access one cycle late; ECM changes the next access
   either way (Lines 17–19: BMM alone, ECM alone, both). The HMOS-II types
   keep the whole old mode for the access after the write.
+
+Tried and dropped: a black pixel where an invalid mode ends (fits
+`videomode2` and `-v` on the 8565 and the a5/ff variants of
+`vicii_reg_timing`, but `videomode-w`, `-x` and `-z` show the data bit
+there); the 6569's repeated bit pair after MCM is switched off at pixels 2
+and 3 instead of 0 and 1 (fits `videomode1` and `-z` on the 6569 coming out
+of the invalid mode, costs every other 6569 entry). Left in the 8565
+`videomode` entries: one pixel each in `videomode2` and `-v`, the four
+settling pixels of BMM switched off under MCM in `-y`; the 6569 entries
+are 2–82 pixels off, mostly at the same transitions.
 
 Left in `vicii_reg_timing`: single pixels at the last cell of Line 17 and
 the BC0 read-modify-write lines 20/21, where two identical lines of the

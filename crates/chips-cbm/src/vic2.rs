@@ -389,6 +389,8 @@ pub struct Vic2 {
     /// The first bit of a pair during a change of MCM (only within a cycle,
     /// so not saved).
     late_bit: u8,
+    /// Bit pair shown while multicolour settles in (see `graphics_pixel`).
+    settle_pair: u8,
     /// Sprites whose DMA started in this cycle's phi1 (only between phi1
     /// and phi2, so not saved).
     dma_started: u8,
@@ -499,6 +501,7 @@ impl Vic2 {
             cycle_sprite_x: [0; 8],
             cycle_mode: (0, 0),
             late_bit: 0,
+            settle_pair: 0,
             g_ctrl1: 0,
             dma_started: 0,
             coll_late: (0, 0),
@@ -1282,10 +1285,31 @@ impl Vic2 {
         };
 
         if mcm_late && multicolor && !bmm {
-            // Background colour 0 while multicolour settles in (the last
-            // cell of VICII/vicii_timing Line 17), black when the new mode
-            // is the invalid ECM + MCM (VICII/videomode-z).
-            return (if ecm { 0 } else { src::BG0 }, false);
+            // Multicolour settling in over the write cycle's first four
+            // pixels: the first shows background colour 0, the next three
+            // the multicolour reading of the bit pair at pixels 2 and 3
+            // (VICII/videomode1, -w, -x: pair 10 gives background 2;
+            // VICII/vicii_timing Line 17: pair 00 gives background 0);
+            // black when the new mode is the invalid ECM + MCM
+            // (VICII/videomode-z).
+            if ecm {
+                return (0, false);
+            }
+            if i == 0 {
+                // The pair at pixels 2 and 3 is the shifter's top after
+                // this pixel's pair was taken.
+                self.settle_pair = self.sr >> 6;
+                return (src::BG0, false);
+            }
+            return (
+                match self.settle_pair {
+                    0 => src::BG0,
+                    1 => src::BG0 + 1,
+                    2 => src::BG0 + 2,
+                    _ => color & 7,
+                },
+                false,
+            );
         }
         (out, fg)
     }

@@ -473,7 +473,7 @@ cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms --option user
 ## Testing
 
 - CPU cores: Tom Harte SingleStepTests (6502, Z80, 68000), Klaus Dormann 6502 functional test, ZEXALL (Z80), WinUAE `cputester` data (68000).
-- C64 / Commodore 8-bit: Lorenz test suite, VICE test programs (results and trend in `docs/test-results-c64.md`; 2026-11-04: 1160/1240 projected from `drive/` 45/51 after the VIA rules, the 1541 address decoding and the byte-ready delay, last full run 1141 on 2026-11-01; Lorenz 264/264).
+- C64 / Commodore 8-bit: Lorenz test suite, VICE test programs (results and trend in `docs/test-results-c64.md`; 2026-11-04: 1163/1240 projected from `drive/` 45/51 (VIA rules, 1541 address decoding, byte-ready delay) and `VICII/` 229/273 (graphics sequencer: load point, XSCROLL write delay, MCM settling, 6569 g-access mode), last full run 1141 on 2026-11-01; Lorenz 264/264).
 - Atari: Acid800, Altirra test programs. CPC: CRTC/Z80 timing test programs. Amiga: vAmigaTS (`vamigats_suite`; 2026-11-01 OCS: 69/537 exact, see "vAmigaTS"). NES: nestest and blargg's suites (nes-test-roms collection).
 - Regression: headless run → N frames → compare against reference images in `tests/reference/` (exact match; update only with an explanation in the commit).
 - Test-suite data and ROMs are fetched by `tools/fetch-testdata.sh`, never committed if license forbids.
