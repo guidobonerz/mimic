@@ -18,8 +18,16 @@
 //! | F   | IRA without handshake        | ORA without handshake                  |
 //!
 //! Timers: T1 counts down every φ2; the cycle after it passes 0 it sets its
-//! flag and, in free-run mode, reloads the latch (one cycle at the latch
-//! value), so it interrupts every N + 2 cycles. T2 counts down once and
+//! flag and reloads the latch (one cycle at $FFFF in between), so it runs
+//! every N + 2 cycles; in one-shot mode only the first pass sets the flag
+//! and toggles PB7, the counter reloads all the same (the VICE
+//! `viavarious` tests measured on a 1541C). The T1 output flip-flop (PB7
+//! with ACR bit 7) rests high after reset, goes low on a write of the
+//! counter's high byte and toggles at a timeout while ACR bit 7 is set
+//! (a timeout with it clear leaves the flip-flop high); a read of port B
+//! then shows the flip-flop in bit 7 whatever DDRB says (`viavarious`
+//! via10–via14: a timer started before PB7 is switched on reads 1 until
+//! its timeout). T2 counts down once and
 //! interrupts once per write of its high byte. Source: MOS 6522 data sheet;
 //! Rockwell R6522 data sheet (timing diagrams). The shift register shifts
 //! out (bit 7 first, rotating it into bit 0) in modes 4 (free-running at
@@ -69,6 +77,10 @@ pub struct Via {
     /// The counter was just written; it starts counting next cycle.
     t1_loaded: bool,
     t2_loaded: bool,
+    /// ACR bit 5 (T2 counts PB6 pulses) as the timer saw it last cycle:
+    /// a mode switch reaches T2 a cycle late in both directions (VICE
+    /// `viavarious` via1 test G and via9 on a 1541C).
+    t2_pulses: bool,
     pb7: bool,
     ca1: bool,
     cb1: bool,
@@ -92,6 +104,8 @@ impl Via {
             ca1: true,
             cb1: true,
             ca2: true,
+            // The T1 output rests high.
+            pb7: true,
             ..Self::default()
         }
     }
@@ -202,18 +216,20 @@ impl Via {
         if self.t1_loaded {
             self.t1_loaded = false;
         } else if self.t1_reload {
+            // The latch goes in after the cycle at $FFFF in both modes:
+            // one-shot only stops the flag and PB7 (VICE `viavarious`
+            // via1/via2 on a 1541C: with latch 0 or 1 the counter reads
+            // 0 or 1/0 for ever, not a free count-down).
             self.t1_reload = false;
-            if self.acr & 0x40 != 0 {
-                self.t1_counter = self.t1_latch;
-            } else {
-                self.t1_counter = self.t1_counter.wrapping_sub(1);
-            }
+            self.t1_counter = self.t1_latch;
         } else {
             if self.t1_counter == 0 {
                 self.t1_reload = true;
                 if self.t1_armed {
                     self.ifr |= ifr::T1;
-                    self.pb7 = !self.pb7;
+                    // The output flip-flop toggles while it is on PB7
+                    // and rests high otherwise.
+                    self.pb7 = self.acr & 0x80 == 0 || !self.pb7;
                     // One-shot mode fires once; free-run keeps going.
                     self.t1_armed = self.acr & 0x40 != 0;
                 }
@@ -244,15 +260,36 @@ impl Via {
             }
         }
 
-        // T2 (timed mode; pulse counting on PB6 is not wired yet).
+        // T2 (timed mode; pulse counting on PB6 is not wired yet). The
+        // mode bit works a cycle after it is written.
+        let pulses = std::mem::replace(&mut self.t2_pulses, self.acr & 0x20 != 0);
         if self.t2_loaded {
             self.t2_loaded = false;
-        } else if self.acr & 0x20 == 0 {
-            if self.t2_counter == 0 && self.t2_armed {
-                self.ifr |= ifr::T2;
-                self.t2_armed = false;
+        } else if !pulses {
+            let sr_mode = (self.acr >> 2) & 7;
+            if matches!(sr_mode, 1 | 4 | 5) {
+                // Shift register clocked by T2: the low byte reloads
+                // from its latch when it underflows, the high byte counts
+                // those reloads, and its own underflow ($0000 to $FFFF)
+                // sets the flag (`viavarious` via20/via21).
+                if self.t2_counter & 0xff == 0 {
+                    let high = (self.t2_counter >> 8) as u8;
+                    if high == 0 && self.t2_armed {
+                        self.ifr |= ifr::T2;
+                        self.t2_armed = false;
+                    }
+                    self.t2_counter =
+                        (u16::from(high.wrapping_sub(1)) << 8) | u16::from(self.t2_latch_lo);
+                } else {
+                    self.t2_counter -= 1;
+                }
+            } else {
+                if self.t2_counter == 0 && self.t2_armed {
+                    self.ifr |= ifr::T2;
+                    self.t2_armed = false;
+                }
+                self.t2_counter = self.t2_counter.wrapping_sub(1);
             }
-            self.t2_counter = self.t2_counter.wrapping_sub(1);
         }
     }
 
@@ -279,7 +316,14 @@ impl Via {
                 } else {
                     pb_pins
                 };
-                (self.port_b_out() & self.ddrb) | (pins & !self.ddrb)
+                let v = (self.port_b_out() & self.ddrb) | (pins & !self.ddrb);
+                if self.acr & 0x80 != 0 {
+                    // With the timer on PB7 bit 7 reads the output
+                    // flip-flop whatever DDRB says.
+                    (v & 0x7f) | (u8::from(self.pb7) << 7)
+                } else {
+                    v
+                }
             }
             // Port A reads the pins; output pins carry ORA.
             0x1 | 0xf => {
@@ -382,7 +426,7 @@ impl Via {
 }
 
 const TAG: [u8; 4] = *b"6522";
-const VERSION: u16 = 4;
+const VERSION: u16 = 5;
 
 impl Savestate for Via {
     fn save(&self, w: &mut StateWriter) {
@@ -422,6 +466,7 @@ impl Savestate for Via {
             w.bool(self.sr_cb2);
             w.u8(self.sr_bits);
             w.bool(self.ca2);
+            w.bool(self.t2_pulses);
         });
     }
 
@@ -468,6 +513,11 @@ impl Savestate for Via {
         if version >= 4 {
             v.ca2 = c.bool()?;
         }
+        v.t2_pulses = if version >= 5 {
+            c.bool()?
+        } else {
+            v.acr & 0x20 != 0
+        };
         *self = v;
         Ok(())
     }
@@ -514,6 +564,71 @@ mod tests {
         assert!(!v.irq(), "reading T1 low clears the flag");
         run(&mut v, 70_000);
         assert!(!v.irq(), "no second interrupt without rewriting");
+    }
+
+    #[test]
+    fn t1_one_shot_reloads_the_latch_after_the_timeout() {
+        // VICE viavarious via2 test a on a 1541C: latch 1, one-shot, read
+        // every 14 cycles gives 1, 0, 1, 0 … for ever, not a free count-down.
+        let mut v = Via::new();
+        v.write(0x4, 1);
+        v.write(0x5, 0);
+        let seq = run(&mut v, 8);
+        assert_eq!(seq, [1, 0, 0xffff, 1, 0, 0xffff, 1, 0]);
+        assert_eq!(v.ifr & ifr::T1, ifr::T1, "the first timeout flags");
+        v.write(0xd, 0x7f);
+        run(&mut v, 6);
+        assert_eq!(v.ifr & ifr::T1, 0, "later ones do not");
+    }
+
+    #[test]
+    fn t2_mode_switch_reaches_the_counter_a_cycle_late() {
+        // via1 test G and via9: T2 held by ACR bit 5 (PB6 pulses) at 0;
+        // after the switch to the clock the first decrement comes two
+        // cycles later, and the switch back lets one more cycle count.
+        let mut v = Via::new();
+        v.write(0xb, 0x20);
+        v.write(0x8, 0);
+        v.write(0x9, 0);
+        run(&mut v, 10);
+        assert_eq!(v.t2_counter, 0);
+        v.write(0xb, 0);
+        run(&mut v, 1);
+        assert_eq!(v.t2_counter, 0, "no count in the cycle after the write");
+        run(&mut v, 5);
+        assert_eq!(v.t2_counter, 0xfffb);
+        v.write(0xb, 0x20);
+        run(&mut v, 1);
+        assert_eq!(v.t2_counter, 0xfffa, "one more count after the switch back");
+        run(&mut v, 5);
+        assert_eq!(v.t2_counter, 0xfffa);
+    }
+
+    #[test]
+    fn pb7_flip_flop_rests_high_and_reads_back_whatever_ddrb_says() {
+        // viavarious via10–via14 on a 1541C.
+        let mut v = Via::new();
+        assert_eq!(v.read(0, 0xff, 0x00) & 0x80, 0, "PB7 off: the pin");
+        // A timer started before PB7 is switched on reads 1 until it
+        // times out, then 0 (via10 test d: DDRB 0, T1 = $0100).
+        v.write(0x4, 0);
+        v.write(0x5, 1);
+        v.write(0xb, 0x80);
+        run(&mut v, 100);
+        assert_eq!(v.read(0, 0xff, 0x00) & 0x80, 0x80);
+        run(&mut v, 200);
+        assert_eq!(v.read(0, 0xff, 0x00) & 0x80, 0);
+        // A timeout with PB7 off puts the flip-flop back high.
+        v.write(0xb, 0);
+        v.write(0x5, 0);
+        run(&mut v, 4);
+        v.write(0xb, 0x80);
+        assert_eq!(v.read(0, 0xff, 0x00) & 0x80, 0x80);
+        // Started with PB7 on it goes low first (via14 test d).
+        v.write(0x5, 1);
+        assert_eq!(v.read(0, 0xff, 0xff) & 0x80, 0);
+        run(&mut v, 300);
+        assert_eq!(v.read(0, 0xff, 0x00) & 0x80, 0x80);
     }
 
     #[test]

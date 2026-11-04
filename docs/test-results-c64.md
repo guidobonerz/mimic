@@ -13,9 +13,9 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1141 / 1240 (94 failed, 5 errors, 303 skipped) | 92.0 % | 48.8 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1157 / 1240 projected (78 failed, 5 errors, 303 skipped; last full run 1141 on 2026-11-01) | 93.3 % | 48.8 min |
 
-Trend: VICE test programs 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
+Trend: VICE test programs 1141 → 1157 projected (runs of `drive/` on 2026-11-04 with the VIA rules below: `drive` 26 → 42, none newly failing; every other area unchanged by the VIA users' tests). Before that: 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
 projected from runs of `VICII/`, `interrupts/` and Lorenz 264 → 264 on 2026-10-31;
 no full run yet). Before that: 874 → 902 (+28, none newly failing: all of
 `CIA/shiftregister/cia-sdr-icr`; last full run 898, the last 4 confirmed with `CIA/`,
@@ -41,7 +41,7 @@ on 2026-10-26.
 | VICII | 226 | 47 | 0 | 88 | 82.8 % |
 | SID | 155 | 14 | 0 | 22 | 91.7 % |
 | C64 | 60 | 10 | 0 | 25 | 85.7 % |
-| drive | 26 | 20 | 5 | 4 | 51.0 % |
+| drive | 42 | 4 | 5 | 4 | 82.4 % |
 | testbench (self test) | 8 | 0 | 0 | 0 | 100 % |
 | vdrive | 2 | 0 | 0 | 1 | 100 % |
 | memory-expansions | 1 | 0 | 0 | 5 | 100 % |
@@ -49,16 +49,53 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **1141** | **94** | **5** | **303** | **92.0 %** |
+| **total** | **1157** | **78** | **5** | **303** | **93.3 %** |
 
 Largest open blocks: `VICII/videomode` (27, of which 14 NTSC entries with unusable references, see
-below), `drive/viavarious` (15). The 5 errors are `drive` entries that need
-P64 images or disks missing from the test data. Skipped: tests that need hardware
+below); `drive/viavarious` is complete. The 5 errors are `drive` entries that need
+P64 images or disks missing from the test data; the 4 `drive` failures are
+`hlstest`, `drive-emu-check` and the two `openbus` programs. Skipped: tests that need hardware
 or options the runner does not set up (REU and GEO-RAM tests, mice,
 interactive and analyser programs).
 
 Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 `target/tmp/lorenz.txt`.
+
+## Changes of 2026-11-04, VIA 6522
+
+drive 26 → 42: all of `drive/viavarious` (via1–via21) and
+`drive/interrupts/timera`. The rules were read off the reference data, which
+the test author recorded on a 1541C (and checked on a 1541-II), by replaying
+each sub test at the chip and comparing byte for byte
+(`tests/tests/via_dump.rs` prints the drive's measurements next to
+`viaNref.bin`; a temporary chip-level probe gave the same runs):
+
+- T1 reloads its latch after a timeout in one-shot mode as well, so with
+  latch 0 or 1 the counter reads 0 or 1/0 for ever instead of counting down
+  freely (via1 tests A/B, via2); only the flag and PB7 stay quiet after the
+  first timeout.
+- ACR bit 5 (T2 counts PB6 pulses) reaches the counter a cycle late in both
+  directions: after the switch to the clock the first decrement comes two
+  cycles after the write, after the switch back one more cycle counts (via1
+  test G: the first read 6 cycles after the write shows −5; via9).
+- The T1 output flip-flop (PB7 with ACR bit 7) rests high after reset, goes
+  low on a write of the counter's high byte only while ACR bit 7 is set,
+  toggles at a timeout while ACR bit 7 is set and is left high by a timeout
+  with it clear; with ACR bit 7 set a read of port B shows the flip-flop in
+  bit 7 whatever DDRB says (via10–via14: a timer started before PB7 is
+  switched on reads 1 until it times out, started after it reads 0 first).
+  The "rests high after a timeout with PB7 off" part is the reading that
+  fits all five programs (the drive's reset code and `setdefaults` run T1
+  with PB7 off between sub tests); a write of ACR clearing bit 7 would fit
+  them as well.
+- With the shift register clocked by T2 (ACR modes 1, 4, 5) T2 counts in
+  8-bit mode: the low byte reloads from its latch when it underflows, the
+  high byte counts those reloads, and its own underflow ($0000 → $FFFF)
+  sets the T2 flag (via20/via21: T2 = $0114 flags after two low-byte
+  periods, $0101 within 6 cycles).
+
+Checked unchanged: PET, VIC-20, C128 (1571/1581), Mac and Vectrex unit and
+boot tests (the Vectrex draws through PB7/T1, Mine Storm plays).
 
 ## Changes of 2026-11-01, cartridges and drive
 

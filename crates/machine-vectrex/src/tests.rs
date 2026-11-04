@@ -306,6 +306,108 @@ fn imager_spins_signals_ca1_and_colours_by_eye() {
     .is_err());
 }
 
+/// Phase 14 gate: the built-in Mine Storm (the 8 KB system ROM in
+/// EMU_ROM_DIR/vectrex/) plays: the mine field appears, button 4 fires
+/// (more segments on the screen), the joystick turns the ship.
+///
+///     EMU_ROM_DIR=$PWD/roms cargo test -p machine-vectrex --release mine_storm_plays -- --ignored --nocapture
+#[test]
+#[ignore = "needs the 8 KB system ROM in EMU_ROM_DIR/vectrex/"]
+fn mine_storm_plays() {
+    let Some(dir) = std::env::var_os("EMU_ROM_DIR") else {
+        return;
+    };
+    let rom_path = std::fs::read_dir(std::path::Path::new(&dir).join("vectrex"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            std::fs::metadata(p)
+                .map(|m| m.len())
+                .is_ok_and(|l| l == 0x2000)
+        })
+        .expect("an 8 KB system ROM");
+    let mut config = MachineConfig::default();
+    config
+        .roms
+        .insert("vectrex".into(), std::fs::read(rom_path).unwrap());
+    let mut m = Vectrex::new(&config).unwrap();
+    let segments = |m: &Vectrex| m.vectors().map_or(0, |v| v.segments.len());
+    // GCE title, "PLAYER 1", then the first mine field.
+    frames(&mut m, 1500);
+    let field = segments(&m);
+    println!("mine field: {field} segments");
+    assert!(
+        field > 100,
+        "no mine field after 1500 frames: {field} segments"
+    );
+    let ship: Vec<Segment> = m.vectors().unwrap().segments.to_vec();
+    // Button 4 fires: the shot adds segments.
+    push(
+        &mut m,
+        InputTarget::Port(PORT1),
+        InputEvent::Digital {
+            dirs: Dirs(0),
+            buttons: 0b1000,
+        },
+    );
+    frames(&mut m, 2);
+    push(
+        &mut m,
+        InputTarget::Port(PORT1),
+        InputEvent::Digital {
+            dirs: Dirs(0),
+            buttons: 0,
+        },
+    );
+    let mut fired = false;
+    for _ in 0..10 {
+        frames(&mut m, 1);
+        if segments(&m) > field + 2 {
+            fired = true;
+            break;
+        }
+    }
+    println!("after fire: {} segments", segments(&m));
+    assert!(fired, "button 4 did not fire a shot");
+    // The joystick turns the ship: its segments at the centre change.
+    let centre = |segs: &[Segment], w: i32, h: i32| -> Vec<(i32, i32, i32, i32)> {
+        segs.iter()
+            .filter(|s| (s.x0 - w / 2).abs() < w / 25 && (s.y0 - h / 2).abs() < h / 25)
+            .map(|s| (s.x0, s.y0, s.x1, s.y1))
+            .collect()
+    };
+    let (w, h) = {
+        let v = m.vectors().unwrap();
+        (v.width as i32, v.height as i32)
+    };
+    let before = centre(&ship, w, h);
+    push(
+        &mut m,
+        InputTarget::Port(PORT1),
+        InputEvent::Digital {
+            dirs: Dirs::LEFT,
+            buttons: 0,
+        },
+    );
+    // The game's loop is not locked to the 30 000-cycle picture window:
+    // a window now and then holds no ship, so the last one with it counts.
+    let mut after = Vec::new();
+    for _ in 0..20 {
+        frames(&mut m, 1);
+        let c = centre(m.vectors().unwrap().segments, w, h);
+        if !c.is_empty() {
+            after = c;
+        }
+    }
+    println!(
+        "ship before {before:?}
+ship after  {after:?}"
+    );
+    assert!(!before.is_empty(), "no ship at the centre");
+    assert_ne!(before, after, "the joystick did not turn the ship");
+}
+
 /// Development aid: run the system ROM (EMU_ROM_DIR/vectrex/*.vec or .bin)
 /// with a cartridge (EMU_CART) for EMU_FRAMES frames and print where the
 /// CPU spends the next frame.
