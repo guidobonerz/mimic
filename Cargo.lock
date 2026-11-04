@@ -1098,6 +1098,7 @@ dependencies = [
  "rfd",
  "video-crt",
  "wgpu",
+ "windows-sys 0.59.0",
  "winit",
 ]
 

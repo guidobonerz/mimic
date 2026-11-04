@@ -24,8 +24,8 @@ pub mod vectrex;
 
 pub use amiga_mouse::AmigaMouse;
 pub use amx_mouse::AmxMouse;
-pub use cbm_keypad::{CbmKeypad, CbmKeypadKind};
 pub use apple::{AppleJoystick, AppleKind};
+pub use cbm_keypad::{CbmKeypad, CbmKeypadKind};
 pub use coleco::{ColecoController, ColecoKind};
 pub use driving::Driving;
 pub use joystick::Joystick;

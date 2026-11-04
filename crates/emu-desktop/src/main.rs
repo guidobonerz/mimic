@@ -7,9 +7,13 @@
 //! Keys use the positional keymap of `emu-input` (see `--help`); the
 //! numeric keypad and the first gamepad act as the joystick in port 2.
 
-#![forbid(unsafe_code)]
+// A GUI program on Windows: no console window of its own; the terminal it
+// was started from is attached in `console` (the crate's only `unsafe`).
+#![cfg_attr(windows, windows_subsystem = "windows")]
+#![deny(unsafe_code)]
 
 mod audio;
+mod console;
 mod emu;
 mod footer;
 mod gfx;
@@ -209,7 +213,12 @@ With a light pen (--option port1=lightpen on the C64/C128/Atari 8-bit,
 port0=lightpen on the Amiga, expansion=lightpen on the CPC) or a Zapper /
 Super Scope the pointer over the picture aims it, the left button is its button.
 
-EMU_DESKTOP_DEBUG=1 prints frame and audio statistics every 5 s.";
+EMU_DESKTOP_DEBUG=1 prints frame and audio statistics every 5 s.
+
+On Windows mimic-desktop is a window program: no console opens with it.
+Started from a terminal, its messages go to that terminal (after the
+prompt, as the shell does not wait for a window program); started by a
+double-click, errors and --help appear in a dialog instead.";
 
 struct Args {
     machine: String,
@@ -2045,7 +2054,7 @@ fn start_from(raw: &[String]) -> Result<Option<Started>, String> {
         match emu_profile::prepare(raw, emu_profile::Frontend::Desktop, &mut notes)? {
             emu_profile::Prepared::Run(a, s) => (a, s),
             emu_profile::Prepared::Done(text) => {
-                print!("{text}");
+                console::report("mimic", text.trim_end(), false);
                 return Ok(None);
             }
         };
@@ -2053,11 +2062,23 @@ fn start_from(raw: &[String]) -> Result<Option<Started>, String> {
         eprintln!("{n}");
     }
     let Some(args) = parse_args(argv)? else {
-        println!(
-            "{}
+        if console::has_terminal() {
+            println!(
+                "{}
 {USAGE}",
-            emu_core::version::banner()
-        );
+                emu_core::version::banner()
+            );
+        } else {
+            console::report(
+                "mimic",
+                &format!(
+                    "{}\n\nStart mimic-desktop from a terminal to read the option list \
+                     (--help); as a window program it has no console of its own.",
+                    emu_core::version::banner()
+                ),
+                false,
+            );
+        }
         return Ok(None);
     };
     start(args, &settings).map(Some)
@@ -2066,19 +2087,13 @@ fn start_from(raw: &[String]) -> Result<Option<Started>, String> {
 /// The picker's list when the command line names no machine and no
 /// profile and a profile file has profiles.
 fn picker_for(raw: &[String]) -> Option<picker::Picker> {
-    if raw.iter().any(|a| {
-        matches!(
-            a.as_str(),
-            "--machine" | "--profile" | "--list-profiles" | "--save-profile" | "--help" | "-h"
-        )
-    }) {
-        return None;
-    }
-    let explicit = raw
-        .iter()
-        .position(|a| a == "--profiles")
-        .and_then(|i| raw.get(i + 1))
-        .map(PathBuf::from);
+    // Only a bare start (at most `--profiles FILE`) lists the profiles;
+    // any other argument is a command line to run or to report on.
+    let explicit = match raw {
+        [] => None,
+        [flag, file] if flag == "--profiles" => Some(PathBuf::from(file)),
+        _ => return None,
+    };
     let path = emu_profile::find_file(explicit.as_deref())?;
     let file = emu_profile::ProfileFile::load(&path).ok()?;
     if file.profiles.is_empty() {
@@ -2222,10 +2237,19 @@ fn run() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
+    console::attach_parent();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e}\n\n{USAGE}");
+            if console::has_terminal() {
+                eprintln!("error: {e}\n\n{USAGE}");
+            } else {
+                console::report(
+                    "mimic",
+                    &format!("{e}\n\nmimic-desktop --help (in a terminal) lists the options."),
+                    true,
+                );
+            }
             ExitCode::FAILURE
         }
     }

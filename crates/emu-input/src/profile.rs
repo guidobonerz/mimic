@@ -296,8 +296,7 @@ impl Profile {
             if matches!(
                 get(option),
                 Some(
-                    "mouse1351" | "paddles" | "amx" | "driving" | "amigamouse" | "stmouse"
-                        | "cx22"
+                    "mouse1351" | "paddles" | "amx" | "driving" | "amigamouse" | "stmouse" | "cx22"
                 )
             ) {
                 p.mouse.push(MouseMap { port });

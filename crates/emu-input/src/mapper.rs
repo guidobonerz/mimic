@@ -455,7 +455,13 @@ impl Mapper {
     }
 
     /// A key of a keypad mapped into a port: the event goes to the port.
-    fn keypad_key(&mut self, code: &str, down: bool, now: Cycle, out: &mut Vec<TimedInput>) -> bool {
+    fn keypad_key(
+        &mut self,
+        code: &str,
+        down: bool,
+        now: Cycle,
+        out: &mut Vec<TimedInput>,
+    ) -> bool {
         let mut taken = false;
         for map in &self.profile.keypad {
             if let Some(k) = map.layout.machine_key(code) {

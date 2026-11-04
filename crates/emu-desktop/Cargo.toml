@@ -9,8 +9,11 @@ publish.workspace = true
 name = "mimic-desktop"
 path = "src/main.rs"
 
-[lints]
-workspace = true
+# Not the workspace's `forbid`: on Windows the program attaches to the
+# terminal it was started from with one documented FFI call
+# (src/console.rs only); main.rs denies unsafe code everywhere else.
+[lints.rust]
+unsafe_code = "deny"
 
 [dependencies]
 emu-core.workspace = true
@@ -30,3 +33,7 @@ pollster.workspace = true
 rfd.workspace = true
 wgpu.workspace = true
 winit.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# AttachConsole for the terminal behind the GUI window (src/console.rs).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }

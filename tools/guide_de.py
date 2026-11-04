@@ -102,6 +102,13 @@ mimic-desktop --machine snes --cart game.sfc
 # Vectrex mit einem Modul
 mimic-desktop --machine vectrex --rom-dir roms --cart "Scramble (1982).vec\"""")
 p("`mimic-desktop --help` listet jede Option mit den Tastenbelegungen.")
+note("""Unter Windows ist `mimic-desktop` ein Fensterprogramm: ein Doppelklick
+oder eine Verknüpfung öffnet kein Konsolenfenster neben dem Emulator. Aus
+einem Terminal gestartet gehen seine Meldungen (Gamepads, Server, Fehler,
+`--help`) in dieses Terminal — hinter die Eingabeaufforderung, weil die
+Shell auf ein Fensterprogramm nicht wartet. Ohne Terminal zeigen ein
+fehlgeschlagener Start und `--help` stattdessen einen Dialog.
+`mimic-headless` bleibt ein Konsolenprogramm.""", "Hinweis")
 
 # ---- 3 ROMs --------------------------------------------------------------
 
