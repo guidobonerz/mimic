@@ -2,9 +2,10 @@
 //! timers, CPU clock).
 //!
 //! Machine ids: "c16" (16 KB RAM) and "plus4" (64 KB RAM, 3-plus-1
-//! function ROM, ACIA and user port). Models: "pal" (default; TED 8360,
+//! function ROM, ACIA and user port). Video formats (`--videoformat`):
+//! "pal" (default; TED 8360,
 //! 1 773 447 Hz double clock, 312 lines) and "ntsc" (TED 7360,
-//! 1 789 772 Hz, 262 lines); the NTSC model uses `roms["kernal-ntsc"]` if
+//! 1 789 772 Hz, 262 lines); NTSC uses `roms["kernal-ntsc"]` if
 //! given. Time ([`Machine::now`]) counts TED double clocks; the CPU runs in
 //! the slots the TED leaves it (see `chips_cbm::ted`). The "cartridge"
 //! slot holds the expansion port's C1/C2 ROMs (ROM banks 2 and 3).

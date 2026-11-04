@@ -17,7 +17,8 @@
 //! 40/80 DISPLAY key decides which is active. Time ([`Machine::now`])
 //! counts system (VIC) cycles.
 //!
-//! Models: "pal" (8566, 985 248 Hz) and "ntsc" (8564, 1 022 727 Hz).
+//! Video formats (`--videoformat`): "pal" (default; 8566, 985 248 Hz) and
+//! "ntsc" (8564, 1 022 727 Hz); no models.
 //! Options: `display` ("40" default, "80": the 40/80 key down at power-on),
 //! `vdc_ram` ("16k" default, "64k"), `sid` ("6581"/"8580"), `drive8`
 //! ("1571" with `roms["dos1571"]`, the default when given; "1541" with

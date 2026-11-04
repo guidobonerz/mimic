@@ -209,7 +209,9 @@ impl Mapper {
                 if repeat {
                     return out;
                 }
-                if self.joystick_key(code, *down) {
+                if self.keypad_key(code, *down, now, &mut out) {
+                    // taken by a keypad in a port
+                } else if self.joystick_key(code, *down) {
                     self.flush_joysticks(now, &mut out);
                 } else {
                     self.keyboard_key(code, *down, now, &mut out);
@@ -450,6 +452,25 @@ impl Mapper {
                 }
             }
         }
+    }
+
+    /// A key of a keypad mapped into a port: the event goes to the port.
+    fn keypad_key(&mut self, code: &str, down: bool, now: Cycle, out: &mut Vec<TimedInput>) -> bool {
+        let mut taken = false;
+        for map in &self.profile.keypad {
+            if let Some(k) = map.layout.machine_key(code) {
+                out.push(TimedInput {
+                    at: now,
+                    target: InputTarget::Port(PortId(map.port)),
+                    event: InputEvent::Key {
+                        machine_key: emu_core::input::MachineKey(k),
+                        down,
+                    },
+                });
+                taken = true;
+            }
+        }
+        taken
     }
 
     fn keyboard_key(&mut self, code: &str, down: bool, now: Cycle, out: &mut Vec<TimedInput>) {

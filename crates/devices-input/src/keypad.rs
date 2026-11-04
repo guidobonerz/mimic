@@ -12,6 +12,11 @@
 //! Input: [`InputEvent::Key`] with `machine_key` 0–11 for the keys in
 //! reading order (1 2 3 4 5 6 7 8 9 * 0 #).
 //!
+//! On a Commodore control port (the Atari CX21 keypad on a C64) the two
+//! pot columns reach the SID: a key in a selected row drives its column
+//! high, which reads $FF; otherwise the line floats at a middling value
+//! (VICE test program `keypad/cx21-c64.asm`, which waits for $FF).
+//!
 //! Source: "Atari 2600 Specifications"
 //! (<https://www.astro.physik.uni-potsdam.de/~mwendt/2600scene/specs.html>),
 //! "Keyboard Controllers".
@@ -32,17 +37,31 @@ pub struct Keypad {
     keys: u16,
     /// Rows the computer drives low (bit 0 = row 1).
     rows: u8,
+    /// On a Commodore port the pot columns are read by the SID.
+    cbm: bool,
 }
 
 impl Keypad {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// The CX21 on a Commodore control port.
+    pub fn cbm() -> Self {
+        Self {
+            cbm: true,
+            ..Self::default()
+        }
+    }
 }
 
 impl PortDevice for Keypad {
     fn kind(&self) -> PortKind {
-        PortKind::AtariJoy
+        if self.cbm {
+            PortKind::CbmControl
+        } else {
+            PortKind::AtariJoy
+        }
     }
 
     fn read_lines(&self, _now: Cycle) -> PortLines {
@@ -56,6 +75,16 @@ impl PortDevice for Keypad {
                     low |= line;
                 }
             }
+        }
+        if self.cbm {
+            // Columns 2 and 3 on POTX/POTY: driven high (reads $FF) when a
+            // key is down in a selected row, floating otherwise.
+            let pot = |line: u32| if low & line != 0 { u16::MAX } else { 0x8000 };
+            let analog = [pot(pin::BUTTON3), pot(pin::BUTTON2)];
+            return PortLines {
+                pulled_low: low & pin::FIRE,
+                analog,
+            };
         }
         PortLines {
             pulled_low: low,

@@ -1,30 +1,69 @@
-// mimic in the browser: loads mimic.wasm (crates/emu-web) and drives it
-// through its plain exports (see crates/emu-web/src/abi.rs). Nothing is
-// bundled: ROMs and images come from the user's files (kept in IndexedDB
-// on request, only in this browser).
+// mimic in the browser: the page. The emulation runs in a Web Worker
+// (mimic-worker.js, which loads mimic.wasm from crates/emu-web and drives
+// it through its plain exports, see crates/emu-web/src/abi.rs); the page
+// sends it commands and input and draws the pictures it gets back. Nothing
+// is bundled: ROMs and images come from the user's files (kept in
+// IndexedDB on request, only in this browser).
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const enc = new TextEncoder(), dec = new TextDecoder();
-let wasm = null;
+const enc = new TextEncoder();
 
-// ---- the exports ----------------------------------------------------------
+// ---- the worker: every command is a message, every answer a promise --------
 
-function mem() { return wasm.memory.buffer; }
-
-function putInput(slot, bytes) {
-  const p = wasm.mimic_in(slot, bytes.length);
-  new Uint8Array(mem(), p, bytes.length).set(bytes);
-}
+const worker = new Worker("mimic-worker.js");
+let callId = 0;
+const pending = new Map();
+let latestFrame = null, newFrame = false;
 
 function call(cmd, args = {}, data = null) {
-  if (data) putInput(1, data);
-  putInput(0, enc.encode(JSON.stringify({ cmd, ...args })));
-  const len = wasm.mimic_call();
-  const answer = JSON.parse(dec.decode(new Uint8Array(mem(), wasm.mimic_out_ptr(), len)));
-  if (!answer.ok) throw new Error(answer.error);
-  return answer.result;
+  return new Promise((resolve, reject) => {
+    const id = ++callId;
+    pending.set(id, { resolve, reject });
+    const msg = { type: "call", id, cmd, args };
+    if (data) {
+      // The bytes move to the worker (their buffer is not used again here).
+      msg.bytes = data.buffer.byteLength === data.byteLength ? data.buffer : data.slice().buffer;
+      worker.postMessage(msg, [msg.bytes]);
+    } else {
+      worker.postMessage(msg);
+    }
+  });
 }
+// A command whose answer nobody waits for (input events): errors reach the status line.
+function send(cmd, args = {}) { call(cmd, args).catch((e) => say(e.message, true)); }
+
+let workerReady = null;
+worker.onmessage = (e) => {
+  const m = e.data;
+  switch (m.type) {
+    case "reply": {
+      const p = pending.get(m.id);
+      pending.delete(m.id);
+      if (!p) break;
+      if (m.ok) p.resolve(m.bytes ? { ...m.result, data: new Uint8Array(m.bytes) } : m.result);
+      else p.reject(new Error(m.error));
+      break;
+    }
+    case "frame":
+      latestFrame = { w: m.w, h: m.h, rgba: new Uint8Array(m.rgba), params: m.params, aspect: m.aspect, zoom: m.zoom };
+      newFrame = true;
+      break;
+    case "stats":
+      if (running) say(`${info.machine} · ${m.fps} fps${paused ? " · paused" : ""}`);
+      break;
+    case "fault":
+      say("the machine stopped with a fault", true);
+      running = false;
+      break;
+    case "ready":
+      workerReady.resolve(m.version);
+      break;
+    case "loadError":
+      workerReady.reject(new Error(m.error));
+      break;
+  }
+};
 
 // ---- status ----------------------------------------------------------------
 
@@ -59,8 +98,8 @@ async function dbDo(mode, f) {
 const keepFiles = () => $("keep").checked;
 
 async function addFile(path, bytes, persist = true) {
-  call("add_file", { path }, bytes);
   if (persist && keepFiles()) await dbDo("readwrite", (s) => s.put(bytes, path));
+  await call("add_file", { path }, bytes);
 }
 
 async function restoreFiles() {
@@ -68,7 +107,7 @@ async function restoreFiles() {
   if (!keys) return;
   for (const k of keys) {
     const v = await dbDo("readonly", (s) => s.get(k));
-    if (v) call("add_file", { path: k }, new Uint8Array(v));
+    if (v) await call("add_file", { path: k }, new Uint8Array(v));
   }
 }
 
@@ -77,11 +116,11 @@ async function addFileList(list, relative) {
     const path = relative && f.webkitRelativePath ? f.webkitRelativePath : f.name;
     await addFile(path, new Uint8Array(await f.arrayBuffer()));
   }
-  showFiles();
+  await showFiles();
 }
 
-function showFiles() {
-  const files = call("files");
+async function showFiles() {
+  const files = await call("files");
   $("files").replaceChildren(...files.map((f) => {
     const li = document.createElement("li");
     const name = document.createElement("span");
@@ -92,7 +131,7 @@ function showFiles() {
     del.textContent = "×";
     del.title = "Remove";
     del.onclick = async () => {
-      call("remove_file", { path: f.path });
+      await call("remove_file", { path: f.path });
       await dbDo("readwrite", (s) => s.delete(f.path));
       showFiles();
     };
@@ -105,8 +144,8 @@ function showFiles() {
 // ---- machines ---------------------------------------------------------------
 
 let machines = [];
-function showMachines() {
-  machines = call("machines");
+async function showMachines() {
+  machines = await call("machines");
   $("machine").replaceChildren(...machines.map((m) => new Option(`${m.name} (${m.id})`, m.id)));
   try { $("machine").value = localStorage.getItem("mimic-machine") || "c64"; } catch (e) { /* no storage */ }
   showModels();
@@ -137,10 +176,10 @@ function parseOptions(text) {
 
 let info = null, running = false, paused = false;
 
-function start(config) {
+async function start(config) {
   stopAudioQueue();
   try {
-    info = call("start", { config });
+    info = await call("start", { config });
   } catch (e) {
     say(e.message, true);
     return;
@@ -159,8 +198,6 @@ function start(config) {
   wantsPointer = !!info.pointer;
   say(`${info.machine} running`);
   $("screen").focus();
-  last = performance.now();
-  acc = 0;
 }
 
 function startFromForm() {
@@ -171,8 +208,8 @@ function startFromForm() {
 
 function crtValue() { return $("crt").value; }
 
-function stop() {
-  call("stop");
+async function stop() {
+  await call("stop");
   running = false;
   info = null;
   for (const id of ["pause", "reset", "stop", "save", "load"]) $(id).disabled = true;
@@ -184,9 +221,9 @@ function stop() {
 
 // ---- drives and slots -------------------------------------------------------
 
-function showSlots() {
+async function showSlots() {
   if (!running) return;
-  info = call("info");
+  info = await call("info");
   $("mediabox").hidden = info.slots.length === 0;
   // One line per drive or slot, as in the desktop's media panel: its name,
   // the image in it, and one button that mounts (green, a file dialog) or
@@ -210,9 +247,9 @@ function showSlots() {
   }));
 }
 
-function ejectSlot(s) {
+async function ejectSlot(s) {
   try {
-    call("eject", { slot: s.id });
+    await call("eject", { slot: s.id });
     say(`${s.name} ejected`);
   }
   catch (e) { say(e.message, true); }
@@ -229,7 +266,7 @@ function mountSlot(s) {
     if (!f) return;
     await addFileList([f], false);
     try {
-      const r = call("insert", { slot: s.id, path: f.name });
+      const r = await call("insert", { slot: s.id, path: f.name });
       say(`${f.name} → ${s.name}${r.cheats ? ` (cheats: ${r.cheats})` : ""}`);
       showCheats();
     }
@@ -243,12 +280,12 @@ function mountSlot(s) {
 async function dropIntoMachine(list) {
   await addFileList(list, false);
   if (!running) return;
-  const files = call("files");
+  const files = await call("files");
   for (const f of list) {
     const kind = files.find((x) => x.path === f.name)?.kind;
     const slot = info.slots.find((s) => s.kind === kind) || (kind === "program" && info.slots.find((s) => s.kind === "tape"));
     if (!slot) continue;
-    try { call("insert", { slot: slot.id, path: f.name }); say(`${f.name} → ${slot.name}`); }
+    try { await call("insert", { slot: slot.id, path: f.name }); say(`${f.name} → ${slot.name}`); }
     catch (e) { say(e.message, true); }
   }
   showSlots();
@@ -257,56 +294,56 @@ async function dropIntoMachine(list) {
 // ---- cheats ----------------------------------------------------------------
 
 const hex = (v, digits) => "$" + v.toString(16).toUpperCase().padStart(digits, "0");
-function showCheats() {
+async function showCheats() {
   if (!running) return;
   $("cheatbox").hidden = false;
-  const list = call("cheats");
+  const list = await call("cheats");
   $("cheats").replaceChildren(...list.map((c) => {
     const li = document.createElement("li");
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = c.enabled;
-    box.onchange = () => { call("cheat_toggle", { id: c.id, enabled: box.checked }); };
+    box.onchange = () => send("cheat_toggle", { id: c.id, enabled: box.checked });
     const text = document.createElement("span");
     text.textContent = `${c.label ?? "cheat"} · ${hex(c.addr, 4)}=${c.value}`;
     const del = document.createElement("button");
     del.textContent = "×";
     del.title = "Remove";
-    del.onclick = () => { call("cheat_remove", { id: c.id }); showCheats(); };
+    del.onclick = async () => { await call("cheat_remove", { id: c.id }); showCheats(); };
     li.append(box, text, del);
     return li;
   }));
 }
 
-function showSearch(r) {
+async function showSearch(r) {
   $("searchcount").textContent = `${r.candidates} candidate(s)`;
-  const res = call("search_results", { max: 30 });
+  const res = await call("search_results", { max: 30 });
   $("searchresults").replaceChildren(...res.results.map((x) => {
     const li = document.createElement("li");
     const t = document.createElement("span");
     t.textContent = `${hex(x.addr, 4)}  ${x.value}`;
     const b = document.createElement("button");
     b.textContent = "Freeze";
-    b.onclick = () => { call("search_freeze", { addr: x.addr }); showCheats(); };
+    b.onclick = async () => { await call("search_freeze", { addr: x.addr }); showCheats(); };
     li.append(t, b);
     return li;
   }));
 }
 
 function wireCheats() {
-  $("cheatimport").onclick = () => {
+  $("cheatimport").onclick = async () => {
     try {
-      const r = call("cheats_import", { format: $("cheatformat").value, text: $("cheattext").value });
+      const r = await call("cheats_import", { format: $("cheatformat").value, text: $("cheattext").value });
       say(`imported ${r.freezes} freeze(s), ${r.patches} patch(es)`);
       showCheats();
     } catch (e) { say(e.message, true); }
   };
-  $("cheatexport").onclick = () => download(`${info.machine}-cheats.toml`, enc.encode(call("cheats_export")));
-  $("searchstart").onclick = () => { try { showSearch(call("search_start", { size: Number($("searchsize").value) })); } catch (e) { say(e.message, true); } };
-  $("searchnext").onclick = () => {
+  $("cheatexport").onclick = async () => download(`${info.machine}-cheats.toml`, enc.encode(await call("cheats_export")));
+  $("searchstart").onclick = async () => { try { showSearch(await call("search_start", { size: Number($("searchsize").value) })); } catch (e) { say(e.message, true); } };
+  $("searchnext").onclick = async () => {
     const v = $("searchvalue").value.trim();
     const value = v === "" ? undefined : Number(v.replace(/^\$/, "0x"));
-    try { showSearch(call("search_next", { op: $("searchop").value, value })); } catch (e) { say(e.message, true); }
+    try { showSearch(await call("search_next", { op: $("searchop").value, value })); } catch (e) { say(e.message, true); }
   };
 }
 
@@ -318,7 +355,7 @@ function showPanel(controls) {
       const b = document.createElement("button");
       b.textContent = c.name;
       b.classList.toggle("on", c.value > 0);
-      const set = (v) => showPanel(call("control", { id: c.id, value: v }));
+      const set = async (v) => showPanel(await call("control", { id: c.id, value: v }));
       b.onpointerdown = () => set(1);
       b.onpointerup = b.onpointerleave = () => { if (b.classList.contains("on") || c.value > 0) set(0); };
       return b;
@@ -329,7 +366,7 @@ function showPanel(controls) {
       const b = document.createElement("button");
       b.textContent = p;
       b.classList.toggle("on", c.value === i);
-      b.onclick = () => showPanel(call("control", { id: c.id, value: i }));
+      b.onclick = async () => showPanel(await call("control", { id: c.id, value: i }));
       wrap.append(b);
     });
     return wrap;
@@ -507,10 +544,11 @@ function initGl() {
 }
 
 function paint() {
-  const w = wasm.mimic_frame_width(), h = wasm.mimic_frame_height();
-  if (!w || !h) return;
-  const pp = glState ? wasm.mimic_crt_params_ptr() : 0;
-  const params = pp ? new Float32Array(mem(), pp, 20) : null;
+  const f = latestFrame;
+  if (!f) return;
+  newFrame = false;
+  const { w, h } = f;
+  const params = glState ? f.params : null;
   const cw = params ? Math.round(params[2]) : w, ch = params ? Math.round(params[3]) : h;
   if (canvas.width !== cw || canvas.height !== ch) {
     canvas.width = cw;
@@ -521,12 +559,12 @@ function paint() {
   canvas.style.imageRendering = params ? "auto" : "pixelated";
   // The pixel aspect can change while the machine runs (resolution,
   // pixel clock, the monitor): the displayed size follows every frame.
-  const now = `${cw}x${ch}:${wasm.mimic_frame_aspect()}:${wasm.mimic_frame_zoom()}`;
+  const now = `${cw}x${ch}:${f.aspect}:${f.zoom}`;
   if (now !== shape) {
     shape = now;
     fit();
   }
-  const pixels = new Uint8Array(mem(), wasm.mimic_frame_ptr(), w * h * 4);
+  const pixels = f.rgba;
   if (!glState) {
     if (!image) image = new ImageData(w, h);
     image.data.set(pixels);
@@ -567,8 +605,8 @@ function paint() {
   if (params[9] > 0) gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, cw, ch);
 }
 function fit() {
-  const aspect = wasm ? wasm.mimic_frame_aspect() || 1 : 1;
-  const zoom = wasm ? wasm.mimic_frame_zoom() || 1 : 1;
+  const aspect = latestFrame ? latestFrame.aspect || 1 : 1;
+  const zoom = latestFrame ? latestFrame.zoom || 1 : 1;
   const s = Number($("scale").value);
   canvas.style.width = `${Math.round(canvas.width * aspect * zoom * s)}px`;
   canvas.style.aspectRatio = `${canvas.width * aspect} / ${canvas.height}`;
@@ -603,17 +641,15 @@ async function startAudio() {
     await audio.audioWorklet.addModule(url);
     worklet = new AudioWorkletNode(audio, "feed", { outputChannelCount: [2] });
     worklet.connect(audio.destination);
+    // The worker feeds the worklet directly.
+    worker.postMessage({ type: "audio", port: worklet.port }, [worklet.port]);
+    worker.postMessage({ type: "sound", on: $("sound").checked });
   } catch (e) {
     audio = null;
     say("no sound in this browser: " + e.message, true);
   }
 }
-function feedAudio() {
-  const n = wasm.mimic_audio();
-  if (!n || !worklet || !$("sound").checked || audio.state !== "running") return;
-  worklet.port.postMessage(new Float32Array(mem(), wasm.mimic_audio_ptr(), n).slice());
-}
-function stopAudioQueue() { if (worklet) worklet.port.postMessage("clear"); }
+function stopAudioQueue() { worker.postMessage({ type: "audioClear" }); }
 
 // ---- input --------------------------------------------------------------------
 
@@ -621,17 +657,17 @@ function stopAudioQueue() { if (worklet) worklet.port.postMessage("clear"); }
 // machine while the picture has the focus.
 canvas.addEventListener("keydown", (e) => {
   if (!running || e.repeat) { if (running) e.preventDefault(); return; }
-  call("key", { code: e.code, down: true });
+  send("key", { code: e.code, down: true });
   e.preventDefault();
 });
 canvas.addEventListener("keyup", (e) => {
   if (!running) return;
-  call("key", { code: e.code, down: false });
+  send("key", { code: e.code, down: false });
   e.preventDefault();
 });
 canvas.addEventListener("blur", () => {
   // Release what is held, so no key sticks.
-  for (const code of held) call("key", { code, down: false });
+  for (const code of held) send("key", { code, down: false });
   held.clear();
 });
 const held = new Set();
@@ -649,10 +685,10 @@ function pollPads() {
     const prev = padState.get(pad.index) || { buttons: [], axes: [] };
     const now = { buttons: pad.buttons.map((b) => b.pressed), axes: pad.axes.slice(0, 2).map((a) => Math.round(a * 20) / 20) };
     now.buttons.forEach((down, i) => {
-      if (PAD_BUTTONS[i] && down !== !!prev.buttons[i]) call("button", { pad: pad.index, button: PAD_BUTTONS[i], down });
+      if (PAD_BUTTONS[i] && down !== !!prev.buttons[i]) send("button", { pad: pad.index, button: PAD_BUTTONS[i], down });
     });
     ["LeftX", "LeftY"].forEach((axis, i) => {
-      if (now.axes[i] !== undefined && now.axes[i] !== prev.axes[i]) call("axis", { pad: pad.index, axis, value: now.axes[i] });
+      if (now.axes[i] !== undefined && now.axes[i] !== prev.axes[i]) send("axis", { pad: pad.index, axis, value: now.axes[i] });
     });
     padState.set(pad.index, now);
   }
@@ -667,61 +703,43 @@ function framePos(e) {
   return fx >= 0 && fy >= 0 && fx < 1 && fy < 1 ? { fx, fy } : {};
 }
 let penButtons = 0;
-canvas.addEventListener("pointermove", (e) => { if (wantsPointer && running) call("pointer", { ...framePos(e), buttons: penButtons }); });
-canvas.addEventListener("pointerleave", () => { if (wantsPointer && running) call("pointer", { buttons: 0 }); });
+canvas.addEventListener("pointermove", (e) => { if (wantsPointer && running) send("pointer", { ...framePos(e), buttons: penButtons }); });
+canvas.addEventListener("pointerleave", () => { if (wantsPointer && running) send("pointer", { buttons: 0 }); });
 canvas.addEventListener("pointerdown", (e) => {
   if (!wantsPointer || !running) return;
   penButtons |= e.button === 2 ? 2 : 1;
-  call("pointer", { ...framePos(e), buttons: penButtons });
+  send("pointer", { ...framePos(e), buttons: penButtons });
 });
 canvas.addEventListener("pointerup", (e) => {
   if (!wantsPointer || !running) return;
   penButtons &= e.button === 2 ? ~2 : ~1;
-  call("pointer", { ...framePos(e), buttons: penButtons });
+  send("pointer", { ...framePos(e), buttons: penButtons });
 });
 canvas.addEventListener("click", () => {
   startAudio().then(() => audio && audio.resume());
   if (wantsMouse && document.pointerLockElement !== canvas) canvas.requestPointerLock();
 });
 document.addEventListener("mousemove", (e) => {
-  if (document.pointerLockElement === canvas && running) call("mouse", { dx: e.movementX, dy: e.movementY, buttons: mouseButtons });
+  if (document.pointerLockElement === canvas && running) send("mouse", { dx: e.movementX, dy: e.movementY, buttons: mouseButtons });
 });
 canvas.addEventListener("mousedown", (e) => {
   if (document.pointerLockElement !== canvas) return;
   mouseButtons |= e.button === 2 ? 2 : 1;
-  call("mouse", { dx: 0, dy: 0, buttons: mouseButtons });
+  send("mouse", { dx: 0, dy: 0, buttons: mouseButtons });
 });
 canvas.addEventListener("mouseup", (e) => {
   if (document.pointerLockElement !== canvas) return;
   mouseButtons &= e.button === 2 ? ~2 : ~1;
-  call("mouse", { dx: 0, dy: 0, buttons: mouseButtons });
+  send("mouse", { dx: 0, dy: 0, buttons: mouseButtons });
 });
 canvas.addEventListener("contextmenu", (e) => { if (document.pointerLockElement === canvas) e.preventDefault(); });
 
 // ---- the loop: frames at the machine's rate, painted per animation frame ----
 
-let last = 0, acc = 0, fpsCount = 0, fpsAt = 0;
-function loop(t) {
+function loop() {
   requestAnimationFrame(loop);
-  if (!running || paused) { last = t; return; }
-  pollPads();
-  const period = 1000 / (info.fps || 50);
-  acc += Math.min(t - last, 100);
-  last = t;
-  let ran = 0;
-  while (acc >= period && ran < 3) {
-    if (wasm.mimic_run_frame()) { say("the machine stopped with a fault", true); running = false; return; }
-    feedAudio();
-    acc -= period;
-    ran++;
-    fpsCount++;
-  }
-  if (ran) paint();
-  if (t - fpsAt > 1000) {
-    say(`${info.machine} · ${fpsCount} fps${paused ? " · paused" : ""}`);
-    fpsCount = 0;
-    fpsAt = t;
-  }
+  if (newFrame) paint();
+  if (running && !paused) pollPads();
 }
 
 // ---- state, profiles --------------------------------------------------------
@@ -736,9 +754,9 @@ function download(name, bytes) {
 
 // A start profile's command line (from profile_args) as a start config;
 // image arguments name uploaded files by their base name.
-function configFromArgs(args) {
+async function configFromArgs(args) {
   const cfg = { machine: "", model: "", videoFormat: "", options: {}, media: [], crt: crtValue() };
-  const files = call("files").map((f) => f.path);
+  const files = (await call("files")).map((f) => f.path);
   const file = (name) => files.find((p) => p === name || p.endsWith("/" + name.split(/[\\/]/).pop())) || name;
   for (let i = 0; i < args.length; i++) {
     const a = args[i], v = args[i + 1];
@@ -778,37 +796,39 @@ function wire() {
     paused = !paused;
     $("pause").textContent = paused ? "Continue" : "Pause";
     $("pause").classList.toggle("on", paused);
-    if (paused) stopAudioQueue();
+    worker.postMessage({ type: "pause", paused });
+    if (paused) { stopAudioQueue(); say(`${info.machine} · paused`); }
   };
-  $("reset").onclick = (e) => { call("reset", { hard: e.shiftKey }); stopAudioQueue(); };
+  $("reset").onclick = (e) => { send("reset", { hard: e.shiftKey }); stopAudioQueue(); };
   $("scale").onchange = fit;
-  $("crt").onchange = () => {
+  $("sound").onchange = () => worker.postMessage({ type: "sound", on: $("sound").checked });
+  $("crt").onchange = async () => {
     if (!running) return;
-    try { call("crt", { name: crtValue() }); paint(); }
+    try { await call("crt", { name: crtValue() }); }
     catch (e) { say(e.message, true); }
   };
   $("addfiles").onclick = () => $("fileinput").click();
   $("addfolder").onclick = () => $("folderinput").click();
   $("fileinput").onchange = (e) => addFileList(e.target.files, false);
   $("folderinput").onchange = (e) => addFileList(e.target.files, true);
-  $("save").onclick = () => {
-    const r = call("save_state");
-    download(`${info.machine}.mimicstate`, new Uint8Array(mem(), wasm.mimic_bytes_ptr(), r.bytes).slice());
+  $("save").onclick = async () => {
+    const r = await call("save_state");
+    download(`${info.machine}.mimicstate`, r.data);
   };
   $("load").onclick = () => $("stateinput").click();
   $("stateinput").onchange = async (e) => {
     const f = e.target.files[0];
     if (!f) return;
-    try { call("load_state", {}, new Uint8Array(await f.arrayBuffer())); paint(); say("state loaded"); }
+    try { await call("load_state", {}, new Uint8Array(await f.arrayBuffer())); say("state loaded"); }
     catch (err) { say(err.message, true); }
     e.target.value = "";
   };
   $("profiles").onclick = () => $("profileinput").click();
   $("profileinput").onchange = (e) => e.target.files[0] && loadProfiles(e.target.files[0]);
-  $("profile").onchange = () => {
+  $("profile").onchange = async () => {
     const name = $("profile").value;
     if (!name) return;
-    try { start(configFromArgs(call("profile_args", { yaml: profileText, name }))); }
+    try { start(await configFromArgs(await call("profile_args", { yaml: profileText, name }))); }
     catch (err) { say(err.message, true); }
   };
   const drop = $("drop");
@@ -825,25 +845,22 @@ function wire() {
 }
 
 (async function main() {
+  let version;
   try {
-    const r = await fetch("mimic.wasm");
-    const { instance } = typeof WebAssembly.instantiateStreaming === "function"
-      ? await WebAssembly.instantiateStreaming(r, {})
-      : await WebAssembly.instantiate(await r.arrayBuffer(), {});
-    wasm = instance.exports;
+    version = await new Promise((resolve, reject) => { workerReady = { resolve, reject }; });
   } catch (e) {
     say("could not load mimic.wasm: " + e.message + " (build it with tools/build-web.sh and serve the folder over http)", true);
     return;
   }
   wire();
-  try { $("version").textContent = `mimic ${call("version")}`; } catch (e) { /* older wasm */ }
+  if (version) $("version").textContent = `mimic ${version}`;
   if (gl) {
-    try { initGl(); call("gpu", { on: true }); }
+    try { initGl(); await call("gpu", { on: true }); }
     catch (e) { glState = null; say("WebGL failed, drawing on the CPU: " + e.message, true); }
   }
   await restoreFiles();
-  showMachines();
-  showFiles();
+  await showMachines();
+  await showFiles();
   say("choose a machine, add its ROMs (or use the built-in test ROMs) and press Start");
   requestAnimationFrame(loop);
   // ?machine=c64&videoformat=ntsc&options=roms=stub,ram=8k&crt=raw&start=1 starts at once.

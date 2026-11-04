@@ -169,6 +169,79 @@ pub struct PointerMap {
     pub port: u8,
 }
 
+/// The host's numeric keypad (and a few letters) works a keypad in a
+/// port: `Numpad0`–`Numpad9`, `NumpadDecimal`, `NumpadEnter`, `NumpadAdd`,
+/// `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `Escape`, `KeyN`,
+/// `KeyY`, `Delete`, `KeyP`, `KeyR` (`devices_input::cbm_keypad::key`), or
+/// for the Atari layout (CX21: 1 2 3 / 4 5 6 / 7 8 9 / * 0 #, machine keys
+/// 0–11 in reading order) the digits, multiply for * and divide for #.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct KeypadMap {
+    pub port: u8,
+    #[serde(default)]
+    pub layout: KeypadLayout,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeypadLayout {
+    /// Rushware, Coplin, CX85, Cardkey: by key label.
+    #[default]
+    Numeric,
+    /// Atari CX21 and the 2600's keypads: keys 0–11 in reading order.
+    Atari,
+}
+
+impl KeypadLayout {
+    /// The machine key a host key code works, if any.
+    pub fn machine_key(self, code: &str) -> Option<u16> {
+        // Machine keys as `devices_input::cbm_keypad::key` numbers them:
+        // digits 0-9, then . Enter + - * / # Esc No Yes Del P R.
+        Some(match (self, code) {
+            (KeypadLayout::Numeric, c) => match c {
+                "Numpad0" => 0,
+                "Numpad1" => 1,
+                "Numpad2" => 2,
+                "Numpad3" => 3,
+                "Numpad4" => 4,
+                "Numpad5" => 5,
+                "Numpad6" => 6,
+                "Numpad7" => 7,
+                "Numpad8" => 8,
+                "Numpad9" => 9,
+                "NumpadDecimal" => 10,
+                "NumpadEnter" => 11,
+                "NumpadAdd" => 12,
+                "NumpadSubtract" => 13,
+                "NumpadMultiply" => 14,
+                "NumpadDivide" => 15,
+                "Escape" => 17,
+                "KeyN" => 18,
+                "KeyY" => 19,
+                "Delete" => 20,
+                "KeyP" => 21,
+                "KeyR" => 22,
+                _ => return None,
+            },
+            (KeypadLayout::Atari, c) => match c {
+                "Numpad1" => 0,
+                "Numpad2" => 1,
+                "Numpad3" => 2,
+                "Numpad4" => 3,
+                "Numpad5" => 4,
+                "Numpad6" => 5,
+                "Numpad7" => 6,
+                "Numpad8" => 7,
+                "Numpad9" => 8,
+                "NumpadMultiply" => 9,
+                "Numpad0" => 10,
+                "NumpadDivide" => 11,
+                _ => return None,
+            },
+        })
+    }
+}
+
 /// A gamepad's left stick turns a pair of paddles.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PaddleMap {
@@ -191,6 +264,8 @@ pub struct Profile {
     pub paddles: Vec<PaddleMap>,
     #[serde(default)]
     pub pointer: Vec<PointerMap>,
+    #[serde(default)]
+    pub keypad: Vec<KeypadMap>,
 }
 
 impl Profile {
@@ -220,9 +295,31 @@ impl Profile {
         for (option, port) in [("port1", 0u8), ("port2", 1), ("joy1", 0)] {
             if matches!(
                 get(option),
-                Some("mouse1351" | "paddles" | "amx" | "driving")
+                Some(
+                    "mouse1351" | "paddles" | "amx" | "driving" | "amigamouse" | "stmouse"
+                        | "cx22"
+                )
             ) {
                 p.mouse.push(MouseMap { port });
+            }
+            let layout = match get(option) {
+                Some("rushware" | "coplin" | "cx85" | "cardkey") => Some(KeypadLayout::Numeric),
+                Some("cx21") => Some(KeypadLayout::Atari),
+                _ => None,
+            };
+            if let Some(layout) = layout {
+                p.keypad.push(KeypadMap { port, layout });
+            }
+        }
+        // A keypad takes the numeric keypad: the joystick keys move to the
+        // cursor keys.
+        if !p.keypad.is_empty() {
+            for j in &mut p.joystick {
+                if matches!(j.source, JoystickSource::Keys { .. }) {
+                    if let Some(source) = JoyKeys::Cursor.source() {
+                        j.source = source;
+                    }
+                }
             }
         }
         let pointer_options: &[(&str, u8)] = match machine {
@@ -285,6 +382,7 @@ impl Profile {
             },
             paddles: Vec::new(),
             pointer: Vec::new(),
+            keypad: Vec::new(),
         }
     }
 }

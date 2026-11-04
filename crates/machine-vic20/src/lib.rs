@@ -6,8 +6,8 @@
 //! PRG/T64, the datasette and a "cartridge" slot (ROM in BLK1–3/BLK5;
 //! "A0CBM" at `$A004` autostarts).
 //!
-//! Models: "pal" (default; 1 108 404 Hz, 312 lines × 71 cycles) and "ntsc"
-//! (1 022 727 Hz, 261 lines × 65 cycles). The NTSC model uses
+//! Video formats (`--videoformat`): "pal" (default; 1 108 404 Hz, 312 lines
+//! × 71 cycles) and "ntsc" (1 022 727 Hz, 261 lines × 65 cycles). NTSC uses
 //! `roms["kernal-ntsc"]` if given, else `roms["kernal"]`.
 //!
 //! Options:

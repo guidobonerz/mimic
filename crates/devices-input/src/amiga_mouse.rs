@@ -22,22 +22,27 @@ use crate::joystick::pin;
 
 /// One axis: position in steps at `since`, steps still to play.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct Axis {
-    pos: i64,
-    since: u64,
-    todo: i64,
+pub(crate) struct Axis {
+    pub(crate) pos: i64,
+    pub(crate) since: u64,
+    pub(crate) todo: i64,
+    /// Sign of the last motion (the CX22's direction level).
+    pub(crate) dir: i8,
 }
 
 impl Axis {
     /// Steps taken by `now`.
-    fn at(&self, now: u64, per_step: u64) -> i64 {
+    pub(crate) fn at(&self, now: u64, per_step: u64) -> i64 {
         let done = (now.saturating_sub(self.since) / per_step) as i64;
         self.pos + self.todo.signum() * done.min(self.todo.abs())
     }
 
     /// Take the steps due by `now` (a step under way keeps its start), then
     /// queue `add` more.
-    fn settle(&mut self, now: u64, per_step: u64, add: i64) {
+    pub(crate) fn settle(&mut self, now: u64, per_step: u64, add: i64) {
+        if add != 0 {
+            self.dir = add.signum() as i8;
+        }
         let steps = (now.saturating_sub(self.since) / per_step).min(self.todo.unsigned_abs());
         self.pos += self.todo.signum() * steps as i64;
         self.todo -= self.todo.signum() * steps as i64;
@@ -48,10 +53,19 @@ impl Axis {
         }
         self.todo += add;
     }
+
+    /// Sign of the latest motion queued (+1 before any).
+    pub(crate) fn last_direction(&self) -> i8 {
+        if self.dir == 0 {
+            1
+        } else {
+            self.dir
+        }
+    }
 }
 
 /// Pulse and quadrature line of Gray-code phase `p`.
-fn phase_lines(p: i64) -> (bool, bool) {
+pub(crate) fn phase_lines(p: i64) -> (bool, bool) {
     match p.rem_euclid(4) {
         0 => (false, false),
         1 => (true, false),
@@ -143,11 +157,12 @@ impl PortDevice for AmigaMouse {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"AMSE", 1, |w| {
+        w.chunk(*b"AMSE", 2, |w| {
             for a in &self.axes {
                 w.u64(a.pos as u64);
                 w.u64(a.since);
                 w.u64(a.todo as u64);
+                w.u8(a.dir as u8);
             }
             for p in self.pending {
                 w.u32(p as u32);
@@ -160,12 +175,13 @@ impl PortDevice for AmigaMouse {
 
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"AMSE", 1)?;
+        let (version, mut c) = r.chunk(*b"AMSE", 2)?;
         let mut n = *self;
         for a in n.axes.iter_mut() {
             a.pos = c.u64()? as i64;
             a.since = c.u64()?;
             a.todo = c.u64()? as i64;
+            a.dir = if version >= 2 { c.u8()? as i8 } else { 0 };
         }
         for p in n.pending.iter_mut() {
             *p = c.u32()? as i32;

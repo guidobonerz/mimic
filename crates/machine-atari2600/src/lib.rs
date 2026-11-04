@@ -18,7 +18,7 @@
 //! TIA reads drive D7 and D6 only; the other data lines keep what the
 //! last bus cycle left on them.
 //!
-//! Models: "auto" (default), "ntsc" (3.579545 MHz colour clock, 262
+//! Video formats (`--videoformat`): "auto" (default), "ntsc" (3.579545 MHz colour clock, 262
 //! lines) and "pal" (3.546894 MHz, 312 lines); the CPU runs at a third of
 //! the colour clock. A cartridge is made for one TV standard: "auto"
 //! starts as NTSC and decides once after power-up from the lengths of

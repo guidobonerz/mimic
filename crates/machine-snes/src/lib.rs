@@ -36,7 +36,8 @@
 //! (high) or 4/5 on D0/D1. A Super Scope in port 2 latches the counters at
 //! dot X + 40 of line Y + 1 when it points at a bright pixel.
 //!
-//! Models "ntsc" (default) and "pal". Options: `port1`, `port2` = pad
+//! Video formats (`--videoformat`): "ntsc" (default) and "pal"; no models.
+//! Options: `port1`, `port2` = pad
 //! (default), mouse, superscope (port 2), none; `multitap=on`; `roms=stub`
 //! uses this project's own sound boot loader even when the IPL is there.
 //! ROM role "spc700" (64 bytes, user-supplied, optional).

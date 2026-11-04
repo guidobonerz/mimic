@@ -10,7 +10,8 @@ cd "$root"
 cargo build -p emu-web --release --target wasm32-unknown-unknown
 mkdir -p "$out"
 cp target/wasm32-unknown-unknown/release/emu_web.wasm "$out/mimic.wasm"
-cp crates/emu-web/www/index.html crates/emu-web/www/mimic.js "$out/"
+cp crates/emu-web/www/index.html crates/emu-web/www/mimic.js crates/emu-web/www/mimic-worker.js "$out/"
+cp docs/mimic-user-guide-en.pdf docs/mimic-user-guide-de.pdf "$out/"
 if command -v wasm-opt >/dev/null; then
   wasm-opt -O3 "$out/mimic.wasm" -o "$out/mimic.wasm"
 fi

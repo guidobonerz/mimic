@@ -67,7 +67,7 @@ jobs:
           release="target/${{ matrix.target }}/release"
           cp "$release/mimic-desktop${{ matrix.exe }}" "$dir/mimic${{ matrix.exe }}"
           cp "$release/mimic-headless${{ matrix.exe }}" "$dir/"
-          cp README.md "$dir/"
+          cp README.md docs/mimic-user-guide-en.pdf docs/mimic-user-guide-de.pdf "$dir/"
       # Linux and Windows only: UPX leaves macOS binaries unsupported (macOS
       # packing is off by default in UPX and breaks code signing).
       - name: Compress with UPX

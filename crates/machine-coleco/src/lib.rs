@@ -37,7 +37,8 @@
 //! derive from the colour subcarrier crystal), the SN76489 one input clock
 //! per T-state. A field: 262 (PAL 313) lines of 228 T-states.
 //!
-//! Models: "ntsc" (default) and "pal". Options:
+//! Video formats (`--videoformat`): "ntsc" (default) and "pal"; no models.
+//! Options:
 //! - `port1`, `port2`: "controller" (default), "superaction", "driving",
 //!   "roller" or "none".
 //! - `roms`: "stub" runs a small built-in BIOS ([`stub`]): a cartridge
