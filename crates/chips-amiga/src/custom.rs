@@ -220,10 +220,14 @@ const COPPER_NO_COMPARE: u16 = 2;
 const BPLCON0_DELAY: u8 = 3;
 /// VHPOSR shows the beam this many colour clocks ahead of the slot that
 /// reads it. Measured with vAmigaTS, whose tests poll VHPOSR to synchronise
-/// the CPU: with this value and the CPU's register writes a colour clock
-/// late (`CPU_WRITE_DELAY` in `machine-amiga`) their picture lands on the
-/// column of the reference and of the photographs of real Amigas.
-const VHPOSR_AHEAD: u16 = 3;
+/// the CPU: with the CPU's register writes a colour clock late
+/// (`CPU_WRITE_DELAY` in `machine-amiga`) their picture lands on the column
+/// of the reference and of the photographs of real Amigas. The value comes
+/// from `Agnus/Registers/VPOS/probe2`–`probe4` (sixteen reads in a row,
+/// whose stored values the test `vpos_probe_values` reads back: 3 gave
+/// every value one too many) and `vprobe1`–`vprobe4` (VPOSR over the
+/// field's end).
+const VHPOSR_AHEAD: u16 = 2;
 /// DIWHIGH with DIWSTRT/DIWSTOP both 0: stop H8 set, stop V8 set.
 const DIWHIGH_DEFAULT: u16 = 0x2100;
 /// Smallest HTOTAL/VTOTAL the programmable beam accepts (a guest writing

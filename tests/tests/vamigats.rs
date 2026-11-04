@@ -407,3 +407,127 @@ fn write_failure(base: &std::path::Path, config: &MachineConfig, case: &Case, ra
     std::fs::write(base.with_extension("ref.rgb"), raw).ok();
     let _ = &case.script;
 }
+
+/// Development aid: the VPOS probe tests' measured values against their
+/// expected ones, read from chip RAM instead of the picture (the test
+/// program keeps both tables; `lea values,a2` and `lea expected,a5` give
+/// their addresses).
+///
+///     EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test vamigats vpos_probe_values -- --ignored --nocapture
+///
+/// `EMU_FILTER` picks the tests (default: all `probe*` and `vprobe*`).
+#[test]
+#[ignore = "needs EMU_ROM_DIR (Kickstart 1.3) and the vAmigaTS data"]
+fn vpos_probe_values() {
+    use emu_core::Size;
+    let rom_dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
+    let roms = media_backends::roms::load(&rom_dir, "amiga").expect("ROMs");
+    let root = std::env::var("EMU_VAMIGATS_ROOT").unwrap_or_else(|_| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../testdata/vamigats").to_string()
+    });
+    let dir = std::path::PathBuf::from(root).join("Agnus/Registers/VPOS");
+    let filter = std::env::var("EMU_FILTER").unwrap_or_default();
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| (n.starts_with("probe") || n.starts_with("vprobe")) && n.contains(&filter))
+        .collect();
+    names.sort();
+    for name in names {
+        let adf = dir.join(&name).join(format!("{name}.adf"));
+        let case = Case {
+            script: adf.clone(),
+            name: name.clone(),
+            adf,
+            raw: dir.clone(),
+            frames: 450,
+            options: Vec::new(),
+        };
+        let mut config = MachineConfig {
+            roms: roms.clone(),
+            ..MachineConfig::default()
+        };
+        config.options.insert("kickstart".into(), "1.3".into());
+        config.options.insert("slow".into(), "512k".into());
+        let Some((mut m, _)) = boot(&case, &config) else {
+            println!("{name}: did not boot");
+            continue;
+        };
+        let t = m.debug_target(machine_amiga::CPU).unwrap();
+        let word = |t: &mut dyn emu_core::DebugTarget, a: u32| {
+            t.peek(machine_amiga::CPU_SPACE, a, Size::Word).unwrap_or(0) as u16
+        };
+        // The display routine: `lea values,a2`, a few words, then `lea
+        // expected,a5` (absolute short $x8, long $x9 or PC-relative $xA;
+        // the pair tells them from Kickstart's own `lea`s in RAM).
+        let lea = |t: &mut dyn emu_core::DebugTarget, a: u32, reg: u16| -> Option<u32> {
+            let op = word(t, a);
+            if op & 0xfff8 != 0x41f8 | reg << 9 {
+                return None;
+            }
+            let addr = match op & 7 {
+                0 => word(t, a + 2) as i16 as i32 as u32 & 0xff_ffff,
+                1 => u32::from(word(t, a + 2)) << 16 | u32::from(word(t, a + 4)),
+                2 => (a + 2).wrapping_add(word(t, a + 2) as i16 as i32 as u32),
+                _ => return None,
+            };
+            (addr < 0x8_0000).then_some(addr)
+        };
+        let (mut values, mut expected) = (None, None);
+        let mut a = 0;
+        while a < 0x8_0000 && values.is_none() {
+            if let Some(v) = lea(t, a, 2) {
+                for b in (a + 2..a + 24).step_by(2) {
+                    if let Some(e) = lea(t, b, 5) {
+                        values = Some(v);
+                        expected = Some(e);
+                        break;
+                    }
+                }
+            }
+            a += 2;
+        }
+        let (Some(v), Some(e)) = (values, expected) else {
+            println!("{name}: tables not found");
+            continue;
+        };
+        let got: Vec<u16> = (0..16).map(|i| word(t, v + 2 * i)).collect();
+        let want: Vec<u16> = (0..16).map(|i| word(t, e + 2 * i)).collect();
+        let diffs: Vec<String> = got
+            .iter()
+            .zip(&want)
+            .map(|(g, w)| {
+                let d = i32::from(*g as u8) - i32::from(*w as u8);
+                // Horizontal positions wrap at $E3 (227 colour clocks).
+                let d = if d > 113 {
+                    d - 227
+                } else if d < -113 {
+                    d + 227
+                } else {
+                    d
+                };
+                format!("{d:+}")
+            })
+            .collect();
+        let ok = got == want;
+        println!(
+            "{name:8} {}  got  {}",
+            if ok { "PASS" } else { "FAIL" },
+            got.iter()
+                .map(|w| format!("{w:04X}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        println!(
+            "{:14}want  {}",
+            "",
+            want.iter()
+                .map(|w| format!("{w:04X}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        println!("{:14}diff  {}", "", diffs.join(" "));
+    }
+}

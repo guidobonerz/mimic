@@ -89,7 +89,7 @@ fn load_and_run_with(drive: &str) {
     let slot = m
         .media_slots()
         .into_iter()
-        .find(|s| s.name == "drive 8")
+        .find(|s| s.name.starts_with("drive 8"))
         .expect("drive 8 present")
         .id;
     m.media_slot(slot).unwrap().insert(disk()).unwrap();
@@ -147,7 +147,7 @@ fn save_writes_the_file_to_the_disk_image() {
     let slot = m
         .media_slots()
         .into_iter()
-        .find(|s| s.name == "drive 8")
+        .find(|s| s.name.starts_with("drive 8"))
         .expect("drive 8 present")
         .id;
     m.media_slot(slot).unwrap().insert(disk()).unwrap();
@@ -217,7 +217,7 @@ fn virtual_drive_session(fastload: bool) -> u32 {
     let slot = m
         .media_slots()
         .into_iter()
-        .find(|s| s.name == "drive 8")
+        .find(|s| s.name.starts_with("drive 8"))
         .expect("drive 8 present")
         .id;
     m.media_slot(slot).unwrap().insert(disk()).unwrap();
@@ -302,7 +302,7 @@ fn fastload_is_fast_and_reports_missing_files() {
         let slot = m
             .media_slots()
             .into_iter()
-            .find(|s| s.name == "drive 8")
+            .find(|s| s.name.starts_with("drive 8"))
             .unwrap()
             .id;
         let media = Media {
@@ -373,7 +373,7 @@ fn host_folder_as_virtual_disk() {
     let slot = m
         .media_slots()
         .into_iter()
-        .find(|s| s.name == "drive 8")
+        .find(|s| s.name.starts_with("drive 8"))
         .unwrap()
         .id;
     let media = media_backends::image::open(&dir).unwrap();

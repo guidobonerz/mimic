@@ -892,6 +892,14 @@ impl TimedBus68 for AmigaBus<'_> {
             // starvation count sees it). On the A1200 the request comes
             // with the cycle's start, its data slot being the next colour
             // clock.
+            // A 68000 chip bus cycle starts its S0 on a colour clock edge
+            // (Commodore, "A+ Processor/Chip Bus Timing Relations", 1992,
+            // "Processor Read Cycle (7 MHz 68000)": S0 on the CCK edge, the
+            // data in the cycle's second colour clock), so one due in the
+            // middle of a colour clock (after an E-clock-stretched CIA
+            // cycle) waits a CPU clock first.
+            let align = u64::from(bus == 4 && !at.is_multiple_of(clk));
+            let at = at + align;
             let c0 = at / clk + 1;
             self.b.run_to(c0 - 1);
             if self.b.cck == c0 - 1 {
@@ -901,7 +909,7 @@ impl TimedBus68 for AmigaBus<'_> {
             loop {
                 let c = self.b.cck;
                 if self.b.tick(true) {
-                    return (clk * (c - c0)) as u32;
+                    return (clk * (c - c0) + align) as u32;
                 }
             }
         }

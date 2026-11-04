@@ -1061,11 +1061,17 @@ impl M68000 {
         }
         let old_sr = self.sr;
         self.set_sr((self.sr | sr::S) & !sr::T & !sr::IPL | (u16::from(level) << 8));
+        // 44 clocks (MC68000 User's Manual, table 8-14 "exception
+        // processing execution times", interrupt 44(5/3)): six idle, the
+        // PC's low word, the acknowledge cycle, four idle, SR, the PC's
+        // high word, the vector, two prefetches. The four idle clocks
+        // this once had before the acknowledge as well made it 48, which
+        // put a handler's first instruction a colour clock late on the
+        // vAmiga suite's `Agnus/Registers/VPOS/probe5` and `probe7`.
         self.idle(bus, 6);
         let pc = self.au.wrapping_sub(4);
         let sp = self.a[7];
         self.write(bus, sp.wrapping_sub(2), Size::Word, pc & 0xffff)?;
-        self.idle(bus, 4);
         // Autovector acknowledge (VPA): the cycle is stretched to the E clock.
         self.cycle(
             bus,

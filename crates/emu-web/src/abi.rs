@@ -159,6 +159,11 @@ fn dispatch(a: &mut Abi, req: &Value) -> Result<Value, String> {
             a.emu.search_freeze(n("addr") as u32, label)
         }
         "eject" => a.emu.eject(n("slot") as u8).map(|()| Value::Null),
+        "crt" => a.emu.set_crt(&s("name")).map(|()| Value::Null),
+        "gpu" => {
+            a.emu.set_gpu(req["on"].as_bool().unwrap_or(true));
+            Ok(Value::Null)
+        }
         "reset" => {
             a.emu.reset(req["hard"].as_bool().unwrap_or(false));
             Ok(Value::Null)
@@ -194,6 +199,28 @@ pub extern "C" fn mimic_run_frame() -> u32 {
 #[no_mangle]
 pub extern "C" fn mimic_frame_ptr() -> usize {
     with(|a| a.emu.frame().map_or(0, |(p, _, _)| p.as_ptr() as usize))
+}
+
+/// Width of a picture pixel against its height (recomputed every frame:
+/// a machine can change its resolution or pixel clock while it runs).
+#[no_mangle]
+pub extern "C" fn mimic_frame_aspect() -> f64 {
+    with(|a| a.emu.frame_shape().0)
+}
+
+/// Picture rows per field line shown: 0.5 for the CRT path's picture.
+#[no_mangle]
+pub extern "C" fn mimic_frame_zoom() -> f64 {
+    with(|a| a.emu.frame_shape().1)
+}
+
+/// The CRT shader's 20 `f32` parameters (`video_crt::gpu::params`) when
+/// the page is to draw the CRT stage (`{"cmd": "gpu"}` and a monitor
+/// chosen): the picture is then the signal stage's output at source size,
+/// the output size is in parameters 2 and 3. 0 when the picture is final.
+#[no_mangle]
+pub extern "C" fn mimic_crt_params_ptr() -> usize {
+    with(|a| a.emu.crt_params().map_or(0, |p| p.as_ptr() as usize))
 }
 
 #[no_mangle]

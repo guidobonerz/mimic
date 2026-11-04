@@ -127,7 +127,7 @@ fn autostart_with(drive: &str) {
     let slot = m
         .media_slots()
         .into_iter()
-        .find(|s| s.name == "drive 8")
+        .find(|s| s.name.starts_with("drive 8"))
         .expect("drive 8 present (1541 DOS ROM in roms/drives/)")
         .id;
     let mut d = D64::blank(b"MIMIC", *b"PT");

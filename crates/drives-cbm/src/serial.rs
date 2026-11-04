@@ -257,6 +257,18 @@ impl SerialDrive {
         }
     }
 
+    /// The media slot's name for drive 8: the model of a true drive, or
+    /// "virtual", so a user sees which mode is running (a virtual drive runs
+    /// no fast loader and notices no disk change through the DOS).
+    pub fn slot_name(&self) -> &'static str {
+        match self.model() {
+            Some(DriveModel::C1541) => "drive 8 (1541)",
+            Some(DriveModel::C1571) => "drive 8 (1571)",
+            Some(DriveModel::C1581) => "drive 8 (1581)",
+            None => "drive 8 (virtual)",
+        }
+    }
+
     /// RESET from the serial bus; `hard` = power cycle.
     pub fn reset(&mut self, hard: bool) {
         match &mut self.kind {

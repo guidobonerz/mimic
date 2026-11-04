@@ -29,8 +29,13 @@ pub struct Running {
     /// Freezes (cheats) live here, as in the debug session.
     pub(crate) hooks: DebugHooks,
     fields: FieldStage,
-    /// Monitor profile for the CPU CRT path (`None`: raw pixels).
+    /// Monitor profile (`None`: raw pixels).
     crt: Option<video_crt::Profile>,
+    /// The page draws the CRT stage with WebGL: the picture is then the
+    /// signal stage's output at source size and `params` the shader's
+    /// uniform (`video_crt::gpu::params`).
+    gpu: bool,
+    params: [f32; 20],
     /// Phosphor persistence history of the CRT path (not machine state).
     history: video_crt::Crt,
     /// A light pen/gun takes the pointer; a mouse-like device the captured mouse.
@@ -42,6 +47,8 @@ pub struct Running {
     aspect: f64,
     samples: Vec<i16>,
     audio: Vec<f32>,
+    /// The uploaded file in each slot (by slot id), for the page's lists.
+    mounted: BTreeMap<u8, String>,
 }
 
 #[derive(Default)]
@@ -49,6 +56,8 @@ pub struct WebEmu {
     /// Uploaded files by path (`roms/c64/kernal.bin`, `game.d64`).
     pub(crate) files: BTreeMap<String, Vec<u8>>,
     pub running: Option<Running>,
+    /// The page has WebGL and draws the CRT stage itself.
+    pub gpu: bool,
     /// A cheat search in progress.
     pub(crate) search: Option<emu_cheats::search::Search>,
 }
@@ -198,6 +207,7 @@ impl WebEmu {
             ));
         }
         let mut used: BTreeMap<u8, usize> = BTreeMap::new();
+        let mut mounted = BTreeMap::new();
         for (file, kind) in &media {
             if *kind == MediaKind::Program && slot_of(machine.as_ref(), *kind, 0).is_none() {
                 continue;
@@ -213,18 +223,15 @@ impl WebEmu {
                 };
                 *n += 1;
                 match insert(machine.as_mut(), slot, &id, file, self.file(file)?) {
-                    Ok(()) => break,
+                    Ok(()) => {
+                        mounted.insert(slot.0, file.clone());
+                        break;
+                    }
                     Err(e) => last = Some(e),
                 }
             }
         }
-        let crt = match cfg["crt"].as_str() {
-            None | Some("raw") | Some("") => None,
-            Some("default") => Some(video_crt::Profile::default_for(&id)),
-            Some(name) => {
-                Some(video_crt::Profile::preset(name).ok_or(format!("unknown monitor '{name}'"))?)
-            }
-        };
+        let crt = crt_profile(&id, cfg["crt"].as_str().unwrap_or(""))?;
         let profile = Profile::for_options(&id, &config.options);
         let wants_pointer = !profile.pointer.is_empty();
         let wants_mouse = !profile.mouse.is_empty();
@@ -236,6 +243,8 @@ impl WebEmu {
             hooks: DebugHooks::new(),
             fields: FieldStage::new(Deinterlace::Weave),
             crt,
+            gpu: self.gpu,
+            params: [0.0; 20],
             history: video_crt::Crt::new(),
             wants_pointer,
             wants_mouse,
@@ -245,6 +254,7 @@ impl WebEmu {
             aspect: 1.0,
             samples: Vec::new(),
             audio: Vec::new(),
+            mounted,
         });
         self.search = None;
         let r = self.running.as_mut().expect("just set");
@@ -273,7 +283,15 @@ impl WebEmu {
         let slots: Vec<Value> = m
             .media_slots()
             .iter()
-            .map(|s| json!({"id": s.id.0, "name": s.name, "kind": kind_name(s.kind)}))
+            .map(|s| {
+                json!({
+                    "id": s.id.0,
+                    "name": s.name,
+                    "kind": kind_name(s.kind),
+                    "inserted": s.inserted,
+                    "file": if s.inserted { r.mounted.get(&s.id.0).cloned() } else { None },
+                })
+            })
             .collect();
         let ports: Vec<Value> = m
             .ports()
@@ -326,6 +344,46 @@ impl WebEmu {
             let cut = r.audio.len() - max;
             r.audio.drain(..cut);
         }
+        Ok(())
+    }
+
+    /// How the picture is shown: the width of a picture pixel against its
+    /// height, and the size the picture stands for (0.5 for the CRT path's
+    /// picture, which has two rows per field line), recomputed every frame.
+    pub fn frame_shape(&self) -> (f64, f64) {
+        self.running.as_ref().map_or((1.0, 1.0), |r| {
+            (r.aspect, if r.crt.is_some() { 0.5 } else { 1.0 })
+        })
+    }
+
+    /// Whether the page draws the CRT stage with WebGL (set once the page
+    /// has a context; takes effect with the next frame).
+    pub fn set_gpu(&mut self, on: bool) {
+        self.gpu = on;
+        if let Some(r) = &mut self.running {
+            r.gpu = on;
+            r.history = video_crt::Crt::new();
+            r.render();
+        }
+    }
+
+    /// The CRT shader's parameters for the current picture, when the page
+    /// is to draw the CRT stage (`gpu` and a monitor profile); `None` when
+    /// the picture is final. The output size is in `params[2..4]`.
+    pub fn crt_params(&self) -> Option<&[f32; 20]> {
+        self.running
+            .as_ref()
+            .filter(|r| r.gpu && r.crt.is_some())
+            .map(|r| &r.params)
+    }
+
+    /// Switch the monitor of the running machine ("raw", "default" or a
+    /// preset name); takes effect with the next frame.
+    pub fn set_crt(&mut self, name: &str) -> Result<(), String> {
+        let r = self.running.as_mut().ok_or("no machine running")?;
+        r.crt = crt_profile(&r.id, name)?;
+        r.history = video_crt::Crt::new();
+        r.render();
         Ok(())
     }
 
@@ -412,6 +470,7 @@ impl WebEmu {
         let data = self.file(path)?;
         let r = self.running.as_mut().ok_or("no machine running")?;
         insert(r.machine.as_mut(), SlotId(slot), &r.id, path, data.clone())?;
+        r.mounted.insert(slot, path.to_string());
         self.cheats_for_image(&data)
     }
 
@@ -421,6 +480,7 @@ impl WebEmu {
             .media_slot(SlotId(slot))
             .ok_or("no such slot")?
             .eject();
+        r.mounted.remove(&slot);
         Ok(())
     }
 
@@ -457,6 +517,51 @@ impl Running {
         let m = self.machine.as_ref();
         let frame = m.framebuffer();
         self.aspect = video_crt::cpu::pixel_aspect(&frame);
+        if let (Some(profile), true) = (&self.crt, self.gpu) {
+            // Signal stage here, CRT stage in the page's shader: the
+            // picture keeps the source size, `params` sizes the output.
+            let woven = self.fields.process(&frame);
+            let (w, h) = woven
+                .as_ref()
+                .map_or((frame.width, frame.height), |(w, h, _)| (*w, *h));
+            self.rgba.clear();
+            match &woven {
+                Some((_, _, px)) => self
+                    .rgba
+                    .extend(px.iter().flat_map(|c| [c.r, c.g, c.b, 255])),
+                None => {
+                    for y in 0..h {
+                        for x in 0..w {
+                            let c = frame.rgb_at(x, y).unwrap_or_default();
+                            self.rgba.extend([c.r, c.g, c.b, 255]);
+                        }
+                    }
+                }
+            }
+            if let Some(decoded) = video_crt::signal::process_rgba(
+                w,
+                h,
+                &self.rgba,
+                frame.luma_chroma,
+                frame.signal,
+                profile,
+            ) {
+                self.rgba = decoded;
+            }
+            let sized = emu_core::FrameRef {
+                width: w,
+                height: h,
+                pixels: emu_core::frame::PixelData::Rgb(&[]),
+                luma_chroma: None,
+                signal: frame.signal,
+            };
+            let out = video_crt::cpu::output_size(&sized, profile, 2);
+            self.params = video_crt::gpu::params(profile, (w, h), out, (0, 0));
+            self.width = w;
+            self.height = h;
+            self.aspect = 1.0;
+            return;
+        }
         if let Some(profile) = &self.crt {
             let img = self.history.render(&frame, profile, 2);
             self.width = img.width;
@@ -491,6 +596,16 @@ impl Running {
             }
         }
     }
+}
+
+/// The monitor profile for `name`: none for raw pixels ("raw" or empty),
+/// the machine's own ("default") or a preset.
+fn crt_profile(machine: &str, name: &str) -> Result<Option<video_crt::Profile>, String> {
+    Ok(match name {
+        "raw" | "" => None,
+        "default" => Some(video_crt::Profile::default_for(machine)),
+        name => Some(video_crt::Profile::preset(name).ok_or(format!("unknown monitor '{name}'"))?),
+    })
 }
 
 fn frame_rate(f: &FrameRef<'_>) -> f64 {
@@ -555,6 +670,87 @@ fn insert(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_webgl_the_picture_stays_at_source_size_and_the_shader_gets_its_params() {
+        let mut emu = WebEmu::new();
+        emu.set_gpu(true);
+        emu.start(&json!({"machine": "c64", "options": {"roms": "stub"}, "crt": "default"}))
+            .unwrap();
+        emu.run_frame().unwrap();
+        let (_, w, h) = emu.frame().unwrap();
+        assert_eq!((w, h), (384, 272), "signal stage only: source size");
+        let p = emu.crt_params().expect("params for the shader");
+        assert_eq!((p[0], p[1]), (384.0, 272.0));
+        assert_eq!(p[3], 544.0, "two rows per line");
+        assert!(
+            p[2] > 600.0 && p[2] < 800.0,
+            "width with the pixel aspect: {}",
+            p[2]
+        );
+        assert_eq!(emu.frame_shape(), (1.0, 0.5));
+        emu.set_crt("raw").unwrap();
+        emu.run_frame().unwrap();
+        assert!(emu.crt_params().is_none(), "raw pixels need no shader");
+        emu.set_gpu(false);
+        emu.set_crt("default").unwrap();
+        emu.run_frame().unwrap();
+        assert!(emu.crt_params().is_none());
+        assert_eq!(
+            emu.frame().unwrap().2,
+            544,
+            "the CPU path renders the output"
+        );
+    }
+
+    #[test]
+    fn the_monitor_switches_while_the_machine_runs() {
+        let mut emu = WebEmu::new();
+        emu.start(&json!({"machine": "c64", "options": {"roms": "stub"}}))
+            .unwrap();
+        emu.run_frame().unwrap();
+        let (aspect, zoom) = emu.frame_shape();
+        assert!((aspect - 0.936).abs() < 0.01, "C64 PAL pixels: {aspect}");
+        assert_eq!(zoom, 1.0);
+        let raw = emu.frame().map(|(_, w, h)| (w, h)).unwrap();
+        emu.set_crt("default").unwrap();
+        emu.run_frame().unwrap();
+        let crt = emu.frame().map(|(_, w, h)| (w, h)).unwrap();
+        assert!(crt.1 >= 2 * raw.1, "two rows a line: {raw:?} -> {crt:?}");
+        assert_eq!(emu.frame_shape(), (1.0, 0.5));
+        assert!(emu.set_crt("nonsense").is_err());
+        emu.set_crt("raw").unwrap();
+        emu.run_frame().unwrap();
+        assert_eq!(emu.frame().map(|(_, w, h)| (w, h)).unwrap(), raw);
+    }
+
+    #[test]
+    fn the_slots_tell_which_file_they_hold() {
+        let mut emu = WebEmu::new();
+        emu.add_file("game.d64", vec![0; 174_848]);
+        emu.start(&json!({"machine": "c64", "options": {"roms": "stub"}}))
+            .unwrap();
+        let disk = |emu: &WebEmu| {
+            emu.info()["slots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["kind"] == "disk")
+                .cloned()
+                .unwrap()
+        };
+        let slot = disk(&emu)["id"].as_u64().unwrap() as u8;
+        assert!(disk(&emu)["file"].is_null());
+        emu.insert(slot, "game.d64").unwrap();
+        assert_eq!(disk(&emu)["file"], "game.d64");
+        emu.eject(slot).unwrap();
+        assert!(disk(&emu)["file"].is_null());
+        // Media named at the start are shown too.
+        emu.start(&json!({"machine": "c64", "options": {"roms": "stub"},
+            "media": [{"file": "game.d64", "kind": "disk"}]}))
+            .unwrap();
+        assert_eq!(disk(&emu)["file"], "game.d64");
+    }
 
     #[test]
     fn a_machine_runs_with_stub_roms_and_takes_input() {

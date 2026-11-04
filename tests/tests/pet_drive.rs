@@ -117,7 +117,7 @@ fn command(m: &mut dyn Machine, cmd: &str) {
 fn drive8(m: &dyn Machine) -> SlotId {
     m.media_slots()
         .into_iter()
-        .find(|s| s.name == "drive 8")
+        .find(|s| s.name.starts_with("drive 8"))
         .expect("drive 8")
         .id
 }
@@ -209,7 +209,10 @@ fn basic2_loads_and_saves_on_a_d64() {
 fn without_a_drive_the_device_is_not_present() {
     let mut m = pet("4032", "none");
     assert!(run_until(m.as_mut(), "READY.", 1, 300), "boot");
-    assert!(m.media_slots().iter().all(|s| s.name != "drive 8"));
+    assert!(m
+        .media_slots()
+        .iter()
+        .all(|s| !s.name.starts_with("drive 8")));
     command(m.as_mut(), "LOAD\"X\",8\n");
     assert_eq!(
         count(m.as_mut(), "DEVICE NOT PRESENT"),

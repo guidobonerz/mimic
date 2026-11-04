@@ -91,7 +91,7 @@ fn command(m: &mut dyn Machine, text: &str, max: u32) -> Option<u32> {
 fn drive8(m: &dyn Machine) -> SlotId {
     m.media_slots()
         .into_iter()
-        .find(|s| s.name == "drive 8")
+        .find(|s| s.name.starts_with("drive 8"))
         .expect("drive 8 present")
         .id
 }

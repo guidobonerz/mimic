@@ -58,7 +58,7 @@ fn autostart_loads_and_runs_from_drive_8() {
         let slot = m
             .media_slots()
             .into_iter()
-            .find(|s| s.name == "drive 8")
+            .find(|s| s.name.starts_with("drive 8"))
             .expect("drive 8 present")
             .id;
         m.media_slot(slot).unwrap().insert(disk()).unwrap();

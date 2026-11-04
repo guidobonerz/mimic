@@ -516,7 +516,7 @@ fn ports_devices_and_media() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|s| s["name"] == "drive 8")
+        .find(|s| s["name"].as_str().is_some_and(|n| n.starts_with("drive 8")))
         .expect("virtual drive 8")["id"]
         .clone();
     let r = c.ok(json!({"cmd": "set_drive_mode", "slot": drive8, "mode": "virtual"}));

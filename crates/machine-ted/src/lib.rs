@@ -982,7 +982,7 @@ impl Machine for TedMachine {
         if let Some(d) = &self.drive {
             slots.push(MediaSlotInfo {
                 id: SLOT_DRIVE8,
-                name: "drive 8",
+                name: d.slot_name(),
                 kind: MediaKind::Disk,
                 inserted: d.has_disk(),
             });

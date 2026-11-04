@@ -119,9 +119,11 @@ function showModels() {
   $("videoformat").replaceChildren(new Option("default video", ""), ...m.videoFormats.map((x) => new Option(x.toUpperCase(), x)));
   $("videoformat").hidden = !m.videoFormats.length;
   const needed = m.roms.filter((r) => !r.optional).map((r) => `${r.role} (${r.size} bytes)`);
-  $("romneeds").textContent = needed.length
+  const optional = m.roms.filter((r) => r.optional).map((r) => r.role);
+  $("romneeds").textContent = (needed.length
     ? `ROMs needed: ${needed.join(", ")} — add the files or a ROM folder.`
-    : "No system ROM needed.";
+    : "No system ROM needed.")
+    + (optional.length ? ` Optional: ${optional.join(", ")} (without a drive DOS ROM the drive is virtual: no fast loaders, no disk-change detection).` : "");
 }
 
 function parseOptions(text) {
@@ -185,36 +187,56 @@ function stop() {
 function showSlots() {
   if (!running) return;
   info = call("info");
-  const files = call("files");
   $("mediabox").hidden = info.slots.length === 0;
+  // One line per drive or slot, as in the desktop's media panel: its name,
+  // the image in it, and one button that mounts (green, a file dialog) or
+  // ejects (red).
   $("slots").replaceChildren(...info.slots.map((s) => {
     const li = document.createElement("li");
     const name = document.createElement("span");
-    name.textContent = `${s.name} (${s.kind})`;
+    name.textContent = s.name;
     name.style.wordBreak = "normal";
-    const pick = document.createElement("select");
-    pick.append(new Option("insert…", ""));
-    for (const f of files) {
-      if (!f.kind || f.kind === s.kind || (s.kind === "tape" && f.kind === "program") || s.kind === "cartridge") {
-        pick.append(new Option(f.path, f.path));
-      }
-    }
-    pick.onchange = () => {
-      if (!pick.value) return;
-      try {
-        const r = call("insert", { slot: s.id, path: pick.value });
-        say(`${pick.value} → ${s.name}${r.cheats ? ` (cheats: ${r.cheats})` : ""}`);
-        showCheats();
-      }
-      catch (e) { say(e.message, true); }
-      pick.value = "";
-    };
-    const eject = document.createElement("button");
-    eject.textContent = "Eject";
-    eject.onclick = () => { try { call("eject", { slot: s.id }); say(`${s.name} ejected`); } catch (e) { say(e.message, true); } };
-    li.append(name, pick, eject);
+    name.style.flex = "0 0 auto";
+    const file = document.createElement("small");
+    file.textContent = s.inserted ? (s.file ?? "(inserted)") : "empty";
+    file.title = file.textContent;
+    Object.assign(file.style, { flex: "1", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis" });
+    const toggle = document.createElement("button");
+    toggle.className = s.inserted ? "eject" : "mount";
+    toggle.textContent = s.inserted ? "Eject" : "Mount";
+    toggle.onclick = () => (s.inserted ? ejectSlot(s) : mountSlot(s));
+    li.append(name, file, toggle);
     return li;
   }));
+}
+
+function ejectSlot(s) {
+  try {
+    call("eject", { slot: s.id });
+    say(`${s.name} ejected`);
+  }
+  catch (e) { say(e.message, true); }
+  showSlots();
+}
+
+// The file dialog for a slot: the chosen image is kept with the other files
+// (and in the browser's storage) and goes into the slot.
+function mountSlot(s) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.onchange = async () => {
+    const f = input.files[0];
+    if (!f) return;
+    await addFileList([f], false);
+    try {
+      const r = call("insert", { slot: s.id, path: f.name });
+      say(`${f.name} → ${s.name}${r.cheats ? ` (cheats: ${r.cheats})` : ""}`);
+      showCheats();
+    }
+    catch (e) { say(e.message, true); }
+    showSlots();
+  };
+  input.click();
 }
 
 // A dropped file goes into the first slot of its kind.
@@ -229,6 +251,7 @@ async function dropIntoMachine(list) {
     try { call("insert", { slot: slot.id, path: f.name }); say(`${f.name} → ${slot.name}`); }
     catch (e) { say(e.message, true); }
   }
+  showSlots();
 }
 
 // ---- cheats ----------------------------------------------------------------
@@ -315,24 +338,239 @@ function showPanel(controls) {
 
 // ---- picture ----------------------------------------------------------------
 
-const canvas = $("screen"), ctx = canvas.getContext("2d");
-let image = null;
+const canvas = $("screen");
+// WebGL2 draws the picture: raw pixels through a pass-through shader, a
+// monitor through the CRT stage (the GLSL port of video-crt's crt.wgsl,
+// same model as its CPU path; the signal stage runs in the wasm). Without
+// WebGL2 the 2D canvas shows the wasm's own CPU rendering.
+const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, preserveDrawingBuffer: false });
+const ctx = gl ? null : canvas.getContext("2d");
+let image = null, shape = "";
+
+const VERTEX = `#version 300 es
+void main() {
+  // Full-screen triangle.
+  vec2 uv = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+}`;
+const RAW_FRAGMENT = `#version 300 es
+precision highp float;
+uniform sampler2D source;
+uniform vec2 out_size;
+out vec4 color;
+void main() {
+  // Rows top-down, as the picture is stored.
+  vec2 p = vec2(gl_FragCoord.x, out_size.y - gl_FragCoord.y);
+  color = texelFetch(source, ivec2(floor(p)), 0);
+}`;
+// params: see video_crt::gpu::params (20 floats as 5 vec4):
+// [0] src_size.xy out_size.zw, [1] tint.xyz scanlines.w,
+// [2] gamma.x persistence.y origin.zw, [3] mask_kind.x mask_strength.y
+// mask_pitch.z bloom.w, [4] curvature.x vignette.y.
+const CRT_FRAGMENT = `#version 300 es
+precision highp float;
+uniform sampler2D source;
+uniform sampler2D previous;
+uniform vec4 u[5];
+out vec4 color;
+
+vec3 fetch(int x, int y) {
+  ivec2 m = ivec2(u[0].xy) - ivec2(1, 1);
+  return texelFetch(source, clamp(ivec2(x, y), ivec2(0, 0), m), 0).rgb;
+}
+
+// Glow around a source pixel: centre 0.2, +-1 0.15, +-2 0.1, lines above
+// and below 0.15 (GLOW in cpu.rs).
+vec3 glow(int x, int y) {
+  return 0.2 * fetch(x, y)
+    + 0.15 * (fetch(x - 1, y) + fetch(x + 1, y))
+    + 0.1 * (fetch(x - 2, y) + fetch(x + 2, y))
+    + 0.15 * (fetch(x, y - 1) + fetch(x, y + 1));
+}
+
+// Per-channel mask factors (gain included) of the screen pixel centred at p.
+vec3 mask(vec2 p) {
+  float s = clamp(u[3].y, 0.0, 1.0);
+  int kind = int(u[3].x + 0.5);
+  if (kind == 0 || s == 0.0) return vec3(1.0);
+  float pitch = max(u[3].z, 1.0);
+  float shift = 0.0;
+  float gap = 1.0;
+  if (kind == 1) {
+    float row = floor(p.y / (pitch * 0.5));
+    if (row - 2.0 * floor(row * 0.5) >= 1.0) shift = 0.5;
+  } else if (kind == 3) {
+    float h = pitch * 2.0;
+    float row = floor(p.y / h);
+    if (row - 2.0 * floor(row * 0.5) >= 1.0) shift = 0.5;
+    if (p.y / h - row > 0.875) gap = 1.0 - s;
+  }
+  float uu = p.x / pitch + shift;
+  float t = uu - floor(uu);
+  vec3 centre = (vec3(0.0, 1.0, 2.0) + 0.5) / 3.0;
+  vec3 d0 = abs(vec3(t) - centre);
+  vec3 d = min(d0, vec3(1.0) - d0) * 3.0;
+  vec3 w = clamp(vec3(1.0) - d, vec3(0.0), vec3(1.0));
+  vec3 m = vec3(1.0) - s * (vec3(1.0) - w);
+  return m * (gap / (1.0 - s / 3.0));
+}
+
+void main() {
+  vec2 src_size = u[0].xy, out_size = u[0].zw;
+  // Rows top-down, as in the WGSL version.
+  vec2 screen = vec2(gl_FragCoord.x, out_size.y - gl_FragCoord.y) - u[2].zw;
+  vec2 p = screen;
+  vec2 c = p * 2.0 / out_size - 1.0;
+  vec3 lit = vec3(0.0);
+  bool visible = true;
+  float k = clamp(u[4].x, 0.0, 0.25);
+  if (k > 0.0) {
+    c = c * ((1.0 + k * dot(c, c)) / (1.0 + k));
+    if (abs(c.x) > 1.0 || abs(c.y) > 1.0) visible = false;
+    p = (c + 1.0) * 0.5 * out_size;
+  }
+  if (visible) {
+    float scale_y = out_size.y / src_size.y;
+    float ly = p.y / scale_y;
+    int sy = int(floor(ly));
+    // Centre-aligned linear resampling along the line.
+    float pos = max(p.x * src_size.x / out_size.x - 0.5, 0.0);
+    int x0 = int(floor(pos));
+    float t = pos - floor(pos);
+    vec3 col = mix(fetch(x0, sy), fetch(x0 + 1, sy), t);
+    // 0 at the beam centre, 1 in the gap between lines.
+    float offset = 0.0;
+    if (scale_y > 1.0) offset = abs(fract(ly) * 2.0 - 1.0);
+    float luma = dot(col, vec3(0.299, 0.587, 0.114));
+    float beam = 0.5 + 0.5 * luma;
+    float falloff = min(offset / max(beam, 0.01), 1.0);
+    lit = col * (1.0 - u[1].w * falloff * falloff);
+    float bloom = clamp(u[3].w, 0.0, 1.0);
+    if (bloom > 0.0) {
+      vec3 g = mix(glow(x0, sy), glow(x0 + 1, sy), t);
+      lit = lit + bloom * g * g;
+    }
+    lit = lit * u[1].xyz * mask(screen);
+    float vignette = clamp(u[4].y, 0.0, 1.0);
+    if (vignette > 0.0) lit = lit * max(1.0 - vignette * 0.5 * dot(c, c), 0.0);
+  }
+  vec3 o = pow(clamp(lit, vec3(0.0), vec3(1.0)), vec3(1.0 / max(u[2].x, 0.01)));
+  float keep = clamp(u[2].y, 0.0, 1.0);
+  if (keep > 0.0) {
+    // The last output, copied from the canvas in its own orientation.
+    vec3 prev = texelFetch(previous, ivec2(gl_FragCoord.xy), 0).rgb;
+    o = max(o, prev * keep);
+  }
+  color = vec4(o, 1.0);
+}`;
+
+let glState = null;
+function compile(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+  return sh;
+}
+function program(fragment) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VERTEX));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fragment));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+function texture() {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+function initGl() {
+  const raw = program(RAW_FRAGMENT), crt = program(CRT_FRAGMENT);
+  glState = {
+    raw, crt,
+    rawSource: gl.getUniformLocation(raw, "source"),
+    rawOut: gl.getUniformLocation(raw, "out_size"),
+    crtSource: gl.getUniformLocation(crt, "source"),
+    crtPrevious: gl.getUniformLocation(crt, "previous"),
+    crtU: gl.getUniformLocation(crt, "u"),
+    source: texture(), previous: texture(),
+    sourceSize: "", previousSize: "",
+  };
+  gl.bindVertexArray(gl.createVertexArray());
+  gl.disable(gl.DEPTH_TEST);
+  gl.disable(gl.BLEND);
+}
+
 function paint() {
   const w = wasm.mimic_frame_width(), h = wasm.mimic_frame_height();
   if (!w || !h) return;
-  if (!image || image.width !== w || image.height !== h) {
-    canvas.width = w;
-    canvas.height = h;
-    image = new ImageData(w, h);
+  const pp = glState ? wasm.mimic_crt_params_ptr() : 0;
+  const params = pp ? new Float32Array(mem(), pp, 20) : null;
+  const cw = params ? Math.round(params[2]) : w, ch = params ? Math.round(params[3]) : h;
+  if (canvas.width !== cw || canvas.height !== ch) {
+    canvas.width = cw;
+    canvas.height = ch;
+    image = null;
+  }
+  // Raw pixels stay sharp; a CRT picture is smoothed when scaled.
+  canvas.style.imageRendering = params ? "auto" : "pixelated";
+  // The pixel aspect can change while the machine runs (resolution,
+  // pixel clock, the monitor): the displayed size follows every frame.
+  const now = `${cw}x${ch}:${wasm.mimic_frame_aspect()}:${wasm.mimic_frame_zoom()}`;
+  if (now !== shape) {
+    shape = now;
     fit();
   }
-  image.data.set(new Uint8ClampedArray(mem(), wasm.mimic_frame_ptr(), w * h * 4));
-  ctx.putImageData(image, 0, 0);
+  const pixels = new Uint8Array(mem(), wasm.mimic_frame_ptr(), w * h * 4);
+  if (!glState) {
+    if (!image) image = new ImageData(w, h);
+    image.data.set(pixels);
+    ctx.putImageData(image, 0, 0);
+    return;
+  }
+  const g = glState;
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, g.source);
+  const size = `${w}x${h}`;
+  if (g.sourceSize !== size) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    g.sourceSize = size;
+  } else {
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  }
+  gl.viewport(0, 0, cw, ch);
+  if (!params) {
+    gl.useProgram(g.raw);
+    gl.uniform1i(g.rawSource, 0);
+    gl.uniform2f(g.rawOut, cw, ch);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return;
+  }
+  // Persistence reads the last output: kept as a copy of the canvas.
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, g.previous);
+  const osize = `${cw}x${ch}`;
+  if (g.previousSize !== osize) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, cw, ch, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    g.previousSize = osize;
+  }
+  gl.useProgram(g.crt);
+  gl.uniform1i(g.crtSource, 0);
+  gl.uniform1i(g.crtPrevious, 1);
+  gl.uniform4fv(g.crtU, params);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  if (params[9] > 0) gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, cw, ch);
 }
 function fit() {
-  const aspect = info && info.aspect ? info.aspect : 1;
+  const aspect = wasm ? wasm.mimic_frame_aspect() || 1 : 1;
+  const zoom = wasm ? wasm.mimic_frame_zoom() || 1 : 1;
   const s = Number($("scale").value);
-  canvas.style.width = `${Math.round(canvas.width * aspect * s)}px`;
+  canvas.style.width = `${Math.round(canvas.width * aspect * zoom * s)}px`;
   canvas.style.aspectRatio = `${canvas.width * aspect} / ${canvas.height}`;
 }
 
@@ -544,7 +782,11 @@ function wire() {
   };
   $("reset").onclick = (e) => { call("reset", { hard: e.shiftKey }); stopAudioQueue(); };
   $("scale").onchange = fit;
-  $("crt").onchange = () => { if (running) say("the monitor applies from the next start"); };
+  $("crt").onchange = () => {
+    if (!running) return;
+    try { call("crt", { name: crtValue() }); paint(); }
+    catch (e) { say(e.message, true); }
+  };
   $("addfiles").onclick = () => $("fileinput").click();
   $("addfolder").onclick = () => $("folderinput").click();
   $("fileinput").onchange = (e) => addFileList(e.target.files, false);
@@ -595,6 +837,10 @@ function wire() {
   }
   wire();
   try { $("version").textContent = `mimic ${call("version")}`; } catch (e) { /* older wasm */ }
+  if (gl) {
+    try { initGl(); call("gpu", { on: true }); }
+    catch (e) { glState = null; say("WebGL failed, drawing on the CPU: " + e.message, true); }
+  }
   await restoreFiles();
   showMachines();
   showFiles();
