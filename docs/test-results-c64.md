@@ -13,9 +13,9 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1157 / 1240 projected (78 failed, 5 errors, 303 skipped; last full run 1141 on 2026-11-01) | 93.3 % | 48.8 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1160 / 1240 projected (75 failed, 5 errors, 303 skipped; last full run 1141 on 2026-11-01) | 93.5 % | 48.8 min |
 
-Trend: VICE test programs 1141 → 1157 projected (runs of `drive/` on 2026-11-04 with the VIA rules below: `drive` 26 → 42, none newly failing; every other area unchanged by the VIA users' tests). Before that: 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
+Trend: VICE test programs 1141 → 1160 projected (runs of `drive/` on 2026-11-04 with the VIA rules, the 1541 address decoding and the byte-ready delay below: `drive` 26 → 45, none newly failing; every other area unchanged by the VIA users' tests). Before that: 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
 projected from runs of `VICII/`, `interrupts/` and Lorenz 264 → 264 on 2026-10-31;
 no full run yet). Before that: 874 → 902 (+28, none newly failing: all of
 `CIA/shiftregister/cia-sdr-icr`; last full run 898, the last 4 confirmed with `CIA/`,
@@ -41,7 +41,7 @@ on 2026-10-26.
 | VICII | 226 | 47 | 0 | 88 | 82.8 % |
 | SID | 155 | 14 | 0 | 22 | 91.7 % |
 | C64 | 60 | 10 | 0 | 25 | 85.7 % |
-| drive | 42 | 4 | 5 | 4 | 82.4 % |
+| drive | 45 | 1 | 5 | 4 | 88.2 % |
 | testbench (self test) | 8 | 0 | 0 | 0 | 100 % |
 | vdrive | 2 | 0 | 0 | 1 | 100 % |
 | memory-expansions | 1 | 0 | 0 | 5 | 100 % |
@@ -49,22 +49,45 @@ on 2026-10-26.
 | GEO-RAM | 0 | 0 | 0 | 5 | – |
 | mouse, propmouse, keypad, testjoy | 0 | 0 | 0 | 15 | – |
 | others (audio-io, c64-cpm, crtemulation, digimax, plus60k, plus256k, sfx_soundsampler, userportrtc) | 0 | 0 | 0 | 10 | – |
-| **total** | **1157** | **78** | **5** | **303** | **93.3 %** |
+| **total** | **1160** | **75** | **5** | **303** | **93.5 %** |
 
 Largest open blocks: `VICII/videomode` (27, of which 14 NTSC entries with unusable references, see
 below); `drive/viavarious` is complete. The 5 errors are `drive` entries that need
-P64 images or disks missing from the test data; the 4 `drive` failures are
-`hlstest`, `drive-emu-check` and the two `openbus` programs. Skipped: tests that need hardware
+P64 images or disks missing from the test data; the one `drive` failure left
+is `drive-emu-check`. Skipped: tests that need hardware
 or options the runner does not set up (REU and GEO-RAM tests, mice,
 interactive and analyser programs).
 
 Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 `target/tmp/lorenz.txt`.
 
-## Changes of 2026-11-04, VIA 6522
+## Changes of 2026-11-04, VIA 6522, the 1541's address decoding and byte ready
 
-drive 26 → 42: all of `drive/viavarious` (via1–via21) and
-`drive/interrupts/timera`. The rules were read off the reference data, which
+drive 26 → 45: all of `drive/viavarious` (via1–via21),
+`drive/interrupts/timera`, both `drive/openbus` programs and
+`drive/hls-protection`.
+
+Byte ready comes one cycle after the eighth bit enters the shift register
+(`BYTE_READY_DELAY` in `drives-cbm/src/c1541.rs`). The HLS protection check
+reads a byte, polls SYNC about 19 cycles after byte ready and expects to
+catch every data-block sync (its byte before the sync is `$AF`, four sync
+bits already in the latch, the tenth due 6 bit cells = 19.2 µs on the
+test's dense track later) while never seeing a header sync (two bits in the
+latch, the tenth 25.6 µs later). With byte ready at the shift itself the
+poll landed a cycle early once in sixteen rows (the bit stream is not locked
+to the CPU clock in the emulation); 1 or 2 cycles satisfy both bounds on
+tracks 17 and 19, the smaller is kept. Found through `dump_hls_test` in
+`tests/tests/via_dump.rs`, which prints the drive's 16 result rows next to
+the expected ones.
+
+The 1541 decodes A15, A12 and A11 only (`drives-cbm/src/c1541.rs`,
+`region`): RAM where A12 = A11 = 0, the VIAs where both are 1 (A10 picks
+one), nothing where they differ, so `$0800–$17FF` is open bus and RAM and
+VIAs repeat every `$2000`. The open bus returns the last byte that was on the
+data bus, which the test reads back through an indexing dummy cycle and the
+high byte of an absolute or indirect address (`openbus`, `openbus2`; the
+author's 1541 and OC118, not a 1570/1581). Before, RAM was mirrored up to
+`$17FF` and `$2000–$7FFF` was open. The rules were read off the reference data, which
 the test author recorded on a 1541C (and checked on a 1541-II), by replaying
 each sub test at the chip and comparing byte for byte
 (`tests/tests/via_dump.rs` prints the drive's measurements next to

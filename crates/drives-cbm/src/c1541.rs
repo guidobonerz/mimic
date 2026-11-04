@@ -1,7 +1,8 @@
 //! Commodore 1541 and 1571 disk drives, true drive emulation.
 //!
 //! 1541: its own NMOS 6502 at 1 MHz, 2 KB RAM, 16 KB DOS ROM and two VIAs.
-//! Memory map: `$0000–$07FF` RAM (mirrored up to `$17FF`), `$1800` VIA1
+//! Memory map: `$0000–$07FF` RAM (`$0800–$17FF` open bus; RAM and VIAs
+//! repeat every `$2000`, see [`region`]), `$1800` VIA1
 //! (IEC), `$1C00` VIA2 (drive mechanics), `$C000–$FFFF` ROM (mirrored at
 //! `$8000`).
 //!
@@ -216,6 +217,9 @@ struct Mechanism {
     /// Towards the next bit: each microsecond adds the track's bits, a bit
     /// passes per [`REVOLUTION_US`].
     bit_clock: u32,
+    /// Cycles until the byte just shifted in is announced (byte ready
+    /// comes a little after the shift register fills).
+    byte_due: u8,
     last_byte: u8,
     sync: bool,
     /// The read shift register.
@@ -284,17 +288,55 @@ fn peek8(
     addr: u16,
 ) -> u8 {
     let c1571 = model == DriveModel::C1571;
-    match addr {
-        0x0000..=0x17ff => ram[usize::from(addr & 0x7ff)],
-        0x1800..=0x1bff => via1.peek(addr as u8, pins.via1.0, pins.via1.1),
-        0x1c00..=0x1fff => via2.peek(addr as u8, pins.via2.0, pins.via2.1),
-        0x2000..=0x3fff if c1571 => 0,
-        0x4000..=0x7fff if c1571 => cia.peek(addr as u8 & 0x0f, 0xff, 0xff),
-        0x8000..=0xffff => rom
+    match region(model, addr) {
+        Region::Ram => ram[usize::from(addr & 0x7ff)],
+        Region::Via1 => via1.peek(addr as u8, pins.via1.0, pins.via1.1),
+        Region::Via2 => via2.peek(addr as u8, pins.via2.0, pins.via2.1),
+        Region::Other if c1571 && (0x2000..=0x3fff).contains(&addr) => 0,
+        Region::Other if c1571 && (0x4000..=0x7fff).contains(&addr) => {
+            cia.peek(addr as u8 & 0x0f, 0xff, 0xff)
+        }
+        Region::Rom => rom
             .get(usize::from(addr) & (model.rom_size() - 1))
             .copied()
             .unwrap_or(0xff),
-        _ => open_bus,
+        Region::Other => open_bus,
+    }
+}
+
+/// What a drive address selects.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Region {
+    Ram,
+    Via1,
+    Via2,
+    Rom,
+    /// Open bus on the 1541; the 1571's WD1770 and CIA live here too.
+    Other,
+}
+
+/// The 1541 decodes A15, A12 and A11 only: RAM where A12 = A11 = 0, the
+/// VIAs where both are 1 (A10 picks one), nothing where they differ, so
+/// `$0800–$17FF` is open bus and RAM and VIAs repeat every `$2000`
+/// (VICE `drive/openbus`, measured on real 1541s). The 1571 keeps its own
+/// map with the WD1770 at `$2000` and the CIA at `$4000`.
+fn region(model: DriveModel, addr: u16) -> Region {
+    if addr >= 0x8000 {
+        return Region::Rom;
+    }
+    match model {
+        DriveModel::C1541 => match (addr & 0x1800, addr & 0x0400) {
+            (0x0000, _) => Region::Ram,
+            (0x1800, 0) => Region::Via1,
+            (0x1800, _) => Region::Via2,
+            _ => Region::Other,
+        },
+        _ => match addr {
+            0x0000..=0x17ff => Region::Ram,
+            0x1800..=0x1bff => Region::Via1,
+            0x1c00..=0x1fff => Region::Via2,
+            _ => Region::Other,
+        },
     }
 }
 
@@ -302,15 +344,17 @@ impl Bus for DriveBus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
         let a = addr as u16;
         let c1571 = self.model == DriveModel::C1571;
-        let v = match a {
-            0x1800..=0x1bff => self.via1.read(a as u8, self.pins.via1.0, self.pins.via1.1),
-            0x1c00..=0x1fff => {
+        let v = match region(self.model, a) {
+            Region::Via1 => self.via1.read(a as u8, self.pins.via1.0, self.pins.via1.1),
+            Region::Via2 => {
                 if matches!(a & 0x0f, 0x01 | 0x0f) {
                     *self.byte_ready = false;
                 }
                 self.via2.read(a as u8, self.pins.via2.0, self.pins.via2.1)
             }
-            0x4000..=0x7fff if c1571 => self.cia.read(a as u8 & 0x0f, 0xff, 0xff),
+            Region::Other if c1571 && (0x4000..=0x7fff).contains(&a) => {
+                self.cia.read(a as u8 & 0x0f, 0xff, 0xff)
+            }
             _ => self.peek(addr, Size::Byte) as u8,
         };
         *self.open_bus = v;
@@ -332,16 +376,16 @@ impl Bus for DriveBus<'_> {
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
         let (a, v) = (addr as u16, v as u8);
         *self.open_bus = v;
-        match a {
-            0x0000..=0x17ff => self.ram[usize::from(a & 0x7ff)] = v,
-            0x1800..=0x1bff => self.via1.write(a as u8, v),
-            0x1c00..=0x1fff => {
+        match region(self.model, a) {
+            Region::Ram => self.ram[usize::from(a & 0x7ff)] = v,
+            Region::Via1 => self.via1.write(a as u8, v),
+            Region::Via2 => {
                 if matches!(a & 0x0f, 0x01 | 0x0f) {
                     *self.byte_ready = false;
                 }
                 self.via2.write(a as u8, v);
             }
-            0x4000..=0x7fff if self.model == DriveModel::C1571 => {
+            Region::Other if self.model == DriveModel::C1571 && (0x4000..=0x7fff).contains(&a) => {
                 self.cia.write(a as u8 & 0x0f, v);
             }
             _ => {}
@@ -566,7 +610,18 @@ impl CbmDrive {
             self.mech.bit_count = 0;
             let byte = self.mech.shift;
             self.mech.last_byte = byte;
-            self.byte_ready_pulse(byte);
+            self.mech.byte_due = BYTE_READY_DELAY;
+        }
+    }
+
+    /// The byte-ready delay running down; the pulse when it ends.
+    fn byte_ready_tick(&mut self) {
+        if self.mech.byte_due > 0 {
+            self.mech.byte_due -= 1;
+            if self.mech.byte_due == 0 {
+                let byte = self.mech.last_byte;
+                self.byte_ready_pulse(byte);
+            }
         }
     }
 
@@ -663,6 +718,7 @@ impl CbmDrive {
         let pins = self.pins(bus);
         self.via1.set_ca1(bus.atn, pins.via1.0);
         if rotate {
+            self.byte_ready_tick();
             self.rotate();
         }
         let cia_irq = self.model == DriveModel::C1571 && self.cia.irq();
@@ -780,11 +836,13 @@ impl DebugTarget for CbmDrive {
         for i in 0..size.bytes() {
             let a = (addr.wrapping_add(i) & 0xffff) as u16;
             let b = (v >> (8 * i)) as u8;
-            match a {
-                0x0000..=0x17ff => self.ram[usize::from(a & 0x7ff)] = b,
-                0x1800..=0x1bff => self.via1.write(a as u8, b),
-                0x1c00..=0x1fff => self.via2.write(a as u8, b),
-                0x4000..=0x7fff if self.model == DriveModel::C1571 => {
+            match region(self.model, a) {
+                Region::Ram => self.ram[usize::from(a & 0x7ff)] = b,
+                Region::Via1 => self.via1.write(a as u8, b),
+                Region::Via2 => self.via2.write(a as u8, b),
+                Region::Other
+                    if self.model == DriveModel::C1571 && (0x4000..=0x7fff).contains(&a) =>
+                {
                     self.cia.write(a as u8 & 0x0f, b);
                 }
                 _ => return false,
@@ -893,7 +951,15 @@ impl MediaSlot for CbmDrive {
     }
 }
 
-const VERSION: u16 = 4;
+const VERSION: u16 = 5;
+
+/// Cycles between the eighth bit entering the shift register and byte
+/// ready: with none, a poll of SYNC 19 cycles after byte ready could still
+/// miss a sync whose tenth bit was due 6 bit cells (19.2 µs on a dense
+/// track) after the byte, which the VICE `drive/hls-protection` test shows
+/// real drives never do (its check reads the byte before every data sync
+/// as $AF and never sees the header sync, which bounds the delay to 1–2).
+const BYTE_READY_DELAY: u8 = 1;
 
 /// How long a disk going in or out covers the write-protect sensor.
 const NOTCH_COVERED_US: u32 = 100_000;
@@ -913,6 +979,7 @@ impl Savestate for CbmDrive {
             w.u8(self.mech.phase);
             w.u32(self.mech.position as u32);
             w.u32(self.mech.bit_clock);
+            w.u8(self.mech.byte_due);
             w.u8(self.mech.last_byte);
             w.bool(self.mech.sync);
             w.u8(self.mech.shift);
@@ -954,6 +1021,7 @@ impl Savestate for CbmDrive {
             } else {
                 u32::from(c.u16()?)
             },
+            byte_due: if version >= 5 { c.u8()? } else { 0 },
             last_byte: c.u8()?,
             sync: c.bool()?,
             ..Mechanism::default()

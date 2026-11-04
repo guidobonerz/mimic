@@ -449,7 +449,7 @@ cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape game.cdt 
 cargo run -p emu-headless -- --machine sim6502 --debug          # JSON-lines debug protocol on 127.0.0.1:6510
 cargo run -p emu-headless -- --machine c64 --vice --preview --run   # + VICE binary monitor (6502), live preview http://127.0.0.1:6580/
 python tools/user_guide.py                   # user guide PDF -> docs/mimic-user-guide.pdf (needs reportlab); keep its text in step with the frontends
-EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIA_TEST=via9 cargo test -p emu-tests --release --test via_dump -- --ignored --nocapture   # a VICE drive/viavarious program: the 1541's measurements per sub test next to viaNref.bin (EMU_BYTES=n, EMU_ALL=1)
+EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIA_TEST=via9 cargo test -p emu-tests --release --test via_dump -- --ignored --nocapture   # a VICE drive/viavarious program: the 1541's measurements per sub test next to viaNref.bin (EMU_BYTES=n, EMU_ALL=1); `--test via_dump hls` (EMU_HLS_TRACK=19) does the same for drive/hls-protection
 EMU_ROM_DIR=$PWD/roms EMU_DISK_A=a.d64 EMU_DISK_B=b.d64 cargo test -p emu-tests --release --test c64_disk_change -- --ignored --nocapture   # a disk change in drive 8: LOAD"$" lists the new disk; demo_continues (Edge of Disgrace disk 0 → 1a, EMU_OPTION=drive8=virtual to see it fail: a fast loader needs the true drive, the slot is named "drive 8 (1541)" or "(virtual)")
 python tools/polydbg.py regs                 # Python debug client (stdlib only): --help, or `shell` for a prompt; `chips`, Atari `dlist`; `gfx [VIEW opts]`, `overlay ids`, `picture --overlays beam`, `rewind [N] --on 1`, `back N`
 cargo run -p emu-headless -- --machine c64 --disk game.d64 --cheats cheats --cheat lives.pokes   # cheat database cheats/<machine>/<crc32>.toml applies by image CRC; --cheat FILE: .toml, POKE list (.pokes/.bas), VICE monitor (.mon), address/value codes (.txt)
@@ -473,7 +473,7 @@ cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms --option user
 ## Testing
 
 - CPU cores: Tom Harte SingleStepTests (6502, Z80, 68000), Klaus Dormann 6502 functional test, ZEXALL (Z80), WinUAE `cputester` data (68000).
-- C64 / Commodore 8-bit: Lorenz test suite, VICE test programs (results and trend in `docs/test-results-c64.md`; 2026-11-04: 1157/1240 projected from `drive/` 42/51 after the VIA rules, last full run 1141 on 2026-11-01; Lorenz 264/264).
+- C64 / Commodore 8-bit: Lorenz test suite, VICE test programs (results and trend in `docs/test-results-c64.md`; 2026-11-04: 1160/1240 projected from `drive/` 45/51 after the VIA rules, the 1541 address decoding and the byte-ready delay, last full run 1141 on 2026-11-01; Lorenz 264/264).
 - Atari: Acid800, Altirra test programs. CPC: CRTC/Z80 timing test programs. Amiga: vAmigaTS (`vamigats_suite`; 2026-11-01 OCS: 69/537 exact, see "vAmigaTS"). NES: nestest and blargg's suites (nes-test-roms collection).
 - Regression: headless run → N frames → compare against reference images in `tests/reference/` (exact match; update only with an explanation in the commit).
 - Test-suite data and ROMs are fetched by `tools/fetch-testdata.sh`, never committed if license forbids.

@@ -89,3 +89,85 @@ fn dump_via_test() {
         }
     );
 }
+
+/// Development aid for VICE `drive/hls-protection`: runs `hlstest.prg`
+/// with its G64 and prints the drive's 16 result rows (bytes between
+/// syncs, the byte before and after each sync) next to the expected ones.
+///
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test via_dump hls -- --ignored --nocapture
+#[test]
+#[ignore = "development aid"]
+fn dump_hls_test() {
+    let rom_dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR");
+    let data =
+        std::path::PathBuf::from(std::env::var("EMU_TESTDATA_DIR").expect("EMU_TESTDATA_DIR"))
+            .join("vice-testprogs/drive/hls-protection");
+    let roms = media_backends::roms::load(&rom_dir, "c64").expect("ROMs");
+    let mut config = MachineConfig {
+        roms,
+        ..MachineConfig::default()
+    };
+    config.options.insert("debugcart".into(), "on".into());
+    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let slot = m
+        .media_slots()
+        .iter()
+        .find(|s| s.kind == emu_core::media::MediaKind::Disk)
+        .unwrap()
+        .id;
+    m.media_slot(slot)
+        .unwrap()
+        .insert(media_backends::image::open(&data.join("hlstest.g64")).unwrap())
+        .unwrap();
+    let mut prg = std::fs::read(data.join("hlstest.prg")).unwrap();
+    if let Ok(t) = std::env::var("EMU_HLS_TRACK") {
+        // The track byte of the M-E string ("sel_track") is the one before "e-m".
+        let t: u8 = t.parse().unwrap();
+        let pos = prg.windows(3).position(|w| w == b"E-M").unwrap();
+        prg[pos - 3] = t;
+    }
+    // PETSCII "e-m", the M-E command sent backwards.
+    let track = prg[prg.windows(3).position(|w| w == b"E-M").unwrap() - 3];
+    let expected = std::fs::read(data.join(if track >= 18 {
+        "expected_t18-35.bin"
+    } else {
+        "expected_t1-17.bin"
+    }))
+    .unwrap();
+    let mut dbg = DebugHooks::new();
+    for _ in 0..lorenz::BOOT_FRAMES {
+        m.run_frame(&mut dbg);
+    }
+    lorenz::load_and_run(m.as_mut(), &prg);
+    let cpu = lorenz::space(m.as_ref(), "cpu");
+    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+        space: cpu,
+        addr: 0xd7ff,
+        len: 1,
+    });
+    while m.now().0 < 400_000_000 {
+        match m.run_frame(&mut dbg) {
+            StopReason::FrameDone => {}
+            StopReason::Watchpoint { .. } => break,
+            other => panic!("{other:?}"),
+        }
+    }
+    let t = m.debug_target(machine_c64::drive::DRIVE8).unwrap();
+    let ours: Vec<u8> = (0..64)
+        .map(|j| {
+            t.peek(machine_c64::drive::DRIVE_SPACE, 0x4c0 + j, Size::Byte)
+                .unwrap() as u8
+        })
+        .collect();
+    println!("track {track}: count(lo hi) before after");
+    for i in 0..16 {
+        let o = &ours[i * 4..i * 4 + 4];
+        let e = &expected[i * 4..i * 4 + 4];
+        println!(
+            "  ours {:02x?}  ref {:02x?}{}",
+            o,
+            e,
+            if o == e { "" } else { "  <--" }
+        );
+    }
+}
