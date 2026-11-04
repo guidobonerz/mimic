@@ -278,12 +278,21 @@ struct Sprite {
 }
 
 /// Graphics data waiting to be loaded into the sequencer.
+/// Pixel of the write cycle from which a new XSCROLL moves the load point
+/// (VICE test program VICII/vicii_timing Lines 18/19: the last cell keeps
+/// its old point when the register rises in the cycle after its g-access;
+/// 3 fits as well, 5 breaks Lines 0-3).
+const XSCROLL_DELAY: usize = 4;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Pending {
     g: u8,
     c: u16,
     /// Pixels since the g-access.
     age: u8,
+    /// Pixels after the g-access at which the byte goes into the shifter
+    /// (4 + XSCROLL as it was at the g-access).
+    due: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -815,12 +824,13 @@ impl Vic2 {
     fn g_access(&mut self, mem: &dyn VicMemory) -> u8 {
         // ECM and BMM reach the address one cycle after the output: the
         // access after a write still uses the old mode. On the older types
-        // that holds for switching off only (VICE test program
-        // VICII/vicii_timing).
+        // that holds for switching BMM off only; ECM changes the next
+        // access either way (VICE test program VICII/vicii_timing Lines
+        // 17-19 on the 6569: ECM alone, BMM alone, both).
         let mode = if self.model.grey_dot() {
             self.g_ctrl1
         } else {
-            self.ctrl1 | self.g_ctrl1
+            (self.ctrl1 & 0x40) | ((self.ctrl1 | self.g_ctrl1) & 0x20)
         };
         let ecm = mode & 0x40 != 0;
         let bmm = mode & 0x20 != 0;
@@ -856,7 +866,12 @@ impl Vic2 {
             self.vc = (self.vc + 1) & 0x3ff;
             self.vmli = (self.vmli + 1) % 40;
         }
-        let p = Pending { g, c, age: 0 };
+        let p = Pending {
+            g,
+            c,
+            age: 0,
+            due: 4 + (self.ctrl2 & 7),
+        };
         if self.pending[0].is_none() {
             self.pending[0] = Some(p);
         } else {
@@ -1130,17 +1145,26 @@ impl Vic2 {
 
     /// Next pixel of the graphics sequencer: (colour, is foreground).
     fn graphics_pixel(&mut self, i: usize) -> (u8, bool) {
-        // Loaded into the shifter XSCROLL + 4 pixels after the g-access, with
-        // XSCROLL as it is at that pixel: a byte whose position a change has
-        // passed is lost (VICE test program VICII/vicii_timing).
-        let due = 4 + (self.ctrl2 & 7);
-        if self.pending[0].is_some_and(|p| p.age > due && p.age >= 12) {
-            self.pending[0] = self.pending[1].take();
-        }
-        if self.pending[1].is_some_and(|p| p.age == due) {
-            self.pending[0] = self.pending[1].take();
+        // Loaded into the shifter XSCROLL + 4 pixels after the g-access.
+        // The load point follows XSCROLL while it lies ahead; one that a
+        // decrease has already passed stays where it was, so the byte is
+        // never lost (VICE test program VICII/vicii_timing: the "/" cells
+        // of Line 0-3 and the last cell with the border opened).
+        // A write of XSCROLL reaches the load point from the cycle's
+        // pixel XSCROLL_DELAY on.
+        let xs = if i < XSCROLL_DELAY {
+            self.cycle_mode.1 & 7
+        } else {
+            self.ctrl2 & 7
+        };
+        let now = 4 + xs;
+        for p in self.pending.iter_mut().flatten() {
+            if p.age <= now {
+                p.due = now;
+            }
         }
         if let Some(p) = self.pending[0] {
+            let due = p.due;
             if p.age == due {
                 // While the vertical border flip-flop is set the sequencer
                 // loads nothing: the shifter runs empty and the colour data
@@ -1256,8 +1280,12 @@ impl Vic2 {
             // Invalid modes output black; collisions still work.
             _ => 0,
         };
+
         if mcm_late && multicolor && !bmm {
-            return (0, false);
+            // Background colour 0 while multicolour settles in (the last
+            // cell of VICII/vicii_timing Line 17), black when the new mode
+            // is the invalid ECM + MCM (VICII/videomode-z).
+            return (if ecm { 0 } else { src::BG0 }, false);
         }
         (out, fg)
     }
@@ -1805,7 +1833,12 @@ impl Savestate for Vic2 {
             } else {
                 age
             };
-            *p = some.then_some(Pending { g, c: cdata, age });
+            *p = some.then_some(Pending {
+                g,
+                c: cdata,
+                age,
+                due: 4 + (v.ctrl2 & 7),
+            });
         }
         v.sr = c.u8()?;
         v.sr_c = c.u16()? & 0x0fff;

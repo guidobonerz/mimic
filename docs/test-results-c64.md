@@ -61,6 +61,42 @@ interactive and analyser programs).
 Details per program: `target/tmp/vice-testprogs.txt`, Lorenz:
 `target/tmp/lorenz.txt`.
 
+## Changes of 2026-11-04, VIC-II graphics sequencer
+
+VICII stays 226/273; `vicii_timing/vicii_reg_timing` goes from 147 to 40
+differing pixels (8565) and 179 to 40 (6569), `videomode` from 4–17 to 2–5
+pixels on PAL, `modesplit` from 683 to 455 (8565) but 761 to 833 (6569); the
+interrupts group and Lorenz are unchanged. Read off the reference pictures
+line by line (`vice_diff.py`, `vice_rows.py` in the session's scratchpad:
+colour indices of ours and the reference side by side) and the test's
+register writes per cycle:
+
+- A fetched byte's load point follows XSCROLL while it lies ahead; one
+  that a decrease has already passed stays where it was, so the byte is
+  never lost (Lines 0–3: the "/" cells keep their shear; Line 15: the last
+  cell's tail with the border open). Before, such a byte was dropped.
+- A write of XSCROLL moves the load point from the write cycle's pixel 4
+  on (`XSCROLL_DELAY`; Lines 18/19: the last cell loads at its old point
+  when the register rises in the cycle after its g-access; 3 fits as well,
+  5 breaks Lines 0–3).
+- The four settling pixels after MCM is switched on show background colour
+  0, black only when the new mode is the invalid ECM + MCM (Line 17 against
+  `videomode-z`).
+- For the g-access address on the older types (6569, 6567) only BMM's
+  switch-off reaches the access one cycle late; ECM changes the next access
+  either way (Lines 17–19: BMM alone, ECM alone, both). The HMOS-II types
+  keep the whole old mode for the access after the write.
+
+Left in `vicii_reg_timing`: single pixels at the last cell of Line 17 and
+the BC0 read-modify-write lines 20/21, where two identical lines of the
+reference (same writes, same data) show different pixels; and in the a5/ff
+variants the first pixel after the invalid ECM + BMM mode ends, which the
+reference shows black. A rule for that pixel helps those variants but costs
+the plain one, `videomode` and the 6569, so it is not in. Note: the
+`videomode` readme (SVN of December 2025) says its PAL references were
+matched against a breadbox 6569 and a C64C 8565; they are no longer
+"unsafe".
+
 ## Changes of 2026-11-04, VIA 6522, the 1541's address decoding and byte ready
 
 drive 26 → 45: all of `drive/viavarious` (via1–via21),
