@@ -235,14 +235,19 @@ impl Ted {
             let (cx, cy) = (u32::from(cell % 40) * 8, u32::from(cell / 40) * 8);
             let attr = ctx.mem.fetch(vm.wrapping_add(cell), false);
             let code = ctx.mem.fetch(vm.wrapping_add(0x400 + cell), false);
-            let zero = (code >> 4) | (attr & 0x70);
-            let one = (code & 0x0f) | ((attr & 0x07) << 4);
+            // Hires: 0 dots matrix bits 0–3 with attribute bits 4–6,
+            // 1 dots matrix bits 4–7 with attribute bits 0–2 (data sheet).
+            let zero = (code & 0x0f) | (attr & 0x70);
+            let one = (code >> 4) | ((attr & 0x07) << 4);
+            // Multicolour pairs 01 and 10, as the TED draws them.
+            let mc1 = (code >> 4) | (attr & 0x70);
+            let mc2 = (code & 0x0f) | ((attr & 0x07) << 4);
             for row in 0..8u16 {
                 let v = ctx.mem.fetch(base.wrapping_add(cell * 8 + row), rom);
                 raw.push(v);
                 let y = cy + u32::from(row);
                 if mc {
-                    let colors = [bg0, zero, one, self.bg(1)];
+                    let colors = [bg0, mc1, mc2, self.bg(1)];
                     c.row_2bpp(cx, y, v, colors.map(Some), 1);
                 } else {
                     c.row_1bpp(cx, y, v, one, Some(zero), 1);
@@ -416,13 +421,13 @@ mod tests {
         ted.write(0x12, 0x08); // bitmap $2000
         let mut mem = Mem(vec![0; 0x10000]);
         mem.0[0x2000] = 0x80;
-        mem.0[0x0c00] = 0x25; // hue 2 for 0 bits, hue 5 for 1 bits
-        mem.0[0x0800] = 0x63; // luminance 6 for 0 bits, 3 for 1 bits
+        mem.0[0x0c00] = 0x25; // hue 2 for 1 bits, hue 5 for 0 bits
+        mem.0[0x0800] = 0x63; // luminance 3 for 1 bits, 6 for 0 bits
         let bm = view(&ted, GfxKind::Bitmap, &mem, &GfxOptions::new());
         assert_eq!(bm.param("bitmapbase"), Some(0x2000));
         assert_eq!(bm.raw.len(), 8000);
-        assert_eq!(bm.frame().rgb_at(0, 0), Some(pal[0x35]));
-        assert_eq!(bm.frame().rgb_at(1, 0), Some(pal[0x62]));
+        assert_eq!(bm.frame().rgb_at(0, 0), Some(pal[0x32]));
+        assert_eq!(bm.frame().rgb_at(1, 0), Some(pal[0x65]));
         let p = view(&ted, GfxKind::Palette, &mem, &GfxOptions::new());
         assert_eq!(p.param("count"), Some(128));
         assert_eq!((p.width, p.height), (16 * 17 - 1, 8 * 17 - 1));

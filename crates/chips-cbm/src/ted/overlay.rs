@@ -1,8 +1,7 @@
 //! Debug overlays of the TED (see `emu_core::overlay`): `badlines`, a band
-//! on every raster line on which the TED takes the CPU's whole fetch window
-//! (the first line of each character row with the display enabled, as
-//! [`Ted`] models its DMA; register map after the TED 7360R0 preliminary
-//! data sheet). Recorded only while switched on; see `crate::overlay`.
+//! on every raster line on which the TED takes the bus for a DMA (the line
+//! before each character row and its first line, with the display
+//! enabled; see [`Ted`]'s timing notes). Recorded only while switched on; see `crate::overlay`.
 
 use emu_core::overlay::{Overlay, OverlayInfo};
 
@@ -151,9 +150,11 @@ mod tests {
                 _ => unreachable!(),
             })
             .collect();
-        // Character rows start at line 1 + YSCROLL.
+        // Character rows start at line 1 + YSCROLL; the DMA lines are the
+        // line before (attributes) and the first line (pointers).
         let expect: Vec<i32> = (0..25)
-            .map(|r| t.frame_row(4 + 8 * r).unwrap() as i32)
+            .flat_map(|r| [3 + 8 * r, 4 + 8 * r])
+            .map(|l| t.frame_row(l).unwrap() as i32)
             .collect();
         assert_eq!(rows, expect);
         t.set_overlays(&[]);

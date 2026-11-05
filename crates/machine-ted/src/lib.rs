@@ -445,6 +445,8 @@ pub struct TedMachine {
     autostart: Autostart,
     palette: [Rgb8; 128],
     field_done_pending: bool,
+    /// A CPU write waits out the TED's sync cycle (`tx` 3 to 7).
+    write_held: bool,
     /// TED frame of the last reset; programs wait [`BOOT_FRAMES`] from here.
     boot_frame: u64,
 }
@@ -551,6 +553,7 @@ impl TedMachine {
             autostart,
             palette: ted::palette::palette(),
             field_done_pending: false,
+            write_held: false,
             boot_frame: 0,
         })
     }
@@ -591,14 +594,33 @@ impl TedMachine {
             self.refresh_port(PortId(0));
             self.refresh_port(PortId(1));
         }
-        let out = self.io.ted.tick(&TedView(&self.mem));
-        // The TED's byte is only read when the CPU reads an unconnected
-        // address (see `open_bus`).
-        if self.io.ted.fetched() {
-            self.io.bus_from_ted = true;
+        // The CPU's cycle comes first in a double clock: it reads the
+        // TED's position of this double clock; then the TED runs it.
+        let (mut cpu_go, ba) = self.io.ted.slot();
+        // A write held back from the cycle where the clock leaves double
+        // speed (`Ted::sync_cycle`).
+        match self.io.ted.sync_cycle() {
+            Some(3) if cpu_go => {
+                let plus4 = self.plus4();
+                let bus = PeekBus {
+                    mem: &self.mem,
+                    io: &self.io,
+                    port: &self.port,
+                    tcbm: self.drive.as_ref().and_then(Drive8::tcbm),
+                    plus4,
+                };
+                self.write_held = self.cpu.next_cycle_writes(&bus);
+            }
+            Some(_) => {}
+            None => self.write_held = false,
+        }
+        if self.write_held {
+            cpu_go = false;
         }
         let mut cpu_result = None;
-        if out.cpu {
+        // BA low: the CPU stops at its next read (writes go on).
+        self.cpu.set_rdy(!ba);
+        if cpu_go {
             self.cpu.set_irq(self.io.ted.irq());
             let beam = self.beam_pos();
             let plus4 = self.plus4();
@@ -616,6 +638,12 @@ impl TedMachine {
                 beam,
             };
             cpu_result = Some((self.cpu.tick(&mut hooked), self.cpu.take_interrupt()));
+        }
+        let out = self.io.ted.tick(&TedView(&self.mem));
+        // The TED's byte is only read when the CPU reads an unconnected
+        // address (see `open_bus`).
+        if self.io.ted.fetched() {
+            self.io.bus_from_ted = true;
         }
         // Datasette: CPU port bit 1 WRITE, bit 3 MOTOR (output low = on),
         // READ on bit 4, SENSE at `$FD10`.
@@ -1145,6 +1173,7 @@ impl Machine for TedMachine {
             w.u8(self.io.user_port);
             w.u8(self.io.data_bus);
             w.bool(self.io.bus_from_ted);
+            w.bool(self.write_held);
         });
         self.cpu.save(&mut w);
         self.port.save(&mut w);
@@ -1194,9 +1223,11 @@ impl Machine for TedMachine {
         };
         c.raw_into(&mut next.io.acia.regs)?;
         next.io.user_port = c.u8()?;
+        let mut write_held = false;
         if version >= 3 {
             next.io.data_bus = c.u8()?;
             next.io.bus_from_ted = c.bool()?;
+            write_held = c.bool()?;
         }
         next.cpu.load(&mut r)?;
         next.port.load(&mut r)?;
@@ -1280,6 +1311,7 @@ impl Machine for TedMachine {
         self.sched = next.sched;
         self.input = next.input;
         self.field_done_pending = field_done_pending;
+        self.write_held = write_held;
         self.autostart = autostart;
         self.boot_frame = boot_frame;
         if let Some(p) = &mut self.printer {

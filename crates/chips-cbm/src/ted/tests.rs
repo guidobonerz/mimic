@@ -97,15 +97,18 @@ fn cpu_gets_double_clock_in_the_border_and_less_in_the_display() {
     let mem = Mem::new();
     run_frame(&mut t, &mem);
     let blank = run_frame(&mut t, &mem);
-    assert_eq!(blank, 312 * 114, "display off: every double clock");
+    // Display off: every double clock but the five refresh cycles, which
+    // take two each.
+    assert_eq!(blank, 312 * (104 + 5), "display off");
     kernal_text(&mut t);
     let display = run_frame(&mut t, &mem);
-    let fetch = FETCH_TICKS.len() as u32;
-    // 200 display lines give up half the fetch window, 25 row starts all of it.
-    let expected = 312 * 114 - 175 * fetch / 2 - 25 * fetch;
+    // Fetch lines (counter 0–203): 49 single-clock cycles and 16 double
+    // clocks; the 50 DMA lines (before and at the start of each of the 25
+    // rows) lose the 40 cycles of the DMA; the other 108 lines as blank.
+    let expected = 108 * 109 + (204 - 50) * 65 + 50 * (65 - 40);
     assert_eq!(display, expected);
     t.write(0x13, 0xd2); // force single clock
-    assert_eq!(run_frame(&mut t, &mem), 312 * 114 / 2 - 25 * fetch / 2);
+    assert_eq!(run_frame(&mut t, &mem), (312 - 50) * 57 + 50 * (57 - 40));
 }
 
 #[test]

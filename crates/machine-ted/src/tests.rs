@@ -227,8 +227,9 @@ fn graphics_views_follow_the_ted() {
     assert_eq!(sc.frame().rgb_at(1, 0), Some(m.palette[0x71]));
     let bm = m.gfx_view("bitmap", &GfxOptions::new()).unwrap();
     assert_eq!((bm.addr, bm.raw.len()), (0x2000, 8000));
-    // Code $01: hue 1 for set bits with the attribute's luminance 6.
-    assert_eq!(bm.frame().rgb_at(0, 0), Some(m.palette[0x61]));
+    // Code $01: set bits take hue 0 (bits 4-7) with the attribute's
+    // luminance 6 (bits 0-2; TED data sheet).
+    assert_eq!(bm.frame().rgb_at(0, 0), Some(m.palette[0x60]));
     let cs = m.gfx_view("charset", &GfxOptions::new()).unwrap();
     assert_eq!(cs.raw[8], 0x80);
     let p = m.gfx_view("palette", &GfxOptions::new()).unwrap();
@@ -251,7 +252,8 @@ fn overlays_record_dma_lines() {
         while m.run_frame(&mut dbg) != StopReason::FrameDone {}
     }
     let o = m.overlay("badlines").unwrap();
-    assert_eq!(o.shapes.len(), 25);
+    // Two DMA lines per character row (attributes, pointers).
+    assert_eq!(o.shapes.len(), 50);
     m.set_overlays(&[]);
     assert!(m.overlay("badlines").is_none());
 }

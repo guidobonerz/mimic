@@ -240,6 +240,17 @@ impl Cpu6502 {
         self.core.jammed
     }
 
+    /// Whether the next tick would write: the cycle runs on a copy of the
+    /// CPU against `bus`'s `peek`, and its write is only noted (no side
+    /// effects). The TED holds a write back in the cycle where its clock
+    /// leaves double speed.
+    pub fn next_cycle_writes(&self, bus: &dyn Bus) -> bool {
+        let mut core = self.core;
+        let mut probe = PeekProbe { bus, wrote: false };
+        core.cycle(&mut probe);
+        probe.wrote
+    }
+
     /// True between instructions, i.e. the next tick fetches an opcode.
     pub fn at_instruction_boundary(&self) -> bool {
         self.core.t == 0 && !self.core.jammed
@@ -281,6 +292,31 @@ impl Bus for WriteProbe<'_> {
     fn write(&mut self, addr: u32, size: Size, v: u32) {
         self.wrote = true;
         self.bus.write(addr, size, v);
+    }
+
+    fn addr_bits(&self) -> u8 {
+        self.bus.addr_bits()
+    }
+}
+
+/// A bus that only peeks and notes a write (see
+/// [`Cpu6502::next_cycle_writes`]).
+struct PeekProbe<'a> {
+    bus: &'a dyn Bus,
+    wrote: bool,
+}
+
+impl Bus for PeekProbe<'_> {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        self.bus.peek(addr, size)
+    }
+
+    fn peek(&self, addr: u32, size: Size) -> u32 {
+        self.bus.peek(addr, size)
+    }
+
+    fn write(&mut self, _addr: u32, _size: Size, _v: u32) {
+        self.wrote = true;
     }
 
     fn addr_bits(&self) -> u8 {

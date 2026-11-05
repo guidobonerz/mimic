@@ -30,12 +30,25 @@
 //! Colours are 7 bits: 0–3 hue, 4–6 luminance. Attribute bytes add bit 7
 //! (flash). Character codes ≥ 128 are shown reversed unless `$07` bit 7.
 //!
-//! Timing: [`Ted::tick`] is one double clock (dot clock / 4, 1.77 MHz PAL)
-//! and puts out 4 pixels; a line has 114 of them. The CPU gets every double
-//! clock in the borders and every second one (single clock) where the TED
-//! fetches (display lines, inside the fetch window) or when `$13` bit 1
-//! forces it; on the first line of each character row the TED takes the
-//! fetch window completely. Timers count single clocks.
+//! Timing: [`Ted::tick`] is one double clock (dc; dot clock / 4, 1.77 MHz
+//! PAL) and puts out 4 pixels; a line has 114 of them, counted from the
+//! horizontal position `$FF1E` / 2 (column `x`). The line counter
+//! (`$FF1C/$FF1D`, raster compare) turns over at `x` = 98 (`$FF1E` = $C4),
+//! a line ahead of the picture's line for the rest of it; `tx` = `x` − 98
+//! counts from there. On every line `tx` 91–100 are the five DRAM refresh
+//! cycles at single clock. On the fetch lines (counter 0–203 with the
+//! display on) the whole of `tx` 3–100 is single clock: one cycle in which
+//! the clock comes out of double speed, three in which BA is low before a
+//! DMA, forty fetch cycles (`tx` 11–90) and the refresh; `tx` 101–2 stay at
+//! double speed. A single-clock CPU cycle takes two double clocks starting
+//! at an odd `tx`. On the line before a character row and its first line
+//! (the attribute and the pointer DMA) BA is low from `tx` 5 and the TED
+//! holds the bus (AEC) for `tx` 11–90: the CPU stops at its next read and
+//! gets no cycle at all while AEC is low. `$13` bit 1 forces single clock
+//! everywhere. Timers count single clocks. Sources: TED System Hardware
+//! Manual 4.5.2 (the order and lengths of the DMA line's phases); the
+//! positions are measured against VICE's xplus4 with
+//! `tools/ted_timing.py` (`tests/tests/ted_timing.rs`).
 //!
 //! Data bus: [`Ted::bus`] is the byte the TED fetched in the last double
 //! clock, if it fetched: in the fetch window of display lines the pattern (or
@@ -92,8 +105,65 @@ const FRAME_LEFT: u16 = 32;
 /// Frame width: 32 border pixels each side of the 320-pixel window.
 pub const WIDTH: u32 = 384;
 
-/// Double clocks in which the TED fetches on display lines.
-const FETCH_TICKS: std::ops::Range<u16> = 12..96;
+/// Column (`x`) where the line counter turns over: `tx` 0.
+pub const TURN: u16 = 98;
+/// `tx` range clocked at single speed on fetch lines (sync, BA, fetch,
+/// refresh), the refresh alone on every line, and BA/AEC on DMA lines.
+const SINGLE_TX: std::ops::RangeInclusive<u16> = 3..=100;
+const REFRESH_TX: std::ops::RangeInclusive<u16> = 91..=100;
+const BA_TX: std::ops::RangeInclusive<u16> = 5..=90;
+const AEC_TX: std::ops::RangeInclusive<u16> = 11..=90;
+/// Last line counter value with fetches (and single clock).
+const LAST_FETCH_LINE: u16 = 203;
+
+/// What a double clock gives the CPU, by line kind and `tx`: [`SLOT_CPU`]
+/// (it runs a cycle), [`SLOT_BA`] (BA low), [`SLOT_HOLD`] (a write
+/// pending at `tx` 3 waits here). Kinds: 0 border, 1 fetch line, 2 DMA
+/// line; 3–5 the same with `$13` bit 1 (single clock forced).
+const SLOT_CPU: u8 = 1;
+const SLOT_BA: u8 = 2;
+const SLOT_HOLD: u8 = 4;
+
+const fn in_range(r: &std::ops::RangeInclusive<u16>, v: u16) -> bool {
+    v >= *r.start() && v <= *r.end()
+}
+
+const fn slot_table(kind: usize) -> [u8; TICKS_PER_LINE as usize] {
+    let forced = kind >= 3;
+    let base = kind % 3;
+    let (fetch, dma) = (base >= 1, base == 2);
+    let mut t = [0u8; TICKS_PER_LINE as usize];
+    let mut tx = 0u16;
+    while tx < TICKS_PER_LINE {
+        let aec = dma && in_range(&AEC_TX, tx);
+        let ba = dma && in_range(&BA_TX, tx);
+        let single = forced || in_range(&REFRESH_TX, tx) || (fetch && in_range(&SINGLE_TX, tx));
+        let mut v = 0;
+        if !aec && (!single || tx % 2 == 1) {
+            v |= SLOT_CPU;
+        }
+        if ba {
+            v |= SLOT_BA;
+        }
+        // The write hold (see `Ted::sync_cycle`).
+        let hold_end = if dma { *REFRESH_TX.start() + 1 } else { 6 };
+        if fetch && !forced && tx >= 3 && tx <= hold_end {
+            v |= SLOT_HOLD;
+        }
+        t[tx as usize] = v;
+        tx += 1;
+    }
+    t
+}
+
+static SLOTS: [[u8; TICKS_PER_LINE as usize]; 6] = [
+    slot_table(0),
+    slot_table(1),
+    slot_table(2),
+    slot_table(3),
+    slot_table(4),
+    slot_table(5),
+];
 
 /// First and last line of the 25-row window; 24 rows show 8..=199.
 const WINDOW_TOP: u16 = 4;
@@ -167,6 +237,8 @@ struct Fetch {
 pub struct TickOut {
     /// The CPU runs a cycle in this double clock.
     pub cpu: bool,
+    /// BA is low: the CPU's RDY, it stops at its next read.
+    pub ba: bool,
     /// A new field starts with the next tick.
     pub frame_end: bool,
 }
@@ -203,6 +275,8 @@ pub struct Ted {
     fetched_now: bool,
     /// Debug overlay record (not machine state; see `crate::overlay`).
     rec: crate::overlay::Recorder<overlay::Record>,
+    /// The counter line's kind (derived, see [`Ted::update_kind`]).
+    kind: u8,
 }
 
 impl Ted {
@@ -227,6 +301,7 @@ impl Ted {
             fetch: None,
             fetched_now: false,
             rec: crate::overlay::Recorder(None),
+            kind: 0,
         }
     }
 
@@ -246,7 +321,9 @@ impl Ted {
     pub fn beam(&self) -> BeamPos {
         BeamPos {
             frame: self.frame,
-            line: self.line,
+            // The line counter ($FF1C/$FF1D, raster compare), which runs a
+            // line ahead of the picture's line from column TURN.
+            line: self.counter_line(),
             cycle: self.tick,
             // Frame column of this double clock's first pixel, clamped to
             // the picture.
@@ -285,8 +362,8 @@ impl Ted {
                 self.irq_flags | any | 0x25
             }
             0x0a => self.regs[0x0a] | 0xa0,
-            0x1c => 0xfe | (self.line >> 8) as u8,
-            0x1d => self.line as u8,
+            0x1c => 0xfe | (self.counter_line() >> 8) as u8,
+            0x1d => self.counter_line() as u8,
             0x1e => ((self.tick * 4) / 2) as u8,
             0x1f => {
                 let flash = ((self.frame >> 1) & 0x0f) as u8;
@@ -321,15 +398,24 @@ impl Ted {
                 }
             }
             0x09 => self.irq_flags &= !v,
-            0x1c => self.set_line((self.line & 0xff) | (u16::from(v & 1) << 8)),
-            0x1d => self.set_line((self.line & 0x100) | u16::from(v)),
+            0x1c => self.set_line((self.counter_line() & 0xff) | (u16::from(v & 1) << 8)),
+            0x1d => self.set_line((self.counter_line() & 0x100) | u16::from(v)),
             _ => self.regs[reg] = v,
+        }
+        if matches!(reg, 0x06 | 0x13 | 0x1c | 0x1d) {
+            self.update_kind();
         }
     }
 
+    /// A write to the line counter (the picture's line follows it).
     fn set_line(&mut self, line: u16) {
-        if line < self.timing().lines {
-            self.line = line;
+        let lines = self.timing().lines;
+        if line < lines {
+            self.line = if self.tick >= TURN {
+                (line + lines - 1) % lines
+            } else {
+                line
+            };
         }
     }
 
@@ -367,26 +453,101 @@ impl Ted {
         (top..=bottom).contains(&self.line)
     }
 
-    /// Whether the CPU gets this double clock.
-    fn cpu_slot(&self) -> bool {
-        let display = self.den() && self.char_row().is_some();
-        let fetching = display && FETCH_TICKS.contains(&self.tick);
-        let row_start = display && self.char_line() == 0;
-        if fetching && row_start {
-            false
-        } else if fetching || self.regs[0x13] & 0x02 != 0 {
-            self.tick % 2 == 1
+    /// The line counter as `$FF1C/$FF1D` show it: a line ahead of the
+    /// picture's line from column [`TURN`].
+    fn counter_line(&self) -> u16 {
+        if self.tick >= TURN {
+            let next = self.line + 1;
+            if next == self.timing().lines {
+                0
+            } else {
+                next
+            }
         } else {
-            true
+            self.line
         }
+    }
+
+    /// Double clocks since the counter turned over.
+    fn tx(&self) -> u16 {
+        let tx = self.tick + (TICKS_PER_LINE - TURN);
+        if tx >= TICKS_PER_LINE {
+            tx - TICKS_PER_LINE
+        } else {
+            tx
+        }
+    }
+
+    /// The kind of the counter's line for [`SLOTS`] (derived; refreshed
+    /// when the counter turns and on writes to `$06`, `$13`, `$1C/$1D`).
+    fn update_kind(&mut self) {
+        let line = self.counter_line();
+        let base = if self.dma_line(line) {
+            2
+        } else if self.fetch_line(line) {
+            1
+        } else {
+            0
+        };
+        let forced = if self.regs[0x13] & 0x02 != 0 { 3 } else { 0 };
+        self.kind = base + forced;
+    }
+
+    fn slot_bits(&self) -> u8 {
+        SLOTS[usize::from(self.kind)][usize::from(self.tx())]
+    }
+
+    /// The TED fetches on this counter line (and clocks the CPU slowly).
+    fn fetch_line(&self, line: u16) -> bool {
+        self.den() && line <= LAST_FETCH_LINE
+    }
+
+    /// The attribute DMA (line before a character row) or the pointer DMA
+    /// (its first line) happens on this counter line.
+    fn dma_line(&self, line: u16) -> bool {
+        if !self.fetch_line(line) {
+            return false;
+        }
+        // Rows start at first_row_line() + 8 r, r = 0..24; the DMA lines
+        // are the line before and the first line.
+        let Some(d) = (line + 1).checked_sub(self.first_row_line()) else {
+            return false;
+        };
+        d / 8 < 25 && d % 8 <= 1
+    }
+
+    /// Whether the CPU gets the coming double clock, and BA, before
+    /// [`Ted::tick`] runs it: the machine runs the CPU's cycle first, so it
+    /// reads `$FF1E` and the line counter of this double clock.
+    pub fn slot(&self) -> (bool, bool) {
+        self.cpu_slot()
+    }
+
+    /// `tx` 3–6 of a fetch line: the first single-clock cycles, where
+    /// the clock comes out of double speed. A CPU write that would fall on
+    /// `tx` 3 is held back to `tx` 7, on a DMA line past the DMA and the
+    /// first refresh cycle to `tx` 93 (measured against xplus4: four
+    /// double clocks lost, on a DMA line one cycle more than its reads;
+    /// reads go on as usual).
+    /// The machine asks this before running the CPU.
+    #[inline]
+    pub fn sync_cycle(&self) -> Option<u16> {
+        (self.slot_bits() & SLOT_HOLD != 0).then(|| self.tx())
+    }
+
+    /// Whether the CPU gets this double clock, and BA.
+    #[inline]
+    fn cpu_slot(&self) -> (bool, bool) {
+        let bits = self.slot_bits();
+        (bits & SLOT_CPU != 0, bits & SLOT_BA != 0)
     }
 
     /// One double clock.
     pub fn tick(&mut self, mem: &dyn TedMemory) -> TickOut {
-        if self.tick == 0 && self.line == self.compare_line() {
+        if self.tick == TURN && self.counter_line() == self.compare_line() {
             self.irq_flags |= 0x02;
         }
-        let cpu = self.cpu_slot();
+        let (cpu, ba) = self.cpu_slot();
         // Timers and sound run on the single clock.
         if self.tick % 2 == 1 {
             self.clock_timers();
@@ -413,14 +574,18 @@ impl Ted {
                 frame_end = true;
             }
         }
-        TickOut { cpu, frame_end }
+        if self.tick == TURN {
+            // The counter turns over with this double clock.
+            self.update_kind();
+        }
+        TickOut { cpu, ba, frame_end }
     }
 
     /// Overlay record at the end of a line: was it a DMA line?
     #[cold]
     #[inline(never)]
     fn record_line(&mut self) {
-        let dma = self.den() && self.char_row().is_some() && self.char_line() == 0;
+        let dma = self.dma_line(self.line);
         let (line, last) = (self.line, self.line + 1 == self.timing().lines);
         if let Some(r) = self.rec.0.as_deref_mut() {
             if dma {
@@ -533,14 +698,22 @@ impl Ted {
 
     /// The fetch of this double clock (see the module documentation).
     fn fetch_slot(&self) -> Option<Fetch> {
-        if !self.den() || !FETCH_TICKS.contains(&self.tick) {
+        // Fetch and DMA lines (kinds 1, 2, 4, 5).
+        let base = self.kind % 3;
+        if base == 0 {
+            return None;
+        }
+        let tx = self.tx();
+        if !AEC_TX.contains(&tx) {
             return None;
         }
         let row = self.char_row()?;
-        let col = ((self.tick - FETCH_TICKS.start) / 2).min(39);
+        let col = ((tx - AEC_TX.start()) / 2).min(39);
         let line = u16::from(self.char_line());
-        let attribute = self.tick % 2 == 1;
-        if attribute && line != 0 {
+        // The TED's half of a single-clock cycle (even tx); on a DMA line
+        // it has the odd ones too (the attribute or pointer fetch).
+        let attribute = tx % 2 == 1;
+        if attribute && base != 2 {
             return None;
         }
         Some(Fetch {
@@ -618,10 +791,14 @@ impl Ted {
                     _ => self.regs[0x16],
                 };
             }
+            // Hires bitmap (TED 7360 data sheet, sheet 7): a 0 dot takes
+            // the colour from matrix bits 0–3 and the luminance from
+            // attribute bits 4–6, a 1 dot matrix bits 4–7 and attribute
+            // bits 0–2.
             return if pattern >> bit & 1 != 0 {
-                (code & 0x0f) | lum_lo
+                (code >> 4) | lum_lo
             } else {
-                (code >> 4) | lum_hi
+                (code & 0x0f) | lum_hi
             };
         }
 
@@ -763,6 +940,7 @@ impl Savestate for Ted {
         if self.rec.0.is_some() {
             t.set_overlays(&[overlay::BADLINES]);
         }
+        t.update_kind();
         *self = t;
         Ok(())
     }
