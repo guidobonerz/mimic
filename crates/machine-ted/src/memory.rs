@@ -101,11 +101,19 @@ impl Memory {
         self.ram[usize::from(addr & self.ram_mask)] = v;
     }
 
-    /// ROM contents at `addr` (`$8000–$FFFF`) with the current banks.
+    /// ROM contents at `addr` (`$8000–$FFFF`) with the current banks;
+    /// `$FF` where no ROM answers (an empty cartridge or function ROM
+    /// socket, see [`Memory::rom_byte`]).
     pub fn rom_read(&self, addr: u16) -> u8 {
+        self.rom_byte(addr).unwrap_or(0xff)
+    }
+
+    /// ROM contents at `addr`, `None` where no ROM answers: the CPU then
+    /// reads the data bus's last byte.
+    pub fn rom_byte(&self, addr: u16) -> Option<u8> {
         let i = usize::from(addr) & (ROM_SIZE - 1);
         if (0xfc00..=0xfcff).contains(&addr) {
-            return self.roms.kernal[i];
+            return Some(self.roms.kernal[i]);
         }
         let (bank, high) = if addr < 0xc000 {
             (self.banks & 3, false)
@@ -113,21 +121,11 @@ impl Memory {
             ((self.banks >> 2) & 3, true)
         };
         match (bank, &self.roms.function) {
-            (0, _) if high => self.roms.kernal[i],
-            (0, _) => self.roms.basic[i],
-            (1, Some((lo, hi))) => {
-                if high {
-                    hi[i]
-                } else {
-                    lo[i]
-                }
-            }
-            (2 | 3, _) => self
-                .cart
-                .as_ref()
-                .and_then(|c| c.peek(bank, addr))
-                .unwrap_or(0xff),
-            _ => 0xff,
+            (0, _) if high => Some(self.roms.kernal[i]),
+            (0, _) => Some(self.roms.basic[i]),
+            (1, Some((lo, hi))) => Some(if high { hi[i] } else { lo[i] }),
+            (2 | 3, _) => self.cart.as_ref().and_then(|c| c.peek(bank, addr)),
+            _ => None,
         }
     }
 }

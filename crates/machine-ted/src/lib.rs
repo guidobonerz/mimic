@@ -20,15 +20,23 @@
 //! | `$FDD0–$FDDF` | ROM bank select (write)                                  |
 //! | `$FF00–$FF3F` | TED; `$FF08` keyboard/joystick, `$FF3E/$FF3F` ROM/RAM    |
 //!
+//! Unconnected addresses (the rest of `$FD00–$FF3F`, an empty cartridge or
+//! function ROM bank) read the data bus's last byte: the TED's fetch in the
+//! half cycle before (`Ted::bus`) or the CPU's own last access.
+//!
 //! CPU port (`$01`, Plus/4 schematic): bit 0 serial DATA out, 1 serial CLK
 //! out, 2 serial ATN out (through 7406 inverters: 1 = line low), 3 cassette
 //! motor, 4 cassette read, 6 serial CLK in, 7 serial DATA in (line level).
 //!
 //! Options: `ram` ("16k", "64k"; defaults per machine), `drive8` ("1541"
 //! when `roms["dos1541"]` is given, "1571" with `roms["dos1571"]`, "1581"
-//! with `roms["dos1581"]`,
+//! with `roms["dos1581"]`, "1551" with `roms["dos1551"]` (on the TCBM bus,
+//! its interface cartridge's TIA at `$FEF0`, see `drives_cbm::tcbm`),
 //! "virtual" or "none"), `drive8_ppm` (drive crystal deviation),
-//! `autostart` ("on"), `port1` ("joystick" default, "none"), `roms` = "stub".
+//! `autostart` ("on"), `port1` ("joystick" default, "none"), `roms` = "stub",
+//! `debugcart` ("on": VICE's debug cartridge for its test programs, an
+//! exit-code register at `$FDCF`, chip "debugcart" in the debugger; address
+//! from VICE's `testprogs/testbench/selftest/plus4.asm`).
 
 #![forbid(unsafe_code)]
 
@@ -41,7 +49,7 @@ pub mod stub;
 use chips_cbm::ted::{self, Ted};
 use cpu_6502::{Config as CpuConfig, Cpu6502, IoPort, Variant};
 use devices_printer::CbmPrinter;
-use drives_cbm::IecLines;
+use drives_cbm::{IecLines, Tcbm1551};
 use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
 use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::hooked::HookedBus;
@@ -61,7 +69,7 @@ use emu_core::{
 use devices_cartridge::slot::CartSlot;
 use devices_cartridge::ted::TedCart;
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
-use drives_cbm::{DriveModel, DriveRoms};
+use drives_cbm::DriveRoms;
 use drives_other::Datasette;
 use keyboard::Keyboard;
 use loader::{Autostart, ProgramSlot, BASIC_START, BOOT_FRAMES};
@@ -219,6 +227,14 @@ pub struct Io {
     pub cassette_read: bool,
     /// A datasette key is down (`$FD10` bit 2 low).
     pub cassette_sense: bool,
+    /// VICE's debug cartridge (configuration) and the last exit code
+    /// written to `$FDCF` (output, not state).
+    pub debugcart: bool,
+    pub debugcart_exit: Option<u8>,
+    /// The data bus's last byte from a CPU access; with `bus_from_ted` the
+    /// TED fetched since, and the byte is its fetch (`Ted::bus`).
+    pub data_bus: u8,
+    pub bus_from_ted: bool,
 }
 
 impl Io {
@@ -242,11 +258,18 @@ impl Io {
 }
 
 /// Side-effect-free read (also the CPU's read outside the TED and port).
-fn peek_byte(mem: &Memory, io: &Io, port: &IoPort, plus4: bool, a: u16) -> u8 {
+fn peek_byte(
+    mem: &Memory,
+    io: &Io,
+    port: &IoPort,
+    tcbm: Option<&Tcbm1551>,
+    plus4: bool,
+    a: u16,
+) -> u8 {
     match mem.area(a) {
         Area::Port => port.read(a as u8, port_pins(io)),
         Area::Ram => mem.ram_read(a),
-        Area::Rom => mem.rom_read(a),
+        Area::Rom => mem.rom_byte(a).unwrap_or_else(|| open_bus(mem, io)),
         Area::Io => match a {
             0xfd00..=0xfd0f if plus4 => io.acia.peek(a as u8),
             // The cassette sense line reads on bit 2 (KERNAL `$E31C`),
@@ -256,11 +279,24 @@ fn peek_byte(mem: &Memory, io: &Io, port: &IoPort, plus4: bool, a: u16) -> u8 {
                 (if plus4 { io.user_port } else { 0xff }) & !sense
             }
             0xfd30..=0xfd3f => io.key_select,
+            // The 1551's interface cartridge, where its DEV line puts it.
+            0xfec0..=0xfeff => tcbm
+                .and_then(|t| t.peek(a))
+                .unwrap_or_else(|| open_bus(mem, io)),
             0xff08 => io.keyboard_read(),
             0xff13 => (io.ted.peek(0x13) & 0xfe) | u8::from(mem.rom_on),
             0xff00..=0xff1f => io.ted.peek(a as u8),
-            _ => 0xff,
+            _ => open_bus(mem, io),
         },
+    }
+}
+
+/// What an unconnected address reads: the data bus's last byte.
+fn open_bus(mem: &Memory, io: &Io) -> u8 {
+    if io.bus_from_ted {
+        io.ted.bus(&TedView(mem)).unwrap_or(io.data_bus)
+    } else {
+        io.data_bus
     }
 }
 
@@ -284,16 +320,27 @@ struct TedBus<'a> {
     mem: &'a mut Memory,
     io: &'a mut Io,
     port: &'a mut IoPort,
+    tcbm: Option<&'a mut Tcbm1551>,
     plus4: bool,
 }
 
 impl Bus for TedBus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
         let a = addr as u16;
-        u32::from(match a {
+        let v = match a {
             0xff00..=0xff1f if a != 0xff08 && a != 0xff13 => self.io.ted.read(a as u8),
-            _ => peek_byte(self.mem, self.io, self.port, self.plus4, a),
-        })
+            _ => peek_byte(
+                self.mem,
+                self.io,
+                self.port,
+                self.tcbm.as_deref(),
+                self.plus4,
+                a,
+            ),
+        };
+        self.io.data_bus = v;
+        self.io.bus_from_ted = false;
+        u32::from(v)
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
@@ -301,6 +348,7 @@ impl Bus for TedBus<'_> {
             self.mem,
             self.io,
             self.port,
+            self.tcbm.as_deref(),
             self.plus4,
             addr as u16,
         ))
@@ -309,6 +357,8 @@ impl Bus for TedBus<'_> {
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
         let a = addr as u16;
         let v = v as u8;
+        self.io.data_bus = v;
+        self.io.bus_from_ted = false;
         match self.mem.area(a) {
             Area::Port => self.port.write(a as u8, v),
             Area::Ram | Area::Rom => self.mem.ram_write(a, v),
@@ -317,6 +367,12 @@ impl Bus for TedBus<'_> {
                 0xfd10..=0xfd1f if self.plus4 => self.io.user_port = v,
                 0xfd30..=0xfd3f => self.io.key_select = v,
                 0xfdd0..=0xfddf => self.mem.banks = (a & 0x0f) as u8,
+                0xfdcf if self.io.debugcart => self.io.debugcart_exit = Some(v),
+                0xfec0..=0xfeff => {
+                    if let Some(t) = self.tcbm.as_deref_mut() {
+                        t.write(a, v);
+                    }
+                }
                 0xff08 => self.io.joy_select = v,
                 0xff3e => self.mem.rom_on = true,
                 0xff3f => self.mem.rom_on = false,
@@ -336,6 +392,7 @@ struct PeekBus<'a> {
     mem: &'a Memory,
     io: &'a Io,
     port: &'a IoPort,
+    tcbm: Option<&'a Tcbm1551>,
     plus4: bool,
 }
 
@@ -349,6 +406,7 @@ impl Bus for PeekBus<'_> {
             self.mem,
             self.io,
             self.port,
+            self.tcbm,
             self.plus4,
             addr as u16,
         ))
@@ -429,13 +487,15 @@ impl TedMachine {
         } else {
             DriveRoms::from_map(&config.roms)
         };
+        let dos1551 = if stub {
+            None
+        } else {
+            config.roms.get("dos1551").map(Vec::as_slice)
+        };
         let mut drive = Drive8::from_option(
             config.options.get("drive8").map(String::as_str),
             drive_roms,
-            DriveModel::C1541,
-            8,
-            DRIVE8,
-            DRIVE_SPACE,
+            dos1551,
             double_hz,
         )?;
         if let Some(d) = &mut drive {
@@ -448,6 +508,11 @@ impl TedMachine {
             None | Some("off") => Autostart::Off,
             Some("on") => Autostart::Armed,
             Some(other) => return Err(ConfigError::Invalid(format!("autostart option '{other}'"))),
+        };
+        let debugcart = match config.options.get("debugcart").map(String::as_str) {
+            None | Some("off") => false,
+            Some("on") => true,
+            Some(other) => return Err(ConfigError::Invalid(format!("debugcart option '{other}'"))),
         };
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Mos7501,
@@ -470,6 +535,10 @@ impl TedMachine {
                 user_port: 0xff,
                 cassette_read: true,
                 cassette_sense: false,
+                debugcart,
+                debugcart_exit: None,
+                data_bus: 0xff,
+                bus_from_ted: false,
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -523,6 +592,11 @@ impl TedMachine {
             self.refresh_port(PortId(1));
         }
         let out = self.io.ted.tick(&TedView(&self.mem));
+        // The TED's byte is only read when the CPU reads an unconnected
+        // address (see `open_bus`).
+        if self.io.ted.fetched() {
+            self.io.bus_from_ted = true;
+        }
         let mut cpu_result = None;
         if out.cpu {
             self.cpu.set_irq(self.io.ted.irq());
@@ -532,6 +606,7 @@ impl TedMachine {
                 mem: &mut self.mem,
                 io: &mut self.io,
                 port: &mut self.port,
+                tcbm: self.drive.as_mut().and_then(Drive8::tcbm_mut),
                 plus4,
             };
             let mut hooked = HookedBus {
@@ -740,6 +815,7 @@ impl TedMachine {
                     mem: &mut self.mem,
                     io: &mut self.io,
                     port: &mut self.port,
+                    tcbm: self.drive.as_mut().and_then(Drive8::tcbm_mut),
                     plus4,
                 }
                 .write(addr, Size::Byte, u32::from(v));
@@ -887,7 +963,7 @@ impl Machine for TedMachine {
             value: u32::from(value),
             bits,
         };
-        vec![
+        let mut chips = vec![
             ChipInfo {
                 name: "ted",
                 regs: TED_REGS
@@ -895,7 +971,14 @@ impl Machine for TedMachine {
                     .enumerate()
                     .map(|(i, &name)| {
                         let a = 0xff00 + i as u16;
-                        let v = peek_byte(&self.mem, &self.io, &self.port, self.plus4(), a);
+                        let v = peek_byte(
+                            &self.mem,
+                            &self.io,
+                            &self.port,
+                            self.drive.as_ref().and_then(Drive8::tcbm),
+                            self.plus4(),
+                            a,
+                        );
                         reg(name, Some(u32::from(a)), v, 8)
                     })
                     .collect(),
@@ -910,7 +993,18 @@ impl Machine for TedMachine {
                     reg("KEYSEL", Some(0xfd30), self.io.key_select, 8),
                 ],
             },
-        ]
+        ];
+        if self.io.debugcart {
+            let exit = self.io.debugcart_exit;
+            chips.push(ChipInfo {
+                name: "debugcart",
+                regs: vec![
+                    reg("EXIT", Some(0xfdcf), exit.unwrap_or(0), 8),
+                    reg("WRITTEN", None, u8::from(exit.is_some()), 1),
+                ],
+            });
+        }
+        chips
     }
 
     fn devices(&self) -> Vec<DeviceId> {
@@ -1035,7 +1129,7 @@ impl Machine for TedMachine {
         if let Some(p) = &self.printer {
             p.save_chunk(&mut w);
         }
-        w.chunk(*b"TEDS", 2, |w| {
+        w.chunk(*b"TEDS", 3, |w| {
             w.bool(self.field_done_pending);
             w.u8(self.autostart.to_u8());
             w.u64(self.boot_frame);
@@ -1049,6 +1143,8 @@ impl Machine for TedMachine {
             w.bool(self.io.iec.data);
             w.raw(&self.io.acia.regs);
             w.u8(self.io.user_port);
+            w.u8(self.io.data_bus);
+            w.bool(self.io.bus_from_ted);
         });
         self.cpu.save(&mut w);
         self.port.save(&mut w);
@@ -1081,7 +1177,7 @@ impl Machine for TedMachine {
             input: self.input.clone(),
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"TEDS", 2)?;
+        let (version, mut c) = r.chunk(*b"TEDS", 3)?;
         let field_done_pending = c.bool()?;
         let autostart =
             Autostart::from_u8(c.u8()?).ok_or(StateError::Invalid("autostart state"))?;
@@ -1098,6 +1194,10 @@ impl Machine for TedMachine {
         };
         c.raw_into(&mut next.io.acia.regs)?;
         next.io.user_port = c.u8()?;
+        if version >= 3 {
+            next.io.data_bus = c.u8()?;
+            next.io.bus_from_ted = c.bool()?;
+        }
         next.cpu.load(&mut r)?;
         next.port.load(&mut r)?;
         next.mem.load(&mut r)?;
@@ -1205,7 +1305,14 @@ impl DebugTarget for TedMachine {
         let mut v = 0;
         for i in 0..size.bytes() {
             let a = (addr.wrapping_add(i) & 0xffff) as u16;
-            let b = peek_byte(&self.mem, &self.io, &self.port, self.plus4(), a);
+            let b = peek_byte(
+                &self.mem,
+                &self.io,
+                &self.port,
+                self.drive.as_ref().and_then(Drive8::tcbm),
+                self.plus4(),
+                a,
+            );
             v |= u32::from(b) << (8 * i);
         }
         Some(v)
@@ -1223,6 +1330,7 @@ impl DebugTarget for TedMachine {
                 mem: &mut self.mem,
                 io: &mut self.io,
                 port: &mut self.port,
+                tcbm: self.drive.as_mut().and_then(Drive8::tcbm_mut),
                 plus4,
             }
             .write(a, Size::Byte, (v >> (8 * i)) & 0xff);
@@ -1236,6 +1344,7 @@ impl DebugTarget for TedMachine {
                 mem: &self.mem,
                 io: &self.io,
                 port: &self.port,
+                tcbm: self.drive.as_ref().and_then(Drive8::tcbm),
                 plus4: self.plus4(),
             },
             addr,

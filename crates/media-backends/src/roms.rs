@@ -60,6 +60,8 @@ const DOS1541: RomSpec = optional("dos1541", &["dos1541-", "1541-"], 0x4000);
 /// The 1571 DOS (the C128D's 1571CR ROM is named `dos1571cr`).
 const DOS1571: RomSpec = optional("dos1571", &["dos1571-", "1571-"], 0x8000);
 const DOS1581: RomSpec = optional("dos1581", &["dos1581-", "1581-"], 0x8000);
+/// The 1551 DOS (318008-01) for the C16/Plus/4's TCBM drive.
+const DOS1551: RomSpec = optional("dos1551", &["dos1551-", "1551-"], 0x4000);
 
 /// ROMs needed per machine id.
 pub fn specs(machine: &str) -> &'static [RomSpec] {
@@ -153,8 +155,11 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         DOS1541,
         DOS1571,
         DOS1581,
+        DOS1551,
     ];
-    const C16: &[RomSpec] = &[PLUS4[0], PLUS4[1], PLUS4[2], DOS1541, DOS1571, DOS1581];
+    const C16: &[RomSpec] = &[
+        PLUS4[0], PLUS4[1], PLUS4[2], DOS1541, DOS1571, DOS1581, DOS1551,
+    ];
     // C128: KERNAL 318020, BASIC 318018 (low) / 318019 (high), character
     // ROM 390059; the C64-mode ROM as one 16 KB 251913 or as the C64's two
     // 8 KB ROMs (VICE names them basic64/kernal64).

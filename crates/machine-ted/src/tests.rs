@@ -74,7 +74,15 @@ fn rom_banking_and_ram_underneath() {
                                                        // Bank select by address; the stub has no function ROM: empty socket.
     assert!(m.poke(CPU_SPACE, 0xfdd5, Size::Byte, 0));
     assert_eq!(m.mem.banks, 5);
-    assert_eq!(m.peek(CPU_SPACE, 0x8000, Size::Byte), Some(0xff));
+    // An empty socket reads the data bus's last byte.
+    m.io.data_bus = 0xa5;
+    m.io.bus_from_ted = false;
+    assert_eq!(m.peek(CPU_SPACE, 0x8000, Size::Byte), Some(0xa5));
+    assert_eq!(
+        m.peek(CPU_SPACE, 0xfd40, Size::Byte),
+        Some(0xa5),
+        "open I/O"
+    );
     assert_eq!(
         m.peek(CPU_SPACE, 0xfc00, Size::Byte),
         Some(0xff),

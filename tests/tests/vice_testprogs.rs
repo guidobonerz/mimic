@@ -131,6 +131,13 @@ const VIC20: Target = Target {
     name: "vice-testprogs-vic20",
 };
 
+const PLUS4: Target = Target {
+    machine: "plus4",
+    list: "testbench/plus4-testlist.in",
+    exit_addr: 0xfdcf,
+    name: "vice-testprogs-plus4",
+};
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Verdict {
     Pass,
@@ -189,6 +196,19 @@ fn config(t: Target, base: &MachineConfig, e: &Entry) -> Result<MachineConfig, S
     }
     let mut c = base.clone();
     c.options.insert("debugcart".into(), "on".into());
+    if t.machine == "plus4" {
+        // A 1551 as drive 8: its interface cartridge's TIA is what
+        // `Plus4/tcbm` tests (without it $FEC0-$FEFF is open bus).
+        if base.roms.contains_key("dos1551") {
+            c.options.insert("drive8".into(), "1551".into());
+        }
+        for o in &e.options {
+            if let Some(u) = UNSUPPORTED.iter().find(|u| o.starts_with(*u)) {
+                return Err(format!("{u} not emulated"));
+            }
+        }
+        return Ok(c);
+    }
     if t.machine == "vic20" {
         if e.kind == "screenshot" {
             return Err("VIC-20 screenshots not compared".into());
@@ -517,6 +537,49 @@ fn compare(m: &dyn Machine, reference: &Path) -> Result<(), String> {
     }
 }
 
+/// Where xplus4's PAL screenshot (384 × 288) has our frame's pixel (0, 0):
+/// both show 32 border pixels left of the window, xplus4 two lines fewer
+/// above it (measured on the selftest pictures: window at line 40 there,
+/// 42 here).
+const TED_REF_OFFSET: (i64, i64) = (0, -2);
+
+/// Compare a TED picture: xplus4's palette is not ours, so the colours
+/// must match one to one (each reference colour stands for one TED colour
+/// and back), over the area both pictures cover.
+fn compare_ted(m: &dyn Machine, reference: &Path) -> Result<(), String> {
+    let (rw, rh, rpx) = load_png(reference)?;
+    let frame = m.framebuffer();
+    let PixelData::Indexed { pixels, .. } = frame.pixels else {
+        return Err("TED frame not indexed".into());
+    };
+    let (ow, oh) = (i64::from(frame.width), i64::from(frame.height));
+    let (dx, dy) = TED_REF_OFFSET;
+    let mut to_ours: BTreeMap<[u8; 3], u8> = BTreeMap::new();
+    let mut to_ref: BTreeMap<u8, [u8; 3]> = BTreeMap::new();
+    let (mut bad, mut first) = (0, None);
+    for y in 0..oh {
+        for x in 0..ow {
+            let (rx, ry) = (x + dx, y + dy);
+            if rx < 0 || ry < 0 || rx >= i64::from(rw) || ry >= i64::from(rh) {
+                continue;
+            }
+            let r = rpx[(ry * i64::from(rw) + rx) as usize];
+            let o = pixels[(y * ow + x) as usize] & 0x7f;
+            let ok = *to_ours.entry(r).or_insert(o) == o && *to_ref.entry(o).or_insert(r) == r;
+            if !ok {
+                bad += 1;
+                first.get_or_insert((x, y, r, o));
+            }
+        }
+    }
+    match first {
+        None => Ok(()),
+        Some((x, y, r, o)) => Err(format!(
+            "{bad} pixels differ, first at {x},{y} (frame) ref {r:02x?} ours ${o:02x}"
+        )),
+    }
+}
+
 /// `EMU_VICE_DUMP`: our picture of a failed screenshot entry, next to
 /// the report in `target/tmp/vice-testprogs/`.
 fn dump(m: &dyn Machine, e: &Entry) {
@@ -560,7 +623,11 @@ fn judge(t: Target, base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
             let ntsc = config.video_format == Some(emu_core::frame::VideoStandard::Ntsc);
             match reference(e, data, ntsc) {
                 None => Verdict::Skipped("reference picture missing".into()),
-                Some(r) => match compare(m.as_ref(), &r) {
+                Some(r) => match if t.machine == "plus4" {
+                    compare_ted(m.as_ref(), &r)
+                } else {
+                    compare(m.as_ref(), &r)
+                } {
                     Ok(()) => Verdict::Pass,
                     Err(why) => Verdict::Fail(format!("exit ${code:02x}, {why}")),
                 },
@@ -593,6 +660,12 @@ fn vice_testprogs_c64() {
 #[ignore = "needs EMU_ROM_DIR and EMU_TESTDATA_DIR (tools/fetch_vice_testprogs.py --list vic20)"]
 fn vice_testprogs_vic20() {
     suite(VIC20);
+}
+
+#[test]
+#[ignore = "needs EMU_ROM_DIR and EMU_TESTDATA_DIR (tools/fetch_vice_testprogs.py --list plus4)"]
+fn vice_testprogs_plus4() {
+    suite(PLUS4);
 }
 
 fn suite(t: Target) {

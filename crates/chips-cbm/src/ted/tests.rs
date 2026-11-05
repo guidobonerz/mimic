@@ -204,3 +204,42 @@ fn savestate_round_trip() {
         .load(&mut StateReader::new(&data))
         .is_err());
 }
+
+#[test]
+fn data_bus_carries_the_fetches_of_display_lines() {
+    let mut t = Ted::new(Model::Mos8360);
+    let mut mem = Mem::new();
+    kernal_text(&mut t);
+    // Character 1 everywhere, its first line $5A, attributes $33.
+    mem.ram[0x0800..0x0c00].fill(0x33);
+    mem.ram[0x0c00..0x1000].fill(0x01);
+    for line in 0..8 {
+        mem.rom[0x1008 + line] = 0x5a + line as u8;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut border = 0;
+    loop {
+        let o = t.tick(&mem);
+        let (line, tick) = (t.line, t.tick);
+        match t.bus(&mem) {
+            Some(b) => {
+                seen.insert(b);
+            }
+            None => border += 1,
+        }
+        // The CPU's double clocks in the fetch window carry no TED byte,
+        // except on a row's first line (attributes).
+        if o.cpu && t.fetched() {
+            panic!("TED byte in a CPU slot at line {line}, tick {tick}");
+        }
+        if o.frame_end {
+            break;
+        }
+    }
+    assert!(border > 0);
+    // Pattern bytes of every character line and the attribute byte.
+    for b in 0x5a..0x62 {
+        assert!(seen.contains(&b), "pattern {b:02X} missing");
+    }
+    assert!(seen.contains(&0x33), "attribute missing");
+}

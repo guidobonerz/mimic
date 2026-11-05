@@ -25,8 +25,28 @@
 //! serial: the CIA's SP drives DATA and CNT drives SRQ while FSDIR is
 //! set, and reads them otherwise. The CIA's IRQ goes to the CPU.
 //!
+//! 1551 (C16/Plus/4, on the TCBM bus instead of the serial bus): a 6510T
+//! at 2 MHz, 2 KB RAM, the 16 KB DOS at `$C000–$FFFF`, a 6523 TIA at
+//! `$4000–$7FFF` (registers repeat every 8 bytes) and the 1541's disk
+//! mechanism without VIA 2. The CPU's 8-bit port takes VIA2 port B's job:
+//! P0/P1 stepper phase, P2 motor, P3 LED, P4 write protect sense
+//! (0 = protected), P5/P6 bit-rate zone, P7 BYTE LATCHED (1 = a byte is
+//! latched; any access to the TIA clears it). TIA port A carries the
+//! TCBM data lines, port B the byte from or to the head; port C: PC0/PC1
+//! STATUS0/1 and PC3 ACK to the host, PC2 DEV (high for device 8, selects
+//! the interface cartridge's address), PC4 MODE (0 = write), PC5 the
+//! device-number jumper (input, 1 = device 9), PC6 SYNC (0 = in a sync
+//! mark), PC7 DAV from the host. The IRQ comes from a 555 astable:
+//! R1 120 kOhm, R2 100 Ohm, C1 0.1 uF give 0.693 * (R1 + R2) * C1 = 8.32 ms
+//! high and 0.693 * R2 * C1 = 6.9 us low. RAM decoding beyond `$07FF`
+//! is not shown on the schematic: this model repeats the 2 KB up to
+//! `$3FFF` and leaves `$8000–$BFFF` open. The host side is in
+//! [`crate::tcbm`].
+//!
 //! Sources: 1541 service manual schematic (251854); "Inside the 1541";
-//! 1571 User's Guide; the port bits as the 1571 DOS (310654-05) uses them.
+//! 1571 User's Guide; the port bits as the 1571 DOS (310654-05) uses them;
+//! 1551 schematic 251860 and parts list (zimmers.net), the 1551 DOS
+//! (318008-01) for the port and TIA bits.
 //! The disk turns in 200 ms and passes the head bit by bit, as dense as
 //! the track was recorded (26–32 µs per byte at the densities of VIA2
 //! PB5/6). Ten 1 bits in a row are a SYNC mark: it holds the
@@ -44,8 +64,9 @@
 //! image (D64) reads as unformatted and keeps no writes.
 
 use chips_cbm::cia::{Cia, CiaModel};
+use chips_cbm::tia::Tia6523;
 use chips_cbm::via::Via;
-use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
+use cpu_6502::{Config as CpuConfig, Cpu6502, IoPort, Variant};
 use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{
     Bus, Cpu, CycleResult, DebugHooks, DebugTarget, HookedBus, Instr, MemSpaceId, RegisterSet,
@@ -75,12 +96,14 @@ pub enum DriveModel {
     C1571,
     /// 3.5" drive with its own implementation in [`crate::c1581`].
     C1581,
+    /// TCBM drive of the C16/Plus/4 (see [`crate::tcbm`]).
+    C1551,
 }
 
 impl DriveModel {
     pub fn rom_size(self) -> usize {
         match self {
-            Self::C1541 => ROM_SIZE,
+            Self::C1541 | Self::C1551 => ROM_SIZE,
             Self::C1571 | Self::C1581 => 0x8000,
         }
     }
@@ -91,6 +114,7 @@ impl DriveModel {
             Self::C1541 => "dos1541",
             Self::C1571 => "dos1571",
             Self::C1581 => "dos1581",
+            Self::C1551 => "dos1551",
         }
     }
 
@@ -99,12 +123,13 @@ impl DriveModel {
             Self::C1541 => "1541",
             Self::C1571 => "1571",
             Self::C1581 => "1581",
+            Self::C1551 => "1551",
         }
     }
 
     fn sides(self) -> u8 {
         match self {
-            Self::C1541 => 1,
+            Self::C1541 | Self::C1551 => 1,
             Self::C1571 | Self::C1581 => 2,
         }
     }
@@ -255,13 +280,55 @@ pub struct CbmDrive {
     motor_was_on: bool,
     space: MemSpaceId,
     open_bus: u8,
+    /// 1551: the 6510T's port, the TIA, the 555's phase in microseconds
+    /// and the TCBM lines the host drives.
+    port: IoPort,
+    pub tia: Tia6523,
+    irq_timer: u32,
+    tcbm_host: TcbmHost,
 }
+
+/// TCBM lines as the host drives them at the 1551's pins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TcbmHost {
+    /// DIO1–8 (1 = released or driven high).
+    pub dio: u8,
+    /// The host's PC6, the drive's DAV input (PC7).
+    pub dav: bool,
+}
+
+impl Default for TcbmHost {
+    fn default() -> Self {
+        Self {
+            dio: 0xff,
+            dav: true,
+        }
+    }
+}
+
+/// TCBM lines as the 1551 drives them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TcbmDrive {
+    pub dio: u8,
+    /// STATUS0 (bit 0) and STATUS1 (bit 1).
+    pub status: u8,
+    pub ack: bool,
+    /// DEV: high selects the interface cartridge's `$FEE0` window.
+    pub dev: bool,
+}
+
+/// 1551 IRQ: the 555's period and its low time, in microseconds.
+const IRQ_PERIOD_US: u32 = 8330;
+const IRQ_LOW_US: u32 = 7;
 
 /// Input levels of the chips' ports for one cycle.
 #[derive(Clone, Copy)]
 struct Pins {
     via1: (u8, u8),
     via2: (u8, u8),
+    /// 1551: the CPU port's pins and TIA ports A, B, C.
+    port: u8,
+    tia: [u8; 3],
 }
 
 /// The drive CPU's bus.
@@ -275,20 +342,26 @@ struct DriveBus<'a> {
     pins: Pins,
     byte_ready: &'a mut bool,
     open_bus: &'a mut u8,
+    port: &'a mut IoPort,
+    tia: &'a mut Tia6523,
 }
 
 /// A side-effect-free read of the drive's address space.
+#[allow(clippy::too_many_arguments)]
 fn peek8(
     model: DriveModel,
     ram: &[u8; 0x800],
     rom: &[u8],
     (via1, via2, cia): (&Via, &Via, &Cia),
+    (port, tia): (&IoPort, &Tia6523),
     pins: Pins,
     open_bus: u8,
     addr: u16,
 ) -> u8 {
     let c1571 = model == DriveModel::C1571;
     match region(model, addr) {
+        Region::Port => port.read(addr as u8, pins.port),
+        Region::Tia => tia.read(addr as u8, pins.tia),
         Region::Ram => ram[usize::from(addr & 0x7ff)],
         Region::Via1 => via1.peek(addr as u8, pins.via1.0, pins.via1.1),
         Region::Via2 => via2.peek(addr as u8, pins.via2.0, pins.via2.1),
@@ -313,6 +386,9 @@ enum Region {
     Rom,
     /// Open bus on the 1541; the 1571's WD1770 and CIA live here too.
     Other,
+    /// 1551: the 6510T's port at `$00/$01` and the TIA.
+    Port,
+    Tia,
 }
 
 /// The 1541 decodes A15, A12 and A11 only: RAM where A12 = A11 = 0, the
@@ -321,6 +397,15 @@ enum Region {
 /// (VICE `drive/openbus`, measured on real 1541s). The 1571 keeps its own
 /// map with the WD1770 at `$2000` and the CIA at `$4000`.
 fn region(model: DriveModel, addr: u16) -> Region {
+    if model == DriveModel::C1551 {
+        return match addr {
+            0x0000..=0x0001 => Region::Port,
+            0x0002..=0x3fff => Region::Ram,
+            0x4000..=0x7fff => Region::Tia,
+            0xc000..=0xffff => Region::Rom,
+            _ => Region::Other,
+        };
+    }
     if addr >= 0x8000 {
         return Region::Rom;
     }
@@ -355,6 +440,10 @@ impl Bus for DriveBus<'_> {
             Region::Other if c1571 && (0x4000..=0x7fff).contains(&a) => {
                 self.cia.read(a as u8 & 0x0f, 0xff, 0xff)
             }
+            Region::Tia => {
+                *self.byte_ready = false;
+                self.tia.read(a as u8, self.pins.tia)
+            }
             _ => self.peek(addr, Size::Byte) as u8,
         };
         *self.open_bus = v;
@@ -367,6 +456,7 @@ impl Bus for DriveBus<'_> {
             self.ram,
             self.rom,
             (self.via1, self.via2, self.cia),
+            (self.port, self.tia),
             self.pins,
             *self.open_bus,
             addr as u16,
@@ -378,6 +468,15 @@ impl Bus for DriveBus<'_> {
         *self.open_bus = v;
         match region(self.model, a) {
             Region::Ram => self.ram[usize::from(a & 0x7ff)] = v,
+            // The 6510's write also reaches the RAM underneath.
+            Region::Port => {
+                self.port.write(a as u8, v);
+                self.ram[usize::from(a)] = v;
+            }
+            Region::Tia => {
+                *self.byte_ready = false;
+                self.tia.write(a as u8, v);
+            }
             Region::Via1 => self.via1.write(a as u8, v),
             Region::Via2 => {
                 if matches!(a & 0x0f, 0x01 | 0x0f) {
@@ -403,7 +502,11 @@ impl CbmDrive {
     /// bytes read as `$FF`.
     pub fn new(model: DriveModel, rom: Box<[u8]>, device: u8, space: MemSpaceId) -> Self {
         let mut cpu = Cpu6502::new(CpuConfig {
-            variant: Variant::Nmos6502,
+            variant: if model == DriveModel::C1551 {
+                Variant::Mos6510
+            } else {
+                Variant::Nmos6502
+            },
             ..CpuConfig::default()
         });
         cpu.reset();
@@ -426,6 +529,10 @@ impl CbmDrive {
             space,
             host_delayed: IecLines::default(),
             open_bus: 0,
+            port: IoPort::new(0xff),
+            tia: Tia6523::new(),
+            irq_timer: 0,
+            tcbm_host: TcbmHost::default(),
         }
     }
 
@@ -444,6 +551,11 @@ impl CbmDrive {
         self.via1.reset();
         self.via2.reset();
         self.cia.reset();
+        if self.model == DriveModel::C1551 {
+            self.port = IoPort::new(0xff);
+            self.tia.reset();
+            self.byte_ready = false;
+        }
         if hard {
             self.ram.fill(0);
         }
@@ -459,9 +571,13 @@ impl CbmDrive {
         u8::from(self.model == DriveModel::C1571 && self.via1.port_a_out() & 0x04 != 0)
     }
 
-    /// The 1571 runs at 2 MHz (VIA1 PA5).
+    /// The 1571 runs at 2 MHz (VIA1 PA5), the 1551 always.
     pub fn fast_clock(&self) -> bool {
-        self.model == DriveModel::C1571 && self.via1.port_a_out() & 0x20 != 0
+        match self.model {
+            DriveModel::C1551 => true,
+            DriveModel::C1571 => self.via1.port_a_out() & 0x20 != 0,
+            _ => false,
+        }
     }
 
     pub fn has_disk(&self) -> bool {
@@ -469,11 +585,52 @@ impl CbmDrive {
     }
 
     pub fn motor_on(&self) -> bool {
-        self.via2.port_b_out() & 0x04 != 0
+        self.mech_out() & 0x04 != 0
     }
 
     pub fn led_on(&self) -> bool {
-        self.via2.port_b_out() & 0x08 != 0
+        self.mech_out() & 0x08 != 0
+    }
+
+    /// The mechanism's control lines: stepper (bits 0–1), motor (2), LED
+    /// (3), zone (5–6). VIA2 port B, on the 1551 the CPU's port.
+    fn mech_out(&self) -> u8 {
+        match self.model {
+            DriveModel::C1551 => self.port.outputs(),
+            _ => self.via2.port_b_out(),
+        }
+    }
+
+    /// The head writes: VIA2 CB2 low, on the 1551 TIA PC4 (MODE) low.
+    fn writing(&self) -> bool {
+        match self.model {
+            DriveModel::C1551 => self.tia.outputs(2) & 0x10 == 0,
+            _ => !self.via2.cb2_out(),
+        }
+    }
+
+    /// The byte to be written: VIA2 port A, on the 1551 TIA port B.
+    fn write_data(&self) -> u8 {
+        match self.model {
+            DriveModel::C1551 => self.tia.outputs(1),
+            _ => self.via2.port_a_out(),
+        }
+    }
+
+    /// 1551: the TCBM lines the host drives now.
+    pub fn set_tcbm_host(&mut self, host: TcbmHost) {
+        self.tcbm_host = host;
+    }
+
+    /// 1551: the TCBM lines the drive drives.
+    pub fn tcbm_out(&self) -> TcbmDrive {
+        let pc = self.tia.outputs(2);
+        TcbmDrive {
+            dio: self.tia.outputs(0),
+            status: pc & 0x03,
+            ack: pc & 0x08 != 0,
+            dev: pc & 0x04 != 0,
+        }
     }
 
     /// The 1571 sends on the fast serial lines (FSDIR set, CIA shifting out).
@@ -485,6 +642,9 @@ impl CbmDrive {
 
     /// Lines this drive pulls on the IEC bus, given the bus ATN level.
     pub fn iec_out(&self, atn_low: bool) -> IecLines {
+        if self.model == DriveModel::C1551 {
+            return IecLines::default();
+        }
         let pb = self.via1.port_b_out();
         let data_out = pb & 0x02 != 0;
         let atna = pb & 0x10 != 0;
@@ -509,7 +669,7 @@ impl CbmDrive {
             | (u8::from(bus.clk) << 2)
             | (u8::from(bus.atn) << 7);
         let pa = match self.model {
-            DriveModel::C1541 | DriveModel::C1581 => 0xff,
+            DriveModel::C1541 | DriveModel::C1581 | DriveModel::C1551 => 0xff,
             // Port A reads the pins: outputs as driven, PA0/PA7 inputs.
             DriveModel::C1571 => {
                 self.via1.port_a_out()
@@ -531,15 +691,40 @@ impl CbmDrive {
     }
 
     fn pins(&self, bus: IecLines) -> Pins {
+        let (port, tia) = self.c1551_pins();
         Pins {
             via1: self.via1_pins(bus),
             via2: self.via2_pins(),
+            port,
+            tia,
         }
+    }
+
+    /// 1551: the CPU port's input pins and TIA ports A, B, C (nothing on
+    /// the other models).
+    fn c1551_pins(&self) -> (u8, [u8; 3]) {
+        if self.model != DriveModel::C1551 {
+            return (0, [0; 3]);
+        }
+        let protected =
+            self.mech.notch_covered > 0 || self.disk.as_ref().is_some_and(|d| d.protected);
+        let port = 0x6f | if protected { 0 } else { 0x10 } | if self.byte_ready { 0x80 } else { 0 };
+        let pc = (self.tia.outputs(2) & 0x1f)
+            | if self.device == 9 { 0x20 } else { 0 }
+            | if self.mech.sync { 0 } else { 0x40 }
+            | if self.tcbm_host.dav { 0x80 } else { 0 };
+        let pa = self.tia.outputs(0) & self.tcbm_host.dio;
+        (port, [pa, self.mech.last_byte, pc])
     }
 
     /// A byte passed the head: SO pin of the CPU (if enabled by CA2), CA1
     /// pulse and the 1571's BYTE READY latch.
     fn byte_ready_pulse(&mut self, byte: u8) {
+        if self.model == DriveModel::C1551 {
+            // The gate array's SOE is tied high: every byte is latched.
+            self.byte_ready = true;
+            return;
+        }
         if self.via2.ca2_out() {
             self.cpu.set_overflow();
         }
@@ -563,7 +748,7 @@ impl CbmDrive {
         }
         // A revolution takes 200 ms whatever the track holds; the density
         // PB5/6 selects sets the size of a track written from nothing.
-        let zone = usize::from(self.via2.port_b_out() >> 5 & 3);
+        let zone = usize::from(self.mech_out() >> 5 & 3);
         let side = self.side();
         let half = self.mech.half_track;
         let data = self
@@ -577,8 +762,8 @@ impl CbmDrive {
             return;
         }
         self.mech.bit_clock -= REVOLUTION_US;
-        // CB2 low: write mode.
-        if !self.via2.cb2_out() {
+        // CB2 low (1551: MODE low): write mode.
+        if self.writing() {
             self.mech.sync = false;
             self.mech.ones = 0;
             self.write_bit(zone);
@@ -658,7 +843,7 @@ impl CbmDrive {
         self.mech.bit_count += 1;
         if self.mech.bit_count >= 8 {
             self.mech.bit_count = 0;
-            let byte = self.via2.port_a_out();
+            let byte = self.write_data();
             self.mech.write_shift = byte;
             // Byte ready asks for the next byte as when reading.
             self.byte_ready_pulse(byte);
@@ -680,7 +865,7 @@ impl CbmDrive {
     }
 
     fn step_head(&mut self) {
-        let phase = self.via2.port_b_out() & 3;
+        let phase = self.mech_out() & 3;
         let old = self.mech.half_track;
         if phase == (self.mech.phase + 1) & 3 && old < HALF_TRACKS - 1 {
             self.mech.half_track += 1;
@@ -720,13 +905,23 @@ impl CbmDrive {
         if rotate {
             self.byte_ready_tick();
             self.rotate();
+            if self.model == DriveModel::C1551 {
+                self.irq_timer = (self.irq_timer + 1) % IRQ_PERIOD_US;
+            }
         }
-        let cia_irq = self.model == DriveModel::C1571 && self.cia.irq();
-        self.cpu
-            .set_irq(self.via1.irq() || self.via2.irq() || cia_irq);
+        if self.model == DriveModel::C1551 {
+            self.cpu.set_irq(self.irq_timer < IRQ_LOW_US);
+        } else {
+            let cia_irq = self.model == DriveModel::C1571 && self.cia.irq();
+            self.cpu
+                .set_irq(self.via1.irq() || self.via2.irq() || cia_irq);
+        }
 
+        let (port, tia) = self.c1551_pins();
         let pins = Pins {
             via2: self.via2_pins(),
+            port,
+            tia,
             ..pins
         };
         let space = self.space;
@@ -740,6 +935,8 @@ impl CbmDrive {
             pins,
             byte_ready: &mut self.byte_ready,
             open_bus: &mut self.open_bus,
+            port: &mut self.port,
+            tia: &mut self.tia,
         };
         let mut hooked = HookedBus {
             inner: &mut b,
@@ -795,6 +992,7 @@ impl Bus for PeekBus<'_> {
             &d.ram,
             &d.rom,
             (&d.via1, &d.via2, &d.cia),
+            (&d.port, &d.tia),
             d.pins(IecLines::default()),
             d.open_bus,
             addr as u16,
@@ -838,6 +1036,8 @@ impl DebugTarget for CbmDrive {
             let b = (v >> (8 * i)) as u8;
             match region(self.model, a) {
                 Region::Ram => self.ram[usize::from(a & 0x7ff)] = b,
+                Region::Port => self.port.write(a as u8, b),
+                Region::Tia => self.tia.write(a as u8, b),
                 Region::Via1 => self.via1.write(a as u8, b),
                 Region::Via2 => self.via2.write(a as u8, b),
                 Region::Other
@@ -964,15 +1164,22 @@ const BYTE_READY_DELAY: u8 = 1;
 /// How long a disk going in or out covers the write-protect sensor.
 const NOTCH_COVERED_US: u32 = 100_000;
 
+impl CbmDrive {
+    fn state_tag(&self) -> [u8; 4] {
+        match self.model {
+            DriveModel::C1541 => *b"1541",
+            DriveModel::C1571 => *b"1571",
+            DriveModel::C1581 => *b"1581",
+            DriveModel::C1551 => *b"1551",
+        }
+    }
+}
+
 impl Savestate for CbmDrive {
     /// The disk itself is media, not state: a savestate restores the drive
     /// with whatever disk is inserted.
     fn save(&self, w: &mut StateWriter) {
-        let tag = match self.model {
-            DriveModel::C1541 => *b"1541",
-            DriveModel::C1571 => *b"1571",
-            DriveModel::C1581 => *b"1581",
-        };
+        let tag = self.state_tag();
         w.chunk(tag, VERSION, |w| {
             w.raw(&self.ram[..]);
             w.u8(self.mech.half_track);
@@ -992,10 +1199,15 @@ impl Savestate for CbmDrive {
                 | u8::from(self.host_delayed.srq) << 3);
             w.u8(self.open_bus);
             w.bool(self.motor_was_on);
-            if self.model == DriveModel::C1571 {
+            if matches!(self.model, DriveModel::C1571 | DriveModel::C1551) {
                 w.bool(self.byte_ready);
             }
             w.u32(self.mech.notch_covered);
+            if self.model == DriveModel::C1551 {
+                w.u32(self.irq_timer);
+                w.u8(self.tcbm_host.dio);
+                w.bool(self.tcbm_host.dav);
+            }
         });
         self.cpu.save(w);
         self.via1.save(w);
@@ -1003,12 +1215,16 @@ impl Savestate for CbmDrive {
         if self.model == DriveModel::C1571 {
             self.cia.save(w);
         }
+        if self.model == DriveModel::C1551 {
+            self.port.save(w);
+            self.tia.save(w);
+        }
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
         let c1571 = self.model == DriveModel::C1571;
-        let tag = if c1571 { *b"1571" } else { *b"1541" };
-        let (version, mut c) = r.chunk(tag, VERSION)?;
+        let c1551 = self.model == DriveModel::C1551;
+        let (version, mut c) = r.chunk(self.state_tag(), VERSION)?;
         let mut ram = Box::new([0u8; 0x800]);
         c.raw_into(&mut ram[..])?;
         let mut host_delayed = IecLines::default();
@@ -1053,8 +1269,23 @@ impl Savestate for CbmDrive {
         let open_bus = c.u8()?;
         // Version 1 states (1541 only) predate writing.
         let motor_was_on = version >= 2 && c.bool()?;
-        let byte_ready = c1571 && c.bool()?;
+        let byte_ready = (c1571 || c1551) && c.bool()?;
         mech.notch_covered = if version >= 4 { c.u32()? } else { 0 };
+        let (irq_timer, tcbm_host) = if c1551 {
+            let t = c.u32()?;
+            if t >= IRQ_PERIOD_US {
+                return Err(StateError::Invalid("1551 IRQ timer"));
+            }
+            (
+                t,
+                TcbmHost {
+                    dio: c.u8()?,
+                    dav: c.bool()?,
+                },
+            )
+        } else {
+            (0, TcbmHost::default())
+        };
         let mut cpu = self.cpu.clone();
         let mut via1 = self.via1.clone();
         let mut via2 = self.via2.clone();
@@ -1065,6 +1296,16 @@ impl Savestate for CbmDrive {
         if c1571 {
             cia.load(r)?;
         }
+        let mut port = self.port;
+        let mut tia = self.tia;
+        if c1551 {
+            port.load(r)?;
+            tia.load(r)?;
+        }
+        self.port = port;
+        self.tia = tia;
+        self.irq_timer = irq_timer;
+        self.tcbm_host = tcbm_host;
         self.ram = ram;
         self.mech = mech;
         self.host_delayed = host_delayed;

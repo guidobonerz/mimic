@@ -137,6 +137,8 @@ impl<'a> DriveRoms<'a> {
             DriveModel::C1541 => self.dos1541,
             DriveModel::C1571 => self.dos1571,
             DriveModel::C1581 => self.dos1581,
+            // Not a serial-bus drive (see `crate::tcbm`).
+            DriveModel::C1551 => None,
         }
     }
 }
@@ -205,7 +207,7 @@ impl SerialDrive {
         };
         let other = match preferred {
             DriveModel::C1541 => DriveModel::C1571,
-            DriveModel::C1571 | DriveModel::C1581 => DriveModel::C1541,
+            DriveModel::C1571 | DriveModel::C1581 | DriveModel::C1551 => DriveModel::C1541,
         };
         match option {
             Some("none") => Ok(None),
@@ -265,6 +267,7 @@ impl SerialDrive {
             Some(DriveModel::C1541) => "drive 8 (1541)",
             Some(DriveModel::C1571) => "drive 8 (1571)",
             Some(DriveModel::C1581) => "drive 8 (1581)",
+            Some(DriveModel::C1551) => "drive 8 (1551)",
             None => "drive 8 (virtual)",
         }
     }

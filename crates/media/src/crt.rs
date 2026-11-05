@@ -1,7 +1,8 @@
 //! CRT: cartridge images as CHIP packets behind a header.
 //!
 //! Header (big-endian): a 16-byte signature ("C64 CARTRIDGE   ", "VIC20
-//! CARTRIDGE ", "C264 CARTRIDGE  " for the C16/Plus/4), the header length
+//! CARTRIDGE ", "PLUS4 CARTRIDGE " for the C16/Plus/4, as VICE's test
+//! cartridges have it; "C264 CARTRIDGE  " is read too), the header length
 //! (u32, at least `$40`), the version (u16), the hardware type (u16), the
 //! EXROM and GAME line levels the cartridge sets (0 = low = active), a
 //! sub-type, and the name (32 bytes at `$20`, zero-padded). Then CHIP
@@ -26,10 +27,13 @@ impl CrtMachine {
         match self {
             Self::C64 => b"C64 CARTRIDGE   ",
             Self::Vic20 => b"VIC20 CARTRIDGE ",
-            Self::C264 => b"C264 CARTRIDGE  ",
+            Self::C264 => b"PLUS4 CARTRIDGE ",
         }
     }
 }
+
+/// Earlier C16/Plus/4 signature, still read.
+const C264_OLD: &[u8; 16] = b"C264 CARTRIDGE  ";
 
 /// Hardware types of C64 CRTs (the numbering of the format).
 pub mod hw {
@@ -76,6 +80,7 @@ impl Crt {
         let machine = [CrtMachine::C64, CrtMachine::Vic20, CrtMachine::C264]
             .into_iter()
             .find(|m| bytes.get(..16) == Some(&m.signature()[..]))
+            .or_else(|| (bytes.get(..16) == Some(&C264_OLD[..])).then_some(CrtMachine::C264))
             .ok_or_else(|| err("no CRT signature"))?;
         let be32 = |o: usize| -> Option<u32> {
             bytes

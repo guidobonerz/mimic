@@ -73,7 +73,8 @@ impl UciMachine for UciContext<'_> {
                     Some(DriveModel::C1541) => drive_kind::C1541,
                     Some(DriveModel::C1571) => drive_kind::C1571,
                     Some(DriveModel::C1581) => drive_kind::C1581,
-                    None => drive_kind::SOFTWARE_IEC,
+                    // A C64 has no TCBM bus; the 1551 never sits on drive 8 here.
+                    Some(DriveModel::C1551) | None => drive_kind::SOFTWARE_IEC,
                 },
                 address: 8,
                 powered: *self.drive_power,

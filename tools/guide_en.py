@@ -155,7 +155,7 @@ table(["Folder", "Machine", "ROMs (example names and sizes)"], [
     ["`mac/`", "Macintosh", "`mac128k.rom` (64 KB), `mac512k.rom` (64 KB), `macplus.rom` "
      "(128 KB), `macse.rom` (256 KB), or each ROM's two chips (Apple part numbers "
      "342-0220/0221, 342-0341/0342, 342-0701/0702)"],
-    ["`drives/`", "Disk drives", "`dos1541`, `dos1571`, `dos1581`"],
+    ["`drives/`", "Disk drives", "`dos1541`, `dos1571`, `dos1581`, `dos1551` (16 KB, 318008-01)"],
 ], [0.14, 0.16, 0.70])
 p("The Atari 2600 and the NES have no system ROM: the program is on the "
   "cartridge.")
@@ -403,7 +403,9 @@ without the network.""")
 h2("Commodore VIC-20, C16/Plus/4, PET and C128")
 table(["Machine", "Options"], [
     ["VIC-20", "`ram=none|3k|8k|16k|24k|all`, `port1=joystick|none`, `drive8=…`, `autostart=on`"],
-    ["C16/Plus/4", "`ram=16k|64k`, `drive8=…`, `port1=joystick|none`, `autostart=on`"],
+    ["C16/Plus/4", "`ram=16k|64k`, `drive8=1541|1571|1581|1551|virtual|none` (`1551`: the "
+     "parallel TCBM drive with its interface cartridge, needs `dos1551`), "
+     "`port1=joystick|none`, `autostart=on`"],
     ["PET", "`ram=8k|16k|32k`, `keyboard=graphics|business`, `hz=50|60`, `drive8=virtual|none`"],
     ["C128", "`display=40|80`, `vdc_ram=16k|64k`, `sid=…`, "
      "`drive8=1571|1541|1581|virtual|none`, `port2=…`, `autostart=on`"],
@@ -1136,8 +1138,8 @@ table(["Key", "Machines", "Values"], [
 h2("Commodore 8-bit")
 table(["Key", "Machine", "Values"], [
     ["`drive8`", "C64, C128, VIC-20, Plus/4", "`1541` (true drive with its DOS ROM; "
-     "the C128 `1571`/`1581`), `virtual` (KERNAL-level file access, the default "
-     "without a DOS ROM), `none`"],
+     "the C128 `1571`/`1581`; the C16/Plus/4 also `1551` on the TCBM bus), `virtual` "
+     "(KERNAL-level file access, the default without a DOS ROM), `none`"],
     ["`drive8_ppm`", "C64", "the drive crystal's deviation in ppm"],
     ["`fastload`", "C64", "`on`: the virtual drive serves the KERNAL's serial routines "
      "without bus time"],

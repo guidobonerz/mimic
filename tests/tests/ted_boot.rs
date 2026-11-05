@@ -1,6 +1,6 @@
 //! C16 and Plus/4 boot to BASIC with real ROMs (user-supplied via
 //! `EMU_ROM_DIR`, e.g. a `plus4/` subfolder), take keyboard input and load
-//! from a true-emulated 1541.
+//! from a true-emulated 1541 and from a 1551 on the TCBM bus.
 //!
 //!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test ted_boot -- --ignored
 
@@ -25,7 +25,7 @@ fn boot_with(machine: &str, model: &str, autostart: bool, drive: &str) -> Box<dy
     if autostart {
         config.options.insert("autostart".into(), "on".into());
     }
-    if config.roms.contains_key("dos1541") || drive == "virtual" {
+    if config.roms.contains_key(&format!("dos{drive}")) || drive == "virtual" {
         config.options.insert("drive8".into(), drive.into());
     }
     emu_machines::registry().create(machine, &config).unwrap()
@@ -117,6 +117,12 @@ fn plus4_autostart_loads_from_drive_8() {
 }
 
 #[test]
+#[ignore = "needs Plus/4 ROMs and the 1551 DOS ROM in EMU_ROM_DIR"]
+fn plus4_autostart_loads_from_a_1551() {
+    autostart_with("1551");
+}
+
+#[test]
 #[ignore = "needs Plus/4 ROMs in EMU_ROM_DIR"]
 fn plus4_autostart_from_the_virtual_drive() {
     autostart_with("virtual");
@@ -147,6 +153,96 @@ fn autostart_with(drive: &str) {
             break;
         }
     }
-    let out = snapshot(m.as_ref(), "plus4_drive");
+    let out = snapshot(m.as_ref(), &format!("plus4_drive_{drive}"));
     assert!(found, "program did not run; snapshot at {}", out.display());
+}
+
+fn type_text(m: &mut dyn Machine, text: &str) {
+    let (events, end) = machine_ted::keyboard::typed_events(text, m.now().0);
+    for ev in events {
+        m.input(ev);
+    }
+    // Let the keys go through before anything else is typed.
+    while m.now().0 < end {
+        run_frames(m, 1);
+    }
+}
+
+/// Run until `text` shows on the screen (or `frames` pass).
+fn wait_for(m: &mut dyn Machine, text: &str, frames: u32) -> bool {
+    for _ in 0..frames {
+        run_frames(m, 1);
+        if row_of(&screen(m), text).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+#[ignore = "needs Plus/4 ROMs and the 1551 DOS ROM in EMU_ROM_DIR"]
+fn plus4_saves_to_a_1551_and_lists_the_directory() {
+    let mut m = boot_with("plus4", "pal", false, "1551");
+    let slot = m
+        .media_slots()
+        .into_iter()
+        .find(|s| s.name == "drive 8 (1551)")
+        .expect("1551 as drive 8 (dos1551 ROM in roms/drives/)")
+        .id;
+    let disk = Media {
+        name: "blank.d64".into(),
+        kind: MediaKind::Disk,
+        backend: Box::new(MemoryBackend {
+            data: D64::blank(b"TCBM", *b"T1").to_bytes(),
+        }),
+    };
+    m.media_slot(slot).unwrap().insert(disk).unwrap();
+    run_frames(m.as_mut(), 150);
+    type_text(m.as_mut(), "10 PRINT\"SAVED\"\r");
+    run_frames(m.as_mut(), 20);
+    type_text(m.as_mut(), "SAVE\"PROG\",8\r");
+    let saved = wait_for(m.as_mut(), "SAVING PROG", 300);
+    // READY. after the save (the second READY. on the screen).
+    let mut done = false;
+    for _ in 0..1500 {
+        run_frames(m.as_mut(), 1);
+        let s = screen(m.as_mut());
+        if s.windows(6).filter(|w| *w == codes("READY.")).count() >= 2 {
+            done = true;
+            break;
+        }
+    }
+    // SCNCLR first: the SAVE line itself shows "PROG".
+    type_text(m.as_mut(), "SCNCLR\r");
+    run_frames(m.as_mut(), 30);
+    type_text(m.as_mut(), "DIRECTORY\r");
+    let listed = wait_for(m.as_mut(), "\"PROG\"", 1500);
+    // The picture follows the screen RAM a frame later.
+    run_frames(m.as_mut(), 60);
+    let out = snapshot(m.as_ref(), "plus4_1551_directory");
+    assert!(
+        saved && done,
+        "SAVE did not finish; snapshot at {}",
+        out.display()
+    );
+    assert!(
+        listed,
+        "PROG not in the directory; snapshot at {}",
+        out.display()
+    );
+    // The header line is shown reversed, the name padded to 16 characters.
+    let header: Vec<u8> = codes("\"TCBM").iter().map(|c| c | 0x80).collect();
+    assert!(
+        screen(m.as_mut())
+            .windows(header.len())
+            .any(|w| w == header),
+        "disk name; snapshot at {}",
+        out.display()
+    );
+    assert!(
+        row_of(&screen(m.as_mut()), "663 BLOCKS FREE").is_some(),
+        "one block used; snapshot at {}",
+        out.display()
+    );
+    assert!(m.media_slot(slot).unwrap().dirty(), "the disk was written");
 }

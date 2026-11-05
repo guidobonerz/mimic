@@ -37,6 +37,17 @@
 //! forces it; on the first line of each character row the TED takes the
 //! fetch window completely. Timers count single clocks.
 //!
+//! Data bus: [`Ted::bus`] is the byte the TED fetched in the last double
+//! clock, if it fetched: in the fetch window of display lines the pattern (or
+//! bitmap) byte of the column in the even double clocks, and on a row's
+//! first line the attribute byte in the odd ones too. A byte the TED leaves
+//! on the bus is what the CPU reads from unconnected addresses (VICE's
+//! `Plus4/openio` tests: such reads change with the picture). The order of
+//! the fetches within a character is this project's simple model. The tick
+//! notes only which cell and line it fetched; the byte is read when asked
+//! for, from the registers then (nothing can change them in between without
+//! a CPU access, which replaces the bus's byte).
+//!
 //! Simplifications: the picture is computed from the registers at each
 //! pixel (no fetch pipeline); refresh cycles do not slow the CPU; light pen
 //! and the `$1A/$1B` character position reload are not modelled.
@@ -142,6 +153,15 @@ pub trait TedMemory {
     fn fetch(&self, addr: u16, rom: bool) -> u8;
 }
 
+/// A fetch the TED made: the cell, its character line, and whether it was
+/// the attribute byte (else the pattern or bitmap byte).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Fetch {
+    cell: u16,
+    line: u16,
+    attribute: bool,
+}
+
 /// What one double clock did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TickOut {
@@ -177,6 +197,10 @@ pub struct Ted {
     /// Audio produced but not yet taken (output, not machine state).
     pub samples: Vec<i16>,
     pixels: Vec<u8>,
+    /// The TED's last fetch and whether it was in the last double clock
+    /// (derived each tick, not state).
+    fetch: Option<Fetch>,
+    fetched_now: bool,
     /// Debug overlay record (not machine state; see `crate::overlay`).
     rec: crate::overlay::Recorder<overlay::Record>,
 }
@@ -200,6 +224,8 @@ impl Ted {
             resampler: Decimator::new(t.double_hz(), SAMPLE_RATE).expect("valid rates"),
             samples: Vec::new(),
             pixels: vec![0; (WIDTH * t.height) as usize],
+            fetch: None,
+            fetched_now: false,
             rec: crate::overlay::Recorder(None),
         }
     }
@@ -367,6 +393,11 @@ impl Ted {
         }
         self.sound();
         self.draw(mem);
+        let fetch = self.fetch_slot();
+        self.fetched_now = fetch.is_some();
+        if fetch.is_some() {
+            self.fetch = fetch;
+        }
 
         self.tick += 1;
         let mut frame_end = false;
@@ -465,6 +496,58 @@ impl Ted {
                 self.samples.push(out);
             }
         }
+    }
+
+    /// Whether the TED fetched in the last double clock.
+    pub fn fetched(&self) -> bool {
+        self.fetched_now
+    }
+
+    /// The byte of the TED's last fetch (`None` before its first).
+    pub fn bus(&self, mem: &dyn TedMemory) -> Option<u8> {
+        let Fetch {
+            cell,
+            line,
+            attribute,
+        } = self.fetch?;
+        let vm = self.matrix_base();
+        if attribute {
+            return Some(mem.fetch(vm.wrapping_add(cell), false));
+        }
+        let rom = self.rom_fetch();
+        if self.regs[0x06] & 0x20 != 0 {
+            let base = u16::from(self.regs[0x12] & 0x38) << 10;
+            return Some(mem.fetch(base.wrapping_add(cell * 8 + line), rom));
+        }
+        let code = mem.fetch(vm.wrapping_add(0x400 + cell), false);
+        let index = if self.regs[0x06] & 0x40 != 0 {
+            code & 0x3f
+        } else if self.regs[0x07] & 0x80 == 0 {
+            code & 0x7f
+        } else {
+            code
+        };
+        let charset = u16::from(self.regs[0x13] & 0xfc) << 8;
+        Some(mem.fetch(charset.wrapping_add(u16::from(index) * 8 + line), rom))
+    }
+
+    /// The fetch of this double clock (see the module documentation).
+    fn fetch_slot(&self) -> Option<Fetch> {
+        if !self.den() || !FETCH_TICKS.contains(&self.tick) {
+            return None;
+        }
+        let row = self.char_row()?;
+        let col = ((self.tick - FETCH_TICKS.start) / 2).min(39);
+        let line = u16::from(self.char_line());
+        let attribute = self.tick % 2 == 1;
+        if attribute && line != 0 {
+            return None;
+        }
+        Some(Fetch {
+            cell: row * 40 + col,
+            line,
+            attribute,
+        })
     }
 
     /// The 4 pixels of this double clock.
@@ -585,7 +668,7 @@ impl Ted {
 }
 
 const TAG: [u8; 4] = *b"TED1";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Ted {
     fn save(&self, w: &mut StateWriter) {
@@ -614,11 +697,22 @@ impl Savestate for Ted {
             w.u8(self.sound_prescale);
             self.resampler.save(w);
             w.raw(&self.pixels);
+            // Version 2: the last fetch (the data bus's byte).
+            w.bool(self.fetched_now);
+            w.bool(self.fetch.is_some());
+            let f = self.fetch.unwrap_or(Fetch {
+                cell: 0,
+                line: 0,
+                attribute: false,
+            });
+            w.u16(f.cell);
+            w.u16(f.line);
+            w.bool(f.attribute);
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let model = match c.u8()? {
             0 => Model::Mos8360,
             1 => Model::Mos7360,
@@ -653,6 +747,16 @@ impl Savestate for Ted {
         c.raw_into(&mut t.pixels)?;
         for p in &mut t.pixels {
             *p &= 0x7f;
+        }
+        if version >= 2 {
+            t.fetched_now = c.bool()?;
+            let some = c.bool()?;
+            let f = Fetch {
+                cell: c.u16()? % 1000,
+                line: c.u16()? & 7,
+                attribute: c.bool()?,
+            };
+            t.fetch = some.then_some(f);
         }
         t.samples = std::mem::take(&mut self.samples);
         // The overlay record is not state: keep it switched on, fresh.

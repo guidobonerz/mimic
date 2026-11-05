@@ -41,7 +41,7 @@ crates/
   cpu-6809/        Motorola 6809 / 68A09 (Vectrex)
   cpu-arm/         Acorn ARM2 (26-bit, Archimedes)
   cpu-8080/        Intel 8080A (IMSAI 8080), machine cycles reported with their status word
-  chips-cbm/       VIC, VIC-II(e), TED, VDC 8563, SID, CIA, VIA, PIA, MMU 8722
+  chips-cbm/       VIC, VIC-II(e), TED, VDC 8563, SID, CIA, VIA, PIA, MMU 8722, TIA 6523
   chips-amiga/     Agnus (DMA, Copper, Blitter), Denise, Paula, Gary, CIA
   chips-atari/     ANTIC, GTIA, POKEY, PIA
   chips-amstrad/   CRTC 6845, Gate Array, AY-3-8912, 8255 PPI, FDC 765
@@ -49,7 +49,7 @@ crates/
   chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision)
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-nintendo/  NES: PPU 2C02/2C07 with its palette, APU of the 2A03/2A07; SNES: S-PPU, S-DSP
-  drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU)
+  drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU), TCBM bus with the 1551
   drives-other/    Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, ZX Microdrives
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX, Kempston), light pens, keypads
   devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts
@@ -392,6 +392,7 @@ EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz l
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test lorenz lorenz_suite -- --ignored --exact
 python tools/fetch_vice_testprogs.py && EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test vice_testprogs -- --ignored --nocapture   # VICE test programs on the C64 (c64-testlist.in, debugcart $D7FF + reference screenshots; EMU_VICE_FILTER=CIA/; report target/tmp/vice-testprogs.txt, EMU_VICE_DUMP=1 saves failed pictures)
 python tools/fetch_vice_testprogs.py --list vic20 && EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test vice_testprogs vice_testprogs_vic20 -- --ignored --nocapture   # the VIC-20 list (vic20-testlist.in: VIA tests, selftest, raminitpattern cartridges; debugcart $910F; screenshot entries skipped; report target/tmp/vice-testprogs-vic20.txt); --list takes c64|vic20|plus4|pet|c128
+python tools/fetch_vice_testprogs.py --list plus4 && EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test vice_testprogs vice_testprogs_plus4 -- --ignored --nocapture   # the Plus/4 list (plus4-testlist.in: selftest, openio, tcbm; debugcart $FDCF; screenshots by one-to-one colour match; report target/tmp/vice-testprogs-plus4.txt)
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test acid800 -- --ignored --nocapture   # Acid800 on the 800XL (EMU_ACID_MODEL=130xe, EMU_ACID_VIDEO=ntsc, EMU_ACID_FILTER=antic)
 EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test cpc_acid -- --ignored --nocapture   # Arnold Acid tests on the CPC 6128 (~10 min; EMU_CPC_FILTER=ppi, EMU_CPC_CRTC=0, EMU_CPC_FRAMES=n, EMU_CPC_TAIL=n, EMU_CPC_BREAK=hex)
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
@@ -403,7 +404,7 @@ node tools/web-smoke.mjs                     # every machine runs in the wasm mo
 cargo run -p emu-headless -- --machine c64 --prg demo.prg --frames 300 --snapshot out.png
 cargo run -p emu-headless -- --machine vic20 --videoformat ntsc --option ram=8k --rom-dir roms --frames 200 --snapshot vic.png   # ROMs in roms/<machine>/, roms/drives/
 cargo run -p emu-headless -- --machine pet --model 8032 --option hz=50 --rom-dir roms --frames 200 --snapshot pet.png   # 2001, 3032, 4032, 8032
-cargo run -p emu-headless -- --machine plus4 --rom-dir roms --frames 200 --snapshot plus4.png   # also --machine c16, --videoformat ntsc
+cargo run -p emu-headless -- --machine plus4 --rom-dir roms --frames 200 --snapshot plus4.png   # also --machine c16, --videoformat ntsc; --option drive8=1551 (TCBM drive, roms/drives/dos1551-318008-01.bin) --disk game.d64
 cargo run -p emu-headless -- --machine c128 --option display=80 --rom-dir roms --frames 600 --screen vdc --snapshot c128.png   # --screen vic|vdc
 cargo run -p emu-headless -- --machine atari8 --rom-dir roms --frames 350 --snapshot atari.png   # ROMs in roms/atari/; --model 800xl|65xe|130xe|800|400, --videoformat pal|ntsc; --option basic=off (XL/XE: self-test; 400/800: no BASIC cartridge), ram=8k|16k|32k|48k (400/800), ram=64k|128k|320k|320k-compy (XL/XE; 128k banks like a 130XE, 320k RAMBO, 320k-compy Compy Shop), port3/port4 (400/800)
 EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test atari_boot other_models_boot -- --ignored --nocapture   # 130XE, 800 (OS-B + BASIC cartridge / memo pad) and 400 boot
@@ -474,6 +475,7 @@ cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms --option user
 ## Testing
 
 - CPU cores: Tom Harte SingleStepTests (6502, Z80, 68000), Klaus Dormann 6502 functional test, ZEXALL (Z80), WinUAE `cputester` data (68000).
+- C16/Plus/4: VICE `plus4-testlist.in` 12/12 on 2026-11-05 (from 4: debug cartridge at `$FDCF`, "PLUS4 CARTRIDGE " CRTs, open data bus from the TED's last fetch, screenshots compared by a one-to-one colour match, xplus4's picture two lines shorter at the top, the 1551 with its interface cartridge as drive 8 for `Plus4/tcbm`); interactive entries skipped. The 1551 (`drive8=1551`, `drives_cbm::tcbm`) loads, saves and lists the directory with the real DOS (`ted_boot`); fast loaders for the 1551 are untested.
 - VIC-20: VICE `vic20-testlist.in` 70/72 on 2026-11-05 (from 55: VIA shift register in all eight modes byte for byte against the real VIC-20's `VIC20/via_sr` dumps, T2 reload cycle in the shift modes); open: `VIC20/raminitpattern` (two cartridges need $FF at $0288 and $1046 at power-on; too few real-machine dumps to choose a pattern), screenshot entries not compared, interactive and GEO-RAM entries skipped.
 - C64 / Commodore 8-bit: Lorenz test suite, VICE test programs (results and trend in `docs/test-results-c64.md`; 2026-11-04: 1173/1240 projected after a full run of 1163 (`C64/` 68/70 and `general/` 323/324 with the power-on RAM pattern, the port's RAM cell and the autostart loading), from `drive/` 45/51 (VIA rules, 1541 address decoding, byte-ready delay) and `VICII/` 229/273 (graphics sequencer: load point, XSCROLL write delay, MCM settling, 6569 g-access mode), last full run 1141 on 2026-11-01; Lorenz 264/264).
 - Atari: Acid800, Altirra test programs. CPC: CRTC/Z80 timing test programs. Amiga: vAmigaTS (`vamigats_suite`; 2026-11-01 OCS: 69/537 exact, see "vAmigaTS"). NES: nestest and blargg's suites (nes-test-roms collection).

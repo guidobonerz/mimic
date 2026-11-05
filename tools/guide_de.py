@@ -157,7 +157,7 @@ table(["Ordner", "Maschine", "ROMs (Beispielnamen und Größen)"], [
     ["`mac/`", "Macintosh", "`mac128k.rom` (64 KB), `mac512k.rom` (64 KB), `macplus.rom` "
      "(128 KB), `macse.rom` (256 KB), oder die zwei Chips jedes ROMs (Apple-Teilenummern "
      "342-0220/0221, 342-0341/0342, 342-0701/0702)"],
-    ["`drives/`", "Diskettenlaufwerke", "`dos1541`, `dos1571`, `dos1581`"],
+    ["`drives/`", "Diskettenlaufwerke", "`dos1541`, `dos1571`, `dos1581`, `dos1551` (16 KB, 318008-01)"],
 ], [0.14, 0.16, 0.70])
 p("Atari 2600 und NES haben kein System-ROM: das Programm steckt im Modul.")
 note("""Viele Maschinen nehmen `--option roms=stub`: ein winziges eingebautes
@@ -419,7 +419,9 @@ zeichnet auch jede Antwort aus dem Netz und dem Ordner auf, so dass
 h2("Commodore VIC-20, C16/Plus/4, PET und C128")
 table(["Maschine", "Optionen"], [
     ["VIC-20", "`ram=none|3k|8k|16k|24k|all`, `port1=joystick|none`, `drive8=…`, `autostart=on`"],
-    ["C16/Plus/4", "`ram=16k|64k`, `drive8=…`, `port1=joystick|none`, `autostart=on`"],
+    ["C16/Plus/4", "`ram=16k|64k`, `drive8=1541|1571|1581|1551|virtual|none` (`1551`: das "
+     "parallele TCBM-Laufwerk mit seinem Interface-Modul, braucht `dos1551`), "
+     "`port1=joystick|none`, `autostart=on`"],
     ["PET", "`ram=8k|16k|32k`, `keyboard=graphics|business`, `hz=50|60`, `drive8=virtual|none`"],
     ["C128", "`display=40|80`, `vdc_ram=16k|64k`, `sid=…`, "
      "`drive8=1571|1541|1581|virtual|none`, `port2=…`, `autostart=on`"],
@@ -1168,8 +1170,8 @@ table(["Schlüssel", "Maschinen", "Werte"], [
 h2("Commodore 8-Bit")
 table(["Schlüssel", "Maschine", "Werte"], [
     ["`drive8`", "C64, C128, VIC-20, Plus/4", "`1541` (echtes Laufwerk mit DOS-ROM; beim "
-     "C128 `1571`/`1581`), `virtual` (Dateizugriff auf KERNAL-Ebene, Standard ohne "
-     "DOS-ROM), `none`"],
+     "C128 `1571`/`1581`; beim C16/Plus/4 auch `1551` am TCBM-Bus), `virtual` "
+     "(Dateizugriff auf KERNAL-Ebene, Standard ohne DOS-ROM), `none`"],
     ["`drive8_ppm`", "C64", "Abweichung des Laufwerksquarzes in ppm"],
     ["`fastload`", "C64", "`on`: das virtuelle Laufwerk bedient die seriellen KERNAL-Routinen "
      "ohne Buszeit"],
