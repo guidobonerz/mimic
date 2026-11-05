@@ -19,6 +19,8 @@
 //!   `drive8_ppm`: the drive
 //!   crystal's deviation in ppm.
 //! - `autostart`: "on" loads and runs the disk in drive 8 after boot.
+//! - `debugcart`: "on" takes VICE's debug cartridge for its test programs,
+//!   an exit-code register at `$910F` (chip "debugcart" in the debugger).
 //! - `roms`: "stub" uses a tiny built-in KERNAL, for tests without ROMs.
 //!
 //! ROMs come from `MachineConfig::roms` ("kernal", "basic", "chargen";
@@ -284,10 +286,18 @@ impl Vic20 {
             Some("on") => Autostart::Armed,
             Some(other) => return Err(ConfigError::Invalid(format!("autostart option '{other}'"))),
         };
+        let debugcart = match config.options.get("debugcart").map(String::as_str) {
+            None | Some("off") => false,
+            Some("on") => true,
+            Some(other) => return Err(ConfigError::Invalid(format!("debugcart option '{other}'"))),
+        };
         let mut m = Self {
             cpu,
             mem: Memory::new(load_roms(config, model)?, expansion),
-            io: Io::new(model),
+            io: Io {
+                debugcart,
+                ..Io::new(model)
+            },
             sched: Scheduler::new(),
             input: InputQueue::new(),
             port,
@@ -319,6 +329,12 @@ impl Vic20 {
         }
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
+        }
+        // Devices whose lines move with time (a proportional mouse steps
+        // its quadrature phases every few hundred cycles) are sampled every
+        // 64 cycles; the rest of the time the chips read the kept lines.
+        if self.sched.now().0 & 63 == 0 {
+            self.refresh_port();
         }
         // VIAs clock before the CPU access: a read sees this cycle's state.
         self.io.tick_vias();
@@ -445,9 +461,14 @@ impl Vic20 {
         }
     }
 
+    /// Take the control port's lines as they are now; `write_lines` gives
+    /// the device the time (a proportional mouse plays out its steps).
     fn refresh_port(&mut self) {
         let now = self.sched.now();
-        let lines = self.port.as_ref().map(|d| d.read_lines(now));
+        let lines = self.port.as_mut().map(|d| {
+            d.write_lines(emu_core::port::PortLines::default(), now);
+            d.read_lines(now)
+        });
         self.io.port_lines = lines.map_or(0, |l| l.pulled_low);
         // The paddles' pots go straight to the VIC's POTX/POTY.
         self.io
@@ -697,7 +718,7 @@ impl Machine for Vic20 {
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
-        vec![
+        let mut chips = vec![
             ChipInfo {
                 name: "vic",
                 regs: VIC_REGS
@@ -713,7 +734,28 @@ impl Machine for Vic20 {
             },
             via_regs("via1", 0x9110, &self.io.via1, self.io.via1_pins()),
             via_regs("via2", 0x9120, &self.io.via2, self.io.via2_pins()),
-        ]
+        ];
+        if self.io.debugcart {
+            let exit = self.io.debugcart_exit;
+            chips.push(ChipInfo {
+                name: "debugcart",
+                regs: vec![
+                    ChipReg {
+                        name: "EXIT",
+                        addr: Some(0x910f),
+                        value: u32::from(exit.unwrap_or(0)),
+                        bits: 8,
+                    },
+                    ChipReg {
+                        name: "WRITTEN",
+                        addr: None,
+                        value: u32::from(exit.is_some()),
+                        bits: 1,
+                    },
+                ],
+            });
+        }
+        chips
     }
 
     fn devices(&self) -> Vec<DeviceId> {

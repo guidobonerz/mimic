@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fetch the VICE test programs the C64 testbench list names into testdata/.
+"""Fetch the VICE test programs a testbench list names into testdata/.
 
-    python tools/fetch_vice_testprogs.py [target-dir]    default: <repo>/testdata
+    python tools/fetch_vice_testprogs.py [target-dir] [--list c64|vic20|plus4|pet|c128 ...]
 
-Downloads `testprogs/testbench/c64-testlist.in` and every directory it
+Default: <repo>/testdata and the C64 list. Downloads
+`testprogs/testbench/<machine>-testlist.in` and every directory it
 refers to (the files directly in it plus its `references/` screenshots) from
 the VICE Subversion repository, pinned to one revision, into
 `<target-dir>/vice-testprogs/`. The test programs come under their authors'
@@ -24,7 +25,7 @@ import urllib.request
 
 REVISION = 46303
 BASE = f"https://svn.code.sf.net/p/vice-emu/code/!svn/bc/{REVISION}/testprogs/"
-TESTLIST = "testbench/c64-testlist.in"
+TESTLIST = "testbench/{}-testlist.in"
 
 
 class Listing(html.parser.HTMLParser):
@@ -101,13 +102,23 @@ def fetch_file(dest, path):
 
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    dest = os.path.join(sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "testdata"),
-                        "vice-testprogs")
+    args = sys.argv[1:]
+    lists = []
+    while "--list" in args:
+        i = args.index("--list")
+        lists.append(args[i + 1])
+        del args[i:i + 2]
+    lists = lists or ["c64"]
+    dest = os.path.join(args[0] if args else os.path.join(root, "testdata"), "vice-testprogs")
     os.makedirs(dest, exist_ok=True)
     print(f"VICE test programs (r{REVISION}) -> {dest}")
-    fetch_file(dest, TESTLIST)
-    with open(os.path.join(dest, *TESTLIST.split("/")), encoding="utf-8") as f:
-        dirs = test_dirs(f.read())
+    dirs = set()
+    for name in lists:
+        testlist = TESTLIST.format(name)
+        fetch_file(dest, testlist)
+        with open(os.path.join(dest, *testlist.split("/")), encoding="utf-8") as f:
+            dirs.update(test_dirs(f.read()))
+    dirs = sorted(dirs)
 
     with concurrent.futures.ThreadPoolExecutor(8) as pool:
         listings = dict(zip(dirs, pool.map(listing, dirs)))
@@ -122,7 +133,7 @@ def main():
         new = sum(pool.map(lambda p: fetch_file(dest, p), files))
     with open(os.path.join(dest, "REVISION"), "w") as f:
         f.write(f"{REVISION}\n")
-    print(f"{len(dirs)} directories, {len(files)} files ({new} new)")
+    print(f"{', '.join(lists)}: {len(dirs)} directories, {len(files)} files ({new} new)")
 
 
 if __name__ == "__main__":

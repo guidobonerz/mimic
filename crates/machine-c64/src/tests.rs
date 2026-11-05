@@ -915,3 +915,97 @@ fn fire_on_control_port_1_latches_the_light_pen_registers() {
     assert_ne!(m.peek(CPU_SPACE, 0xd019, Size::Byte).unwrap() & 0x08, 0);
     assert_eq!(lp(&m).1, line as u8);
 }
+
+/// An Atari ST mouse in control port 2 shows its quadrature phases on the
+/// joystick lines of CIA 1 port A, one step per `PROP_MOUSE_STEP` cycles;
+/// a CX85 keypad in port 1 puts its key code on the five lines of port B
+/// (`propmouse/prop_c64_st.prg` and `keypad/cx85-c64.prg` read them so).
+#[test]
+fn proportional_mouse_and_keypad_read_as_joystick_lines() {
+    use devices_input::{cbm_keypad::key, CbmKeypad, CbmKeypadKind, PropMouse, PropMouseKind};
+    use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("port1".into(), "cx85".into());
+    config.options.insert("port2".into(), "stmouse".into());
+    assert!(C64::new(&config).is_ok(), "the options build the devices");
+
+    let mut m = stub();
+    m.disconnect(CONTROL_PORT_2);
+    assert!(m
+        .connect(
+            CONTROL_PORT_2,
+            Box::new(PropMouse::new(PropMouseKind::AtariSt, 256))
+        )
+        .is_ok());
+    assert!(m
+        .connect(
+            CONTROL_PORT_1,
+            Box::new(CbmKeypad::new(CbmKeypadKind::Cx85))
+        )
+        .is_ok());
+    // CIA 1 port A as inputs reads port 2; port B with no keyboard column
+    // selected reads port 1.
+    assert!(m.poke(CPU_SPACE, 0xdc02, Size::Byte, 0x00));
+    assert!(m.poke(CPU_SPACE, 0xdc03, Size::Byte, 0x00));
+    m.run_frame(&mut DebugHooks::new());
+    // At rest both quadrature pairs stand in Gray-code phase 0, which the
+    // model puts on the pins as low levels.
+    assert_eq!(
+        m.peek(CPU_SPACE, 0xdc00, Size::Byte).unwrap() & 0x0f,
+        0,
+        "mouse at rest"
+    );
+    assert_eq!(
+        m.peek(CPU_SPACE, 0xdc01, Size::Byte).unwrap() & 0x1f,
+        0x1f,
+        "no key"
+    );
+
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(CONTROL_PORT_2),
+        event: InputEvent::MouseRel {
+            dx: 2,
+            dy: 0,
+            buttons: 0,
+        },
+    });
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(CONTROL_PORT_1),
+        event: InputEvent::Key {
+            machine_key: MachineKey(5),
+            down: true,
+        },
+    });
+    m.run_frame(&mut DebugHooks::new());
+    // Two steps right: XA and XB (pins 2 and 1) both high in the Gray code
+    // phase 2; the vertical pair stays in phase 0 (pulled low).
+    assert_eq!(
+        m.peek(CPU_SPACE, 0xdc00, Size::Byte).unwrap() & 0x0f,
+        0b0011
+    );
+    assert_eq!(
+        m.peek(CPU_SPACE, 0xdc01, Size::Byte).unwrap() & 0x1f,
+        18,
+        "CX85 key 5"
+    );
+
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(CONTROL_PORT_1),
+        event: InputEvent::Key {
+            machine_key: MachineKey(key::ENTER),
+            down: true,
+        },
+    });
+    m.run_frame(&mut DebugHooks::new());
+    assert_eq!(
+        m.peek(CPU_SPACE, 0xdc01, Size::Byte).unwrap() & 0x1f,
+        30,
+        "ENTER wins while down"
+    );
+}

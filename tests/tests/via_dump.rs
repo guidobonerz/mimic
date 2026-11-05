@@ -350,3 +350,158 @@ fn dump_prg() {
         println!("{row:2}: {line}");
     }
 }
+
+/// Development aid for the VICE `VIC20/via_sr` tests: runs `viasrNN.prg`
+/// on the VIC-20 (`EMU_VIASR_TEST=04`, `04exp` …) and prints the 388
+/// bytes the program dumped (128 reads of the register 7 cycles apart,
+/// then the loop's reads) next to `dumpNN.bin`, with the differences marked.
+///
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIASR_TEST=04 cargo test -p emu-tests --release --test via_dump dump_via_sr_test -- --ignored --nocapture
+#[test]
+#[ignore = "development aid"]
+fn dump_via_sr_test() {
+    let Ok(name) = std::env::var("EMU_VIASR_TEST") else {
+        return;
+    };
+    let rom_dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR");
+    let data =
+        std::path::PathBuf::from(std::env::var("EMU_TESTDATA_DIR").expect("EMU_TESTDATA_DIR"))
+            .join("vice-testprogs/VIC20/via_sr");
+    let expanded = name.contains("exp") || name.contains("iex");
+    let mode = &name[..2];
+    let roms = media_backends::roms::load(&rom_dir, "vic20").expect("ROMs");
+    let mut config = MachineConfig {
+        roms,
+        ..MachineConfig::default()
+    };
+    config.options.insert("debugcart".into(), "on".into());
+    config
+        .options
+        .insert("ram".into(), if expanded { "8k" } else { "none" }.into());
+    let mut m = emu_machines::registry().create("vic20", &config).unwrap();
+    let prg = std::fs::read(data.join(format!("viasr{name}.prg"))).unwrap();
+    let ifr = name.contains("ifr") || name.contains("iex");
+    let reference =
+        std::fs::read(data.join(format!("dump{mode}{}.bin", if ifr { "i" } else { "" })))
+            .unwrap_or_default();
+    let media =
+        media_backends::image::from_bytes("t.prg", prg, emu_core::media::MediaKind::Program);
+    let slot = m
+        .media_slots()
+        .into_iter()
+        .find(|s| s.kind == emu_core::media::MediaKind::Program)
+        .unwrap()
+        .id;
+    m.media_slot(slot).unwrap().insert(media).unwrap();
+    let cpu = lorenz::space(m.as_ref(), "cpu");
+    let mut dbg = DebugHooks::new();
+    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+        space: cpu,
+        addr: 0x910f,
+        len: 1,
+    });
+    let mut hit = false;
+    for _ in 0..2000 {
+        if let StopReason::Watchpoint { .. } = m.run_frame(&mut dbg) {
+            hit = true;
+            break;
+        }
+    }
+    println!("exit written: {hit}");
+    let screen = if expanded { 0x1000 } else { 0x1e00 };
+    let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+    let ours: Vec<u8> = (0..388)
+        .map(|i| t.peek(cpu, screen + i, Size::Byte).unwrap_or(0) as u8)
+        .collect();
+    let mut bad = 0;
+    for row in 0..388usize.div_ceil(32) {
+        let range = row * 32..(row * 32 + 32).min(388);
+        let line = |v: &[u8]| -> String {
+            v[range.clone()]
+                .iter()
+                .enumerate()
+                .map(|(i, b)| {
+                    let r = reference.get(range.start + i);
+                    let mark = if r.is_some_and(|r| r != b) { "*" } else { " " };
+                    format!("{b:02x}{mark}")
+                })
+                .collect()
+        };
+        println!("{:>3} ours {}", range.start, line(&ours));
+        if reference.len() >= range.end {
+            println!("    ref  {}", line(&reference));
+        }
+        bad += range
+            .clone()
+            .filter(|&i| reference.get(i).is_some_and(|r| *r != ours[i]))
+            .count();
+    }
+    println!("{bad} bytes differ");
+}
+
+/// Development aid: runs any VIC-20 program (`EMU_VIC20_PRG`, relative to
+/// the VICE test data; `EMU_VIC20_RAM=8k`) until it writes the debug
+/// register `$910F` and prints the text screen as hex, rows of 22.
+///
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIC20_PRG=VIC20/via_wrap/via_T2wrap2a.prg EMU_VIC20_RAM=8k cargo test -p emu-tests --release --test via_dump dump_vic20_prg -- --ignored --nocapture
+#[test]
+#[ignore = "development aid"]
+fn dump_vic20_prg() {
+    let Ok(path) = std::env::var("EMU_VIC20_PRG") else {
+        return;
+    };
+    let ram = std::env::var("EMU_VIC20_RAM").unwrap_or_else(|_| "none".into());
+    let rom_dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR");
+    let data =
+        std::path::PathBuf::from(std::env::var("EMU_TESTDATA_DIR").expect("EMU_TESTDATA_DIR"))
+            .join("vice-testprogs");
+    let mut config = MachineConfig {
+        roms: media_backends::roms::load(&rom_dir, "vic20").expect("ROMs"),
+        ..MachineConfig::default()
+    };
+    config.options.insert("debugcart".into(), "on".into());
+    config.options.insert("ram".into(), ram.clone());
+    let mut m = emu_machines::registry().create("vic20", &config).unwrap();
+    let prg = std::fs::read(data.join(&path)).unwrap();
+    let media =
+        media_backends::image::from_bytes("t.prg", prg, emu_core::media::MediaKind::Program);
+    let slot = m
+        .media_slots()
+        .into_iter()
+        .find(|s| s.kind == emu_core::media::MediaKind::Program)
+        .unwrap()
+        .id;
+    m.media_slot(slot).unwrap().insert(media).unwrap();
+    let cpu = lorenz::space(m.as_ref(), "cpu");
+    let mut dbg = DebugHooks::new();
+    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+        space: cpu,
+        addr: 0x910f,
+        len: 1,
+    });
+    let mut code = None;
+    for _ in 0..3000 {
+        if let StopReason::Watchpoint { .. } = m.run_frame(&mut dbg) {
+            code = m
+                .chips()
+                .into_iter()
+                .find(|c| c.name == "debugcart")
+                .and_then(|c| c.regs.iter().find(|r| r.name == "EXIT").map(|r| r.value));
+            break;
+        }
+    }
+    println!("exit code: {code:?}");
+    let screen = if ram == "none" { 0x1e00 } else { 0x1000 };
+    let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+    for row in 0..23u32 {
+        let line: Vec<String> = (0..22)
+            .map(|c| {
+                format!(
+                    "{:02x}",
+                    t.peek(cpu, screen + row * 22 + c, Size::Byte).unwrap_or(0)
+                )
+            })
+            .collect();
+        println!("{row:>2} {}", line.join(" "));
+    }
+}

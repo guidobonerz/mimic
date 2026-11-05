@@ -515,6 +515,13 @@ impl TedMachine {
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
         }
+        // Devices whose lines move with time (a proportional mouse steps
+        // its quadrature phases every few hundred cycles) are sampled every
+        // 64 cycles; the rest of the time the chips read the kept lines.
+        if self.sched.now().0 & 63 == 0 {
+            self.refresh_port(PortId(0));
+            self.refresh_port(PortId(1));
+        }
         let out = self.io.ted.tick(&TedView(&self.mem));
         let mut cpu_result = None;
         if out.cpu {
@@ -643,12 +650,16 @@ impl TedMachine {
         }
     }
 
+    /// Take a control port's lines as they are now; `write_lines` gives
+    /// the device the time (a proportional mouse plays out its steps).
     fn refresh_port(&mut self, p: PortId) {
         let now = self.sched.now();
-        if let Some(lines) = self.io.port_lines.get_mut(usize::from(p.0)) {
-            *lines = self.ports[usize::from(p.0)]
-                .as_ref()
-                .map_or(0, |d| d.read_lines(now).pulled_low);
+        let i = usize::from(p.0);
+        if i < self.io.port_lines.len() {
+            self.io.port_lines[i] = self.ports[i].as_mut().map_or(0, |d| {
+                d.write_lines(emu_core::port::PortLines::default(), now);
+                d.read_lines(now).pulled_low
+            });
         }
     }
 

@@ -45,6 +45,13 @@ pub struct Io {
     pub iec: IecLines,
     /// A datasette key is down (VIA1 PA6 low).
     pub cassette_sense: bool,
+    /// VICE's "debug cartridge" (`options["debugcart"] = "on"`): test
+    /// programs write their exit code to `$910F` (an unused address of
+    /// the I/O block, `testprogs/testbench/selftest/vic20.asm`). The
+    /// VIAs see no such write anyway. `debugcart` is configuration,
+    /// `debugcart_exit` the last code written (output, not state).
+    pub debugcart: bool,
+    pub debugcart_exit: Option<u8>,
 }
 
 impl Io {
@@ -57,6 +64,8 @@ impl Io {
             port_lines: 0,
             iec: IecLines::default(),
             cassette_sense: false,
+            debugcart: false,
+            debugcart_exit: None,
         }
     }
 
@@ -185,6 +194,9 @@ impl Io {
         match addr {
             0x9000..=0x90ff => self.vic.write(reg, v),
             _ => {
+                if self.debugcart && addr == 0x910f {
+                    self.debugcart_exit = Some(v);
+                }
                 if addr & 0x10 != 0 {
                     self.via1.write(reg, v);
                 }

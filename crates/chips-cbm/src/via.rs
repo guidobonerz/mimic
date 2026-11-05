@@ -29,18 +29,29 @@
 //! via10–via14: a timer started before PB7 is switched on reads 1 until
 //! its timeout). T2 counts down once and
 //! interrupts once per write of its high byte. Source: MOS 6522 data sheet;
-//! Rockwell R6522 data sheet (timing diagrams). The shift register shifts
-//! out (bit 7 first, rotating it into bit 0) in modes 4 (free-running at
-//! the T2 rate, the PET's sound: one bit every T2 low latch + 1 cycles), 5
-//! (the same rate, eight bits) and 6 (eight bits at half the φ2 rate, the
-//! Vectrex's beam blanking); CB2 carries the bit shifted out and stays at
-//! the last one. After eight bits modes 5 and 6 stop and set the SR flag;
-//! reading or writing the register restarts them. Modes 3 (shift in) and
-//! 7 (shift out) run on an external clock on CB1 ([`Via::shift_ext`], the
-//! Macintosh keyboard and ADB transceiver): bit 7 first, the SR flag after
-//! eight bits. Mode 2 (shift in at the φ2 rate) and mode 1 store the
-//! value only. CA2 as an input ([`Via::set_ca2`]) sets its flag on the
-//! edge PCR bits 3–1 select.
+//! Rockwell R6522 data sheet (timing diagrams).
+//!
+//! Shift register (VICE `VIC20/via_sr` dumps of a real VIC-20, `dump*.bin`):
+//! a shift clock toggles either every φ2 (modes 2 and 6) or at every
+//! timeout of T2's low byte once it counts a value loaded from its latch
+//! (modes 1, 4, 5: the first timeout after a plain write of T2 only starts
+//! the reloading, so a bit takes 2 × (N + 2) cycles; the PET's sound, f =
+//! φ2 / (16 (N + 2))). Shift-out modes 4 (free-running), 5 and 6 (eight
+//! bits) move bit 7 out on the clock's rising edge, rotating it into bit 0;
+//! CB2 carries the bit shifted out and stays at the last one. Shift-in
+//! modes 1 (T2) and 2 (φ2) take CB2 ([`Via::set_cb2_in`]) into bit 0 on
+//! the falling edge, half a clock later. After eight bits modes 1, 2, 5 and
+//! 6 stop and set the SR flag; an access of the register restarts them
+//! only when they stand still (a read while shifting changes nothing but
+//! the flag; in the φ2 modes the first shift then comes two cycles after
+//! the access). Modes 3 (shift in) and 7 (shift out) run on an external
+//! clock on CB1 ([`Via::shift_ext`], the Macintosh keyboard and ADB
+//! transceiver): bit 7 first, the SR flag after eight bits. T2 in the
+//! shift modes: the low byte reloads from its latch one cycle after it
+//! passed 0 (the counter shows the high byte decremented and $FF in
+//! between, `VIC20/via_wrap`), the high byte counts those reloads and its
+//! own underflow sets the flag. CA2 as an input ([`Via::set_ca2`]) sets
+//! its flag on the edge PCR bits 3–1 select.
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -88,11 +99,22 @@ pub struct Via {
     /// Input latches (ACR bits 0/1) captured on the CA1/CB1 edge.
     ira_latch: u8,
     irb_latch: u8,
-    /// Shift register: cycles to the next shift, CB2 output.
-    sr_count: u8,
+    /// Shift register: the shift clock (out on its rise, in on its fall),
+    /// a one-cycle hold after a restart before the φ2 clock toggles, CB2
+    /// output, CB2 input, bits left in the eight-bit modes.
+    sr_clock: bool,
+    sr_hold: bool,
     sr_cb2: bool,
-    /// Bits left to shift in modes 5 and 6.
+    cb2_in: bool,
     sr_bits: u8,
+    /// T2 in the shift modes: the low byte stands at $FF and takes the
+    /// latch next cycle; the low count came from the latch (its timeouts
+    /// clock the shift register, a plain write's first one does not).
+    t2_reload: bool,
+    t2_from_latch: bool,
+    /// The shift clock toggles in the next cycle (a T2 reload just
+    /// happened; the edge follows it by a cycle).
+    sr_edge: bool,
 }
 
 impl Via {
@@ -106,6 +128,8 @@ impl Via {
             ca2: true,
             // The T1 output rests high.
             pb7: true,
+            cb2_in: true,
+            t2_from_latch: true,
             ..Self::default()
         }
     }
@@ -182,6 +206,56 @@ impl Via {
         self.ca2 = level;
     }
 
+    /// CB2 input level, what the shift-in modes take into bit 0 (high when
+    /// nothing drives the pin).
+    pub fn set_cb2_in(&mut self, level: bool) {
+        self.cb2_in = level;
+    }
+
+    /// Shift one bit: out (bit 7 to CB2, rotated into bit 0) or in (CB2
+    /// into bit 0). Counts the eight-bit modes down and flags their end.
+    fn shift(&mut self, out: bool, free_run: bool) {
+        if !free_run && self.sr_bits == 0 {
+            return;
+        }
+        if out {
+            self.sr = self.sr.rotate_left(1);
+            self.sr_cb2 = self.sr & 1 != 0;
+        } else {
+            self.sr = self.sr << 1 | u8::from(self.cb2_in);
+        }
+        if !free_run {
+            self.sr_bits -= 1;
+            if self.sr_bits == 0 {
+                self.ifr |= ifr::SR;
+            }
+        }
+    }
+
+    /// A shift clock edge: rising shifts out (modes 4–6), falling shifts
+    /// in (modes 1, 2). The eight-bit shift-out modes count the bit on the
+    /// falling edge after it, so they stop (and flag) half a clock after
+    /// the eighth bit went out (`VIC20/via_sr` dump14: a read in that half
+    /// clock finds the register still running and does not restart it).
+    fn shift_edge(&mut self, rising: bool) {
+        let mode = (self.acr >> 2) & 7;
+        match (mode, rising) {
+            (4, true) => self.shift(true, true),
+            (5 | 6, true) if self.sr_bits > 0 => {
+                self.sr = self.sr.rotate_left(1);
+                self.sr_cb2 = self.sr & 1 != 0;
+            }
+            (5 | 6, false) if self.sr_bits > 0 => {
+                self.sr_bits -= 1;
+                if self.sr_bits == 0 {
+                    self.ifr |= ifr::SR;
+                }
+            }
+            (1 | 2, false) => self.shift(false, false),
+            _ => {}
+        }
+    }
+
     /// One clock edge on CB1 from an external device in shift modes 3
     /// (in: `data_in` enters bit 0) and 7 (out). Returns the bit shifted
     /// out in mode 7 (bit 7 first), `None` in other modes or after the
@@ -241,45 +315,52 @@ impl Via {
             }
         }
 
-        // Shift register: output at the T2 rate (4 free-running, 5 eight
-        // bits) or at half the φ2 rate (6, eight bits).
-        let mode = (self.acr >> 2) & 7;
-        if (4..=6).contains(&mode) && (mode == 4 || self.sr_bits > 0) {
-            if self.sr_count == 0 {
-                self.sr_count = if mode == 6 { 1 } else { self.t2_latch_lo };
-                self.sr = self.sr.rotate_left(1);
-                self.sr_cb2 = self.sr & 1 != 0;
-                if mode != 4 {
-                    self.sr_bits -= 1;
-                    if self.sr_bits == 0 {
-                        self.ifr |= ifr::SR;
-                    }
-                }
+        // Shift register clocked by φ2 (modes 2 and 6): the clock toggles
+        // every cycle, after a one-cycle hold following a restart.
+        if matches!((self.acr >> 2) & 7, 2 | 6) {
+            if self.sr_hold {
+                self.sr_hold = false;
             } else {
-                self.sr_count -= 1;
+                self.sr_clock = !self.sr_clock;
+                self.shift_edge(self.sr_clock);
             }
         }
 
         // T2 (timed mode; pulse counting on PB6 is not wired yet). The
         // mode bit works a cycle after it is written.
         let pulses = std::mem::replace(&mut self.t2_pulses, self.acr & 0x20 != 0);
+        // A T2-clocked eight-bit run that has stopped holds its clock low
+        // until an access restarts it.
+        if std::mem::take(&mut self.sr_edge)
+            && !((self.acr >> 2) & 7 == 5 && self.sr_bits == 0 && !self.sr_clock)
+        {
+            self.sr_clock = !self.sr_clock;
+            self.shift_edge(self.sr_clock);
+        }
         if self.t2_loaded {
             self.t2_loaded = false;
         } else if !pulses {
-            let sr_mode = (self.acr >> 2) & 7;
-            if matches!(sr_mode, 1 | 4 | 5) {
+            if matches!((self.acr >> 2) & 7, 1 | 4 | 5) {
                 // Shift register clocked by T2: the low byte reloads
-                // from its latch when it underflows, the high byte counts
-                // those reloads, and its own underflow ($0000 to $FFFF)
-                // sets the flag (`viavarious` via20/via21).
-                if self.t2_counter & 0xff == 0 {
-                    let high = (self.t2_counter >> 8) as u8;
-                    if high == 0 && self.t2_armed {
+                // from its latch a cycle after it passed 0 (one cycle at
+                // $FF with the high byte already decremented), the high
+                // byte counts those reloads, and its own underflow ($0000
+                // to $FFFF) sets the flag (`viavarious` via20/via21,
+                // `VIC20/via_wrap`). Each timeout of a count that came
+                // from the latch toggles the shift clock.
+                if self.t2_reload {
+                    self.t2_reload = false;
+                    self.t2_counter = (self.t2_counter & 0xff00) | u16::from(self.t2_latch_lo);
+                    if self.t2_from_latch {
+                        self.sr_edge = true;
+                    }
+                } else if self.t2_counter & 0xff == 0 {
+                    if self.t2_counter == 0 && self.t2_armed {
                         self.ifr |= ifr::T2;
                         self.t2_armed = false;
                     }
-                    self.t2_counter =
-                        (u16::from(high.wrapping_sub(1)) << 8) | u16::from(self.t2_latch_lo);
+                    self.t2_counter = self.t2_counter.wrapping_sub(1);
+                    self.t2_reload = true;
                 } else {
                     self.t2_counter -= 1;
                 }
@@ -362,12 +443,19 @@ impl Via {
         }
     }
 
-    /// A shift register access clears its flag and starts eight more bits.
+    /// A shift register access clears its flag and, when the register
+    /// stands still, starts eight more bits (`VIC20/via_sr`: reads during
+    /// a run leave it alone). In a φ2 mode the first shift comes two
+    /// cycles later; T2 keeps its phase.
     fn restart_shift(&mut self) {
         self.ifr &= !ifr::SR;
-        self.sr_bits = 8;
-        if (self.acr >> 2) & 7 == 6 {
-            self.sr_count = 0;
+        let mode = (self.acr >> 2) & 7;
+        if mode != 0 && self.sr_bits == 0 {
+            self.sr_bits = 8;
+            if matches!(mode, 2 | 6) {
+                self.sr_clock = false;
+                self.sr_hold = true;
+            }
         }
     }
 
@@ -405,6 +493,7 @@ impl Via {
                 self.ifr &= !ifr::T2;
                 self.t2_armed = true;
                 self.t2_loaded = true;
+                self.t2_reload = false;
             }
             0xa => {
                 self.sr = v;
@@ -426,7 +515,7 @@ impl Via {
 }
 
 const TAG: [u8; 4] = *b"6522";
-const VERSION: u16 = 5;
+const VERSION: u16 = 6;
 
 impl Savestate for Via {
     fn save(&self, w: &mut StateWriter) {
@@ -462,11 +551,21 @@ impl Savestate for Via {
             ] {
                 w.bool(b);
             }
-            w.u8(self.sr_count);
+            w.u8(0);
             w.bool(self.sr_cb2);
             w.u8(self.sr_bits);
             w.bool(self.ca2);
             w.bool(self.t2_pulses);
+            for b in [
+                self.sr_clock,
+                self.sr_hold,
+                self.cb2_in,
+                self.t2_reload,
+                self.t2_from_latch,
+                self.sr_edge,
+            ] {
+                w.bool(b);
+            }
         });
     }
 
@@ -504,7 +603,7 @@ impl Savestate for Via {
         v.cb1 = c.bool()?;
         // Version 1 states predate the shift register output.
         if version >= 2 {
-            v.sr_count = c.u8()?;
+            let _old_sr_count = c.u8()?;
             v.sr_cb2 = c.bool()?;
         }
         if version >= 3 {
@@ -518,6 +617,16 @@ impl Savestate for Via {
         } else {
             v.acr & 0x20 != 0
         };
+        if version >= 6 {
+            v.sr_clock = c.bool()?;
+            v.sr_hold = c.bool()?;
+            v.cb2_in = c.bool()?;
+            v.t2_reload = c.bool()?;
+            v.t2_from_latch = c.bool()?;
+            v.sr_edge = c.bool()?;
+        } else {
+            v.t2_from_latch = true;
+        }
         *self = v;
         Ok(())
     }
@@ -675,45 +784,73 @@ mod tests {
         assert!(v.ca2_out());
     }
 
+    /// The cycles in which CB2 changes, from now, and its levels.
+    fn cb2_trace(v: &mut Via, cycles: usize) -> Vec<bool> {
+        (0..cycles)
+            .map(|_| {
+                v.tick();
+                v.cb2_out()
+            })
+            .collect()
+    }
+
     #[test]
     fn shift_register_mode_6_shifts_eight_bits_at_half_clock() {
+        // VIC20/via_sr dump18: the first bit two cycles after the access,
+        // then one every two cycles; the run stops after eight.
         let mut v = Via::new();
         v.write(0xb, 0x18);
         v.write(0xa, 0xa5); // 1010 0101
-        let mut levels = Vec::new();
-        for _ in 0..20 {
-            v.tick();
-            levels.push(v.cb2_out());
-        }
-        let bits: Vec<bool> = levels.iter().step_by(2).take(8).copied().collect();
+        let levels = cb2_trace(&mut v, 22);
+        let bits: Vec<bool> = levels.iter().skip(1).step_by(2).take(8).copied().collect();
         assert_eq!(bits, [true, false, true, false, false, true, false, true]);
         assert_eq!(v.ifr & ifr::SR, ifr::SR);
         assert!(levels[16..].iter().all(|&l| l), "stays at the last bit");
         assert_eq!(v.sr, 0xa5, "rotated back");
         v.write(0xa, 0x00);
-        v.tick();
-        assert!(!v.cb2_out());
         assert_eq!(v.ifr & ifr::SR, 0);
+        cb2_trace(&mut v, 2);
+        assert!(!v.cb2_out());
     }
 
     #[test]
-    fn shift_register_mode_4_drives_cb2() {
+    fn shift_register_mode_4_shifts_at_twice_the_t2_period() {
+        // VIC20/via_sr dump10 and dump14: each timeout of T2's low byte toggles
+        // the shift clock, a bit every 2 × (N + 2) cycles.
         let mut v = Via::new();
-        v.write(0x8, 3); // T2 low latch: shift every 4 cycles
+        v.write(0x8, 3);
+        v.write(0x9, 0);
         v.write(0xb, 0x10);
         v.write(0xa, 0x0f); // 0000 1111
-        let mut levels = Vec::new();
-        for _ in 0..32 {
-            v.tick();
-            levels.push(v.cb2_out());
-        }
-        // MSB first, each bit holding CB2 for 4 cycles: 0000 1111.
-        let bits: Vec<bool> = levels.iter().step_by(4).copied().collect();
-        assert_eq!(
-            bits,
-            [false, false, false, false, true, true, true, true],
-            "{levels:?}"
-        );
+        let levels = cb2_trace(&mut v, 120);
+        let edges: Vec<usize> = (1..levels.len())
+            .filter(|&i| levels[i] != levels[i - 1])
+            .collect();
+        // CB2 goes high with the fifth bit and low again with the ninth.
+        assert_eq!(edges.len(), 2, "{levels:?}");
+        assert_eq!(edges[1] - edges[0], 4 * 2 * (3 + 2));
+        assert_eq!(v.ifr & ifr::SR, 0, "mode 4 runs on and never flags");
+    }
+
+    #[test]
+    fn shift_register_mode_5_holds_its_clock_while_stopped() {
+        // VIC20/via_sr dump14: after eight bits the run stops and the
+        // shift clock waits low; an access restarts it, and the next T2
+        // timeout shifts at once.
+        let mut v = Via::new();
+        v.write(0x8, 7);
+        v.write(0x9, 0);
+        v.write(0xb, 0x14);
+        v.write(0xa, 0x01);
+        cb2_trace(&mut v, 8 * 18 + 20);
+        assert_eq!(v.ifr & ifr::SR, ifr::SR);
+        assert_eq!(v.sr, 0x01);
+        cb2_trace(&mut v, 50);
+        assert_eq!(v.sr, 0x01, "stopped");
+        v.read(0xa, 0, 0);
+        assert_eq!(v.ifr & ifr::SR, 0);
+        cb2_trace(&mut v, 10);
+        assert_eq!(v.sr, 0x02, "the first timeout after the restart shifts");
     }
 
     #[test]

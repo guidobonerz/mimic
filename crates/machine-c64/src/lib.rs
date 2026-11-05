@@ -760,6 +760,12 @@ impl C64 {
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
         }
+        // Devices whose lines move with time (a proportional mouse steps
+        // its quadrature phases every few hundred cycles) are sampled every
+        // 64 cycles; the rest of the time the CIAs read the kept lines.
+        if self.sched.now().0 & 63 == 0 {
+            self.poll_ports();
+        }
         // φ1: VIC-II access; its BA decides whether the CPU may read.
         let bank = self.io.vic_bank();
         self.io.vic.phi1(&VicView {
@@ -974,13 +980,25 @@ impl C64 {
         }
     }
 
-    fn refresh_port(&mut self, p: PortId) {
+    /// Take the control ports' lines as they are now. The machine drives
+    /// nothing onto a control port, but `write_lines` gives the device the
+    /// time, which a proportional mouse needs to play out its steps.
+    fn poll_ports(&mut self) {
         let now = self.sched.now();
-        let i = usize::from(p.0);
-        if i < 2 {
-            let lines = self.ports[i].as_ref().map(|d| d.read_lines(now));
+        for i in 0..2 {
+            let lines = self.ports[i].as_mut().map(|d| {
+                d.write_lines(PortLines::default(), now);
+                d.read_lines(now)
+            });
             self.io.port_lines[i] = lines.map_or(0, |l| l.pulled_low);
             self.io.port_analog[i] = lines.map_or([u16::MAX; 2], |l| l.analog);
+        }
+    }
+
+    fn refresh_port(&mut self, p: PortId) {
+        let i = usize::from(p.0);
+        if i < 2 {
+            self.poll_ports();
         }
         if i == 0 {
             // Control port 1 pin 6 is the VIC-II's LP input: the fire

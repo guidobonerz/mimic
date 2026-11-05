@@ -28,6 +28,14 @@
 //! GEO-RAM, +60K, +256K, DQBB, RAMCart, Isepic) and the 6567R56A
 //! (`vicii-ntscold`); there is one VIC-II per standard, so `vicii-old` and
 //! `vicii-new` only choose the reference picture.
+//!
+//! `vice_testprogs_vic20` runs `vic20-testlist.in` the same way on the
+//! VIC-20 (`python tools/fetch_vice_testprogs.py --list vic20`): the
+//! program goes into the program slot (the machine injects it after boot
+//! and types RUN, like VICE's autostart), `vic20-unexp`/`vic20-8k`/
+//! `vic20-32k` set the RAM, the exit code is written to `$910F`. Its
+//! screenshot entries are not compared yet (no VIC palette and window
+//! mapping for xvic's references); report `vice-testprogs-vic20.txt`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -98,6 +106,31 @@ impl Entry {
     }
 }
 
+/// The machine a list runs on.
+#[derive(Clone, Copy)]
+struct Target {
+    machine: &'static str,
+    list: &'static str,
+    /// Where the test programs write their exit code.
+    exit_addr: u32,
+    /// Report and trend names.
+    name: &'static str,
+}
+
+const C64: Target = Target {
+    machine: "c64",
+    list: "testbench/c64-testlist.in",
+    exit_addr: 0xd7ff,
+    name: "vice-testprogs-c64",
+};
+
+const VIC20: Target = Target {
+    machine: "vic20",
+    list: "testbench/vic20-testlist.in",
+    exit_addr: 0x910f,
+    name: "vice-testprogs-vic20",
+};
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Verdict {
     Pass,
@@ -150,12 +183,33 @@ const UNSUPPORTED: &[&str] = &[
 ];
 
 /// Machine configuration for an entry, or why it is not run.
-fn config(base: &MachineConfig, e: &Entry) -> Result<MachineConfig, String> {
+fn config(t: Target, base: &MachineConfig, e: &Entry) -> Result<MachineConfig, String> {
     if e.kind != "exitcode" && e.kind != "screenshot" {
         return Err(e.kind.clone());
     }
     let mut c = base.clone();
     c.options.insert("debugcart".into(), "on".into());
+    if t.machine == "vic20" {
+        if e.kind == "screenshot" {
+            return Err("VIC-20 screenshots not compared".into());
+        }
+        for o in &e.options {
+            if let Some(u) = UNSUPPORTED.iter().find(|u| o.starts_with(*u)) {
+                return Err(format!("{u} not emulated"));
+            }
+            let ram = match o.as_str() {
+                "vic20-unexp" => "none",
+                "vic20-3k" => "3k",
+                "vic20-8k" => "8k",
+                "vic20-16k" => "16k",
+                "vic20-24k" => "24k",
+                "vic20-32k" => "all",
+                _ => continue,
+            };
+            c.options.insert("ram".into(), ram.into());
+        }
+        return Ok(c);
+    }
     c.options.insert("cia".into(), "6526a".into());
     c.options.insert("sid".into(), "8580".into());
     // The 8565/8562 like the testbench's C64C, unless the entry asks for
@@ -255,7 +309,7 @@ fn exit_code(m: &dyn Machine) -> Option<u8> {
 }
 
 /// Run one entry: `Ok(None)` timeout, `Ok(Some(code))` exit code.
-fn run(m: &mut dyn Machine, e: &Entry, data: &Path) -> Result<Option<u8>, String> {
+fn run(t: Target, m: &mut dyn Machine, e: &Entry, data: &Path) -> Result<Option<u8>, String> {
     let dir = data.join(&e.dir);
     for o in &e.options {
         if let Some(f) = o.strip_prefix("mountcrt:") {
@@ -274,10 +328,26 @@ fn run(m: &mut dyn Machine, e: &Entry, data: &Path) -> Result<Option<u8>, String
         if prg.len() < 3 {
             return Err("program too short".into());
         }
-        for _ in 0..lorenz::BOOT_FRAMES {
-            m.run_frame(&mut dbg);
+        if t.machine != "c64" {
+            // The machine's own program slot: injected after boot, then RUN.
+            let media = media_backends::image::from_bytes(&e.prg, prg.clone(), MediaKind::Program);
+            let slot = m
+                .media_slots()
+                .into_iter()
+                .find(|s| s.kind == MediaKind::Program)
+                .ok_or("no program slot")?
+                .id;
+            m.media_slot(slot)
+                .ok_or("no program slot")?
+                .insert(media)
+                .map_err(|err| format!("program: {err}"))?;
+        } else {
+            for _ in 0..lorenz::BOOT_FRAMES {
+                m.run_frame(&mut dbg);
+            }
         }
-        if e.options.iter().any(|o| o.contains("\"TEST\" as filename")) {
+        if t.machine != "c64" {
+        } else if e.options.iter().any(|o| o.contains("\"TEST\" as filename")) {
             // The test wants a real LOAD"TEST",8: its reference memory
             // dump holds the typed file name. Without a disk the program
             // goes on a disk of its own as "TEST".
@@ -320,7 +390,7 @@ fn run(m: &mut dyn Machine, e: &Entry, data: &Path) -> Result<Option<u8>, String
     let cpu = lorenz::space(m, "cpu");
     dbg.add_breakpoint(BreakpointKind::Write {
         space: cpu,
-        addr: 0xd7ff,
+        addr: t.exit_addr,
         len: 1,
     });
     while m.now().0 < e.cycles {
@@ -467,8 +537,8 @@ fn dump(m: &dyn Machine, e: &Entry) {
     enc.write_header().unwrap().write_image_data(&rgb).unwrap();
 }
 
-fn judge(base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
-    let config = match config(base, e) {
+fn judge(t: Target, base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
+    let config = match config(t, base, e) {
         Ok(c) => c,
         Err(why) => return Verdict::Skipped(why),
     };
@@ -476,13 +546,13 @@ fn judge(base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
         return Verdict::Skipped("program not in the repository".into());
     }
     let registry = emu_machines::registry();
-    let mut m = match registry.create("c64", &config) {
+    let mut m = match registry.create(t.machine, &config) {
         Ok(m) => m,
         Err(err) => return Verdict::Error(format!("{err:?}")),
     };
     let expect_error = e.has("expect:error");
     let expect_timeout = e.has("expect:timeout");
-    let outcome = run(m.as_mut(), e, data);
+    let outcome = run(t, m.as_mut(), e, data);
     let result = match outcome {
         Err(why) => Verdict::Error(why),
         Ok(None) => Verdict::Timeout,
@@ -516,15 +586,25 @@ fn judge(base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
 #[test]
 #[ignore = "needs EMU_ROM_DIR and EMU_TESTDATA_DIR (tools/fetch_vice_testprogs.py)"]
 fn vice_testprogs_c64() {
+    suite(C64);
+}
+
+#[test]
+#[ignore = "needs EMU_ROM_DIR and EMU_TESTDATA_DIR (tools/fetch_vice_testprogs.py --list vic20)"]
+fn vice_testprogs_vic20() {
+    suite(VIC20);
+}
+
+fn suite(t: Target) {
     let rom_dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let base = MachineConfig {
-        roms: media_backends::roms::load(&rom_dir, "c64").expect("ROMs"),
+        roms: media_backends::roms::load(&rom_dir, t.machine).expect("ROMs"),
         ..MachineConfig::default()
     };
     let data = PathBuf::from(std::env::var_os("EMU_TESTDATA_DIR").expect("EMU_TESTDATA_DIR"))
         .join("vice-testprogs");
-    let list = std::fs::read_to_string(data.join("testbench/c64-testlist.in"))
-        .expect("run tools/fetch_vice_testprogs.py");
+    let list = std::fs::read_to_string(data.join(t.list))
+        .expect("run tools/fetch_vice_testprogs.py (--list vic20 for the VIC-20)");
     let filter = std::env::var("EMU_VICE_FILTER").unwrap_or_default();
     let entries: Vec<Entry> = parse(&list)
         .into_iter()
@@ -539,7 +619,7 @@ fn vice_testprogs_c64() {
             s.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::Relaxed);
                 let Some(e) = entries.get(i) else { break };
-                let v = judge(&base, e, &data);
+                let v = judge(t, &base, e, &data);
                 results.lock().unwrap().push((i, v));
             });
         }
@@ -579,10 +659,11 @@ fn vice_testprogs_c64() {
         "{:<40} {:>6} {:>5} {:>5} {:>5}\n",
         "total", total[0], total[1], total[2], total[3]
     ));
-    let report_name = if filter.is_empty() {
-        "vice-testprogs.txt"
-    } else {
-        "vice-testprogs-filtered.txt"
+    let report_name = match (t.machine, filter.is_empty()) {
+        ("c64", true) => "vice-testprogs.txt".to_string(),
+        ("c64", false) => "vice-testprogs-filtered.txt".to_string(),
+        (_, true) => format!("{}.txt", t.name),
+        (_, false) => format!("{}-filtered.txt", t.name),
     };
     // Trend: every entry that ran (the options tell apart entries of one
     // program).
@@ -596,11 +677,11 @@ fn vice_testprogs_c64() {
         })
         .collect();
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
-    let trend = emu_tests::trend::record(tmp, "vice-testprogs-c64", &outcomes);
+    let trend = emu_tests::trend::record(tmp, t.name, &outcomes);
     report.push('\n');
     report.push_str(&trend);
     report.push('\n');
-    let out = tmp.join(report_name);
+    let out = tmp.join(&report_name);
     std::fs::write(&out, &report).unwrap();
     let run = total[0] + total[1] + total[2];
     println!(
