@@ -127,12 +127,17 @@ const AEC_TX: std::ops::RangeInclusive<u16> = 11..=90;
 const LAST_FETCH_LINE: u16 = 203;
 
 /// What a double clock gives the CPU, by line kind and `tx`: [`SLOT_CPU`]
-/// (it runs a cycle), [`SLOT_BA`] (BA low), [`SLOT_HOLD`] (a write
-/// pending at `tx` 3 waits here). Kinds: 0 border, 1 fetch line, 2 DMA
-/// line; 3–5 the same with `$13` bit 1 (single clock forced).
+/// (it may run a cycle), [`SLOT_BA`] (BA low), [`SLOT_HOLD`] (a write
+/// pending at `tx` 3 of a DMA line waits here), [`SLOT_SINGLE`] (single
+/// clock: a cycle takes this double clock and the next), [`SLOT_SWITCH`]
+/// (`tx` 3 of a fetch line without DMA, where the clock leaves double
+/// speed). Kinds: 0 border, 1 fetch line, 2 DMA line; 3–5 the same with
+/// `$13` bit 1 (single clock forced).
 const SLOT_CPU: u8 = 1;
 const SLOT_BA: u8 = 2;
 const SLOT_HOLD: u8 = 4;
+const SLOT_SINGLE: u8 = 8;
+const SLOT_SWITCH: u8 = 16;
 
 const fn in_range(r: &std::ops::RangeInclusive<u16>, v: u16) -> bool {
     v >= *r.start() && v <= *r.end()
@@ -149,16 +154,21 @@ const fn slot_table(kind: usize) -> [u8; TICKS_PER_LINE as usize] {
         let ba = dma && in_range(&BA_TX, tx);
         let single = forced || in_range(&REFRESH_TX, tx) || (fetch && in_range(&SINGLE_TX, tx));
         let mut v = 0;
-        if !aec && (!single || tx % 2 == 1) {
+        if !aec {
             v |= SLOT_CPU;
+        }
+        if single {
+            v |= SLOT_SINGLE;
         }
         if ba {
             v |= SLOT_BA;
         }
-        // The write hold (see `Ted::sync_cycle`).
-        let hold_end = if dma { *REFRESH_TX.start() + 1 } else { 6 };
-        if fetch && !forced && tx >= 3 && tx <= hold_end {
+        // The write hold of a DMA line (see `Ted::sync_cycle`).
+        if dma && !forced && tx >= 3 && tx <= *REFRESH_TX.start() + 1 {
             v |= SLOT_HOLD;
+        }
+        if fetch && !dma && !forced && tx == 3 {
+            v |= SLOT_SWITCH;
         }
         t[tx as usize] = v;
         tx += 1;
@@ -275,6 +285,10 @@ pub struct Ted {
     voices: [Voice; 2],
     noise: u8,
     sound_prescale: u8,
+    /// Level of a sound source outside the TED mixed into its output
+    /// (a SID card), set by the machine before each double clock (input,
+    /// not state).
+    pub external_audio: i32,
     resampler: Decimator,
     /// Audio produced but not yet taken (output, not machine state).
     pub samples: Vec<i16>,
@@ -290,6 +304,15 @@ pub struct Ted {
     /// A colour register write on its way to the picture: register,
     /// value, and whether a double clock has passed (state).
     pending: Option<(u8, u8, bool)>,
+    /// Internal counters: the line within the character row (`$1F` bits
+    /// 0–2), the character position (`$1A/$1B`) and the flash counter
+    /// (`$1F` bits 3–6).
+    chrast: u8,
+    vcbase: u16,
+    flash: u8,
+    /// The live character counter still stands 40 past the position in
+    /// the first double clocks of a line (see `count_line`).
+    vc_ahead: bool,
 }
 
 impl Ted {
@@ -308,6 +331,7 @@ impl Ted {
             voices: [Voice::default(); 2],
             noise: 0xff,
             sound_prescale: 0,
+            external_audio: 0,
             resampler: Decimator::new(t.double_hz(), SAMPLE_RATE).expect("valid rates"),
             samples: Vec::new(),
             pixels: vec![0; (WIDTH * t.height) as usize],
@@ -316,6 +340,10 @@ impl Ted {
             rec: crate::overlay::Recorder(None),
             kind: 0,
             pending: None,
+            chrast: 0,
+            vcbase: 0,
+            flash: 0,
+            vc_ahead: false,
         }
     }
 
@@ -379,10 +407,9 @@ impl Ted {
             0x1c => 0xfe | (self.counter_line() >> 8) as u8,
             0x1d => self.counter_line() as u8,
             0x1e => ((self.tick * 4) / 2) as u8,
-            0x1f => {
-                let flash = ((self.frame >> 1) & 0x0f) as u8;
-                0x80 | (flash << 3) | self.char_line()
-            }
+            0x1a => 0xfc | ((self.position() >> 8) & 1) as u8,
+            0x1b => self.position() as u8,
+            0x1f => 0x80 | ((self.flash & 0x0f) << 3) | self.chrast,
             0x15..=0x19 => match self.pending {
                 Some((r, v, _)) if usize::from(r) == reg => v,
                 _ => self.regs[reg],
@@ -430,7 +457,15 @@ impl Ted {
             _ => self.regs[reg] = v,
         }
         if matches!(reg, 0x06 | 0x13 | 0x1c | 0x1d) {
+            let old = self.kind;
             self.update_kind();
+            // Whether a fetch line has the DMA is settled where BA would
+            // fall (`tx` 5): a later YSCROLL or counter write neither
+            // starts nor stops it in this line (xplus4, `ted_timing` dma).
+            let (was, now) = (old % 3, self.kind % 3);
+            if self.tx() > *BA_TX.start() && was >= 1 && now >= 1 && was != now {
+                self.kind = self.kind - now + was;
+            }
         }
     }
 
@@ -550,13 +585,30 @@ impl Ted {
         self.cpu_slot()
     }
 
-    /// `tx` 3 of a fetch line is the cycle in which the clock comes out of
-    /// double speed. A CPU write that falls on it is held back to `tx` 7,
-    /// on a DMA line past the DMA and the first refresh cycle to `tx` 93
-    /// (measured against xplus4: four double clocks lost, on a DMA line one
-    /// cycle more than its reads; reads go on as usual). Returns `tx`
-    /// while such a hold may still run (`tx` 3–6, on a DMA line 3–92);
-    /// the machine asks this before running the CPU.
+    /// Whether this double clock is single clock: a CPU cycle started in
+    /// it also takes the next one (no fixed phase: after a stretch the
+    /// cycles fall on even double clocks, as in xplus4).
+    #[inline]
+    pub fn single(&self) -> bool {
+        self.slot_bits() & SLOT_SINGLE != 0
+    }
+
+    /// `tx` 3 of a fetch line without DMA, where the clock leaves double
+    /// speed. Measured against xplus4 (`ted_timing` start): an
+    /// instruction that began before the line turned (its next cycle is
+    /// its fifth or later) is stretched there by its cycle count less one
+    /// double clocks (STA abs,X 4, INC abs 5, INC abs,X 6); one that began
+    /// at `tx` 0 or later runs on undisturbed. The machine applies it.
+    #[inline]
+    pub fn switch_point(&self) -> bool {
+        self.slot_bits() & SLOT_SWITCH != 0
+    }
+
+    /// `tx` 3 of a DMA line: a CPU write that falls on it is held back
+    /// past the DMA and the first refresh cycle to `tx` 93 (measured
+    /// against xplus4: one cycle more than its reads). Returns `tx` while
+    /// such a hold may still run (3–92); the machine asks this before
+    /// running the CPU.
     #[inline]
     pub fn sync_cycle(&self) -> Option<u16> {
         (self.slot_bits() & SLOT_HOLD != 0).then(|| self.tx())
@@ -606,8 +658,45 @@ impl Ted {
             if self.counter_line() == self.compare_line() {
                 self.irq_flags |= 0x02;
             }
+            self.count_line();
         }
         TickOut { cpu, ba, frame_end }
+    }
+
+    /// The counters as the line counter turns over (measured against
+    /// xplus4, `ted_timing` counters): at line 0 the position and the
+    /// character line start from 0 and the flash counter steps; on fetch
+    /// lines after the first row's start the character line counts; on
+    /// each attribute DMA line after it the position moves on a row.
+    fn count_line(&mut self) {
+        let line = self.counter_line();
+        self.vc_ahead = false;
+        if line == 0 {
+            self.vcbase = 0;
+            self.chrast = 0;
+            self.flash = (self.flash + 1) & 0x0f;
+            return;
+        }
+        if !self.fetch_line(line) || line <= self.first_row_line() {
+            return;
+        }
+        self.chrast = (self.chrast + 1) & 7;
+        if line & 7 == u16::from(self.regs[0x06] & 7) {
+            self.vcbase = (self.vcbase + 40) & 0x3ff;
+        } else {
+            self.vc_ahead = true;
+        }
+    }
+
+    /// `$1A/$1B` as read: the position, or in `tx` 0–3 of a line after a
+    /// row's line the live counter, which then still stands 40 further on
+    /// (xplus4, `ted_timing` counters; the reload follows at `tx` 4).
+    fn position(&self) -> u16 {
+        if self.vc_ahead && self.tx() <= 3 {
+            (self.vcbase + 40) & 0x3ff
+        } else {
+            self.vcbase
+        }
     }
 
     /// Overlay record at the end of a line: was it a DMA line?
@@ -683,7 +772,7 @@ impl Ted {
             level += 1;
         }
         let volume = i32::from((ctrl & 0x0f).min(8));
-        let s = level * volume * 1500 - 8 * 1500;
+        let s = level * volume * 1500 - 8 * 1500 + self.external_audio;
         if let Some(out) = self.resampler.push(s) {
             // Bound the backlog if nobody drains it.
             if self.samples.len() < SAMPLE_RATE as usize * 4 {
@@ -860,10 +949,12 @@ impl Ted {
                 let pair = (pattern >> (bit & 6)) & 3;
                 return match pair {
                     0 => bg0,
-                    1 => (code >> 4) | lum_hi,
-                    // Pair 10: matrix bits 0–3 with attribute bits 4–6,
-                    // like pair 01 (TED data sheet, sheet 7; Promised Land's
-                    // title picture against xplus4).
+                    // Pair 01 takes a 1 dot's colour (matrix bits 4–7,
+                    // attribute bits 0–2), pair 10 a 0 dot's (matrix bits
+                    // 0–3, attribute bits 4–6): every pixel of Promised
+                    // Land's "Gods of the Universe" picture against xplus4
+                    // (TED data sheet, sheet 7, for the hires pairing).
+                    1 => (code >> 4) | lum_lo,
                     2 => (code & 0x0f) | lum_hi,
                     _ => self.regs[0x16],
                 };
@@ -922,7 +1013,7 @@ impl Ted {
 }
 
 const TAG: [u8; 4] = *b"TED1";
-const VERSION: u16 = 3;
+const VERSION: u16 = 4;
 
 impl Savestate for Ted {
     fn save(&self, w: &mut StateWriter) {
@@ -968,6 +1059,11 @@ impl Savestate for Ted {
             w.u8(r);
             w.u8(v);
             w.bool(armed);
+            // Version 4: the internal counters.
+            w.u8(self.chrast);
+            w.u16(self.vcbase);
+            w.u8(self.flash);
+            w.bool(self.vc_ahead);
         });
     }
 
@@ -1027,6 +1123,12 @@ impl Savestate for Ted {
                 return Err(StateError::Invalid("TED pending colour register"));
             }
             t.pending = some.then_some((r, v, armed));
+        }
+        if version >= 4 {
+            t.chrast = c.u8()? & 7;
+            t.vcbase = c.u16()? & 0x3ff;
+            t.flash = c.u8()? & 0x0f;
+            t.vc_ahead = c.bool()?;
         }
         t.samples = std::mem::take(&mut self.samples);
         // The overlay record is not state: keep it switched on, fresh.

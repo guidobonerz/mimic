@@ -258,6 +258,29 @@ impl Cpu6502 {
         c.op == 0x00 && c.seq == micro::Seq::Interrupt && (2..=4).contains(&c.t)
     }
 
+    /// Cycles of the current instruction (or interrupt sequence) already
+    /// run; 0 when the next tick fetches an opcode.
+    pub fn cycle_in_instruction(&self) -> u8 {
+        self.core.t
+    }
+
+    /// All cycles of the current instruction: those run plus those still
+    /// to come, counted on a copy of the CPU against `bus`'s `peek` (no
+    /// side effects; page crossings and taken branches included).
+    pub fn instruction_cycles(&self, bus: &dyn Bus) -> u8 {
+        let mut core = self.core;
+        let mut probe = PeekProbe { bus, wrote: false };
+        let mut n = core.t;
+        for _ in 0..16 {
+            core.cycle(&mut probe);
+            n += 1;
+            if core.t == 0 || core.jammed {
+                break;
+            }
+        }
+        n
+    }
+
     /// True between instructions, i.e. the next tick fetches an opcode.
     pub fn at_instruction_boundary(&self) -> bool {
         self.core.t == 0 && !self.core.jammed

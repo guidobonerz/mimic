@@ -253,8 +253,10 @@ p("""Strg+Leertaste zeigt eine Statuszeile unter dem Bild. Links sitzt der
 10 %, 25 %, 50 %, 100 %, 150 %, 200 %, 400 % oder 800 % der Echtzeit (abseits
 von 100 % ist der Ton stumm). Bei 100 % läuft der Emulator stumm so schnell
 er kann, solange ein Diskettenlaufwerk arbeitet (LED oder Motor, etwa beim
-LOAD) und die Maschine eine Sekunde lang still war, so dass Musik, die
-während des Ladens eines Demos spielt, im Takt bleibt; die Fußzeile zeigt
+LOAD) und die Maschine eine Sekunde lang ohne Ton und mit stehendem Bild war,
+und nur, bis das geladene Programm zum ersten Mal Ton oder eine Animation
+zeigt (nach einem Diskwechsel wieder), so dass ein Demo, das beim Laufen
+seinen nächsten Teil nachlädt, sein Tempo behält; die Fußzeile zeigt
 dann "warp: loading". `--warp-load off` schaltet das ab. Daneben speichert
 der **Schnappschuss**-Knopf das Bild als PNG-Datei mit dem Namen der
 Maschine (`mac-001.png`, `mac-002.png` …) im `snapshots`-Ordner der
@@ -421,7 +423,8 @@ table(["Maschine", "Optionen"], [
     ["VIC-20", "`ram=none|3k|8k|16k|24k|all`, `port1=joystick|none`, `drive8=…`, `autostart=on`"],
     ["C16/Plus/4", "`ram=16k|64k`, `drive8=1541|1571|1581|1551|virtual|none` (`1551`: das "
      "parallele TCBM-Laufwerk mit seinem Interface-Modul, braucht `dos1551`), "
-     "`port1=joystick|none`, `autostart=on`"],
+     "`sidcard=6581|8580|off` (eine SID-Karte bei `$FD40`, für Demos und Spiele mit "
+     "SID-Musik), `port1=joystick|none`, `autostart=on`"],
     ["PET", "`ram=8k|16k|32k`, `keyboard=graphics|business`, `hz=50|60`, `drive8=virtual|none`"],
     ["C128", "`display=40|80`, `vdc_ram=16k|64k`, `sid=…`, "
      "`drive8=1571|1541|1581|virtual|none`, `port2=…`, `autostart=on`"],
@@ -1034,7 +1037,8 @@ table(["Option", "Bedeutung"], [
      "Strg+I schaltet im Betrieb um."],
     ["`--speed PROZENT`", "Mit 10, 25, 50, 100, 150, 200, 400 oder 800 % Geschwindigkeit starten."],
     ["`--warp-load on|off`", "Bei 100 %: stumm so schnell wie möglich laufen, solange ein "
-     "Diskettenlaufwerk arbeitet und die Maschine eine Sekunde still war (Standard `on`)."],
+     "Diskettenlaufwerk arbeitet und die Maschine eine Sekunde ohne Ton mit stehendem Bild war, "
+     "bis das geladene Programm zum ersten Mal Ton oder eine Animation zeigt (Standard `on`)."],
     ["`--rewind-mb N`", "Speicher fürs Zurückspulen mit Strg+R (Standard 128; 0 = aus)."],
     ["`--joykeys TASTEN`", "Tasten, die den Joystick spielen: `cursor` (Cursortasten, "
      "Leertaste feuert; Standard bei den Konsolen), `numpad` (8/2/4/6, 0 oder rechte "
@@ -1178,6 +1182,8 @@ table(["Schlüssel", "Maschine", "Werte"], [
     ["`debugcart`", "C64", "`on`: das Debug-Modul der Testumgebung bei `$D7FF`"],
     ["`cia`", "C64", "`6526` (alt), `6526a` (neu)"],
     ["`sid`", "C64", "`6581`, `8580`"],
+    ["`sidcard`", "C16/Plus/4", "`6581` (auch `on`), `8580`: eine SID-Karte bei `$FD40` "
+     "(Solders Karte, mit dem Einzeltakt des Plus/4 getaktet); Standard `off`"],
     ["`vicii`", "C64", "`6569`, `8565` (PAL), `6567`, `8562` (NTSC)"],
     ["`reu`", "C64", "`128k`, `256k`, `512k`, `1m` … `16m`: eine REU (REC 8726)"],
     ["`uci`", "C64", "`on`: das Ultimate-64-Command-Interface bei `$DF1C`–`$DF1F` "

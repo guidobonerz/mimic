@@ -12,7 +12,8 @@
 //! Attribute bytes: bits 0–3 hue, 4–6 luminance, 7 flash. Bitmap colours
 //! come from the code byte (hue: high nibble for 0 bits, low nibble for
 //! 1 bits) and the attribute byte (their luminances: bits 4–6 and 0–2);
-//! multicolour pairs 00 `$FF15`, 01/10 those two, 11 `$FF16`.
+//! multicolour pairs 00 `$FF15`, 01 the 1 bits' colour, 10 the 0 bits',
+//! 11 `$FF16`.
 //!
 //! Flashing characters and the hardware cursor are shown steady (not
 //! flashing, no cursor): a view is a picture of memory, not of a frame.
@@ -242,7 +243,7 @@ impl Ted {
             let zero = (code & 0x0f) | (attr & 0x70);
             let one = (code >> 4) | ((attr & 0x07) << 4);
             // Multicolour pairs 01 and 10, as the TED draws them.
-            let mc1 = (code >> 4) | (attr & 0x70);
+            let mc1 = (code >> 4) | ((attr & 0x07) << 4);
             let mc2 = (code & 0x0f) | (attr & 0x70);
             for row in 0..8u16 {
                 let v = ctx.mem.fetch(base.wrapping_add(cell * 8 + row), rom);
@@ -430,6 +431,12 @@ mod tests {
         assert_eq!(bm.raw.len(), 8000);
         assert_eq!(bm.frame().rgb_at(0, 0), Some(pal[0x32]));
         assert_eq!(bm.frame().rgb_at(1, 0), Some(pal[0x65]));
+        // Multicolour: pair 01 is the 1 bits' colour, 10 the 0 bits'.
+        ted.write(0x07, 0x18);
+        mem.0[0x2000] = 0b0110_0000;
+        let mc = view(&ted, GfxKind::Bitmap, &mem, &GfxOptions::new());
+        assert_eq!(mc.frame().rgb_at(0, 0), Some(pal[0x32]), "pair 01");
+        assert_eq!(mc.frame().rgb_at(2, 0), Some(pal[0x65]), "pair 10");
         let p = view(&ted, GfxKind::Palette, &mem, &GfxOptions::new());
         assert_eq!(p.param("count"), Some(128));
         assert_eq!((p.width, p.height), (16 * 17 - 1, 8 * 17 - 1));

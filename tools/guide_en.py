@@ -245,7 +245,9 @@ p("""Ctrl+Space shows a status line below the picture. On the left is a
 100 %, 150 %, 200 %, 400 % or 800 % of real time (sound is muted away from
 100 %). At 100 % the emulator runs as fast as it can, muted, while a disk
 drive works (LED or motor, e.g. during LOAD) and the machine has been silent
-for a second, so music playing while a demo loads stays in time; the footer
+with a still picture for a second, and only until the loaded program first
+plays sound or an animation (again after a disk change), so a demo that
+loads its next part while it runs keeps its pace; the footer
 then shows "warp: loading". `--warp-load off` turns that off. Next to it the **snapshot** button saves the picture as a PNG file
 named after the machine (`mac-001.png`, `mac-002.png` …) in the `snapshots`
 folder of the profile file's settings, else in the folder the emulator was
@@ -405,7 +407,8 @@ table(["Machine", "Options"], [
     ["VIC-20", "`ram=none|3k|8k|16k|24k|all`, `port1=joystick|none`, `drive8=…`, `autostart=on`"],
     ["C16/Plus/4", "`ram=16k|64k`, `drive8=1541|1571|1581|1551|virtual|none` (`1551`: the "
      "parallel TCBM drive with its interface cartridge, needs `dos1551`), "
-     "`port1=joystick|none`, `autostart=on`"],
+     "`sidcard=6581|8580|off` (a SID card at `$FD40`, for demos and games with SID "
+     "music), `port1=joystick|none`, `autostart=on`"],
     ["PET", "`ram=8k|16k|32k`, `keyboard=graphics|business`, `hz=50|60`, `drive8=virtual|none`"],
     ["C128", "`display=40|80`, `vdc_ram=16k|64k`, `sid=…`, "
      "`drive8=1571|1541|1581|virtual|none`, `port2=…`, `autostart=on`"],
@@ -1003,7 +1006,8 @@ table(["Flag", "Meaning"], [
      "switches at run time."],
     ["`--speed PERCENT`", "Start at 10, 25, 50, 100, 150, 200, 400 or 800 % speed."],
     ["`--warp-load on|off`", "At 100 %: run as fast as possible, muted, while a disk "
-     "drive works and the machine has been silent for a second (default `on`)."],
+     "drive works and the machine has been silent with a still picture for a second, "
+     "until the loaded program first shows sound or an animation (default `on`)."],
     ["`--rewind-mb N`", "Memory for rewinding with Ctrl+R (default 128; 0 = off)."],
     ["`--joykeys KEYS`", "Keys that play the joystick: `cursor` (cursor keys, Space "
      "fires; default on the consoles), `numpad` (8/2/4/6, 0 or right Ctrl; default on "
@@ -1146,6 +1150,8 @@ table(["Key", "Machine", "Values"], [
     ["`debugcart`", "C64", "`on`: the test-bench debug cartridge at `$D7FF`"],
     ["`cia`", "C64", "`6526` (old), `6526a` (new)"],
     ["`sid`", "C64", "`6581`, `8580`"],
+    ["`sidcard`", "C16/Plus/4", "`6581` (also `on`), `8580`: a SID card at `$FD40` "
+     "(Solder's card, clocked at the Plus/4's single clock); default `off`"],
     ["`vicii`", "C64", "`6569`, `8565` (PAL), `6567`, `8562` (NTSC)"],
     ["`reu`", "C64", "`128k`, `256k`, `512k`, `1m` … `16m`: a REU (REC 8726)"],
     ["`uci`", "C64", "`on`: the Ultimate 64 command interface at `$DF1C`–`$DF1F` "

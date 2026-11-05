@@ -11,10 +11,13 @@ use emu_core::media::MediaKind;
 use emu_core::registry::MachineConfig;
 use emu_core::{DebugHooks, DeviceId, Size};
 
+/// A file of `tests/data`, or of `EMU_TED_DATA` when set (programs and
+/// screenshots made with the tool elsewhere).
 fn data(name: &str) -> Vec<u8> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join(name);
+    let dir = std::env::var_os("EMU_TED_DATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data"));
+    let path = dir.join(name);
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
@@ -410,4 +413,134 @@ fn trace_split_writes() {
             }
         }
     }
+}
+
+/// The TED's counters over a frame (`counters`): $FF1E, $FF1D, $FF1F,
+/// $FF1A, $FF1B, 1024 samples each.
+fn compare_counters(reference: &[u8], ours: &[u8]) -> usize {
+    let n = 1024;
+    let mut differ = 0;
+    let mut shown = 0;
+    for i in 0..n {
+        // The flash counter (bits 3-6 of $FF1F) counts frames since power-on,
+        // which differ with the emulators' boot times: not compared.
+        let get = |s: &[u8], k: usize| {
+            if k == 2 {
+                s[k * n + i] & 0x87
+            } else {
+                s[k * n + i]
+            }
+        };
+        let r: Vec<u8> = (0..5).map(|k| get(reference, k)).collect();
+        let o: Vec<u8> = (0..5).map(|k| get(ours, k)).collect();
+        if r != o {
+            differ += 1;
+            if show() && shown < 60 {
+                shown += 1;
+                println!(
+                    "{i:4} xplus4 line {:3} x {:3} ff1f {:02X} pos {:4} | mimic line {:3} x {:3} ff1f {:02X} pos {:4}",
+                    r[1],
+                    r[0] / 2,
+                    r[2],
+                    (u16::from(r[3] & 3) << 8) | u16::from(r[4]),
+                    o[1],
+                    o[0] / 2,
+                    o[2],
+                    (u16::from(o[3] & 3) << 8) | u16::from(o[4])
+                );
+            }
+        }
+    }
+    differ
+}
+
+/// Byte for byte; `EMU_TED_SHOW` prints the differing bytes.
+fn compare_bytes(reference: &[u8], ours: &[u8]) -> usize {
+    let mut differ = 0;
+    for (i, (r, o)) in reference.iter().zip(ours).enumerate() {
+        if r != o {
+            differ += 1;
+            if show() {
+                println!("  byte {i}: xplus4 {r:02x}, mimic {o:02x}");
+            }
+        }
+    }
+    differ
+}
+
+/// `yscroll`: the CPU clock through the display for every YSCROLL, with
+/// the stretch where single clock starts and the DMA lines' holds.
+#[test]
+#[ignore = "needs Plus/4 ROMs in EMU_ROM_DIR"]
+fn yscroll_matches_xplus4() {
+    check("yscroll", compare_bytes);
+}
+
+/// `dma`: a YSCROLL write turns the line into a DMA line up to `tx` 5.
+#[test]
+#[ignore = "needs Plus/4 ROMs in EMU_ROM_DIR"]
+fn dma_decision_matches_xplus4() {
+    check("dma", compare_bytes);
+}
+
+/// `start` and `startdma`: instructions across the switch to single
+/// clock, on a plain fetch line and on a DMA line. One byte each is open:
+/// INC abs,X whose opcode fetch falls on `tx` 3 (xplus4 a double clock
+/// earlier) and INC zp whose last write falls on `tx` 3 of a DMA line
+/// (xplus4 does not hold it, though STA abs,X is held).
+fn check_open(name: &str, open: usize) {
+    let reference = data(&format!("ted-{name}.ref"));
+    let ours = measure(name, reference.len());
+    let differ = compare_bytes(&reference, &ours);
+    println!("{name}: {differ} of {} bytes differ", reference.len());
+    assert!(differ <= open, "TED {name} got worse (EMU_TED_SHOW=1)");
+}
+
+#[test]
+#[ignore = "needs Plus/4 ROMs in EMU_ROM_DIR"]
+fn start_matches_xplus4() {
+    check_open("start", 1);
+}
+
+#[test]
+#[ignore = "needs Plus/4 ROMs in EMU_ROM_DIR"]
+fn start_on_dma_line_matches_xplus4() {
+    check_open("startdma", 1);
+}
+
+/// Development aid: the results of any measuring program
+/// (`EMU_TED_MEASURE=name`, `EMU_TED_LEN` bytes, rows of `EMU_TED_ROW`),
+/// written to `target/tmp/ted-<name>.bin` and printed in hex.
+#[test]
+#[ignore = "development aid: EMU_ROM_DIR and EMU_TED_MEASURE"]
+fn measure_results() {
+    let name = std::env::var("EMU_TED_MEASURE").expect("EMU_TED_MEASURE not set");
+    let num = |k: &str, d: usize| {
+        std::env::var(k)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d)
+    };
+    let ours = measure(&name, num("EMU_TED_LEN", 256));
+    let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("ted-{name}.bin"));
+    std::fs::write(&out, &ours).unwrap();
+    for (i, row) in ours.chunks(num("EMU_TED_ROW", 16)).enumerate() {
+        let hex: Vec<String> = row.iter().map(|b| format!("{b:02x}")).collect();
+        println!("{i:3}: {}", hex.join(" "));
+    }
+}
+
+/// Development aid: any picture test against its screenshot
+/// (`EMU_TED_PICTURE=name`, files from `EMU_TED_DATA` or `tests/data`).
+#[test]
+#[ignore = "development aid: EMU_ROM_DIR and EMU_TED_PICTURE"]
+fn picture_differences() {
+    let name = std::env::var("EMU_TED_PICTURE").expect("EMU_TED_PICTURE not set");
+    println!("{name}: {} pixels differ", compare_picture(&name));
+}
+
+#[test]
+#[ignore = "needs Plus/4 ROMs in EMU_ROM_DIR"]
+fn counters_match_xplus4() {
+    check("counters", compare_counters);
 }

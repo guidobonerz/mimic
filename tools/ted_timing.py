@@ -30,6 +30,14 @@ Tests (PAL; each run starts with SYNC, below):
     iterations of LDA $FF1E / STA hpos,X / INX / BNE (14 cycles). Together
     they place every stolen cycle to the double clock. Results: 14 × 256
     bytes of $FF1E.
+  start, startdma: eleven probe instructions (NOP, STA/INC/PHA/LDA in
+    several modes) moved cycle by cycle across tx 3 of a fetch line
+    (startdma: of an attribute DMA line), then $FF1E and $FF1D.
+  yscroll: the CPU clock through display lines for YSCROLL 0-7.
+  dma: a YSCROLL write cycle by cycle through line 102: when does it
+    still make the line a DMA line?
+  counters: $FF1A/$FF1B/$FF1F over a frame.
+  split, rows, fli: pictures (xplus4's screenshot is the reference).
 
 SYNC: wait for line 300 ($FF1C bit 0 set, $FF1D = 44; vertical blank,
 where the CPU runs at double clock), wait for $FF1E < $10, then for
@@ -61,8 +69,8 @@ OPS = {
     "CLC": {"imp": 0x18}, "CLI": {"imp": 0x58}, "SEC": {"imp": 0x38},
     "SEI": {"imp": 0x78},
     "CMP": {"imm": 0xC9, "zp": 0xC5, "abs": 0xCD},
-    "CPX": {"imm": 0xE0}, "CPY": {"imm": 0xC0},
-    "DEC": {"zp": 0xC6, "abs": 0xCE}, "INC": {"zp": 0xE6, "abs": 0xEE},
+    "CPX": {"imm": 0xE0, "abs": 0xEC}, "CPY": {"imm": 0xC0},
+    "DEC": {"zp": 0xC6, "abs": 0xCE},
     "DEX": {"imp": 0xCA}, "DEY": {"imp": 0x88},
     "INX": {"imp": 0xE8}, "INY": {"imp": 0xC8},
     "EOR": {"imm": 0x49},
@@ -75,12 +83,13 @@ OPS = {
     "NOP": {"imp": 0xEA},
     "ORA": {"imm": 0x09},
     "PHA": {"imp": 0x48}, "PLA": {"imp": 0x68},
-    "STA": {"zp": 0x85, "abs": 0x8D, "abx": 0x9D, "aby": 0x99},
+    "STA": {"zp": 0x85, "abs": 0x8D, "abx": 0x9D, "aby": 0x99, "izy": 0x91},
+    "INC": {"zp": 0xE6, "abs": 0xEE, "abx": 0xFE},
     "STX": {"zp": 0x86, "abs": 0x8E}, "STY": {"zp": 0x84, "abs": 0x8C},
     "TAX": {"imp": 0xAA}, "TAY": {"imp": 0xA8}, "TXA": {"imp": 0x8A},
     "TYA": {"imp": 0x98},
 }
-SIZE = {"imp": 1, "acc": 1, "imm": 2, "zp": 2, "rel": 2, "abs": 3, "abx": 3, "aby": 3}
+SIZE = {"imp": 1, "acc": 1, "imm": 2, "zp": 2, "rel": 2, "abs": 3, "abx": 3, "aby": 3, "izy": 2}
 
 
 class Asm:
@@ -470,11 +479,464 @@ def build_split():
     return a.assemble(), 0
 
 
+def build_rows():
+    """A picture test: the text screen with every row in its own colour
+    (attributes $31 + row) and every character a solid reversed space;
+    shows which line takes which row's attributes (the attribute DMA runs
+    on the last line of the row before)."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    blank_screen(a)
+    # Row r: attribute ($31 + r) & $7F; character $A0 (reversed space).
+    for r in range(25):
+        for c in range(40):
+            pass
+    a.op("LDX", "imm", 0)
+    a.label("rowsl")
+    a.op("LDA", "abx", "rowattr")
+    a.op("STA", "zp", 0xF0)
+    a.op("TXA")
+    a.op("PHA")
+    # pointer = $0800 + 40 * row, from the table
+    a.op("LDA", "abx", "rowlo")
+    a.op("STA", "zp", 0xF2)
+    a.op("LDA", "abx", "rowhi")
+    a.op("STA", "zp", 0xF3)
+    a.op("LDY", "imm", 39)
+    a.label("colsl")
+    a.op("LDA", "zp", 0xF0)
+    a.op("STA", "izy", 0xF2)
+    a.op("DEY")
+    a.op("BPL", "rel", "colsl")
+    a.op("LDA", "zp", 0xF3)
+    a.op("CLC")
+    a.op("ADC", "imm", 0x04)
+    a.op("STA", "zp", 0xF3)
+    a.op("LDY", "imm", 39)
+    a.op("LDA", "imm", 0xA0)
+    a.label("chrsl")
+    a.op("STA", "izy", 0xF2)
+    a.op("DEY")
+    a.op("BPL", "rel", "chrsl")
+    a.op("PLA")
+    a.op("TAX")
+    a.op("INX")
+    a.op("CPX", "imm", 25)
+    a.op("BNE", "rel", "rowsl")
+    a.label("rowsend")
+    a.op("JMP", "abs", "rowsend")
+    a.label("rowattr")
+    a.byte(*[((0x31 + r) & 0x7F) for r in range(25)])
+    a.label("rowlo")
+    a.byte(*[(0x0800 + 40 * r) & 0xFF for r in range(25)])
+    a.label("rowhi")
+    a.byte(*[(0x0800 + 40 * r) >> 8 for r in range(25)])
+    return a.assemble(), 0
+
+
+COUNTER_PAGES = 4
+COUNTER_REGS = [0xFF1E, 0xFF1D, 0xFF1F, 0xFF1A, 0xFF1B]
+
+
+def build_counters():
+    """The TED's internal counters over a frame: from SYNC on, 1024
+    samples of $FF1E, $FF1D, $FF1F (character line, flash counter),
+    $FF1A/$FF1B (character position), 41 cycles apart, on the KERNAL's
+    text screen. Results: per register 1024 bytes, in that order."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    clear_results(a)
+    sync(a, "c")
+    for page in range(COUNTER_PAGES):
+        a.op("LDX", "imm", 0)
+        a.label(f"c{page}")
+        for k, reg in enumerate(COUNTER_REGS):
+            a.op("LDA", "abs", reg)
+            a.op("STA", "abx", RESULTS + k * COUNTER_PAGES * 0x100 + page * 0x100)
+        a.op("INX")
+        a.op("BNE", "rel", f"c{page}")
+    show_results(a)
+    return a.assemble(), len(COUNTER_REGS) * COUNTER_PAGES * 0x100
+
+
+def build_fli():
+    """A picture test of FLI: eight video matrices at $8000-$BFFF (ROM off
+    for the CPU), matrix k with attributes ($42 + k) and character 0,
+    solid in a charset in RAM at $C000. On every line L from 2 to 199 the program waits for the line
+    counter to reach L, then sets YSCROLL = (L + 1) & 7 (an attribute DMA
+    on line L + 1) and $FF14 to matrix (L + 1) & 7: each line takes its own
+    matrix's colours."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    a.op("STA", "abs", 0xFF3F)
+    # fill the matrices: attributes at m + 0..999, characters at m + $400.
+    for k in range(8):
+        base = 0x8000 + k * 0x800
+        a.op("LDX", "imm", 0)
+        a.label(f"fm{k}")
+        for page in range(4):
+            a.op("LDA", "imm", 0x40 | (k + 2))
+            a.op("STA", "abx", base + page * 0x100)
+            a.op("LDA", "imm", 0x00)
+            a.op("STA", "abx", base + 0x400 + page * 0x100)
+        a.op("INX")
+        a.op("BNE", "rel", f"fm{k}")
+    # character 0 of a RAM charset at $C000 is solid (no ROM fetches).
+    a.op("LDA", "imm", 0xFF)
+    a.op("LDX", "imm", 7)
+    a.label("fcs")
+    a.op("STA", "abx", 0xC000)
+    a.op("DEX")
+    a.op("BPL", "rel", "fcs")
+    a.op("LDA", "abs", 0xFF12)
+    a.op("AND", "imm", 0xFB)
+    a.op("STA", "abs", 0xFF12)
+    a.op("LDA", "abs", 0xFF13)
+    a.op("AND", "imm", 0x03)
+    a.op("ORA", "imm", 0xC0)
+    a.op("STA", "abs", 0xFF13)
+    a.op("LDA", "imm", 0x03)             # cursor off the screen
+    a.op("STA", "abs", 0xFF0C)
+    a.op("LDA", "imm", 0xFF)
+    a.op("STA", "abs", 0xFF0D)
+    a.label("frame")
+    # wait for line 1 (high bit clear)
+    a.label("fw0")
+    a.op("LDA", "abs", 0xFF1C)
+    a.op("AND", "imm", 0x01)
+    a.op("BNE", "rel", "fw0")
+    a.op("LDA", "abs", 0xFF1D)
+    a.op("CMP", "imm", 1)
+    a.op("BNE", "rel", "fw0")
+    # unrolled: a DMA line leaves the CPU only some 25 cycles.
+    for line in range(2, 200):
+        nxt = (line + 1) & 7
+        a.op("LDA", "imm", line)
+        a.label(f"fl{line}")
+        a.op("CMP", "abs", 0xFF1D)
+        a.op("BNE", "rel", f"fl{line}")
+        a.op("LDA", "imm", 0x18 | nxt)   # DEN, 25 rows
+        a.op("STA", "abs", 0xFF06)
+        a.op("LDA", "imm", (0x8000 + nxt * 0x800) >> 8)
+        a.op("STA", "abs", 0xFF14)
+    a.op("LDA", "imm", 0x1B)             # back to normal for the rest
+    a.op("STA", "abs", 0xFF06)
+    a.op("LDA", "imm", 0x80)
+    a.op("STA", "abs", 0xFF14)
+    a.op("JMP", "abs", "frame")
+    return a.assemble(), 0
+
+
+DMA_LINE = 102          # line & 7 = 6: in the middle of a character row
+DMA_FRAMES = 80         # write positions, one cycle apart
+DMA_SAMPLES = 24
+DMA_BASE = int(os.environ.get("TED_DMA_BASE", "950"))
+DMA_VALUES = [0x18 | (DMA_LINE & 7), 0x18 | ((DMA_LINE + 1) & 7)]
+
+
+def build_dma():
+    """When the TED decides a DMA line: frame after frame, from SYNC on,
+    a fixed delay plus 0–79 cycles, then STX $FF06 with YSCROLL = 6 (the
+    line counter's DMA_LINE & 7: does the current line still turn into a
+    DMA line?) in the first 80 frames and YSCROLL = 7 (the next line) in
+    the next 80, then the line counter and 23 samples of $FF1E, 12 cycles
+    apart (stalls show the DMA); $FF06 back to $1B. Results: per frame
+    DMA_SAMPLES bytes."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    clear_results(a)
+    a.op("LDA", "imm", RESULTS & 0xFF)
+    a.op("STA", "zp", 0xF2)
+    a.op("LDA", "imm", RESULTS >> 8)
+    a.op("STA", "zp", 0xF3)
+    a.op("LDA", "imm", DMA_VALUES[0])
+    a.op("STA", "zp", 0xF1)
+    a.op("LDA", "imm", 0)
+    a.op("STA", "zp", 0xF0)
+    a.label("dframe")
+    sync(a, "ys")
+    a.op("LDA", "zp", 0xF0)
+    a.op("CLC")
+    a.op("ADC", "imm", "<dchain")
+    a.op("STA", "abs", "djmp+1")
+    a.op("LDX", "zp", 0xF1)
+    a.op("LDY", "imm", 0)
+    # fixed delay: 5 cycles a round (DMA_BASE rounds of 256 minus).
+    for _ in range(DMA_BASE // 256):
+        a.op("LDA", "imm", 0)
+        a.label(f"dd{_}")
+        a.op("SEC")
+        a.op("SBC", "imm", 1)
+        a.op("BNE", "rel", f"dd{_}")
+    if DMA_BASE % 256:
+        a.op("LDA", "imm", DMA_BASE % 256)
+        a.label("ddr")
+        a.op("SEC")
+        a.op("SBC", "imm", 1)
+        a.op("BNE", "rel", "ddr")
+    a.label("djmp")
+    a.op("JMP", "abs", "dchain")
+    if (a.pc & 0xFF) + DMA_FRAMES + 2 > 0xFF:
+        a.code += bytes(0x100 - (a.pc & 0xFF))
+    a.label("dchain")
+    a.byte(*([0xC9] * DMA_FRAMES), 0x24, 0xEA)
+    a.op("STX", "abs", 0xFF06)
+    a.op("LDA", "abs", 0xFF1D)
+    a.op("STA", "izy", 0xF2)
+    a.op("INY")
+    for _ in range(DMA_SAMPLES - 1):
+        a.op("LDA", "abs", 0xFF1E)
+        a.op("STA", "izy", 0xF2)
+        a.op("INY")
+    a.op("LDA", "imm", 0x1B)
+    a.op("STA", "abs", 0xFF06)
+    a.op("LDA", "zp", 0xF2)
+    a.op("CLC")
+    a.op("ADC", "imm", DMA_SAMPLES)
+    a.op("STA", "zp", 0xF2)
+    a.op("LDA", "zp", 0xF3)
+    a.op("ADC", "imm", 0)
+    a.op("STA", "zp", 0xF3)
+    a.op("INC", "zp", 0xF0)
+    a.op("LDA", "zp", 0xF0)
+    a.op("CMP", "imm", DMA_FRAMES)
+    a.op("BEQ", "rel", "dnext")
+    a.op("JMP", "abs", "dframe")
+    a.label("dnext")
+    a.op("LDA", "imm", 0)
+    a.op("STA", "zp", 0xF0)
+    a.op("LDA", "zp", 0xF1)
+    a.op("CMP", "imm", DMA_VALUES[1])
+    a.op("BEQ", "rel", "dshow")
+    a.op("LDA", "imm", DMA_VALUES[1])
+    a.op("STA", "zp", 0xF1)
+    a.op("JMP", "abs", "dframe")
+    a.label("dshow")
+    show_results(a)
+    return a.assemble(), 2 * DMA_FRAMES * DMA_SAMPLES
+
+
+YSC_SAMPLES = 128
+
+
+def build_yscroll():
+    """The CPU clock in the display for every YSCROLL: for k = 0–7 one
+    frame each with $FF06 = $18 + k from the border on, from SYNC a fixed
+    delay into line ~100, then the line counter and 127 samples of $FF1E,
+    15 cycles apart. Results: per k 128 bytes."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    clear_results(a)
+    a.op("LDA", "imm", RESULTS & 0xFF)
+    a.op("STA", "zp", 0xF2)
+    a.op("LDA", "imm", RESULTS >> 8)
+    a.op("STA", "zp", 0xF3)
+    a.op("LDA", "imm", 0)
+    a.op("STA", "zp", 0xF0)
+    a.label("vframe")
+    sync(a, "vs")
+    a.op("LDA", "zp", 0xF0)
+    a.op("ORA", "imm", 0x18)
+    a.op("STA", "abs", 0xFF06)
+    a.op("LDY", "imm", 0)
+    for i in range(3):
+        a.op("LDA", "imm", 0)
+        a.label(f"vd{i}")
+        a.op("SEC")
+        a.op("SBC", "imm", 1)
+        a.op("BNE", "rel", f"vd{i}")
+    a.op("LDA", "imm", 160)
+    a.label("vdr")
+    a.op("SEC")
+    a.op("SBC", "imm", 1)
+    a.op("BNE", "rel", "vdr")
+    a.op("LDA", "abs", 0xFF1D)
+    a.op("STA", "izy", 0xF2)
+    a.op("INY")
+    a.label("vsamp")
+    a.op("LDA", "abs", 0xFF1E)
+    a.op("STA", "izy", 0xF2)
+    a.op("INY")
+    a.op("BPL", "rel", "vsamp")
+    a.op("LDA", "imm", 0x1B)
+    a.op("STA", "abs", 0xFF06)
+    a.op("LDA", "zp", 0xF2)
+    a.op("CLC")
+    a.op("ADC", "imm", YSC_SAMPLES)
+    a.op("STA", "zp", 0xF2)
+    a.op("LDA", "zp", 0xF3)
+    a.op("ADC", "imm", 0)
+    a.op("STA", "zp", 0xF3)
+    a.op("INC", "zp", 0xF0)
+    a.op("LDA", "zp", 0xF0)
+    a.op("CMP", "imm", 8)
+    a.op("BEQ", "rel", "vshow")
+    a.op("JMP", "abs", "vframe")
+    a.label("vshow")
+    show_results(a)
+    return a.assemble(), 8 * YSC_SAMPLES
+
+
+START_PROBES = [
+    ("NOP", "imp", None),             # reads only
+    ("STA", "abs", 0x00F8),           # write in the last cycle
+    ("STA", "abx", 0x00F8),           # dummy read, then the write
+    ("INC", "abs", 0x00F8),           # read, write, write
+    ("PHA", "imp", None),             # dummy read, push
+    ("LDA", "abs", 0x00F8),           # read in the last cycle
+    ("STA", "zp", 0xF8),              # 3 cycles, write last
+    ("STA", "izy", 0xFA),             # 6 cycles: dummy read, write
+    ("INC", "zp", 0xF8),              # 5 cycles: read, write, write
+    ("INC", "abx", 0x00F8),           # 7 cycles: dummy read, read, 2 writes
+    ("STA", "aby", 0x00F8),           # 5 cycles like STA abs,X
+]
+START_OFFSETS = 20
+START_BASE = int(os.environ.get("TED_START_BASE", "950"))
+
+
+def build_start_dma():
+    """`start` with YSCROLL = 5: line 101 is an attribute DMA line."""
+    return build_start(0x1D, START_BASE + 11)
+
+
+def build_start(yscroll=None, base=None):
+    """The CPU at the start of a fetch line's single clock (tx 3): for
+    every probe instruction of START_PROBES and every offset 0–23 cycles,
+    one frame: SYNC, a fixed delay to the end of a display line, the
+    offset, the probe, then LDA $FF1E and LDA $FF1D stored. Results: per
+    probe and offset 2 bytes ($FF1E, $FF1D)."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    clear_results(a)
+    a.op("LDX", "imm", 0)              # X = 0: STA abs,X writes $F8
+    a.op("STX", "zp", 0xF0)            # offset
+    a.op("STX", "zp", 0xF1)            # frame
+    a.op("STX", "zp", 0xF6)            # probe
+    a.op("LDA", "imm", 0xF8)           # ($FA) -> $00F8
+    a.op("STA", "zp", 0xFA)
+    a.op("STX", "zp", 0xFB)
+    a.op("LDA", "imm", RESULTS & 0xFF)
+    a.op("STA", "zp", 0xF2)
+    a.op("LDA", "imm", RESULTS >> 8)
+    a.op("STA", "zp", 0xF3)
+    a.op("JMP", "abs", "snext")
+    a.label("sframe")
+    sync(a, "ss")
+    if yscroll is not None:
+        a.op("LDA", "imm", yscroll)
+        a.op("STA", "abs", 0xFF06)
+    a.op("LDA", "zp", 0xF0)
+    a.op("CLC")
+    a.op("ADC", "imm", "<schain")
+    a.op("STA", "abs", "sjmp+1")
+    a.op("LDY", "imm", 0)
+    base = START_BASE if base is None else base
+    for i in range(base // 256):
+        a.op("LDA", "imm", 0)
+        a.label(f"sd{i}")
+        a.op("SEC")
+        a.op("SBC", "imm", 1)
+        a.op("BNE", "rel", f"sd{i}")
+    if base % 256:
+        a.op("LDA", "imm", base % 256)
+        a.label("sdr")
+        a.op("SEC")
+        a.op("SBC", "imm", 1)
+        a.op("BNE", "rel", "sdr")
+    a.label("sjmp")
+    a.op("JMP", "abs", "schain")
+    if (a.pc & 0xFF) + START_OFFSETS + 2 > 0xFF:
+        a.code += bytes(0x100 - (a.pc & 0xFF))
+    a.label("schain")
+    a.byte(*([0xC9] * START_OFFSETS), 0x24, 0xEA)
+    # the probe (self-modified: three bytes)
+    a.label("sprobe")
+    a.byte(0xEA, 0xEA, 0xEA)
+    a.op("LDA", "abs", 0xFF1E)
+    a.op("STA", "zp", 0xF4)
+    a.op("LDA", "abs", 0xFF1D)
+    a.op("STA", "zp", 0xF5)
+    if yscroll is not None:
+        a.op("LDA", "imm", 0x1B)
+        a.op("STA", "abs", 0xFF06)
+    # results: two bytes a frame
+    a.op("LDY", "imm", 0)
+    a.op("LDA", "zp", 0xF4)
+    a.op("STA", "izy", 0xF2)
+    a.op("INY")
+    a.op("LDA", "zp", 0xF5)
+    a.op("STA", "izy", 0xF2)
+    a.op("LDA", "zp", 0xF2)
+    a.op("CLC")
+    a.op("ADC", "imm", 2)
+    a.op("STA", "zp", 0xF2)
+    a.op("LDA", "zp", 0xF3)
+    a.op("ADC", "imm", 0)
+    a.op("STA", "zp", 0xF3)
+    a.op("LDX", "imm", 0)
+    a.op("INC", "zp", 0xF0)
+    a.op("LDA", "zp", 0xF0)
+    a.op("CMP", "imm", START_OFFSETS)
+    a.op("BNE", "rel", "snext")
+    a.op("LDA", "imm", 0)
+    a.op("STA", "zp", 0xF0)
+    a.op("INC", "zp", 0xF6)            # probe number
+    a.op("LDA", "zp", 0xF6)
+    a.op("CMP", "imm", len(START_PROBES))
+    a.op("BEQ", "rel", "sshow")
+    a.label("snext")
+    # copy the probe's three bytes into place
+    a.op("LDA", "zp", 0xF6)
+    a.op("ASL", "acc")
+    a.op("CLC")
+    a.op("ADC", "zp", 0xF6)
+    a.op("TAY")
+    a.op("LDA", "aby", "sbytes")
+    a.op("STA", "abs", "sprobe")
+    a.op("LDA", "aby", "sbytes+1")
+    a.op("STA", "abs", "sprobe+1")
+    a.op("LDA", "aby", "sbytes+2")
+    a.op("STA", "abs", "sprobe+2")
+    a.op("JMP", "abs", "sframe")
+    a.label("sshow")
+    show_results(a)
+    a.label("sbytes")
+    for mnem, mode, arg in START_PROBES:
+        b = [OPS[mnem][mode]]
+        if SIZE[mode] == 3:
+            b += [arg & 0xFF, arg >> 8]
+        elif SIZE[mode] == 2:
+            b += [arg & 0xFF]
+        while len(b) < 3:
+            b.append(0xEA)             # padding NOPs: the same for every offset
+        a.byte(*b)
+    return a.assemble(), 2 * START_OFFSETS * len(START_PROBES)
+
+
 # Tests whose result is xplus4's picture (tests/data/ted-<name>.png).
-PICTURES = {"split"}
+PICTURES = {"split", "rows", "fli"}
 
 TESTS = {
     "split": build_split,
+    "rows": build_rows,
+    "fli": build_fli,
+    "dma": build_dma,
+    "yscroll": build_yscroll,
+    "start": build_start,
+    "startdma": build_start_dma,
+    "counters": build_counters,
     "trace": build_trace,
     "fine": build_fine,
     "irq": build_irq,
@@ -482,7 +944,7 @@ TESTS = {
 }
 
 # Tests that run longer than LIMIT_CYCLES.
-LIMITS = {"irqall": 40_000_000, "split": 40_000_000}
+LIMITS = {"irqall": 40_000_000, "split": 40_000_000, "rows": 30_000_000, "fli": 80_000_000, "dma": 40_000_000, "start": 40_000_000, "startdma": 40_000_000}
 
 # xplus4 cycles until the screenshot (PAL, ~1.77 M per second: autostart
 # takes about 3 s, the tests well under one).
@@ -608,8 +1070,10 @@ def main(argv):
                     _, _, rows = read_png(shot)
                     # Stripes in the left border (many colour changes down
                     # column 5), not the BASIC screen of a failed autostart.
-                    col = [rows[y][5] for y in range(len(rows))]
-                    if sum(1 for p, q in zip(col, col[1:]) if p != q) >= 8:
+                    def changes(x):
+                        col = [rows[y][x] for y in range(len(rows))]
+                        return sum(1 for p, q in zip(col, col[1:]) if p != q)
+                    if max(changes(5), changes(200)) >= 8:
                         break
                 else:
                     raise SystemExit(f"{name}: no stripes in xplus4's picture")

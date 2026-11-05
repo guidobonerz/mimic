@@ -36,7 +36,17 @@
 //! `autostart` ("on"), `port1` ("joystick" default, "none"), `roms` = "stub",
 //! `debugcart` ("on": VICE's debug cartridge for its test programs, an
 //! exit-code register at `$FDCF`, chip "debugcart" in the debugger; address
-//! from VICE's `testprogs/testbench/selftest/plus4.asm`).
+//! from VICE's `testprogs/testbench/selftest/plus4.asm`), `sidcard`
+//! ("6581" or "on", "8580": a SID card at `$FD40–$FD5F`, off by default).
+//!
+//! The SID card follows Solder's card, the one most Plus/4 software
+//! writes to: the SID at `$FD40` (mirrored every 32 bytes up to `$FD5F`),
+//! clocked with the single clock (the TED's double clock ÷ 2, PAL
+//! ≈ 886.7 kHz, not a C64's 985 kHz), its output mixed with the TED's.
+//! Sources: plus4world forum threads 6104 and 29208 (address, clock from
+//! the double clock halved by a CD4520), the ReSeed replica
+//! (github.com/SukkoPera/ReSeed). Its joystick port and the `$FE80`
+//! address of other cards are not built.
 
 #![forbid(unsafe_code)]
 
@@ -46,6 +56,7 @@ pub mod loader;
 pub mod memory;
 pub mod stub;
 
+use chips_cbm::sid::{Sid, SidModel};
 use chips_cbm::ted::{self, Ted};
 use cpu_6502::{Config as CpuConfig, Cpu6502, IoPort, Variant};
 use devices_printer::CbmPrinter;
@@ -235,6 +246,11 @@ pub struct Io {
     /// TED fetched since, and the byte is its fetch (`Ted::bus`).
     pub data_bus: u8,
     pub bus_from_ted: bool,
+    /// The SID card (option `sidcard`), its last output and whether the
+    /// next double clock is the second half of its cycle.
+    pub sidcard: Option<Sid>,
+    pub sid_level: i32,
+    pub sid_phase: bool,
 }
 
 impl Io {
@@ -279,6 +295,10 @@ fn peek_byte(
                 (if plus4 { io.user_port } else { 0xff }) & !sense
             }
             0xfd30..=0xfd3f => io.key_select,
+            0xfd40..=0xfd5f if io.sidcard.is_some() => io
+                .sidcard
+                .as_ref()
+                .map_or(0, |sid| sid.peek(a as u8 & 0x1f)),
             // The 1551's interface cartridge, where its DEV line puts it.
             0xfec0..=0xfeff => tcbm
                 .and_then(|t| t.peek(a))
@@ -329,6 +349,11 @@ impl Bus for TedBus<'_> {
         let a = addr as u16;
         let v = match a {
             0xff00..=0xff1f if a != 0xff08 && a != 0xff13 => self.io.ted.read(a as u8),
+            0xfd40..=0xfd5f if self.io.sidcard.is_some() => self
+                .io
+                .sidcard
+                .as_mut()
+                .map_or(0, |sid| sid.read(a as u8 & 0x1f)),
             _ => peek_byte(
                 self.mem,
                 self.io,
@@ -366,6 +391,11 @@ impl Bus for TedBus<'_> {
                 0xfd00..=0xfd0f if self.plus4 => self.io.acia.regs[usize::from(a & 3)] = v,
                 0xfd10..=0xfd1f if self.plus4 => self.io.user_port = v,
                 0xfd30..=0xfd3f => self.io.key_select = v,
+                0xfd40..=0xfd5f => {
+                    if let Some(sid) = &mut self.io.sidcard {
+                        sid.write(a as u8 & 0x1f, v);
+                    }
+                }
                 0xfdd0..=0xfddf => self.mem.banks = (a & 0x0f) as u8,
                 0xfdcf if self.io.debugcart => self.io.debugcart_exit = Some(v),
                 0xfec0..=0xfeff => {
@@ -447,6 +477,10 @@ pub struct TedMachine {
     field_done_pending: bool,
     /// A CPU write waits out the TED's sync cycle (`tx` 3 to 7, or 93).
     write_held: bool,
+    /// The CPU's single-clock cycle takes the next double clock too.
+    cpu_skip: bool,
+    /// Double clocks the CPU still waits at the switch to single clock.
+    stretch: u8,
     /// TED frame of the last reset; programs wait [`BOOT_FRAMES`] from here.
     boot_frame: u64,
 }
@@ -516,6 +550,16 @@ impl TedMachine {
             Some("on") => true,
             Some(other) => return Err(ConfigError::Invalid(format!("debugcart option '{other}'"))),
         };
+        let sidcard = match config.options.get("sidcard").map(String::as_str) {
+            None | Some("off") | Some("none") => None,
+            Some("6581" | "on") => Some(Sid::new(SidModel::Mos6581, double_hz / 2)),
+            Some("8580") => Some(Sid::new(SidModel::Mos8580, double_hz / 2)),
+            Some(other) => {
+                return Err(ConfigError::Invalid(format!(
+                    "sidcard option '{other}' (6581, 8580 or off)"
+                )))
+            }
+        };
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: Variant::Mos7501,
             ..CpuConfig::default()
@@ -541,6 +585,9 @@ impl TedMachine {
                 debugcart_exit: None,
                 data_bus: 0xff,
                 bus_from_ted: false,
+                sidcard,
+                sid_level: 0,
+                sid_phase: false,
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -554,6 +601,8 @@ impl TedMachine {
             palette: ted::palette::palette(),
             field_done_pending: false,
             write_held: false,
+            cpu_skip: false,
+            stretch: 0,
             boot_frame: 0,
         })
     }
@@ -597,8 +646,30 @@ impl TedMachine {
         // The CPU's cycle comes first in a double clock: it reads the
         // TED's position of this double clock; then the TED runs it.
         let (mut cpu_go, ba) = self.io.ted.slot();
-        // A write held back from the cycle where the clock leaves double
-        // speed (`Ted::sync_cycle`).
+        let single = self.io.ted.single();
+        // A single-clock cycle still running from the last double clock
+        // (one begun in the last single double clock ends with it).
+        if self.cpu_skip && single {
+            cpu_go = false;
+        }
+        // Where the clock leaves double speed an instruction begun in the
+        // line before is stretched (`Ted::switch_point`).
+        if cpu_go && self.io.ted.switch_point() && self.cpu.cycle_in_instruction() >= 4 {
+            let plus4 = self.plus4();
+            let bus = PeekBus {
+                mem: &self.mem,
+                io: &self.io,
+                port: &self.port,
+                tcbm: self.drive.as_ref().and_then(Drive8::tcbm),
+                plus4,
+            };
+            self.stretch = self.cpu.instruction_cycles(&bus).saturating_sub(1);
+        }
+        if self.stretch > 0 {
+            self.stretch -= 1;
+            cpu_go = false;
+        }
+        // A write held back from `tx` 3 of a DMA line (`Ted::sync_cycle`).
         match self.io.ted.sync_cycle() {
             Some(3) if cpu_go => {
                 let plus4 = self.plus4();
@@ -609,7 +680,12 @@ impl TedMachine {
                     tcbm: self.drive.as_ref().and_then(Drive8::tcbm),
                     plus4,
                 };
-                self.write_held = self.cpu.next_cycle_writes(&bus);
+                if self.cpu.cycle_in_instruction() >= 4 {
+                    // until tx 88 + C (from tx 3)
+                    self.stretch = self.cpu.instruction_cycles(&bus) + 84;
+                    cpu_go = false;
+                }
+                self.write_held = false;
             }
             Some(_) => {}
             None => self.write_held = false,
@@ -622,6 +698,7 @@ impl TedMachine {
         if self.write_held || (ba && self.cpu.pushing_interrupt()) {
             cpu_go = false;
         }
+        self.cpu_skip = cpu_go && single;
         let mut cpu_result = None;
         self.cpu.set_rdy(!ba);
         if cpu_go {
@@ -643,6 +720,15 @@ impl TedMachine {
             };
             cpu_result = Some((self.cpu.tick(&mut hooked), self.cpu.take_interrupt()));
         }
+        if let Some(sid) = &mut self.io.sidcard {
+            self.io.sid_phase = !self.io.sid_phase;
+            if self.io.sid_phase {
+                self.io.sid_level = sid.clock();
+            }
+        }
+        // Half the SID's swing: with the TED's own (±12 000, resting at
+        // −12 000) a full one clips.
+        self.io.ted.external_audio = self.io.sid_level / 2;
         let out = self.io.ted.tick(&TedView(&self.mem));
         // The TED's byte is only read when the CPU reads an unconnected
         // address (see `open_bus`).
@@ -1161,7 +1247,7 @@ impl Machine for TedMachine {
         if let Some(p) = &self.printer {
             p.save_chunk(&mut w);
         }
-        w.chunk(*b"TEDS", 3, |w| {
+        w.chunk(*b"TEDS", 5, |w| {
             w.bool(self.field_done_pending);
             w.u8(self.autostart.to_u8());
             w.u64(self.boot_frame);
@@ -1178,11 +1264,21 @@ impl Machine for TedMachine {
             w.u8(self.io.data_bus);
             w.bool(self.io.bus_from_ted);
             w.bool(self.write_held);
+            w.bool(self.cpu_skip);
+            w.u8(self.stretch);
+            w.bool(self.io.sidcard.is_some());
         });
         self.cpu.save(&mut w);
         self.port.save(&mut w);
         self.mem.save(&mut w);
         self.io.ted.save(&mut w);
+        if let Some(sid) = &self.io.sidcard {
+            sid.save(&mut w);
+            w.chunk(*b"SIDC", 1, |w| {
+                w.u32(self.io.sid_level as u32);
+                w.bool(self.io.sid_phase);
+            });
+        }
         self.sched.save(&mut w);
         self.input.save(&mut w);
         self.tape.save(&mut w);
@@ -1210,7 +1306,7 @@ impl Machine for TedMachine {
             input: self.input.clone(),
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"TEDS", 3)?;
+        let (version, mut c) = r.chunk(*b"TEDS", 5)?;
         let field_done_pending = c.bool()?;
         let autostart =
             Autostart::from_u8(c.u8()?).ok_or(StateError::Invalid("autostart state"))?;
@@ -1233,10 +1329,26 @@ impl Machine for TedMachine {
             next.io.bus_from_ted = c.bool()?;
             write_held = c.bool()?;
         }
+        let (mut cpu_skip, mut stretch) = (false, 0);
+        if version >= 4 {
+            cpu_skip = c.bool()?;
+            stretch = c.u8()?.min(127);
+        }
+        // Version 5 on: whether a SID card was fitted (none before).
+        let sidcard = version >= 5 && c.bool()?;
+        if sidcard != next.io.sidcard.is_some() {
+            return Err(StateError::Invalid("SID card configuration differs"));
+        }
         next.cpu.load(&mut r)?;
         next.port.load(&mut r)?;
         next.mem.load(&mut r)?;
         next.io.ted.load(&mut r)?;
+        if let Some(sid) = &mut next.io.sidcard {
+            sid.load(&mut r)?;
+            let (_, mut c) = r.chunk(*b"SIDC", 1)?;
+            next.io.sid_level = (c.u32()? as i32).clamp(-0x10000, 0x10000);
+            next.io.sid_phase = c.bool()?;
+        }
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
         // The datasette (not clonable; version 2 on): restored if a later
@@ -1316,6 +1428,8 @@ impl Machine for TedMachine {
         self.input = next.input;
         self.field_done_pending = field_done_pending;
         self.write_held = write_held;
+        self.cpu_skip = cpu_skip;
+        self.stretch = stretch;
         self.autostart = autostart;
         self.boot_frame = boot_frame;
         if let Some(p) = &mut self.printer {

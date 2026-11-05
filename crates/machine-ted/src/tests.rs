@@ -257,3 +257,77 @@ fn overlays_record_dma_lines() {
     m.set_overlays(&[]);
     assert!(m.overlay("badlines").is_none());
 }
+
+/// A CPU write or read through the machine's bus.
+fn bus_access(m: &mut TedMachine, addr: u16, write: Option<u8>) -> u8 {
+    let plus4 = m.plus4();
+    let mut bus = TedBus {
+        mem: &mut m.mem,
+        io: &mut m.io,
+        port: &mut m.port,
+        tcbm: None,
+        plus4,
+    };
+    match write {
+        Some(v) => {
+            bus.write(u32::from(addr), Size::Byte, u32::from(v));
+            v
+        }
+        None => bus.read(u32::from(addr), Size::Byte) as u8,
+    }
+}
+
+#[test]
+fn sid_card_plays_at_fd40_and_keeps_its_state() {
+    // Without the card `$FD40` is open bus and the TED alone is silent.
+    let mut plain = stub();
+    run_cycles(&mut plain, 20_000);
+    bus_access(&mut plain, 0xfd58, Some(0x0f));
+    assert!(plain.io.sidcard.is_none());
+
+    let mut m = stub_with(Variant16::Plus4, "pal", &[("sidcard", "8580")]);
+    run_cycles(&mut m, 20_000);
+    let mut out = Vec::new();
+    m.audio(&mut out);
+    // Voice 1: sawtooth, full sustain, volume 15.
+    for (a, v) in [
+        (0xfd40, 0x00),
+        (0xfd41, 0x20),
+        (0xfd45, 0x00),
+        (0xfd46, 0xf0),
+        (0xfd44, 0x21),
+        (0xfd58, 0x0f),
+    ] {
+        bus_access(&mut m, a, Some(v));
+    }
+    run_cycles(&mut m, 40_000);
+    out.clear();
+    m.audio(&mut out);
+    let (lo, hi) = (out.iter().min().unwrap(), out.iter().max().unwrap());
+    assert!(hi - lo > 2000, "SID card is audible: {lo}..{hi}");
+    // ENV3 / OSC3 read through the card, not the open bus.
+    bus_access(&mut m, 0xfd52, Some(0x11));
+    run_cycles(&mut m, 5_000);
+    let osc3 = bus_access(&mut m, 0xfd5b, None);
+    assert_eq!(osc3, m.io.sidcard.as_ref().unwrap().peek(0x1b));
+
+    // Savestate: the card's state travels and the run continues alike.
+    let state = m.save_state();
+    let mut b = stub_with(Variant16::Plus4, "pal", &[("sidcard", "8580")]);
+    b.load_state(&state).unwrap();
+    assert_eq!(b.save_state(), state);
+    run_cycles(&mut m, 30_000);
+    run_cycles(&mut b, 30_000);
+    let (mut sa, mut sb) = (Vec::new(), Vec::new());
+    m.audio(&mut sa);
+    b.audio(&mut sb);
+    assert_eq!(m.save_state(), b.save_state());
+    assert!(
+        stub().load_state(&state).is_err(),
+        "a machine without the card refuses its state"
+    );
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("sidcard".into(), "x".into());
+    assert!(TedMachine::new(Variant16::Plus4, &config).is_err());
+}

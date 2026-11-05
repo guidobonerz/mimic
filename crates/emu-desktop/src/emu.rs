@@ -15,7 +15,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use emu_core::frame::SignalInfo;
+use emu_core::frame::{FrameRef, SignalInfo};
 use emu_core::input::{InputEvent, InputTarget, TimedInput};
 use emu_core::{ControlId, ControlInfo, Machine, ScreenId, StopReason};
 use emu_debug::protocol::Command;
@@ -806,6 +806,16 @@ pub fn spawn(
         let mut warp_hold = 0u32;
         // Frames since the machine last made a sound.
         let mut quiet_frames = 0u32;
+        // The picture's fingerprint and, one bit a frame, which of the
+        // last 64 frames changed it.
+        let (mut picture_hash, mut picture_moves) = (0u64, 0u64);
+        // Set once the loaded program shows that it runs (sound, or a
+        // moving picture) outside the warp: from then on the warp stays
+        // off until a disk goes in, like VICE's autostart warp. A demo
+        // that loads its next part in the background (with its picture
+        // standing or its music pausing) keeps its own pace.
+        let mut program_running = false;
+        let mut drive_seen = false;
         let mut tracker = Tracker::default();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
@@ -930,6 +940,8 @@ pub fn spawn(
                     }
                     report_media(&shared, msg);
                     pending_disk = None;
+                    program_running = false;
+                    drive_seen = false;
                 }
             }
             if shared.next_screen.swap(false, Ordering::Relaxed) {
@@ -1114,8 +1126,17 @@ pub fn spawn(
             let percent = crate::footer::speed_percent(shared.speed.load(Ordering::Relaxed));
             let warp = warp_hold > 0
                 && quiet_frames >= WARP_QUIET
+                && still_picture(picture_moves)
+                && !program_running
                 && percent == 100
                 && shared.warp_load.load(Ordering::Relaxed);
+            if debug_stats && warp != shared.warping.load(Ordering::Relaxed) {
+                eprintln!(
+                    "frame {frames_run}: warp {} (quiet {quiet_frames}, moving {})",
+                    if warp { "on" } else { "off" },
+                    picture_moves.count_ones()
+                );
+            }
             shared.warping.store(warp, Ordering::Relaxed);
             let period = shared.display_period_ns.load(Ordering::Relaxed);
             if warp {
@@ -1166,6 +1187,18 @@ pub fn spawn(
             } else {
                 quiet_frames.saturating_add(1)
             };
+            let hash = picture_fingerprint(&session.machine().framebuffer());
+            picture_moves = (picture_moves << 1) | u64::from(hash != picture_hash);
+            picture_hash = hash;
+            drive_seen |= warp_hold == WARP_HOLD;
+            if drive_seen
+                && !warp
+                && (quiet_frames == 0 || picture_moves.count_ones() >= ANIMATION_FRAMES)
+            {
+                // Sound or an animation after a load began (typing and a
+                // cursor change too few frames): the loaded program runs.
+                program_running = true;
+            }
             if let Some(tap) = &preview {
                 tap.publish_audio(&samples, format);
             }
@@ -1212,6 +1245,45 @@ const WARP_HOLD: u32 = 25;
 /// Frames without sound before a working disk drive may start the warp:
 /// a demo's music plays on while its trackloader runs, and warp mutes it.
 const WARP_QUIET: u32 = 50;
+
+/// Frames of the last 64 that may change the picture while the warp still
+/// starts: a blinking cursor or a loader's counter, not an animation (a
+/// demo drawing its next effect while it loads, Promised Land's curtain
+/// on the Plus/4, must keep its speed, sound or not).
+const WARP_MOVING_FRAMES: u32 = 6;
+
+/// Frames of the last 64 that change the picture in an animation, which
+/// tells the loaded program is running.
+const ANIMATION_FRAMES: u32 = 32;
+
+/// Is the picture (nearly) still over the last 64 frames?
+fn still_picture(moves: u64) -> bool {
+    moves.count_ones() <= WARP_MOVING_FRAMES
+}
+
+/// A cheap fingerprint of a frame's pixels.
+fn picture_fingerprint(frame: &FrameRef) -> u64 {
+    let bytes: &[u8] = match &frame.pixels {
+        emu_core::frame::PixelData::Indexed { pixels, .. } => pixels,
+        emu_core::frame::PixelData::Rgb(px) => {
+            return px.iter().fold(0xcbf2_9ce4_8422_2325, |h: u64, p| {
+                (h ^ u64::from(u32::from_le_bytes([p.r, p.g, p.b, 0])))
+                    .wrapping_mul(0x0000_0100_0000_01b3)
+            })
+        }
+    };
+    let (words, rest) = bytes.as_chunks::<8>();
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for w in words {
+        h = (h ^ u64::from_le_bytes(*w))
+            .wrapping_mul(0x0000_0100_0000_01b3)
+            .rotate_left(29);
+    }
+    for &b in rest {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
 
 /// Peak-to-peak level from which a frame's samples count as sound; a
 /// constant output of any height (a SID's DC level) stays below it.
@@ -1291,6 +1363,30 @@ fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {
 mod tests {
     use super::*;
     use emu_core::registry::MachineConfig;
+
+    #[test]
+    fn warp_needs_a_still_picture() {
+        let mut config = MachineConfig::default();
+        config.options.insert("roms".into(), "stub".into());
+        let m = emu_machines::registry().create("c64", &config).unwrap();
+        let frame = m.framebuffer();
+        assert_eq!(picture_fingerprint(&frame), picture_fingerprint(&frame));
+        let other = FrameRef {
+            pixels: emu_core::frame::PixelData::Indexed {
+                pixels: &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+                palette: &[],
+            },
+            ..frame
+        };
+        assert_ne!(picture_fingerprint(&frame), picture_fingerprint(&other));
+        // A cursor or a counter: a few changed frames still allow the warp,
+        // an animation (Promised Land's curtain) does not.
+        assert!(still_picture(0));
+        assert!(still_picture(0b1000_0000_0000_0001_0000_0001));
+        assert!(!still_picture(u64::MAX));
+        assert!(!still_picture((1 << (WARP_MOVING_FRAMES + 1)) - 1));
+        assert!(u64::MAX.count_ones() >= ANIMATION_FRAMES);
+    }
 
     #[test]
     fn cheats_show_as_panel_rows() {

@@ -279,7 +279,11 @@ mod tests {
         assert_eq!(pc & 0x01, 0, "STATUS0 pulled low by the host");
         assert_eq!(pc & 0x02, 0x02, "STATUS1 high");
         assert_eq!(pc & 0x08, 0, "ACK pulled low by the host");
-        assert_eq!(t.peek(0xfef1).map(|v| v & 0x03), Some(0x02), "host reads the line");
+        assert_eq!(
+            t.peek(0xfef1).map(|v| v & 0x03),
+            Some(0x02),
+            "host reads the line"
+        );
     }
 
     #[test]
