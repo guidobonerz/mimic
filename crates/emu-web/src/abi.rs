@@ -178,6 +178,7 @@ fn dispatch(a: &mut Abi, req: &Value) -> Result<Value, String> {
             a.emu.load_state(&data).map(|()| Value::Null)
         }
         "profile_args" => crate::profile_args(&s("yaml"), &s("name")).map(|v| json!(v)),
+        "profile_names" => crate::profile_names(&s("yaml")).map(|v| json!(v)),
         other => Err(format!("unknown command '{other}'")),
     }
 }

@@ -1,0 +1,22 @@
+[package]
+name = "machine-cogitatron16"
+description = "Cogitatron 16, a fictional steampunk home computer"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-ada.workspace = true
+chips-cogitatron.workspace = true
+
+[build-dependencies]
+asm-ada.workspace = true
+emu-core.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+asm-ada.workspace = true

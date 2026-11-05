@@ -21,7 +21,7 @@ pub mod cheats;
 /// The command line for profile `name` of the profile file text `yaml`;
 /// the file's ROM folder stands in when the profile names none.
 pub fn profile_args(yaml: &str, name: &str) -> Result<Vec<String>, String> {
-    let file = emu_profile::ProfileFile::parse(yaml)?;
+    let file = emu_profile::ProfileFile::parse(yaml)?.with_builtin();
     let mut p = file.get(name).cloned().ok_or_else(|| {
         format!(
             "no profile '{name}' (there are: {})",
@@ -32,6 +32,13 @@ pub fn profile_args(yaml: &str, name: &str) -> Result<Vec<String>, String> {
         p.roms.clone_from(&file.settings.roms);
     }
     Ok(p.to_args(emu_profile::Frontend::Web))
+}
+
+/// The profile names of the profile file text `yaml` and the built-in
+/// ones mimic ships.
+pub fn profile_names(yaml: &str) -> Result<Vec<String>, String> {
+    let file = emu_profile::ProfileFile::parse(yaml)?.with_builtin();
+    Ok(file.names().into_iter().map(String::from).collect())
 }
 
 #[cfg(test)]

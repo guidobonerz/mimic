@@ -53,6 +53,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// The file name looked for in the working and configuration folders.
 pub const FILE_NAME: &str = "profiles.yaml";
 
+/// Profiles mimic ships, listed after a user's own (a user profile of the
+/// same name wins): machines that need no user files.
+pub const BUILTIN: &str = "profiles:
+  cogitatron16:
+    description: Cogitatron 16, mimic's own steampunk computer (built-in ROM)
+    machine: cogitatron16
+";
+
 /// Which frontend a command line is for (they take different flags).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frontend {
@@ -555,6 +563,21 @@ impl ProfileFile {
     pub fn names(&self) -> Vec<&str> {
         self.profiles.iter().map(|(n, _)| n.as_str()).collect()
     }
+
+    /// The profiles mimic ships ([`BUILTIN`]).
+    pub fn builtin() -> Self {
+        Self::parse(BUILTIN).unwrap_or_default()
+    }
+
+    /// This file with the built-in profiles it does not override appended.
+    pub fn with_builtin(mut self) -> Self {
+        for (n, p) in Self::builtin().profiles {
+            if self.get(&n).is_none() {
+                self.profiles.push((n, p));
+            }
+        }
+        self
+    }
 }
 
 /// YAML for one profile entry (`name:` and the profile indented below),
@@ -697,7 +720,8 @@ pub fn prepare(
     let loaded = match &found {
         Some(p) if p.is_file() => ProfileFile::load(p)?,
         _ => ProfileFile::default(),
-    };
+    }
+    .with_builtin();
     if list {
         let mut out = match &found {
             Some(p) if p.is_file() => format!("profiles in {}:\n", p.display()),
@@ -788,6 +812,34 @@ profiles:
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn built_in_profiles_come_after_the_users_and_yield_to_them() {
+        let mine = ProfileFile::parse(EXAMPLE).unwrap().with_builtin();
+        let names = mine.names();
+        assert_eq!(names.last(), Some(&"cogitatron16"));
+        assert_eq!(
+            mine.get("cogitatron16").unwrap().machine.as_deref(),
+            Some("cogitatron16")
+        );
+        let own = ProfileFile::parse(
+            "profiles:
+  cogitatron16:
+    machine: c64
+",
+        )
+        .unwrap()
+        .with_builtin();
+        assert_eq!(own.names(), ["cogitatron16"]);
+        assert_eq!(
+            own.get("cogitatron16").unwrap().machine.as_deref(),
+            Some("c64")
+        );
+        assert_eq!(
+            ProfileFile::default().with_builtin().names(),
+            ["cogitatron16"]
+        );
     }
 
     #[test]

@@ -42,6 +42,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Video (`--videoformat
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`vectrex`", "Vectrex (Vektorbildschirm)", "`vectrex`", "–"],
     ["`imsai`", "IMSAI 8080 (Frontplatte; Terminal auf F12)", "`8080`", "–"],
+    ["`cogitatron16`", "Cogitatron 16, mimics eigener Steampunk-Rechner (ROM eingebaut, Profil `cogitatron16`)", "`16`", "–"],
     ["`archimedes`", "Acorn Archimedes", "`a310` (Standard), `a305`, `a440`, `a3000`", "–"],
     ["`apple2`", "Apple II, II+, IIe", "`iie` (enhanced IIe, Standard), `iie-unenhanced`, "
      "`iiplus`, `ii`", "–"],
@@ -939,6 +940,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Videoformate (`--vide
     ["`mac`", "Apple Macintosh", "`plus` (Standard), `128k`, `512k`, `se`", "–"],
     ["`archimedes`", "Acorn Archimedes", "`a310` (Standard), `a305`, `a440`, `a3000`", "–"],
     ["`imsai`", "IMSAI 8080", "`8080`", "–"],
+    ["`cogitatron16`", "Cogitatron 16", "`16`", "–"],
     ["`sim6502`", "6502-Referenzmaschine", "`default`", "–"],
 ], [0.14, 0.28, 0.34, 0.24])
 note("""Eine Maschine mit Strich unter Videoformate hat eine feste Norm (das

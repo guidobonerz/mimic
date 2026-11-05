@@ -2094,8 +2094,13 @@ fn picker_for(raw: &[String]) -> Option<picker::Picker> {
         [flag, file] if flag == "--profiles" => Some(PathBuf::from(file)),
         _ => return None,
     };
-    let path = emu_profile::find_file(explicit.as_deref())?;
-    let file = emu_profile::ProfileFile::load(&path).ok()?;
+    // The user's file (if any) and the profiles mimic ships.
+    let path = emu_profile::find_file(explicit.as_deref());
+    let file = match &path {
+        Some(p) => emu_profile::ProfileFile::load(p).ok()?,
+        None => emu_profile::ProfileFile::default(),
+    }
+    .with_builtin();
     if file.profiles.is_empty() {
         return None;
     }
@@ -2114,7 +2119,7 @@ fn picker_for(raw: &[String]) -> Option<picker::Picker> {
                 (n.clone(), what)
             })
             .collect(),
-        file: path.display().to_string(),
+        file: path.map_or_else(|| "built-in profiles".into(), |p| p.display().to_string()),
         hover: None,
         error: None,
     })

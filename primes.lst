@@ -1,0 +1,48 @@
+0040:0000  21ff 31ff                li      r1, #IO_SEG
+0040:0004  c312                     mts     s3, r1          ; S3 reaches the I/O segment (SWX/SBX)
+0040:0006  2502 3500                li      r5, #2          ; candidate
+0040:000a  2602 3600                li      r6, #2          ; divisor
+0040:000e  016c                     mov     r1, r6
+0040:0010  016f                     mul     r1, r6          ; divisor squared
+0040:0012  051d                     cmp     r5, r1
+0040:0014  a306                     bcc     .prime          ; candidate < divisor²: no divisor left
+0040:0016  015c                     mov     r1, r5
+0040:0018  d164                     remu    r1, r6
+0040:001a  4100                     cmpi    r1, #0
+0040:001c  a006                     beq     .composite
+0040:001e  1601                     addi    r6, #1
+0040:0020  aef6                     bra     .try
+0040:0022  015c                     mov     r1, r5
+0040:0024  b00e                     bl      print_dec
+0040:0026  2120                     movi    r1, #' '
+0040:0028  b021                     bl      putc
+0040:002a  1501                     addi    r5, #1
+0040:002c  21e8 3103                li      r1, #LIMIT
+0040:0030  051d                     cmp     r5, r1
+0040:0032  a3eb                     bcc     .next           ; candidate < LIMIT
+0040:0034  210a                     movi    r1, #10         ; newline
+0040:0036  b01a                     bl      putc
+0040:0038  22f2 3243                li      r2, #DBGEXIT
+0040:003c  2100                     movi    r1, #0
+0040:003e  9121                     swx     r1, (r2)
+0040:0040  aeff                     bra     .stop
+0040:0042  1cfe 6bc0                push    lr
+0040:0046  2400                     movi    r4, #0          ; digits on the stack
+0040:0048  021c                     mov     r2, r1
+0040:004a  230a                     movi    r3, #10
+0040:004c  d234                     remu    r2, r3          ; last digit
+0040:004e  d132                     divu    r1, r3
+0040:0050  1230                     addi    r2, #'0'
+0040:0052  1cfe 62c0                push    r2
+0040:0056  1401                     addi    r4, #1
+0040:0058  4100                     cmpi    r1, #0
+0040:005a  a1f6                     bne     .digit
+0040:005c  51c0 1c02                pop     r1
+0040:0060  b005                     bl      putc
+0040:0062  14ff                     addi    r4, #-1         ; sets Z at the last digit
+0040:0064  a1fb                     bne     .out
+0040:0066  5bc0 1c02                pop     lr
+0040:006a  c0b0                     ret
+0040:006c  22f0 3243                li      r2, #DBGOUT
+0040:0070  9123                     sbx     r1, (r2)
+0040:0072  c0b0                     ret

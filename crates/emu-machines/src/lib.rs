@@ -166,6 +166,7 @@ pub fn registry() -> Registry {
     r.register(machine_mac::entry());
     r.register(machine_imsai::entry());
     r.register(machine_archimedes::entry());
+    r.register(machine_cogitatron16::entry());
     r
 }
 

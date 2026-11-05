@@ -1,0 +1,12 @@
+[package]
+name = "chips-cogitatron"
+description = "Babbage, Lumiere, Calliope and Telegraph, the chips of the fictional Cogitatron 16"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

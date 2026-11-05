@@ -164,6 +164,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "asm-ada"
+version = "0.1.0"
+dependencies = [
+ "cpu-ada",
+ "emu-core",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -561,6 +569,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "chips-cogitatron"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "chips-nintendo"
 version = "0.1.0"
 dependencies = [
@@ -794,6 +809,13 @@ dependencies = [
 
 [[package]]
 name = "cpu-8080"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
+name = "cpu-ada"
 version = "0.1.0"
 dependencies = [
  "emu-core",
@@ -1140,6 +1162,7 @@ dependencies = [
  "machine-atari8",
  "machine-c128",
  "machine-c64",
+ "machine-cogitatron16",
  "machine-coleco",
  "machine-cpc",
  "machine-imsai",
@@ -2137,6 +2160,17 @@ dependencies = [
  "drives-other",
  "emu-core",
  "media",
+]
+
+[[package]]
+name = "machine-cogitatron16"
+version = "0.1.0"
+dependencies = [
+ "asm-ada",
+ "chips-cogitatron",
+ "cpu-ada",
+ "emu-core",
+ "png",
 ]
 
 [[package]]

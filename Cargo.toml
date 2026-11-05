@@ -17,6 +17,8 @@ cpu-6502 = { path = "crates/cpu-6502" }
 cpu-65816 = { path = "crates/cpu-65816" }
 cpu-spc700 = { path = "crates/cpu-spc700" }
 cpu-8080 = { path = "crates/cpu-8080" }
+cpu-ada = { path = "crates/cpu-ada" }
+asm-ada = { path = "crates/asm-ada" }
 cpu-arm = { path = "crates/cpu-arm" }
 cpu-6809 = { path = "crates/cpu-6809" }
 cpu-z80 = { path = "crates/cpu-z80" }
@@ -27,6 +29,7 @@ chips-atari = { path = "crates/chips-atari" }
 chips-amstrad = { path = "crates/chips-amstrad" }
 chips-sinclair = { path = "crates/chips-sinclair" }
 chips-ti = { path = "crates/chips-ti" }
+chips-cogitatron = { path = "crates/chips-cogitatron" }
 chips-acorn = { path = "crates/chips-acorn" }
 chips-nintendo = { path = "crates/chips-nintendo" }
 drives-cbm = { path = "crates/drives-cbm" }
@@ -59,6 +62,7 @@ machine-vectrex = { path = "crates/machine-vectrex" }
 machine-apple2 = { path = "crates/machine-apple2" }
 machine-mac = { path = "crates/machine-mac" }
 machine-imsai = { path = "crates/machine-imsai" }
+machine-cogitatron16 = { path = "crates/machine-cogitatron16" }
 machine-archimedes = { path = "crates/machine-archimedes" }
 machine-sim6502 = { path = "crates/machine-sim6502" }
 emu-machines = { path = "crates/emu-machines" }

@@ -149,6 +149,7 @@ async function showMachines() {
   $("machine").replaceChildren(...machines.map((m) => new Option(`${m.name} (${m.id})`, m.id)));
   try { $("machine").value = localStorage.getItem("mimic-machine") || "c64"; } catch (e) { /* no storage */ }
   showModels();
+  loadProfiles(null); // the built-in profiles, before any profile file
 }
 function showModels() {
   const m = machines.find((x) => x.id === $("machine").value);
@@ -778,8 +779,9 @@ async function configFromArgs(args) {
 
 let profileText = "";
 async function loadProfiles(file) {
-  profileText = await file.text();
-  const names = [...profileText.matchAll(/^  ([A-Za-z0-9_.-]+):\s*$/gm)].map((m) => m[1]);
+  profileText = file ? await file.text() : "";
+  // The file's profiles and the built-in ones (the Cogitatron 16).
+  const names = await call("profile_names", { yaml: profileText });
   const sel = $("profile");
   sel.replaceChildren(new Option("start profile…", ""), ...names.map((n) => new Option(n, n)));
   sel.hidden = false;
