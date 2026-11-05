@@ -44,8 +44,9 @@
 //! at an odd `tx`. On the line before a character row and its first line
 //! (the attribute and the pointer DMA) BA is low from `tx` 5 and the TED
 //! holds the bus (AEC) for `tx` 11–90: the CPU stops at its next read and
-//! gets no cycle at all while AEC is low. `$13` bit 1 forces single clock
-//! everywhere. Timers count single clocks. Sources: TED System Hardware
+//! gets no cycle at all while AEC is low. A CPU write that falls on the
+//! sync cycle (`tx` 3) waits (see [`Ted::sync_cycle`]). `$13` bit 1 forces
+//! single clock everywhere. Timers count single clocks. Sources: TED System Hardware
 //! Manual 4.5.2 (the order and lengths of the DMA line's phases); the
 //! positions are measured against VICE's xplus4 with
 //! `tools/ted_timing.py` (`tests/tests/ted_timing.rs`).
@@ -60,6 +61,13 @@
 //! notes only which cell and line it fetched; the byte is read when asked
 //! for, from the registers then (nothing can change them in between without
 //! a CPU access, which replaces the bus's byte).
+//!
+//! Colour registers (`$15–$19`): a CPU write shows in the border from the
+//! second pixel of the next double clock; its first pixel shows the old
+//! and the new value ORed. The display window is put out 11 double clocks
+//! (44 pixels) after the TED composes it, with the registers of that
+//! moment, so a write reaches the window 44 pixels further left than the
+//! border (both measured against xplus4, `ted_timing` split).
 //!
 //! Simplifications: the picture is computed from the registers at each
 //! pixel (no fetch pipeline); refresh cycles do not slow the CPU; light pen
@@ -102,6 +110,8 @@ const LINE_PIXELS: u16 = TICKS_PER_LINE * 4;
 /// buffer starts [`FRAME_LEFT`] pixels earlier.
 const DISPLAY_X: u16 = 64;
 const FRAME_LEFT: u16 = 32;
+/// The window is put out this many pixels after the TED composes it.
+const WINDOW_DELAY: u16 = 44;
 /// Frame width: 32 border pixels each side of the 320-pixel window.
 pub const WIDTH: u32 = 384;
 
@@ -277,6 +287,9 @@ pub struct Ted {
     rec: crate::overlay::Recorder<overlay::Record>,
     /// The counter line's kind (derived, see [`Ted::update_kind`]).
     kind: u8,
+    /// A colour register write on its way to the picture: register,
+    /// value, and whether a double clock has passed (state).
+    pending: Option<(u8, u8, bool)>,
 }
 
 impl Ted {
@@ -302,6 +315,7 @@ impl Ted {
             fetched_now: false,
             rec: crate::overlay::Recorder(None),
             kind: 0,
+            pending: None,
         }
     }
 
@@ -369,6 +383,10 @@ impl Ted {
                 let flash = ((self.frame >> 1) & 0x0f) as u8;
                 0x80 | (flash << 3) | self.char_line()
             }
+            0x15..=0x19 => match self.pending {
+                Some((r, v, _)) if usize::from(r) == reg => v,
+                _ => self.regs[reg],
+            },
             _ => self.regs[reg],
         }
     }
@@ -379,6 +397,15 @@ impl Ted {
 
     pub fn write(&mut self, reg: u8, v: u8) {
         let reg = usize::from(reg & 0x1f);
+        if (0x15..=0x19).contains(&reg) {
+            // Reaches the picture a double clock later (see the module
+            // documentation); a write still on its way lands first.
+            if let Some((r, old_v, _)) = self.pending.take() {
+                self.regs[usize::from(r)] = old_v;
+            }
+            self.pending = Some((reg as u8, v, false));
+            return;
+        }
         match reg {
             0..=5 => {
                 let t = reg / 2;
@@ -523,13 +550,13 @@ impl Ted {
         self.cpu_slot()
     }
 
-    /// `tx` 3–6 of a fetch line: the first single-clock cycles, where
-    /// the clock comes out of double speed. A CPU write that would fall on
-    /// `tx` 3 is held back to `tx` 7, on a DMA line past the DMA and the
-    /// first refresh cycle to `tx` 93 (measured against xplus4: four
-    /// double clocks lost, on a DMA line one cycle more than its reads;
-    /// reads go on as usual).
-    /// The machine asks this before running the CPU.
+    /// `tx` 3 of a fetch line is the cycle in which the clock comes out of
+    /// double speed. A CPU write that falls on it is held back to `tx` 7,
+    /// on a DMA line past the DMA and the first refresh cycle to `tx` 93
+    /// (measured against xplus4: four double clocks lost, on a DMA line one
+    /// cycle more than its reads; reads go on as usual). Returns `tx`
+    /// while such a hold may still run (`tx` 3–6, on a DMA line 3–92);
+    /// the machine asks this before running the CPU.
     #[inline]
     pub fn sync_cycle(&self) -> Option<u16> {
         (self.slot_bits() & SLOT_HOLD != 0).then(|| self.tx())
@@ -544,9 +571,6 @@ impl Ted {
 
     /// One double clock.
     pub fn tick(&mut self, mem: &dyn TedMemory) -> TickOut {
-        if self.tick == TURN && self.counter_line() == self.compare_line() {
-            self.irq_flags |= 0x02;
-        }
         let (cpu, ba) = self.cpu_slot();
         // Timers and sound run on the single clock.
         if self.tick % 2 == 1 {
@@ -575,8 +599,13 @@ impl Ted {
             }
         }
         if self.tick == TURN {
-            // The counter turns over with this double clock.
+            // The counter turns over with the coming double clock; the
+            // raster compare flag is there for that double clock's CPU
+            // cycle (measured against xplus4, `ted_timing` irqall).
             self.update_kind();
+            if self.counter_line() == self.compare_line() {
+                self.irq_flags |= 0x02;
+            }
         }
         TickOut { cpu, ba, frame_end }
     }
@@ -725,23 +754,68 @@ impl Ted {
 
     /// The 4 pixels of this double clock.
     fn draw(&mut self, mem: &dyn TedMemory) {
+        // A colour register written a double clock ago takes effect now;
+        // this double clock's first pixel shows old | new.
+        let mut glitch = None;
+        if let Some((r, v, armed)) = self.pending {
+            if armed {
+                let r = usize::from(r);
+                glitch = Some((r, self.regs[r] | v, v));
+                self.regs[r] = v;
+                self.pending = None;
+            } else {
+                self.pending = Some((r, v, true));
+            }
+        }
         let t = self.timing();
         let y = (self.line + t.lines - t.first_line) % t.lines;
         if u32::from(y) >= t.height {
             return;
         }
         let x0 = self.tick * 4;
+        let row = u32::from(y) * WIDTH;
+        // The window as composed now, 44 pixels to the left.
+        for i in 0..4 {
+            let Some(x) = (x0 + i).checked_sub(WINDOW_DELAY) else {
+                continue;
+            };
+            if !self.in_window(x) {
+                continue;
+            }
+            let fx = x - FRAME_LEFT;
+            let c = self.pixel(mem, x);
+            self.pixels[(row + u32::from(fx)) as usize] = c & 0x7f;
+        }
         for i in 0..4 {
             let x = x0 + i;
             let Some(fx) = x.checked_sub(FRAME_LEFT) else {
                 continue;
             };
-            if u32::from(fx) >= WIDTH {
+            if u32::from(fx) >= WIDTH || self.in_window(x) {
                 continue;
             }
-            let c = self.pixel(mem, x);
-            self.pixels[(u32::from(y) * WIDTH + u32::from(fx)) as usize] = c & 0x7f;
+            let c = match glitch {
+                Some((r, mixed, v)) if i == 0 => {
+                    self.regs[r] = mixed;
+                    let c = self.pixel(mem, x);
+                    self.regs[r] = v;
+                    c
+                }
+                _ => self.pixel(mem, x),
+            };
+            self.pixels[(row + u32::from(fx)) as usize] = c & 0x7f;
         }
+    }
+
+    /// Pixel position `x` (from the line start, 4 a double clock) lies in
+    /// the display window.
+    fn in_window(&self, x: u16) -> bool {
+        let (left, right) = if self.regs[0x07] & 0x08 != 0 {
+            (DISPLAY_X, DISPLAY_X + 320)
+        } else {
+            (DISPLAY_X + 8, DISPLAY_X + 312)
+        };
+        self.den() && self.in_window_v() && x >= left && x < right
     }
 
     fn pixel(&self, mem: &dyn TedMemory, x: u16) -> u8 {
@@ -845,7 +919,7 @@ impl Ted {
 }
 
 const TAG: [u8; 4] = *b"TED1";
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 
 impl Savestate for Ted {
     fn save(&self, w: &mut StateWriter) {
@@ -885,6 +959,12 @@ impl Savestate for Ted {
             w.u16(f.cell);
             w.u16(f.line);
             w.bool(f.attribute);
+            // Version 3: a colour register write on its way.
+            let (r, v, armed) = self.pending.unwrap_or((0, 0, false));
+            w.bool(self.pending.is_some());
+            w.u8(r);
+            w.u8(v);
+            w.bool(armed);
         });
     }
 
@@ -934,6 +1014,16 @@ impl Savestate for Ted {
                 attribute: c.bool()?,
             };
             t.fetch = some.then_some(f);
+        }
+        if version >= 3 {
+            let some = c.bool()?;
+            let r = c.u8()?;
+            let v = c.u8()?;
+            let armed = c.bool()?;
+            if some && !(0x15..=0x19).contains(&r) {
+                return Err(StateError::Invalid("TED pending colour register"));
+            }
+            t.pending = some.then_some((r, v, armed));
         }
         t.samples = std::mem::take(&mut self.samples);
         // The overlay record is not state: keep it switched on, fresh.

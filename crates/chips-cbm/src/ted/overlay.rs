@@ -106,7 +106,9 @@ mod tests {
         field(&mut t);
         let at = t.frame_row(100).unwrap() * super::super::WIDTH;
         let px = |c: u32| t.pixels()[(at + c) as usize];
-        assert_eq!((px(x - 1), px(x)), (0, 5));
+        // A colour write shows from the second pixel of the next double
+        // clock; its first pixel shows old | new (0 | 5).
+        assert_eq!((px(x + 3), px(x + 4), px(x + 5)), (0, 5, 5));
         t.tick = 0;
         assert_eq!(t.beam().hpos, 0, "clamped left");
         t.tick = 113;

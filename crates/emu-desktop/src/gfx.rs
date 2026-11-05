@@ -605,6 +605,7 @@ impl Gfx {
         match self.surface.get_current_texture() {
             Ok(t) => Some(t),
             Err(_) => {
+                // No image is held here (every caller acquires without one).
                 self.surface.configure(&self.device, &self.config);
                 None
             }

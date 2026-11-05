@@ -280,7 +280,15 @@ fn run(mut gfx: Gfx, inner: &Inner, scale: u32) {
         if stopped() {
             break;
         }
-        apply_commands(&mut gfx, inner, true);
+        // FIFO holds the window's image already; a resize configures the
+        // surface anew, which wgpu refuses while an image is held. Drop it
+        // unpresented and take a fresh one after the resize.
+        let mut target = target;
+        let resize_pending = inner.commands.lock().is_ok_and(|c| c.resize.is_some());
+        if resize_pending {
+            target = None;
+        }
+        apply_commands(&mut gfx, inner, target.is_none());
         if let Some(f) = &frame {
             gfx.upload(f, scale);
             shared.presented.fetch_add(1, Ordering::Relaxed);

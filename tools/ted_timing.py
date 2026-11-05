@@ -67,6 +67,7 @@ OPS = {
     "INX": {"imp": 0xE8}, "INY": {"imp": 0xC8},
     "EOR": {"imm": 0x49},
     "JMP": {"abs": 0x4C}, "JSR": {"abs": 0x20}, "RTS": {"imp": 0x60},
+    "RTI": {"imp": 0x40},
     "LDA": {"imm": 0xA9, "zp": 0xA5, "abs": 0xAD, "abx": 0xBD, "aby": 0xB9},
     "LDX": {"imm": 0xA2, "zp": 0xA6, "abs": 0xAE},
     "LDY": {"imm": 0xA0, "zp": 0xA4, "abs": 0xAC},
@@ -117,9 +118,11 @@ class Asm:
             self.code += struct.pack("<H", arg & 0xFFFF)
 
     def value(self, name):
-        """A label, `label+n` or `<label` (low byte)."""
+        """A label, `label+n`, `<label` (low byte) or `label>` (high byte)."""
         if name.startswith("<"):
             return self.value(name[1:]) & 0xFF
+        if name.endswith(">"):
+            return self.value(name[:-1]) >> 8
         if "+" in name:
             base, off = name.split("+")
             return self.value(base) + int(off)
@@ -186,6 +189,24 @@ def show_results(a):
     a.op("STA", "abs", 0xFF07)
     a.label("done")
     a.op("JMP", "abs", "done")
+
+
+def blank_screen(a):
+    """Spaces with attribute $71 everywhere, the hardware cursor off the
+    screen: the text the loading left differs between emulators."""
+    a.op("LDX", "imm", 0)
+    a.label("blank")
+    for page in range(4):
+        a.op("LDA", "imm", 0x71)
+        a.op("STA", "abx", 0x0800 + page * 0x100)
+        a.op("LDA", "imm", 0x20)
+        a.op("STA", "abx", 0x0C00 + page * 0x100)
+    a.op("INX")
+    a.op("BNE", "rel", "blank")
+    a.op("LDA", "imm", 0x03)
+    a.op("STA", "abs", 0xFF0C)
+    a.op("LDA", "imm", 0xFF)
+    a.op("STA", "abs", 0xFF0D)
 
 
 def clear_results(a):
@@ -301,10 +322,167 @@ def build_fine():
     return a.assemble(), FINE_RUNS * 0x100
 
 
+IRQ_LINES = [0, 2, 3, 4, 5, 100, 203, 204, 250, 311]
+
+
+def build_irqall():
+    """Raster IRQ entry for every line 0-311 (one per frame): $FF1E at
+    $2000+line... as two pages (lines 0-255, 256-311), $FF1D likewise at
+    $2200. Same frame as `irq`."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    clear_results(a)
+    a.op("STA", "abs", 0xFF3F)
+    a.op("LDA", "imm", "<irqa")
+    a.op("STA", "abs", 0xFFFE)
+    a.op("LDA", "imm", "irqa>")
+    a.op("STA", "abs", 0xFFFF)
+    # line counter in $F2 (low) / $F3 (high)
+    a.op("LDA", "imm", 0)
+    a.op("STA", "zp", 0xF2)
+    a.op("STA", "zp", 0xF3)
+    a.label("next")
+    a.op("LDA", "imm", 0)
+    a.op("STA", "zp", 0xF1)
+    a.op("LDA", "zp", 0xF2)
+    a.op("STA", "abs", 0xFF0B)
+    a.op("LDA", "zp", 0xF3)
+    a.op("ORA", "imm", 0x02)
+    a.op("STA", "abs", 0xFF0A)
+    sync(a, "ia")
+    a.op("LDA", "imm", 0xFF)
+    a.op("STA", "abs", 0xFF09)
+    a.op("CLI")
+    a.label("iaw")
+    for _ in range(20):
+        a.op("NOP")
+    a.op("LDA", "zp", 0xF1)
+    a.op("BEQ", "rel", "iaw")
+    a.op("SEI")
+    a.op("INC", "zp", 0xF2)
+    a.op("BNE", "rel", "nohi")
+    a.op("INC", "zp", 0xF3)
+    a.label("nohi")
+    a.op("LDA", "zp", 0xF3)
+    a.op("BEQ", "rel", "more")
+    a.op("LDA", "zp", 0xF2)
+    a.op("CMP", "imm", 312 - 256)
+    a.op("BEQ", "rel", "fin")
+    a.label("more")
+    a.op("JMP", "abs", "next")
+    a.label("fin")
+    a.op("STA", "abs", 0xFF3E)
+    show_results(a)
+    a.label("irqa")
+    a.op("LDA", "abs", 0xFF1E)
+    a.op("LDX", "zp", 0xF2)
+    a.op("LDY", "zp", 0xF3)
+    a.op("BNE", "rel", "ihi")
+    a.op("STA", "abx", RESULTS)
+    a.op("LDA", "abs", 0xFF1D)
+    a.op("STA", "abx", RESULTS + 0x200)
+    a.op("JMP", "abs", "iend")
+    a.label("ihi")
+    a.op("STA", "abx", RESULTS + 0x100)
+    a.op("LDA", "abs", 0xFF1D)
+    a.op("STA", "abx", RESULTS + 0x300)
+    a.label("iend")
+    a.op("LDA", "imm", 0xFF)
+    a.op("STA", "abs", 0xFF09)
+    a.op("INC", "zp", 0xF1)
+    a.op("RTI")
+    return a.assemble(), 0x400
+
+
+def build_irq():
+    """Raster IRQ entry: for each compare line, the handler's first
+    instructions read $FF1E, $FF1D and $FF1C while the main program runs a
+    loop of NOPs (ROM switched off, the IRQ vector in RAM)."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    clear_results(a)
+    a.op("STA", "abs", 0xFF3F)          # RAM at $8000-$FFFF
+    a.op("LDA", "imm", "<irq")
+    a.op("STA", "abs", 0xFFFE)
+    a.op("LDA", "imm", "irq>")
+    a.op("STA", "abs", 0xFFFF)
+    for k, line in enumerate(IRQ_LINES):
+        a.op("LDA", "imm", k)
+        a.op("STA", "zp", 0xF0)
+        a.op("LDA", "imm", 0)
+        a.op("STA", "zp", 0xF1)
+        a.op("LDA", "imm", line & 0xFF)
+        a.op("STA", "abs", 0xFF0B)
+        a.op("LDA", "imm", 0x02 | (line >> 8))
+        a.op("STA", "abs", 0xFF0A)
+        sync(a, f"i{k}")
+        a.op("LDA", "imm", 0xFF)         # drop flags latched before
+        a.op("STA", "abs", 0xFF09)
+        a.op("CLI")
+        a.label(f"i{k}w")
+        for _ in range(20):
+            a.op("NOP")
+        a.op("LDA", "zp", 0xF1)
+        a.op("BEQ", "rel", f"i{k}w")
+        a.op("SEI")
+    a.op("STA", "abs", 0xFF3E)          # ROM back
+    show_results(a)
+    a.label("irq")
+    a.op("LDA", "abs", 0xFF1E)
+    a.op("LDX", "zp", 0xF0)
+    a.op("STA", "abx", RESULTS)
+    a.op("LDA", "abs", 0xFF1D)
+    a.op("STA", "abx", RESULTS + 0x10)
+    a.op("LDA", "abs", 0xFF1C)
+    a.op("STA", "abx", RESULTS + 0x20)
+    a.op("LDA", "imm", 0xFF)
+    a.op("STA", "abs", 0xFF09)
+    a.op("INC", "zp", 0xF1)
+    a.op("RTI")
+    return a.assemble(), 0x30
+
+
+SPLIT_WRITES = 2400
+
+
+def build_split():
+    """A picture test: every frame, from SYNC on, a straight run of
+    STX/STY $FF19 (border) and $FF15 (background) alternating two colours,
+    4 cycles each, through the top border and about 120 display lines. The
+    stripes' edges show where a register write reaches the picture."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    blank_screen(a)
+    a.op("LDX", "imm", 0x32)            # red
+    a.op("LDY", "imm", 0x55)            # green
+    a.label("frame")
+    sync(a, "sp")
+    regs = [0xFF19, 0xFF19, 0xFF15, 0xFF15]
+    for i in range(SPLIT_WRITES):
+        a.op("STX" if i % 2 == 0 else "STY", "abs", regs[(i // 2) % 2 * 2])
+    a.op("JMP", "abs", "frame")
+    return a.assemble(), 0
+
+
+# Tests whose result is xplus4's picture (tests/data/ted-<name>.png).
+PICTURES = {"split"}
+
 TESTS = {
+    "split": build_split,
     "trace": build_trace,
     "fine": build_fine,
+    "irq": build_irq,
+    "irqall": build_irqall,
 }
+
+# Tests that run longer than LIMIT_CYCLES.
+LIMITS = {"irqall": 40_000_000, "split": 40_000_000}
 
 # xplus4 cycles until the screenshot (PAL, ~1.77 M per second: autostart
 # takes about 3 s, the tests well under one).
@@ -420,10 +598,31 @@ def main(argv):
             if os.path.exists(shot):
                 os.remove(shot)
             _, count = TESTS[name]()
+            data_dir = os.path.join(os.path.dirname(__file__), "..", "tests", "data")
+            if name in PICTURES:
+                for attempt in range(5):
+                    subprocess.run([exe, "-default", "+sound", "-limitcycles",
+                                    str(LIMITS.get(name, LIMIT_CYCLES)),
+                                    "-exitscreenshot", shot, path],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
+                    _, _, rows = read_png(shot)
+                    # Stripes in the left border (many colour changes down
+                    # column 5), not the BASIC screen of a failed autostart.
+                    col = [rows[y][5] for y in range(len(rows))]
+                    if sum(1 for p, q in zip(col, col[1:]) if p != q) >= 8:
+                        break
+                else:
+                    raise SystemExit(f"{name}: no stripes in xplus4's picture")
+                import shutil
+                shutil.copy(shot, os.path.join(data_dir, f"ted-{name}.png"))
+                open(os.path.join(data_dir, f"ted-{name}.prg"), "wb").write(prg(name))
+                print(f"{name}: picture -> tests/data/ted-{name}.png")
+                continue
             # xplus4's autostart now and then reports FILE NOT FOUND: retry
             # until the program's done marker is in the picture.
             for attempt in range(5):
-                subprocess.run([exe, "-default", "+sound", "-limitcycles", str(LIMIT_CYCLES),
+                limit = LIMITS.get(name, LIMIT_CYCLES)
+                subprocess.run([exe, "-default", "+sound", "-limitcycles", str(limit),
                                 "-exitscreenshot", shot, path],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600)
                 every = bitmap_bytes(shot, BITMAP_BYTES)

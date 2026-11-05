@@ -251,6 +251,13 @@ impl Cpu6502 {
         probe.wrote
     }
 
+    /// Whether the next tick pushes PC or P in the entry of a hardware IRQ
+    /// or NMI (cycles 2–4 of the sequence; not BRK).
+    pub fn pushing_interrupt(&self) -> bool {
+        let c = &self.core;
+        c.op == 0x00 && c.seq == micro::Seq::Interrupt && (2..=4).contains(&c.t)
+    }
+
     /// True between instructions, i.e. the next tick fetches an opcode.
     pub fn at_instruction_boundary(&self) -> bool {
         self.core.t == 0 && !self.core.jammed

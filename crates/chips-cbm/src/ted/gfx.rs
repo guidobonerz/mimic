@@ -107,8 +107,10 @@ impl Ted {
         u16::from(self.regs[0x12] & 0x38) << 10
     }
 
+    /// Background colour `n` as the CPU reads it (a write still on its
+    /// way to the picture included).
     fn bg(&self, n: usize) -> u8 {
-        self.regs[0x15 + n] & 0x7f
+        self.peek(0x15 + n as u8) & 0x7f
     }
 
     fn view_rom(&self, opts: &GfxOptions) -> bool {
@@ -333,7 +335,7 @@ impl Ted {
             ("mode", mode),
             ("reverse", u32::from(reverse_allowed)),
             ("bg0", u32::from(bg0)),
-            ("border", u32::from(self.regs[0x19] & 0x7f)),
+            ("border", u32::from(self.peek(0x19) & 0x7f)),
         ];
         attrs.extend_from_slice(&codes);
         Part {

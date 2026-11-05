@@ -445,7 +445,7 @@ pub struct TedMachine {
     autostart: Autostart,
     palette: [Rgb8; 128],
     field_done_pending: bool,
-    /// A CPU write waits out the TED's sync cycle (`tx` 3 to 7).
+    /// A CPU write waits out the TED's sync cycle (`tx` 3 to 7, or 93).
     write_held: bool,
     /// TED frame of the last reset; programs wait [`BOOT_FRAMES`] from here.
     boot_frame: u64,
@@ -614,11 +614,15 @@ impl TedMachine {
             Some(_) => {}
             None => self.write_held = false,
         }
-        if self.write_held {
+        // While BA is low the CPU stops at its next read; writes go on,
+        // except the pushes of an IRQ/NMI entry, which wait for the bus as
+        // xplus4 has them (`ted_timing` irqall: a raster IRQ on a DMA line
+        // pushes after the DMA. A 6502 ignores RDY on writes, so on real
+        // hardware they may well go on; xplus4 is the reference here).
+        if self.write_held || (ba && self.cpu.pushing_interrupt()) {
             cpu_go = false;
         }
         let mut cpu_result = None;
-        // BA low: the CPU stops at its next read (writes go on).
         self.cpu.set_rdy(!ba);
         if cpu_go {
             self.cpu.set_irq(self.io.ted.irq());
