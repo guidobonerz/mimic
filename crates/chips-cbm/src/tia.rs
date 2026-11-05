@@ -70,6 +70,17 @@ impl Tia6523 {
         }
     }
 
+    /// Register `reg` as read when the ports' pins are wired lines: a
+    /// port reads the level of its lines, outputs included (`lines` must
+    /// hold the chip's own output ANDed with whatever else drives them).
+    pub fn read_lines(&self, reg: u8, lines: [u8; 3]) -> u8 {
+        match reg & 7 {
+            r @ 0..=2 => lines[usize::from(r)],
+            r @ 3..=5 => self.ddr[usize::from(r - 3)],
+            _ => 0,
+        }
+    }
+
     /// What port `port` (0 = A, 1 = B, 2 = C) drives: the latch on output
     /// bits, high (released) on inputs.
     pub fn outputs(&self, port: usize) -> u8 {

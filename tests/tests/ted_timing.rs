@@ -350,7 +350,10 @@ fn split_matches_xplus4() {
     // Not equal yet: the border matches outside the refresh cycles, the
     // window's register sampling in single-clock areas does not (open, see
     // CLAUDE.md). The bound keeps it from getting worse.
-    assert!(bad <= 27_947, "TED split picture got worse (EMU_TED_SHOW=1)");
+    assert!(
+        bad <= 27_947,
+        "TED split picture got worse (EMU_TED_SHOW=1)"
+    );
 }
 
 /// Development aid: where (`line`, `x`) the `split` program's writes to

@@ -861,7 +861,10 @@ impl Ted {
                 return match pair {
                     0 => bg0,
                     1 => (code >> 4) | lum_hi,
-                    2 => (code & 0x0f) | lum_lo,
+                    // Pair 10: matrix bits 0–3 with attribute bits 4–6,
+                    // like pair 01 (TED data sheet, sheet 7; Promised Land's
+                    // title picture against xplus4).
+                    2 => (code & 0x0f) | lum_hi,
                     _ => self.regs[0x16],
                 };
             }

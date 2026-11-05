@@ -243,7 +243,7 @@ impl Ted {
             let one = (code >> 4) | ((attr & 0x07) << 4);
             // Multicolour pairs 01 and 10, as the TED draws them.
             let mc1 = (code >> 4) | (attr & 0x70);
-            let mc2 = (code & 0x0f) | ((attr & 0x07) << 4);
+            let mc2 = (code & 0x0f) | (attr & 0x70);
             for row in 0..8u16 {
                 let v = ctx.mem.fetch(base.wrapping_add(cell * 8 + row), rom);
                 raw.push(v);

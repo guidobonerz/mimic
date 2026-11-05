@@ -288,13 +288,19 @@ pub struct CbmDrive {
     tcbm_host: TcbmHost,
 }
 
-/// TCBM lines as the host drives them at the 1551's pins.
+/// TCBM lines as the host drives them at the 1551's pins (1 = released
+/// or driven high; every line has a pull-up and is low when either side
+/// drives it low, so fast loaders can use STATUS and ACK both ways).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TcbmHost {
-    /// DIO1–8 (1 = released or driven high).
+    /// DIO1–8.
     pub dio: u8,
-    /// The host's PC6, the drive's DAV input (PC7).
+    /// The host's PC6 on DAV (the drive's PC7).
     pub dav: bool,
+    /// The host's PB0/PB1 on STATUS0/1 (the drive's PC0/PC1).
+    pub status: u8,
+    /// The host's PC7 on ACK (the drive's PC3).
+    pub ack: bool,
 }
 
 impl Default for TcbmHost {
@@ -302,6 +308,8 @@ impl Default for TcbmHost {
         Self {
             dio: 0xff,
             dav: true,
+            status: 0x03,
+            ack: true,
         }
     }
 }
@@ -315,6 +323,8 @@ pub struct TcbmDrive {
     pub ack: bool,
     /// DEV: high selects the interface cartridge's `$FEE0` window.
     pub dev: bool,
+    /// The drive's PC7 on DAV (released unless a program drives it).
+    pub dav: bool,
 }
 
 /// 1551 IRQ: the 555's period and its low time, in microseconds.
@@ -361,7 +371,7 @@ fn peek8(
     let c1571 = model == DriveModel::C1571;
     match region(model, addr) {
         Region::Port => port.read(addr as u8, pins.port),
-        Region::Tia => tia.read(addr as u8, pins.tia),
+        Region::Tia => tia.read_lines(addr as u8, pins.tia),
         Region::Ram => ram[usize::from(addr & 0x7ff)],
         Region::Via1 => via1.peek(addr as u8, pins.via1.0, pins.via1.1),
         Region::Via2 => via2.peek(addr as u8, pins.via2.0, pins.via2.1),
@@ -442,7 +452,7 @@ impl Bus for DriveBus<'_> {
             }
             Region::Tia => {
                 *self.byte_ready = false;
-                self.tia.read(a as u8, self.pins.tia)
+                self.tia.read_lines(a as u8, self.pins.tia)
             }
             _ => self.peek(addr, Size::Byte) as u8,
         };
@@ -630,6 +640,7 @@ impl CbmDrive {
             status: pc & 0x03,
             ack: pc & 0x08 != 0,
             dev: pc & 0x04 != 0,
+            dav: pc & 0x80 != 0,
         }
     }
 
@@ -709,12 +720,20 @@ impl CbmDrive {
         let protected =
             self.mech.notch_covered > 0 || self.disk.as_ref().is_some_and(|d| d.protected);
         let port = 0x6f | if protected { 0 } else { 0x10 } | if self.byte_ready { 0x80 } else { 0 };
-        let pc = (self.tia.outputs(2) & 0x1f)
+        // Line levels: the TIA's own outputs ANDed with the other drivers.
+        let h = self.tcbm_host;
+        let others = (h.status & 0x03)
+            | 0x04
+            | if h.ack { 0x08 } else { 0 }
+            | 0x10
             | if self.device == 9 { 0x20 } else { 0 }
             | if self.mech.sync { 0 } else { 0x40 }
-            | if self.tcbm_host.dav { 0x80 } else { 0 };
-        let pa = self.tia.outputs(0) & self.tcbm_host.dio;
-        (port, [pa, self.mech.last_byte, pc])
+            | if h.dav { 0x80 } else { 0 };
+        let pc = self.tia.outputs(2) & others;
+        let pa = self.tia.outputs(0) & h.dio;
+        // Port B: the head's byte on inputs, the latch on outputs.
+        let pb = self.tia.outputs(1) & (self.mech.last_byte | self.tia.ddr[1]);
+        (port, [pa, pb, pc])
     }
 
     /// A byte passed the head: SO pin of the CPU (if enabled by CA2), CA1
@@ -1151,7 +1170,7 @@ impl MediaSlot for CbmDrive {
     }
 }
 
-const VERSION: u16 = 5;
+const VERSION: u16 = 6;
 
 /// Cycles between the eighth bit entering the shift register and byte
 /// ready: with none, a poll of SYNC 19 cycles after byte ready could still
@@ -1207,6 +1226,8 @@ impl Savestate for CbmDrive {
                 w.u32(self.irq_timer);
                 w.u8(self.tcbm_host.dio);
                 w.bool(self.tcbm_host.dav);
+                w.u8(self.tcbm_host.status);
+                w.bool(self.tcbm_host.ack);
             }
         });
         self.cpu.save(w);
@@ -1281,6 +1302,8 @@ impl Savestate for CbmDrive {
                 TcbmHost {
                     dio: c.u8()?,
                     dav: c.bool()?,
+                    status: if version >= 6 { c.u8()? & 0x03 } else { 0x03 },
+                    ack: version < 6 || c.bool()?,
                 },
             )
         } else {

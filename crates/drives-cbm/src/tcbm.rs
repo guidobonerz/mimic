@@ -17,7 +17,10 @@
 //! | RESET     | the host's reset   | RESET                  |
 //!
 //! Every line has a pull-up; a line is low when either side drives it low
-//! (released inputs read high). The host's reset resets the drive.
+//! (released inputs read high), and a bonded pin reads its line, outputs
+//! included: fast loaders turn STATUS and ACK around (Promised Land's
+//! drive code waits for the host on PC0). The host's reset resets the
+//! drive.
 //! The protocol on these lines is the KERNAL's and the DOS's business
 //! (described in "Commodore Peripheral Bus: Part 5: TCBM", pagetable.com).
 //!
@@ -84,20 +87,32 @@ impl Tcbm1551 {
         (addr & 0xffe0 == base).then_some(addr as u8 & 7)
     }
 
-    /// Levels at the paddle's ports A, B, C.
-    fn host_pins(&self) -> [u8; 3] {
+    /// Line levels at the paddle's bonded pins: its outputs ANDed with
+    /// the drive's (unbonded bits 0).
+    fn host_lines(&self) -> [u8; 3] {
         let d = self.drive.tcbm_out();
-        let pa = self.paddle.outputs(0) & d.dio;
-        let pb = d.status;
-        let pc = (self.paddle.outputs(2) & 0x40) | if d.ack { 0x80 } else { 0 };
+        let out = |p| self.paddle.outputs(p);
+        let pa = out(0) & d.dio;
+        let pb = out(1) & d.status;
+        let pc = out(2) & ((if d.dav { 0x40 } else { 0 }) | if d.ack { 0x80 } else { 0 });
         [pa & BONDED[0], pb & BONDED[1], pc & BONDED[2]]
     }
 
     /// A host read without side effects (the TIA has none); `None` where
-    /// the paddle does not answer.
+    /// the paddle does not answer. Bonded pins read their line, the others
+    /// their latch as outputs and 0 as inputs.
     pub fn peek(&self, addr: u16) -> Option<u8> {
-        self.register(addr)
-            .map(|r| self.paddle.read(r, self.host_pins()))
+        let r = self.register(addr)?;
+        let lines = self.host_lines();
+        let v = self.paddle.read(r, lines);
+        Some(match r {
+            0..=2 => {
+                let i = usize::from(r);
+                let bonded_out = self.paddle.ddr[i] & BONDED[i];
+                (v & !bonded_out) | (lines[i] & bonded_out)
+            }
+            _ => v,
+        })
     }
 
     /// A host write; false where the paddle does not answer.
@@ -122,9 +137,12 @@ impl Tcbm1551 {
     pub fn run(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
         let mut stop = None;
         for _ in 0..self.clock.tick() {
+            let pc = self.paddle.outputs(2);
             self.drive.set_tcbm_host(TcbmHost {
                 dio: self.paddle.outputs(0),
-                dav: self.paddle.outputs(2) & 0x40 != 0,
+                dav: pc & 0x40 != 0,
+                status: self.paddle.outputs(1) & BONDED[1],
+                ack: pc & 0x80 != 0,
             });
             if let CycleResult::Jammed = self.drive.tick(IecLines::default(), dbg.as_deref_mut()) {
                 stop = Some(StopReason::CpuJam {
@@ -240,6 +258,28 @@ mod tests {
         assert_eq!(t.peek(0xfef1).map(|v| v & 0xfc), Some(0xfc));
         assert!(t.write(0xfef4, 0x00));
         assert_eq!(t.peek(0xfef1).map(|v| v & 0xfc), Some(0));
+    }
+
+    #[test]
+    fn status_and_ack_work_both_ways() {
+        // Fast loaders (Promised Land) drive STATUS from the host and read
+        // it in the drive: a line is low when either side pulls it.
+        let mut t = tcbm();
+        t.drive.tia.write(5, 0x1f);
+        t.drive.tia.write(2, 0x0f); // drive: STATUS0/1, DEV and ACK high
+        assert!(t.write(0xfef4, 0x01)); // host PB0 output, low
+        assert!(t.write(0xfef1, 0x00));
+        assert!(t.write(0xfef5, 0xc0)); // host PC6/PC7 outputs
+        assert!(t.write(0xfef2, 0x40)); // DAV high, ACK pulled low
+        for _ in 0..4 {
+            t.run(None);
+        }
+        let space = MemSpaceId(3);
+        let pc = t.drive.peek(space, 0x4002, emu_core::Size::Byte).unwrap();
+        assert_eq!(pc & 0x01, 0, "STATUS0 pulled low by the host");
+        assert_eq!(pc & 0x02, 0x02, "STATUS1 high");
+        assert_eq!(pc & 0x08, 0, "ACK pulled low by the host");
+        assert_eq!(t.peek(0xfef1).map(|v| v & 0x03), Some(0x02), "host reads the line");
     }
 
     #[test]
