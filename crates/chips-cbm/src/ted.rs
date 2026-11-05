@@ -51,16 +51,30 @@
 //! positions are measured against VICE's xplus4 with
 //! `tools/ted_timing.py` (`tests/tests/ted_timing.rs`).
 //!
+//! Fetch pipeline (`tx` 11–90, column c at `tx` 11 + 2c and 12 + 2c):
+//! on the attribute DMA line (the line before a row) the odd double clocks
+//! fetch the attributes of the next row into a DMA buffer; they become the
+//! row's attributes when a pointer DMA starts or a field begins. On a
+//! row's first line (the pointer DMA) the odd double clocks fetch the
+//! character codes into the row's buffer. On every line from the field's
+//! first attribute DMA to line 203 the even double clocks fetch the
+//! pattern (or bitmap) byte from the code, the character position and the
+//! character line counter (`$1F` bits 0–2), which counts on every line and
+//! restarts only with a pointer DMA, not with YSCROLL. Each column keeps
+//! its attribute, code and pattern byte for putting out the line. The
+//! position moves on a row at the end of the attribute DMA line's
+//! fetches. So a `$FF14` write in the middle of a row changes nothing
+//! until the next DMA, and FLI (an attribute DMA forced on every line)
+//! freezes attributes and codes while the character line runs on. All
+//! measured against xplus4 (`ted_timing` rows, matrix, matrixc,
+//! fli2–fli4, counters).
+//!
 //! Data bus: [`Ted::bus`] is the byte the TED fetched in the last double
-//! clock, if it fetched: in the fetch window of display lines the pattern (or
-//! bitmap) byte of the column in the even double clocks, and on a row's
-//! first line the attribute byte in the odd ones too. A byte the TED leaves
-//! on the bus is what the CPU reads from unconnected addresses (VICE's
-//! `Plus4/openio` tests: such reads change with the picture). The order of
-//! the fetches within a character is this project's simple model. The tick
-//! notes only which cell and line it fetched; the byte is read when asked
-//! for, from the registers then (nothing can change them in between without
-//! a CPU access, which replaces the bus's byte).
+//! clock, if it fetched: the pattern byte in the even double clocks of the
+//! fetch window, the attribute or character code in the odd ones of a DMA
+//! line. A byte the TED leaves on the bus is what the CPU reads from
+//! unconnected addresses (VICE's `Plus4/openio` tests: such reads change
+//! with the picture).
 //!
 //! Colour registers (`$15–$19`): a CPU write shows in the border from the
 //! second pixel of the next double clock; its first pixel shows the old
@@ -69,9 +83,9 @@
 //! moment, so a write reaches the window 44 pixels further left than the
 //! border (both measured against xplus4, `ted_timing` split).
 //!
-//! Simplifications: the picture is computed from the registers at each
-//! pixel (no fetch pipeline); refresh cycles do not slow the CPU; light pen
-//! and the `$1A/$1B` character position reload are not modelled.
+//! Simplifications: modes, colour registers and the cursor apply when a
+//! pixel is put out, not through the pipeline; light pen and writes to
+//! `$1A/$1B` and `$1F` are not modelled.
 
 pub mod gfx;
 pub mod overlay;
@@ -243,13 +257,22 @@ pub trait TedMemory {
     fn fetch(&self, addr: u16, rom: bool) -> u8;
 }
 
-/// A fetch the TED made: the cell, its character line, and whether it was
-/// the attribute byte (else the pattern or bitmap byte).
+/// What the TED fetches in a double clock of the fetch window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FetchKind {
+    /// The character pattern or bitmap byte (even `tx`, every fetch line).
+    Pattern,
+    /// The attribute DMA (odd `tx`, the line before a character row).
+    Attribute,
+    /// The character pointer DMA (odd `tx`, a row's first line).
+    Code,
+}
+
+/// A fetch for column `col` (0–39).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Fetch {
-    cell: u16,
-    line: u16,
-    attribute: bool,
+    col: u16,
+    kind: FetchKind,
 }
 
 /// What one double clock did.
@@ -293,10 +316,27 @@ pub struct Ted {
     /// Audio produced but not yet taken (output, not machine state).
     pub samples: Vec<i16>,
     pixels: Vec<u8>,
-    /// The TED's last fetch and whether it was in the last double clock
-    /// (derived each tick, not state).
-    fetch: Option<Fetch>,
+    /// The byte of the TED's last fetch (the data bus) and whether it was
+    /// in the last double clock.
+    bus_byte: Option<u8>,
     fetched_now: bool,
+    /// The fetch pipeline (see the module documentation): attributes of
+    /// the attribute DMA, taken over as the row's (`attr_row`) when the
+    /// line counter turns; the row's character codes; and per column of
+    /// the line being put out its attribute, code and pattern byte as the
+    /// pattern fetch found them, with the position of its first cell.
+    attr_dma: [u8; 40],
+    attr_dma_done: bool,
+    attr_row: [u8; 40],
+    code_row: [u8; 40],
+    line_attr: [u8; 40],
+    line_code: [u8; 40],
+    line_pattern: [u8; 40],
+    line_vc: u16,
+    /// The character rows have begun this field (set by its first
+    /// attribute DMA), and the line being put out fetched pattern bytes.
+    rows_active: bool,
+    line_rows: bool,
     /// Debug overlay record (not machine state; see `crate::overlay`).
     rec: crate::overlay::Recorder<overlay::Record>,
     /// The counter line's kind (derived, see [`Ted::update_kind`]).
@@ -313,6 +353,10 @@ pub struct Ted {
     /// The live character counter still stands 40 past the position in
     /// the first double clocks of a line (see `count_line`).
     vc_ahead: bool,
+    /// The position moves on a row at the end of this line's fetches
+    /// (`tx` 91): the line's pattern bytes still come from the row it
+    /// shows, its attribute DMA already reads the next row.
+    vc_step: bool,
 }
 
 impl Ted {
@@ -335,8 +379,18 @@ impl Ted {
             resampler: Decimator::new(t.double_hz(), SAMPLE_RATE).expect("valid rates"),
             samples: Vec::new(),
             pixels: vec![0; (WIDTH * t.height) as usize],
-            fetch: None,
+            bus_byte: None,
             fetched_now: false,
+            attr_dma: [0; 40],
+            attr_dma_done: false,
+            attr_row: [0; 40],
+            code_row: [0; 40],
+            line_attr: [0; 40],
+            line_code: [0; 40],
+            line_pattern: [0; 40],
+            line_vc: 0,
+            rows_active: false,
+            line_rows: false,
             rec: crate::overlay::Recorder(None),
             kind: 0,
             pending: None,
@@ -344,6 +398,7 @@ impl Ted {
             vcbase: 0,
             flash: 0,
             vc_ahead: false,
+            vc_step: false,
         }
     }
 
@@ -494,18 +549,6 @@ impl Ted {
         1 + u16::from(self.regs[0x06] & 7)
     }
 
-    /// Line within the current character row.
-    fn char_line(&self) -> u8 {
-        (self.line.wrapping_sub(self.first_row_line()) & 7) as u8
-    }
-
-    /// Character row of the current line, if inside the rows.
-    fn char_row(&self) -> Option<u16> {
-        let first = self.first_row_line();
-        let row = self.line.checked_sub(first)? / 8;
-        (row < 25 && self.line <= WINDOW_BOTTOM).then_some(row)
-    }
-
     fn in_window_v(&self) -> bool {
         let (top, bottom) = if self.rows25() {
             (WINDOW_TOP, WINDOW_BOTTOM)
@@ -629,11 +672,18 @@ impl Ted {
             self.clock_timers();
         }
         self.sound();
-        self.draw(mem);
+        self.draw();
+        if self.tx() == *AEC_TX.start() + 1 {
+            self.line_rows = self.rows_line();
+        }
         let fetch = self.fetch_slot();
         self.fetched_now = fetch.is_some();
-        if fetch.is_some() {
-            self.fetch = fetch;
+        if let Some(f) = fetch {
+            self.fetch_byte(mem, f);
+        }
+        if self.vc_step && self.tx() == *AEC_TX.end() {
+            self.vc_step = false;
+            self.vcbase = (self.vcbase + 40) & 0x3ff;
         }
 
         self.tick += 1;
@@ -655,6 +705,14 @@ impl Ted {
             // raster compare flag is there for that double clock's CPU
             // cycle (measured against xplus4, `ted_timing` irqall).
             self.update_kind();
+            // The attribute DMA's bytes reach the row with a pointer DMA or
+            // at the start of a field: under FLI (an attribute DMA on every
+            // line) they never do (xplus4, `ted_timing` fli2–fli4).
+            let line = self.counter_line();
+            if self.attr_dma_done && (line == 0 || self.pointer_line(line)) {
+                self.attr_dma_done = false;
+                self.attr_row = self.attr_dma;
+            }
             if self.counter_line() == self.compare_line() {
                 self.irq_flags |= 0x02;
             }
@@ -673,16 +731,25 @@ impl Ted {
         self.vc_ahead = false;
         if line == 0 {
             self.vcbase = 0;
+            self.vc_step = false;
             self.chrast = 0;
+            self.rows_active = false;
             self.flash = (self.flash + 1) & 0x0f;
             return;
         }
-        if !self.fetch_line(line) || line <= self.first_row_line() {
+        if !self.fetch_line(line) || !self.rows_active {
             return;
         }
-        self.chrast = (self.chrast + 1) & 7;
+        // The character line counts on from the field's first attribute
+        // DMA and starts again with a pointer DMA, not with YSCROLL (FLI
+        // keeps it running: xplus4, `ted_timing` fli2).
+        self.chrast = if self.pointer_line(line) {
+            0
+        } else {
+            (self.chrast + 1) & 7
+        };
         if line & 7 == u16::from(self.regs[0x06] & 7) {
-            self.vcbase = (self.vcbase + 40) & 0x3ff;
+            self.vc_step = true;
         } else {
             self.vc_ahead = true;
         }
@@ -692,7 +759,7 @@ impl Ted {
     /// row's line the live counter, which then still stands 40 further on
     /// (xplus4, `ted_timing` counters; the reload follows at `tx` 4).
     fn position(&self) -> u16 {
-        if self.vc_ahead && self.tx() <= 3 {
+        if self.vc_step || (self.vc_ahead && self.tx() <= 3) {
             (self.vcbase + 40) & 0x3ff
         } else {
             self.vcbase
@@ -787,31 +854,8 @@ impl Ted {
     }
 
     /// The byte of the TED's last fetch (`None` before its first).
-    pub fn bus(&self, mem: &dyn TedMemory) -> Option<u8> {
-        let Fetch {
-            cell,
-            line,
-            attribute,
-        } = self.fetch?;
-        let vm = self.matrix_base();
-        if attribute {
-            return Some(mem.fetch(vm.wrapping_add(cell), false));
-        }
-        let rom = self.rom_fetch();
-        if self.regs[0x06] & 0x20 != 0 {
-            let base = u16::from(self.regs[0x12] & 0x38) << 10;
-            return Some(mem.fetch(base.wrapping_add(cell * 8 + line), rom));
-        }
-        let code = mem.fetch(vm.wrapping_add(0x400 + cell), false);
-        let index = if self.regs[0x06] & 0x40 != 0 {
-            code & 0x3f
-        } else if self.regs[0x07] & 0x80 == 0 {
-            code & 0x7f
-        } else {
-            code
-        };
-        let charset = u16::from(self.regs[0x13] & 0xfc) << 8;
-        Some(mem.fetch(charset.wrapping_add(u16::from(index) * 8 + line), rom))
+    pub fn bus(&self) -> Option<u8> {
+        self.bus_byte
     }
 
     /// The fetch of this double clock (see the module documentation).
@@ -825,24 +869,98 @@ impl Ted {
         if !AEC_TX.contains(&tx) {
             return None;
         }
-        let row = self.char_row()?;
         let col = ((tx - AEC_TX.start()) / 2).min(39);
-        let line = u16::from(self.char_line());
-        // The TED's half of a single-clock cycle (even tx); on a DMA line
-        // it has the odd ones too (the attribute or pointer fetch).
-        let attribute = tx % 2 == 1;
-        if attribute && base != 2 {
-            return None;
+        if tx % 2 == 1 {
+            // The TED's half of a single-clock cycle is the even one; on a
+            // DMA line it has the odd ones too.
+            if base != 2 {
+                return None;
+            }
+            let kind = if self.pointer_line(self.counter_line()) {
+                FetchKind::Code
+            } else {
+                FetchKind::Attribute
+            };
+            return Some(Fetch { col, kind });
         }
-        Some(Fetch {
-            cell: row * 40 + col,
-            line,
-            attribute,
+        // Pattern bytes on the lines that fetch them (see `rows_line`).
+        self.line_rows.then_some(Fetch {
+            col,
+            kind: FetchKind::Pattern,
         })
     }
 
+    /// The counter's line is a row's first line with the pointer DMA.
+    fn pointer_line(&self, line: u16) -> bool {
+        self.dma_line(line) && (line + 1).wrapping_sub(self.first_row_line()) % 8 == 1
+    }
+
+    /// The counter's line fetches pattern bytes: a fetch line after the
+    /// field's first attribute DMA, whatever YSCROLL says since (FLI), up
+    /// to the end of the 25th row.
+    fn rows_line(&self) -> bool {
+        let line = self.counter_line();
+        let first = self.first_row_line();
+        !self.kind.is_multiple_of(3)
+            && self.rows_active
+            && line <= WINDOW_BOTTOM
+            && !(line >= first && (line - first) / 8 >= 25)
+    }
+
+    /// Fetch a byte: the attribute or character pointer DMA into the row
+    /// buffers, a pattern byte together with the column's attribute and
+    /// code into the line's.
+    fn fetch_byte(&mut self, mem: &dyn TedMemory, f: Fetch) {
+        let col = usize::from(f.col);
+        let next = if self.vc_step { 40 } else { 0 };
+        let cell = (self.vcbase + f.col) & 0x3ff;
+        let vm = self.matrix_base();
+        let b = match f.kind {
+            FetchKind::Attribute => {
+                let cell = (cell + next) & 0x3ff;
+                let b = mem.fetch(vm.wrapping_add(cell), false);
+                self.attr_dma[col] = b;
+                self.attr_dma_done = true;
+                self.rows_active = true;
+                b
+            }
+            FetchKind::Code => {
+                let b = mem.fetch(vm.wrapping_add(0x400 + cell), false);
+                self.code_row[col] = b;
+                b
+            }
+            FetchKind::Pattern => {
+                if col == 0 {
+                    self.line_vc = self.vcbase;
+                }
+                let rom = self.rom_fetch();
+                let line = u16::from(self.chrast);
+                let code = self.code_row[col];
+                let b = if self.regs[0x06] & 0x20 != 0 {
+                    let base = u16::from(self.regs[0x12] & 0x38) << 10;
+                    mem.fetch(base.wrapping_add(cell * 8 + line), rom)
+                } else {
+                    let index = if self.regs[0x06] & 0x40 != 0 {
+                        code & 0x3f
+                    } else if self.regs[0x07] & 0x80 == 0 {
+                        code & 0x7f
+                    } else {
+                        code
+                    };
+                    let charset = u16::from(self.regs[0x13] & 0xfc) << 8;
+                    mem.fetch(charset.wrapping_add(u16::from(index) * 8 + line), rom)
+                };
+                self.line_attr[col] = self.attr_row[col];
+                self.line_code[col] = code;
+                self.line_pattern[col] = b;
+                b
+            }
+        };
+        self.bus_byte = Some(b);
+    }
+
     /// The 4 pixels of this double clock.
-    fn draw(&mut self, mem: &dyn TedMemory) {
+    fn draw(&mut self) {
         // A colour register written a double clock ago takes effect now;
         // this double clock's first pixel shows old | new.
         let mut glitch = None;
@@ -872,7 +990,7 @@ impl Ted {
                 continue;
             }
             let fx = x - FRAME_LEFT;
-            let c = self.pixel(mem, x);
+            let c = self.pixel(x);
             self.pixels[(row + u32::from(fx)) as usize] = c & 0x7f;
         }
         for i in 0..4 {
@@ -886,11 +1004,11 @@ impl Ted {
             let c = match glitch {
                 Some((r, mixed, v)) if i == 0 => {
                     self.regs[r] = mixed;
-                    let c = self.pixel(mem, x);
+                    let c = self.pixel(x);
                     self.regs[r] = v;
                     c
                 }
-                _ => self.pixel(mem, x),
+                _ => self.pixel(x),
             };
             self.pixels[(row + u32::from(fx)) as usize] = c & 0x7f;
         }
@@ -907,7 +1025,7 @@ impl Ted {
         self.den() && self.in_window_v() && x >= left && x < right
     }
 
-    fn pixel(&self, mem: &dyn TedMemory, x: u16) -> u8 {
+    fn pixel(&self, x: u16) -> u8 {
         let border = self.regs[0x19];
         let (left, right) = if self.regs[0x07] & 0x08 != 0 {
             (DISPLAY_X, DISPLAY_X + 320)
@@ -918,9 +1036,9 @@ impl Ted {
             return border;
         }
         let bg0 = self.regs[0x15];
-        let Some(row) = self.char_row() else {
+        if !self.line_rows {
             return bg0;
-        };
+        }
         let xs = x - DISPLAY_X;
         let Some(px) = xs.checked_sub(u16::from(self.regs[0x07] & 7)) else {
             return bg0;
@@ -930,19 +1048,14 @@ impl Ted {
             return bg0;
         }
         let bit = 7 - (px % 8) as u8;
-        let cell = row * 40 + col;
-        let vm = self.matrix_base();
-        let attr = mem.fetch(vm.wrapping_add(cell), false);
-        let code = mem.fetch(vm.wrapping_add(0x400 + cell), false);
-        let line = u16::from(self.char_line());
+        let c = usize::from(col);
+        let cell = (self.line_vc + col) & 0x3ff;
+        let (attr, code, pattern) = (self.line_attr[c], self.line_code[c], self.line_pattern[c]);
         let ecm = self.regs[0x06] & 0x40 != 0;
         let bmm = self.regs[0x06] & 0x20 != 0;
         let mcm = self.regs[0x07] & 0x10 != 0;
-        let rom = self.rom_fetch();
 
         if bmm {
-            let base = u16::from(self.regs[0x12] & 0x38) << 10;
-            let pattern = mem.fetch(base.wrapping_add(cell * 8 + line), rom);
             let lum_hi = attr & 0x70;
             let lum_lo = (attr & 0x07) << 4;
             if mcm {
@@ -970,16 +1083,8 @@ impl Ted {
             };
         }
 
-        let charset = u16::from(self.regs[0x13] & 0xfc) << 8;
         let reverse_allowed = self.regs[0x07] & 0x80 == 0 && !ecm;
-        let index = if ecm {
-            code & 0x3f
-        } else if reverse_allowed {
-            code & 0x7f
-        } else {
-            code
-        };
-        let mut pattern = mem.fetch(charset.wrapping_add(u16::from(index) * 8 + line), rom);
+        let mut pattern = pattern;
         let flash_on = (self.frame >> 4) & 1 == 0;
         if attr & 0x80 != 0 && !flash_on {
             pattern = 0;
@@ -1013,7 +1118,7 @@ impl Ted {
 }
 
 const TAG: [u8; 4] = *b"TED1";
-const VERSION: u16 = 4;
+const VERSION: u16 = 5;
 
 impl Savestate for Ted {
     fn save(&self, w: &mut StateWriter) {
@@ -1042,17 +1147,11 @@ impl Savestate for Ted {
             w.u8(self.sound_prescale);
             self.resampler.save(w);
             w.raw(&self.pixels);
-            // Version 2: the last fetch (the data bus's byte).
+            // Version 2: the last fetch (the data bus's byte; version 5:
+            // the byte itself).
             w.bool(self.fetched_now);
-            w.bool(self.fetch.is_some());
-            let f = self.fetch.unwrap_or(Fetch {
-                cell: 0,
-                line: 0,
-                attribute: false,
-            });
-            w.u16(f.cell);
-            w.u16(f.line);
-            w.bool(f.attribute);
+            w.bool(self.bus_byte.is_some());
+            w.u8(self.bus_byte.unwrap_or(0));
             // Version 3: a colour register write on its way.
             let (r, v, armed) = self.pending.unwrap_or((0, 0, false));
             w.bool(self.pending.is_some());
@@ -1064,6 +1163,22 @@ impl Savestate for Ted {
             w.u16(self.vcbase);
             w.u8(self.flash);
             w.bool(self.vc_ahead);
+            // Version 5: the fetch pipeline.
+            for buf in [
+                &self.attr_dma,
+                &self.attr_row,
+                &self.code_row,
+                &self.line_attr,
+                &self.line_code,
+                &self.line_pattern,
+            ] {
+                w.raw(buf);
+            }
+            w.bool(self.attr_dma_done);
+            w.u16(self.line_vc);
+            w.bool(self.rows_active);
+            w.bool(self.line_rows);
+            w.bool(self.vc_step);
         });
     }
 
@@ -1104,15 +1219,18 @@ impl Savestate for Ted {
         for p in &mut t.pixels {
             *p &= 0x7f;
         }
-        if version >= 2 {
+        if version >= 5 {
             t.fetched_now = c.bool()?;
             let some = c.bool()?;
-            let f = Fetch {
-                cell: c.u16()? % 1000,
-                line: c.u16()? & 7,
-                attribute: c.bool()?,
-            };
-            t.fetch = some.then_some(f);
+            let b = c.u8()?;
+            t.bus_byte = some.then_some(b);
+        } else if version >= 2 {
+            // Older states noted the cell; the byte comes with the next fetch.
+            t.fetched_now = c.bool()?;
+            c.bool()?;
+            c.u16()?;
+            c.u16()?;
+            c.bool()?;
         }
         if version >= 3 {
             let some = c.bool()?;
@@ -1129,6 +1247,23 @@ impl Savestate for Ted {
             t.vcbase = c.u16()? & 0x3ff;
             t.flash = c.u8()? & 0x0f;
             t.vc_ahead = c.bool()?;
+        }
+        if version >= 5 {
+            for buf in [
+                &mut t.attr_dma,
+                &mut t.attr_row,
+                &mut t.code_row,
+                &mut t.line_attr,
+                &mut t.line_code,
+                &mut t.line_pattern,
+            ] {
+                c.raw_into(buf)?;
+            }
+            t.attr_dma_done = c.bool()?;
+            t.line_vc = c.u16()? & 0x3ff;
+            t.rows_active = c.bool()?;
+            t.line_rows = c.bool()?;
+            t.vc_step = c.bool()?;
         }
         t.samples = std::mem::take(&mut self.samples);
         // The overlay record is not state: keep it switched on, fresh.

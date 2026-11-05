@@ -285,7 +285,7 @@ fn peek_byte(
     match mem.area(a) {
         Area::Port => port.read(a as u8, port_pins(io)),
         Area::Ram => mem.ram_read(a),
-        Area::Rom => mem.rom_byte(a).unwrap_or_else(|| open_bus(mem, io)),
+        Area::Rom => mem.rom_byte(a).unwrap_or_else(|| open_bus(io)),
         Area::Io => match a {
             0xfd00..=0xfd0f if plus4 => io.acia.peek(a as u8),
             // The cassette sense line reads on bit 2 (KERNAL `$E31C`),
@@ -300,21 +300,19 @@ fn peek_byte(
                 .as_ref()
                 .map_or(0, |sid| sid.peek(a as u8 & 0x1f)),
             // The 1551's interface cartridge, where its DEV line puts it.
-            0xfec0..=0xfeff => tcbm
-                .and_then(|t| t.peek(a))
-                .unwrap_or_else(|| open_bus(mem, io)),
+            0xfec0..=0xfeff => tcbm.and_then(|t| t.peek(a)).unwrap_or_else(|| open_bus(io)),
             0xff08 => io.keyboard_read(),
             0xff13 => (io.ted.peek(0x13) & 0xfe) | u8::from(mem.rom_on),
             0xff00..=0xff1f => io.ted.peek(a as u8),
-            _ => open_bus(mem, io),
+            _ => open_bus(io),
         },
     }
 }
 
 /// What an unconnected address reads: the data bus's last byte.
-fn open_bus(mem: &Memory, io: &Io) -> u8 {
+fn open_bus(io: &Io) -> u8 {
     if io.bus_from_ted {
-        io.ted.bus(&TedView(mem)).unwrap_or(io.data_bus)
+        io.ted.bus().unwrap_or(io.data_bus)
     } else {
         io.data_bus
     }

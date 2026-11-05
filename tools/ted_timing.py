@@ -37,7 +37,16 @@ Tests (PAL; each run starts with SYNC, below):
   dma: a YSCROLL write cycle by cycle through line 102: when does it
     still make the line a DMA line?
   counters: $FF1A/$FF1B/$FF1F over a frame.
-  split, rows, fli: pictures (xplus4's screenshot is the reference).
+  split, rows, fli: pictures (xplus4's screenshot is the reference; fli's
+    picture comes from uninitialised RAM, whose power-on pattern differs
+    between emulators, so it is no test).
+  matrix, matrixc: $FF14 switched in the middle of a row (attributes /
+    character codes come from the DMA buffers).
+  fli2, fli3, fli4: FLI with a coded charset (which matrix the attributes
+    and codes came from, which character line), shifted matrices, a later
+    start.
+  flicnt: $FF1F/$FF1A/$FF1B/$FF1E under FLI (the program falls behind
+    from line 8 on; development aid, not a test yet).
 
 SYNC: wait for line 300 ($FF1C bit 0 set, $FF1D = 44; vertical blank,
 where the CPU runs at double clock), wait for $FF1E < $10, then for
@@ -536,6 +545,78 @@ def build_rows():
     return a.assemble(), 0
 
 
+def build_matrix(codes=False):
+    """A picture test of the video matrix buffers: matrix A at $0800 and
+    matrix B at $4000 (characters at +$400), every row r of A in colour
+    $31 + r and of B in $61 + r (`codes`: both in A's colours, A with the
+    solid reversed space $A0, B with spaces $20). On every frame the
+    program switches $FF14 to B when the line counter reaches 46 (the
+    middle of row 5 with YSCROLL 3) and back to A at line 120 (row 14):
+    the picture shows from which line (and where in it) the TED takes the
+    new matrix's attributes (`matrix`) or character codes (`matrixc`)."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    tag = "c" if codes else "a"
+    for name, base, lum, ch in (("A", 0x0800, 0x30, 0xA0), ("B", 0x4000, 0x60 if not codes else 0x30, 0x20 if codes else 0xA0)):
+        a.op("LDX", "imm", 0)
+        a.label(f"mr{tag}{name}")
+        a.op("LDA", "abx", f"mat{tag}{name}")
+        a.op("STA", "zp", 0xF0)
+        a.op("LDA", "abx", "mrowlo")
+        a.op("STA", "zp", 0xF2)
+        a.op("LDA", "abx", "mrowhi")
+        a.op("CLC")
+        a.op("ADC", "imm", base >> 8)
+        a.op("STA", "zp", 0xF3)
+        a.op("LDY", "imm", 39)
+        a.label(f"mc{tag}{name}")
+        a.op("LDA", "zp", 0xF0)
+        a.op("STA", "izy", 0xF2)
+        a.op("DEY")
+        a.op("BPL", "rel", f"mc{tag}{name}")
+        a.op("LDA", "zp", 0xF3)
+        a.op("CLC")
+        a.op("ADC", "imm", 0x04)
+        a.op("STA", "zp", 0xF3)
+        a.op("LDY", "imm", 39)
+        a.op("LDA", "imm", ch)
+        a.label(f"mh{tag}{name}")
+        a.op("STA", "izy", 0xF2)
+        a.op("DEY")
+        a.op("BPL", "rel", f"mh{tag}{name}")
+        a.op("INX")
+        a.op("CPX", "imm", 25)
+        a.op("BNE", "rel", f"mr{tag}{name}")
+    a.op("LDA", "imm", 0x03)             # cursor off the screen
+    a.op("STA", "abs", 0xFF0C)
+    a.op("LDA", "imm", 0xFF)
+    a.op("STA", "abs", 0xFF0D)
+    a.label("mframe")
+    for line, base in ((46, 0x4000), (120, 0x0800)):
+        a.label(f"mw{line}")
+        a.op("LDA", "imm", line)
+        a.op("CMP", "abs", 0xFF1D)
+        a.op("BNE", "rel", f"mw{line}")
+        a.op("LDA", "abs", 0xFF1C)
+        a.op("AND", "imm", 0x01)
+        a.op("BNE", "rel", f"mw{line}")
+        a.op("LDA", "imm", base >> 8)
+        a.op("STA", "abs", 0xFF14)
+    a.op("JMP", "abs", "mframe")
+    lumb = 0x60 if not codes else 0x30
+    a.label(f"mat{tag}A")
+    a.byte(*[(0x30 | ((1 + r) & 0x0F)) & 0x7F for r in range(25)])
+    a.label(f"mat{tag}B")
+    a.byte(*[(lumb | ((1 + r) & 0x0F)) & 0x7F for r in range(25)])
+    a.label("mrowlo")
+    a.byte(*[(40 * r) & 0xFF for r in range(25)])
+    a.label("mrowhi")
+    a.byte(*[(40 * r) >> 8 for r in range(25)])
+    return a.assemble(), 0
+
+
 COUNTER_PAGES = 4
 COUNTER_REGS = [0xFF1E, 0xFF1D, 0xFF1F, 0xFF1A, 0xFF1B]
 
@@ -563,13 +644,78 @@ def build_counters():
     return a.assemble(), len(COUNTER_REGS) * COUNTER_PAGES * 0x100
 
 
-def build_fli():
+FLICNT_REGS = [0xFF1F, 0xFF1A, 0xFF1B, 0xFF1E]
+
+
+def build_flicnt():
+    """The counters under FLI: the line loop of `fli` (YSCROLL = (L + 1) & 7
+    and $FF14 written on every line L from 2 to 199), and right after the
+    two writes $FF1F, $FF1A, $FF1B or $FF1E (one register a frame, after a
+    frame without recording) stored for line L. Results: per register 256
+    bytes indexed by the line. The unrolled program reaches into the
+    bitmap, so the samples go to RAM at $D000 first."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    a.op("STA", "abs", 0xFF3F)
+    a.op("LDA", "imm", 0)
+    a.op("TAX")
+    a.label("qclr")
+    for page in range(len(FLICNT_REGS)):
+        a.op("STA", "abx", 0xD000 + page * 0x100)
+    a.op("INX")
+    a.op("BNE", "rel", "qclr")
+    for f, reg in enumerate([None] + FLICNT_REGS):
+        a.label(f"q{f}w")
+        a.op("LDA", "abs", 0xFF1C)
+        a.op("AND", "imm", 0x01)
+        a.op("BNE", "rel", f"q{f}w")
+        a.op("LDA", "abs", 0xFF1D)
+        a.op("CMP", "imm", 1)
+        a.op("BNE", "rel", f"q{f}w")
+        for line in range(2, 200):
+            nxt = (line + 1) & 7
+            a.op("LDA", "imm", line)
+            a.label(f"q{f}l{line}")
+            a.op("CMP", "abs", 0xFF1D)
+            a.op("BNE", "rel", f"q{f}l{line}")
+            a.op("LDA", "imm", 0x18 | nxt)
+            a.op("STA", "abs", 0xFF06)
+            a.op("LDA", "imm", (0x8000 + nxt * 0x800) >> 8)
+            a.op("STA", "abs", 0xFF14)
+            if reg is not None:
+                a.op("LDA", "abs", reg)
+                a.op("STA", "abs", 0xD000 + (f - 1) * 0x100 + line)
+        a.op("LDA", "imm", 0x1B)
+        a.op("STA", "abs", 0xFF06)
+        a.op("LDA", "imm", 0x08)
+        a.op("STA", "abs", 0xFF14)
+    a.op("LDX", "imm", 0)
+    a.label("qcopy")
+    for page in range(len(FLICNT_REGS)):
+        a.op("LDA", "abx", 0xD000 + page * 0x100)
+        a.op("STA", "abx", RESULTS + page * 0x100)
+    a.op("INX")
+    a.op("BNE", "rel", "qcopy")
+    show_results(a)
+    return a.assemble(), len(FLICNT_REGS) * 0x100
+
+
+def build_fli(coded=False, shift=0, start=2):
     """A picture test of FLI: eight video matrices at $8000-$BFFF (ROM off
     for the CPU), matrix k with attributes ($42 + k) and character 0,
     solid in a charset in RAM at $C000. On every line L from 2 to 199 the program waits for the line
     counter to reach L, then sets YSCROLL = (L + 1) & 7 (an attribute DMA
     on line L + 1) and $FF14 to matrix (L + 1) & 7: each line takes its own
-    matrix's colours."""
+    matrix's colours.
+
+    `coded` (`fli2`): matrix k holds character k and attribute $40 + k + 2
+    with a black background, and the whole RAM charset is written: row r
+    of character c is `hhhhhrrr` with h = k + 1 for the characters 0-7,
+    31 for the space $20 (the KERNAL screen's) and 30 for the rest, so
+    each line shows which matrix its attributes and its characters came
+    from and which character row the TED fetched."""
     a = Asm(0x1001)
     basic_stub(a)
     a.label("main")
@@ -583,17 +729,29 @@ def build_fli():
         for page in range(4):
             a.op("LDA", "imm", 0x40 | (k + 2))
             a.op("STA", "abx", base + page * 0x100)
-            a.op("LDA", "imm", 0x00)
+            a.op("LDA", "imm", k if coded else 0x00)
             a.op("STA", "abx", base + 0x400 + page * 0x100)
         a.op("INX")
         a.op("BNE", "rel", f"fm{k}")
-    # character 0 of a RAM charset at $C000 is solid (no ROM fetches).
-    a.op("LDA", "imm", 0xFF)
-    a.op("LDX", "imm", 7)
-    a.label("fcs")
-    a.op("STA", "abx", 0xC000)
-    a.op("DEX")
-    a.op("BPL", "rel", "fcs")
+    if coded:
+        # the whole charset: 2 KB copied from the table below.
+        a.op("LDX", "imm", 0)
+        a.label("fcs")
+        for page in range(8):
+            a.op("LDA", "abx", f"fcodes{page}")
+            a.op("STA", "abx", 0xC000 + page * 0x100)
+        a.op("INX")
+        a.op("BNE", "rel", "fcs")
+        a.op("LDA", "imm", 0x00)             # black background
+        a.op("STA", "abs", 0xFF15)
+    else:
+        # character 0 of a RAM charset at $C000 is solid (no ROM fetches).
+        a.op("LDA", "imm", 0xFF)
+        a.op("LDX", "imm", 7)
+        a.label("fcs")
+        a.op("STA", "abx", 0xC000)
+        a.op("DEX")
+        a.op("BPL", "rel", "fcs")
     a.op("LDA", "abs", 0xFF12)
     a.op("AND", "imm", 0xFB)
     a.op("STA", "abs", 0xFF12)
@@ -615,7 +773,7 @@ def build_fli():
     a.op("CMP", "imm", 1)
     a.op("BNE", "rel", "fw0")
     # unrolled: a DMA line leaves the CPU only some 25 cycles.
-    for line in range(2, 200):
+    for line in range(start, 200):
         nxt = (line + 1) & 7
         a.op("LDA", "imm", line)
         a.label(f"fl{line}")
@@ -623,13 +781,20 @@ def build_fli():
         a.op("BNE", "rel", f"fl{line}")
         a.op("LDA", "imm", 0x18 | nxt)   # DEN, 25 rows
         a.op("STA", "abs", 0xFF06)
-        a.op("LDA", "imm", (0x8000 + nxt * 0x800) >> 8)
+        a.op("LDA", "imm", (0x8000 + ((nxt + shift) & 7) * 0x800) >> 8)
         a.op("STA", "abs", 0xFF14)
     a.op("LDA", "imm", 0x1B)             # back to normal for the rest
     a.op("STA", "abs", 0xFF06)
     a.op("LDA", "imm", 0x80)
     a.op("STA", "abs", 0xFF14)
     a.op("JMP", "abs", "frame")
+    if coded:
+        def hi(c):
+            return c + 1 if c < 8 else 31 if c == 0x20 else 30
+        table = [(hi(c) << 3) | r for c in range(256) for r in range(8)]
+        for page in range(8):
+            a.label(f"fcodes{page}")
+            a.byte(*table[page * 0x100:(page + 1) * 0x100])
     return a.assemble(), 0
 
 
@@ -926,12 +1091,18 @@ def build_start(yscroll=None, base=None):
 
 
 # Tests whose result is xplus4's picture (tests/data/ted-<name>.png).
-PICTURES = {"split", "rows", "fli"}
+PICTURES = {"split", "rows", "fli", "fli2", "matrix", "matrixc"}
 
 TESTS = {
     "split": build_split,
     "rows": build_rows,
     "fli": build_fli,
+    "fli2": lambda: build_fli(coded=True),
+    "fli3": lambda: build_fli(coded=True, shift=2),
+    "fli4": lambda: build_fli(coded=True, start=6),
+    "flicnt": build_flicnt,
+    "matrix": build_matrix,
+    "matrixc": lambda: build_matrix(codes=True),
     "dma": build_dma,
     "yscroll": build_yscroll,
     "start": build_start,
@@ -944,7 +1115,7 @@ TESTS = {
 }
 
 # Tests that run longer than LIMIT_CYCLES.
-LIMITS = {"irqall": 40_000_000, "split": 40_000_000, "rows": 30_000_000, "fli": 80_000_000, "dma": 40_000_000, "start": 40_000_000, "startdma": 40_000_000}
+LIMITS = {"irqall": 40_000_000, "split": 40_000_000, "rows": 30_000_000, "fli": 80_000_000, "fli2": 80_000_000, "fli3": 80_000_000, "fli4": 80_000_000, "flicnt": 90_000_000, "matrix": 30_000_000, "matrixc": 30_000_000, "dma": 40_000_000, "start": 40_000_000, "startdma": 40_000_000}
 
 # xplus4 cycles until the screenshot (PAL, ~1.77 M per second: autostart
 # takes about 3 s, the tests well under one).
@@ -1073,7 +1244,9 @@ def main(argv):
                     def changes(x):
                         col = [rows[y][x] for y in range(len(rows))]
                         return sum(1 for p, q in zip(col, col[1:]) if p != q)
-                    if max(changes(5), changes(200)) >= 8:
+                    # (The coded FLI pictures are one even pattern down
+                    # every column: the screenshot existing is enough.)
+                    if max(changes(5), changes(200)) >= 8 or name in ("fli2", "fli3", "fli4"):
                         break
                 else:
                     raise SystemExit(f"{name}: no stripes in xplus4's picture")

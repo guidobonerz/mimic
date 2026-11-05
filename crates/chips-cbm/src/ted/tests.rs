@@ -238,7 +238,7 @@ fn data_bus_carries_the_fetches_of_display_lines() {
         let single = t.single();
         let o = t.tick(&mem);
         let (line, tick) = (t.line, t.tick);
-        match t.bus(&mem) {
+        match t.bus() {
             Some(b) => {
                 seen.insert(b);
             }
@@ -286,4 +286,79 @@ fn multicolour_bitmap_pairs() {
     assert_eq!(at(1), 0x32, "pair 01");
     assert_eq!(at(2), 0x65, "pair 10");
     assert_eq!(at(3), 0x47, "pair 11: $FF16");
+}
+
+/// Run until the line counter turns to `line` (picture line `line - 1`'s
+/// tick `TURN`), or to the end of the field.
+fn run_to_counter_line(t: &mut Ted, mem: &Mem, line: u16) {
+    while t.counter_line() != line || t.tick != TURN {
+        if t.tick(mem).frame_end {
+            return;
+        }
+    }
+}
+
+/// Matrix A at $0800 (attribute $32, character 1), matrix B at $1000
+/// (attribute $65, character 2); characters 1 and 2 solid, 0 empty.
+fn two_matrices() -> Mem {
+    let mut mem = Mem::new();
+    mem.ram[0x0800..0x0c00].fill(0x32);
+    mem.ram[0x0c00..0x1000].fill(0x01);
+    mem.ram[0x1000..0x1400].fill(0x65);
+    mem.ram[0x1400..0x1800].fill(0x02);
+    mem.rom[0x1008..0x1018].fill(0xff);
+    mem
+}
+
+#[test]
+fn a_row_keeps_the_attributes_and_codes_its_dma_fetched() {
+    // $FF14 switched to B in the middle of row 14 (lines 116–123): the
+    // row's last lines keep A's colour, row 15 takes B's (xplus4,
+    // `ted_timing` matrix/matrixc).
+    let mut t = Ted::new(Model::Mos8360);
+    kernal_text(&mut t);
+    let mem = two_matrices();
+    run_frame(&mut t, &mem);
+    run_to_counter_line(&mut t, &mem, 120);
+    t.write(0x14, 0x10);
+    run_frame(&mut t, &mem);
+    let x = DISPLAY_X + 100;
+    assert_eq!(pixel(&t, 119, x), 0x32);
+    assert_eq!(pixel(&t, 123, x), 0x32, "row 14 keeps its buffers");
+    assert_eq!(pixel(&t, 124, x), 0x65, "row 15 from matrix B");
+}
+
+#[test]
+fn fli_on_every_line_freezes_the_rows_buffers() {
+    // YSCROLL = (L + 1) & 7 and $FF14 alternating on every line L: every
+    // line is an attribute DMA line, none a pointer DMA line, so neither
+    // attributes nor codes reach the picture after the field's start
+    // (xplus4, `ted_timing` fli2-fli4).
+    let mut t = Ted::new(Model::Mos8360);
+    kernal_text(&mut t);
+    let mut mem = two_matrices();
+    mem.rom[0x1000..0x1008].fill(0xff); // character 0 solid too
+    for _ in 0..3 {
+        for line in 2..200u16 {
+            run_to_counter_line(&mut t, &mem, line);
+            // late in the line, after its fetches, as the CPU manages it
+            while t.tx() != 104 {
+                t.tick(&mem);
+            }
+            t.write(0x06, 0x18 | ((line + 1) & 7) as u8);
+            t.write(0x14, if line % 2 == 0 { 0x10 } else { 0x08 });
+        }
+        t.write(0x06, 0x1b);
+        t.write(0x14, 0x08);
+        run_to_counter_line(&mut t, &mem, 0);
+    }
+    let x = DISPLAY_X + 100;
+    let colours: std::collections::BTreeSet<u8> = (10..190).map(|l| pixel(&t, l, x)).collect();
+    // The attributes of the last DMA before the field's start (line 199,
+    // matrix B) stand all field long.
+    assert_eq!(
+        colours,
+        std::collections::BTreeSet::from([0x65]),
+        "one colour under FLI"
+    );
 }

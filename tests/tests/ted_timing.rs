@@ -354,8 +354,32 @@ fn split_matches_xplus4() {
     // window's register sampling in single-clock areas does not (open, see
     // CLAUDE.md). The bound keeps it from getting worse.
     assert!(
-        bad <= 27_947,
+        bad <= 24_432,
         "TED split picture got worse (EMU_TED_SHOW=1)"
+    );
+}
+
+/// The fetch pipeline against xplus4's pictures, pixel for pixel: `rows`
+/// (a row takes the attributes of the DMA on the line before it),
+/// `matrix`/`matrixc` ($FF14 switched in the middle of a row: attributes
+/// and character codes come from the buffers the DMA filled, not from the
+/// new matrix), `fli2`–`fli4` (YSCROLL and $FF14 rewritten on every line:
+/// an attribute DMA on every line never reaches the picture, no pointer
+/// DMA happens, the character line runs on).
+#[test]
+#[ignore = "needs Plus/4 ROMs in EMU_ROM_DIR"]
+fn fetch_pipeline_pictures_match_xplus4() {
+    let mut failed = Vec::new();
+    for name in ["rows", "matrix", "matrixc", "fli2", "fli3", "fli4"] {
+        let bad = compare_picture(name);
+        println!("{name}: {bad} pixels differ");
+        if bad != 0 {
+            failed.push(name);
+        }
+    }
+    assert!(
+        failed.is_empty(),
+        "pictures differ: {failed:?} (EMU_TED_SHOW=1)"
     );
 }
 
