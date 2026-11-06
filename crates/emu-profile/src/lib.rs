@@ -56,9 +56,9 @@ pub const FILE_NAME: &str = "profiles.yaml";
 /// Profiles mimic ships, listed after a user's own (a user profile of the
 /// same name wins): machines that need no user files.
 pub const BUILTIN: &str = "profiles:
-  cogitatron16:
-    description: Cogitatron 16, mimic's own steampunk computer (built-in ROM)
-    machine: cogitatron16
+  logophor16:
+    description: Logophor 16, mimic's own steampunk computer (built-in ROM)
+    machine: logophor16
 ";
 
 /// Which frontend a command line is for (they take different flags).
@@ -818,27 +818,27 @@ profiles:
     fn built_in_profiles_come_after_the_users_and_yield_to_them() {
         let mine = ProfileFile::parse(EXAMPLE).unwrap().with_builtin();
         let names = mine.names();
-        assert_eq!(names.last(), Some(&"cogitatron16"));
+        assert_eq!(names.last(), Some(&"logophor16"));
         assert_eq!(
-            mine.get("cogitatron16").unwrap().machine.as_deref(),
-            Some("cogitatron16")
+            mine.get("logophor16").unwrap().machine.as_deref(),
+            Some("logophor16")
         );
         let own = ProfileFile::parse(
             "profiles:
-  cogitatron16:
+  logophor16:
     machine: c64
 ",
         )
         .unwrap()
         .with_builtin();
-        assert_eq!(own.names(), ["cogitatron16"]);
+        assert_eq!(own.names(), ["logophor16"]);
         assert_eq!(
-            own.get("cogitatron16").unwrap().machine.as_deref(),
+            own.get("logophor16").unwrap().machine.as_deref(),
             Some("c64")
         );
         assert_eq!(
             ProfileFile::default().with_builtin().names(),
-            ["cogitatron16"]
+            ["logophor16"]
         );
     }
 

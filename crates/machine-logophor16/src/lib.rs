@@ -1,10 +1,10 @@
-//! The Cogitatron 16, a fictional steampunk home computer designed for this
+//! The Logophor 16, a fictional steampunk home computer designed for this
 //! project: CPU Ada, chips Babbage, Lumière, Calliope and Telegraph, 4 MiB
 //! chip RAM and 28 MiB fast RAM, the ROM Foundry (assembled from this
 //! crate's `asm/foundry` sources by the build script and built in, so the
 //! machine needs no user files), shipped as a standard profile.
 //!
-//! Specification: `docs/cogitatron16/SPEC.md`. Built so far (steps 3 and
+//! Specification: `docs/logophor16/SPEC.md`. Built so far (steps 3 and
 //! 4 of Phase 31): the CPU, the memory map, Lumière's modes 0 and 4,
 //! Babbage's DMA control and Copper, Telegraph's interrupt controller, the
 //! debug port (FFFF:43F0: console output kept in the machine, exit code),
@@ -26,10 +26,10 @@
 #[cfg(test)]
 mod tests;
 
-use chips_cogitatron::babbage::{self, Babbage, CopperAction};
-use chips_cogitatron::blitter::ChipRamMut;
-use chips_cogitatron::lumiere::{self, Beam, ChipRam, Lumiere};
-use chips_cogitatron::telegraph::{self, Interrupts};
+use chips_logophor::babbage::{self, Babbage, CopperAction};
+use chips_logophor::blitter::ChipRamMut;
+use chips_logophor::lumiere::{self, Beam, ChipRam, Lumiere};
+use chips_logophor::telegraph::{self, Interrupts};
 use cpu_ada::Ada;
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
 use emu_core::hooked::HookedBus;
@@ -80,11 +80,11 @@ const CONSOLE_KEEP: usize = 1 << 16;
 
 pub fn entry() -> MachineEntry {
     MachineEntry {
-        id: "cogitatron16",
-        name: "Cogitatron 16",
+        id: "logophor16",
+        name: "Logophor 16",
         models: &["16"],
         video_formats: &[],
-        create: |config| Ok(Box::new(Cogitatron::new(config)?)),
+        create: |config| Ok(Box::new(Logophor::new(config)?)),
     }
 }
 
@@ -175,7 +175,7 @@ impl Board {
     fn io_peek(&self, off: u16) -> u16 {
         match off & !1 {
             0x0000..=0x07ff => self.babbage.peek(off),
-            0x0800..=0x11ff => self.lumiere.peek(off, self.beam),
+            0x0800..=0x11ff | 0x2000..=0x27ff => self.lumiere.peek(off, self.beam),
             telegraph::INTREQ | telegraph::INTENA => self.ints.peek(off),
             DBGID => 0xc016,
             _ => 0,
@@ -185,7 +185,7 @@ impl Board {
     fn io_read(&mut self, off: u16) -> u16 {
         match off & !1 {
             0x0000..=0x07ff => self.babbage.read(off),
-            0x0800..=0x11ff => self.lumiere.read(off, self.beam),
+            0x0800..=0x11ff | 0x2000..=0x27ff => self.lumiere.read(off, self.beam),
             _ => self.io_peek(off),
         }
     }
@@ -196,11 +196,26 @@ impl Board {
                 self.babbage.write(off, v);
                 self.lumiere
                     .set_dma(self.babbage.dma(babbage::DMA_FRAMEBUFFER));
+                self.lumiere
+                    .set_sprite_dma(self.babbage.dma(babbage::DMA_SPRITES));
                 if self.babbage.take_error() {
                     self.ints.raise(telegraph::INT_DMAERR);
                 }
+                if self.babbage.stereo.take_start() {
+                    let Board {
+                        ram,
+                        touched,
+                        babbage,
+                        ..
+                    } = self;
+                    let ok = babbage.stereo.run(&mut ChipMut { ram, touched });
+                    if !ok {
+                        babbage.stereo_error();
+                        self.ints.raise(telegraph::INT_DMAERR);
+                    }
+                }
             }
-            0x0800..=0x11ff => {
+            0x0800..=0x11ff | 0x2000..=0x27ff => {
                 // The picture up to the beam with the old value first.
                 let Board {
                     ram, lumiere, beam, ..
@@ -322,7 +337,7 @@ impl MediaSlot for ProgramSlot {
     }
 }
 
-pub struct Cogitatron {
+pub struct Logophor {
     pub cpu: Ada,
     pub board: Board,
     /// Beam: line (0–627) and CPU cycle in it (0–317).
@@ -338,7 +353,7 @@ pub struct Cogitatron {
     program: ProgramSlot,
 }
 
-impl Cogitatron {
+impl Logophor {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
         if let Some(m) = config.model.as_deref().filter(|m| *m != "16") {
             return Err(ConfigError::UnknownModel(m.into()));
@@ -417,13 +432,21 @@ impl Cogitatron {
             self.field_done = true;
             self.board.babbage.field_start();
         }
-        // During this line the framebuffer of the next is fetched.
+        // The next line's fetch is set up at slot 640 (`prepare_fetch`).
+        self.fixed = 0;
+    }
+
+    /// Slot 640: the fixed DMA for the next line, its framebuffer row and
+    /// the sprites Lumière chooses for it now.
+    fn prepare_fetch(&mut self) {
         let next = if self.line + 1 == LINES {
             0
         } else {
             self.line + 1
         };
-        self.fixed = self.board.lumiere.fetch_slots(next);
+        let Board { ram, lumiere, .. } = &mut self.board;
+        let sprites = lumiere.select_sprites(next, &ChipView(&ram[..CHIP_END as usize]));
+        self.fixed = lumiere.fetch_slots(next) + sprites;
     }
 
     /// Slot `s` of this line belongs to the fixed DMA.
@@ -453,6 +476,9 @@ impl Cogitatron {
         let (mut free, mut cpu_served) = (0, false);
         for s in (c * 8 / 3)..((c + 1) * 8 / 3) {
             let s = s as u16;
+            if s == FIXED_START {
+                self.prepare_fetch();
+            }
             if self.fixed_slot(s) {
                 continue;
             }
@@ -466,7 +492,11 @@ impl Cogitatron {
                 self.copper_action(action, y, x);
                 continue;
             }
-            if self.board.babbage.blitter_wants() {
+            let (blit, stereo) = (
+                self.board.babbage.blitter_wants(),
+                self.board.babbage.stereo_wants(),
+            );
+            if blit || stereo {
                 // BUSCON bit 0: a waiting CPU comes first (one slot).
                 if self.board.babbage.cpu_first()
                     && !cpu_served
@@ -475,6 +505,12 @@ impl Cogitatron {
                 {
                     cpu_served = true;
                     free += 1;
+                    continue;
+                }
+                if stereo && (!blit || self.board.babbage.stereo_turn()) {
+                    if self.board.babbage.stereo.slot() {
+                        self.board.ints.raise(telegraph::INT_STEREOSCOPE);
+                    }
                     continue;
                 }
                 let done = {
@@ -575,7 +611,7 @@ impl Cogitatron {
     }
 }
 
-impl Machine for Cogitatron {
+impl Machine for Logophor {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
         self.service();
         loop {
@@ -838,7 +874,7 @@ impl Machine for Cogitatron {
     }
 }
 
-impl DebugTarget for Cogitatron {
+impl DebugTarget for Logophor {
     fn regs(&self) -> RegisterSet {
         self.cpu.regs()
     }

@@ -569,7 +569,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "chips-cogitatron"
+name = "chips-logophor"
 version = "0.1.0"
 dependencies = [
  "emu-core",
@@ -1162,10 +1162,10 @@ dependencies = [
  "machine-atari8",
  "machine-c128",
  "machine-c64",
- "machine-cogitatron16",
  "machine-coleco",
  "machine-cpc",
  "machine-imsai",
+ "machine-logophor16",
  "machine-mac",
  "machine-nes",
  "machine-pet",
@@ -2163,17 +2163,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "machine-cogitatron16"
-version = "0.1.0"
-dependencies = [
- "asm-ada",
- "chips-cogitatron",
- "cpu-ada",
- "emu-core",
- "png",
-]
-
-[[package]]
 name = "machine-coleco"
 version = "0.1.0"
 dependencies = [
@@ -2203,6 +2192,17 @@ version = "0.1.0"
 dependencies = [
  "cpu-8080",
  "emu-core",
+]
+
+[[package]]
+name = "machine-logophor16"
+version = "0.1.0"
+dependencies = [
+ "asm-ada",
+ "chips-logophor",
+ "cpu-ada",
+ "emu-core",
+ "png",
 ]
 
 [[package]]

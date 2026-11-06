@@ -1,8 +1,8 @@
-# Cogitatron 16 — Specification
+# Logophor 16 — Specification
 
-The Cogitatron 16 is a fictional steampunk home computer. This document is
+The Logophor 16 is a fictional steampunk home computer. This document is
 the single source of truth for its hardware and the conventions of its
-software. The emulator lives in mimic as machine `cogitatron16`
+software. The emulator lives in mimic as machine `logophor16`
 (Phase 31); where this file and code disagree, this file wins and the
 code is fixed (or this file is changed first, deliberately).
 
@@ -485,30 +485,64 @@ registers must not change while BLTSTAT bit 0 says busy.
 | 0212 | S3DSTAT | bit 0 busy, bit 1 done, bit 2 error (bad command) |
 
 Display list: 32-bit words (low word first). Command word: bits 31–24
-opcode, 23–0 argument; parameters follow.
+opcode, 23–0 argument; parameter words follow. Pointers are linear chip
+RAM addresses (segment << 16 | offset). Fixed point is 16.16, signed.
 
-| Op | Name | Parameters |
-| --- | --- | --- |
-| 00 | END | raises the Stereoscope interrupt |
-| 01 | MATRIX | 16 × 16.16 fixed point (row-major 4 × 4) |
-| 02 | VERTICES | pointer, count (≤ 256): vertex list (below) |
-| 03 | TRIANGLES | pointer to index triples (16 bit), count |
-| 04 | LINES | pointer to index pairs, count |
-| 05 | POINTS | pointer to indices, count |
-| 06 | TEXTURE | pointer, width and height (log2, ≤ 8), format (4/8/16 bit) |
-| 07 | STATE | bit 0 Gouraud, 1 texture, 2 Z test, 3 Z write, 4 backface culling, 5 lighting, 6 dither (8 bit), 7 blend, 8 fog |
-| 08 | LIGHT | direction (3 × 16.16), ambient and diffuse (0–255) |
-| 09 | TABLES | blend table pointer, fog table pointer (256 × 256 bytes each, chip RAM) |
-| 0A | CLEAR | colour, Z value, rectangle |
-| 0B | VIEWPORT | x, y, w, h, near clip (16.16), perspective scale |
-| 0C | JUMP | pointer (continue the list there) |
+| Op | Name | Argument | Parameter words |
+| --- | --- | --- | --- |
+| 00 | END | – | – (the list is over) |
+| 01 | MATRIX | – | 16: row-major 4 × 4, v' = M · (x, y, z, 1) |
+| 02 | VERTICES | count (≤ 256) | pointer: transforms and lights the vertices (below) |
+| 03 | TRIANGLES | count | pointer to index triples (16 bit) |
+| 04 | LINES | count | pointer to index pairs |
+| 05 | POINTS | count | pointer to indices |
+| 06 | TEXTURE | bits 0–3 log2 width, 4–7 log2 height (≤ 8), 8–9 format (0 = 4 bit, high nibble first; 1 = 8 bit; 2 = 16 bit RGB 5:6:5) | pointer |
+| 07 | STATE | bit 0 Gouraud, 1 texture, 2 Z test, 3 Z write, 4 backface culling, 5 lighting, 6 dither (8 bit), 7 blend, 8 fog | – |
+| 08 | LIGHT | bits 0–7 ambient, 8–15 diffuse | 3: direction the light travels (camera space) |
+| 09 | TABLES | – | 2: blend table, shade table (256 × 256 bytes each) |
+| 0A | CLEAR | colour (8 or 16 bit) | 1: Z value (low 16 bits); clears the viewport, the Z buffer too when STATE has Z test or Z write |
+| 0B | VIEWPORT | – | 4: x \| y << 16, w \| h << 16, near plane (16.16), perspective scale (16.16) |
+| 0C | JUMP | – | pointer: the list continues there |
+| 0D | FOG | – | 2: near and far distance (16.16) |
 
-Vertex: x, y, z (3 × 16.16), normal (3 × s16, 1.15), u, v (2 × s16,
-texels × 16), colour (16 bit) = 24 bytes. Rasteriser: triangles, lines,
-points; flat or Gouraud; perspective-correct textures every 16 pixels;
-16-bit Z buffer; blend and fog through the tables; ordered dithering in
-8-bit modes. Throughput figures: about 300 000 vertices/s and 5 million
-pixels/s, modelled as slot costs in Phase 7.
+Vertex (24 bytes): x, y, z (3 × 16.16), normal (3 × s16, 1.15), u, v
+(2 × s16, texels × 16), colour (16 bit). Indices past the last vertex
+skip their primitive.
+
+Behaviour **[S]** (step 7): every list starts from a reset state
+(identity matrix, STATE 0, no texture, no tables, viewport the whole
+target with the near plane at 1.0 and the scale half its width, light
+straight ahead, ambient 0, diffuse 255). The camera looks along +z with
+y up: a point lands at x = vx + w/2 + scale · x/z, y = vy + h/2 −
+scale · y/z. A triangle faces the camera when it runs clockwise on the
+screen; culling drops the others, without culling both sides are drawn.
+Triangles are cut at the near plane, lines and points behind it are
+dropped. Pixel centres at +0.5, a pixel on a shared edge belongs to one
+triangle only (top-left rule). Light per vertex: I = ambient + diffuse ·
+max(0, −n·l) with the transformed normal normalised, at most 255;
+flat shading takes the first vertex's I, Gouraud interpolates it; with
+lighting off I = 255. Textures repeat; u, v are exact every 16 pixels of
+a row and linear in between. Z buffer: 16 bits per target pixel, a row
+as many entries as the target row has pixels, value z · 256 (smaller is
+nearer); the test passes when the new value is smaller. Fog scales I by
+1 − (z − near) / (far − near), clamped. 8-bit targets: with lighting or
+fog the index becomes shade[I · 256 + index] (I plus a 4 × 4 ordered
+dither of −8…+7 when STATE bit 6), with blend blend[source · 256 +
+destination]. 16-bit targets: R, G, B scaled by I / 255; blend is the
+average of source and destination.
+
+S3DSTAT: START while busy is ignored. The list runs when it is started
+and the unit then stays busy for the slots its work costs: 100 a vertex,
+6 a pixel reaching the Z test, 2 a cleared pixel with the Z buffer (1
+without), 2 a command. It takes free chip-bus slots as the Blitter does
+(taking turns with it, DMACON bit 6); then done is set and the
+Stereoscope interrupt raised. A bad list (unknown command, a pointer
+beyond chip RAM, more than 2^20 commands) sets error, stops the list
+there, raises DMAERR bit 6 and the DMA error interrupt. Done and error
+clear when S3DSTAT is read. The unit computes in double precision; the
+fixed-point formats are its interface. Throughput at these costs: about
+300 000 vertices/s and 4 million pixels/s when every free slot is the
+Stereoscope's.
 
 ## 8. Lumière: video and sprites (FFFF:0800)
 
@@ -529,6 +563,11 @@ every 32 fields (about 0.53 s) **[S]**.
 Text mode: each cell is two bytes, character then attribute (bits 0–3
 foreground, 4–6 background, 7 blink), colours 0–15 of the palette's text
 bank (`TXTBANK`). Font: 256 × 16 bytes in chip RAM (`FONTSEG/OFS`).
+
+Mode 1 **[S]** (step 7): the border colour (`BORDER`) is RGB 5:6:5 itself,
+FGINDEX has no effect, and a sprite with the "behind" bit shows only
+where the background pixel is 0 (black); sprites keep their palette
+colours.
 
 ### 8.2 Registers
 
@@ -572,6 +611,15 @@ sprites covering the next line are chosen into a line buffer; a lower
 number lies on top. "Behind the background": the sprite shows only where
 the framebuffer pixel is 0 (modes 0, 2, 3) or black (mode 1). Palette
 indices ≥ FGINDEX lie in front of all sprites.
+
+**[S]** Details: the choice for a line is made at the start of the
+horizontal blank before it (chip-bus slot 640), as part of the fixed DMA
+(each chosen sprite's row costs the 32-bit words it touches); a change of
+the table shows from the next line on. Sprites show only inside the
+mode's picture area. A sprite pixel touches the "foreground" (SPRCOLFG)
+over a background index ≥ FGINDEX, or ≠ 0 while FGINDEX is 0. Two sprite
+pixels on top of each other set both groups' bits (group 0 takes no part).
+In the text mode a background pixel's index is TXTBANK | its colour.
 
 ## 9. Calliope: sound (FFFF:3000)
 
@@ -706,9 +754,21 @@ ROM layout at FFFB:0000:
 | 0040–00BF | vector table (32 × segment, offset) |
 | 00C0 | `init`, then code and data over FFFB–FFFE |
 
+System font **[S]** (step 7, owner's choice): Martin Sedlák's Sweet16mono
+(8 × 16, Boost Software License 1.0, <https://github.com/kmar/Sweet16Font>),
+its first 256 characters, so the character set is ISO 8859-1; $00–$20
+and $80–$A0 are blank. Foundry copies it to chip RAM for text mode.
+
 Boot: self-test and chip set-up, start picture with the brass logo,
 boot loader loads Boiler and Panorama from the SD card; holding a key at
 power-on enters the emergency monitor. No text screen in the normal boot.
+
+Panorama themes **[D]** (owner's request 2026-11-06, built in step 11):
+besides the brass default, an **oscilloscope theme**, switchable at run
+time: everything in shades of green only on black (like a green phosphor
+tube), drawn with lines (outlines, no filled bevels or textures); window
+frames, buttons, icons and text are line drawings in a few green levels,
+the brightest for focus and highlights.
 
 Calling convention **[S]**: arguments in R1–R4, results in R1 (R2 for
 32-bit), R1–R4 and R10/R11 caller-saved, R5–R9 callee-saved, R12 stack
@@ -732,8 +792,8 @@ All in Rust in mimic's workspace **[D]**:
 
 ## 13. Emulation in mimic
 
-- Machine id `cogitatron16`; crates `cpu-ada` (CPU), `chips-cogitatron`
-  (Babbage, Lumière, Calliope, Telegraph), `machine-cogitatron16`,
+- Machine id `logophor16`; crates `cpu-ada` (CPU), `chips-logophor`
+  (Babbage, Lumière, Calliope, Telegraph), `machine-logophor16`,
   `asm-ada` (assembler, also used by tests and to build the ROM).
 - Frame: 800 × 600 RGB (the full visible area; modes 0, 1 and 4 with
   their borders), signal metadata 40 MHz pixel clock, 1060 × 628, VGA RGB
@@ -741,7 +801,7 @@ All in Rust in mimic's workspace **[D]**:
 - **Shipped as a standard profile** (owner's request): the Foundry ROM is
   assembled from `rom/` sources at build time and embedded, so the
   machine needs no user files; mimic carries a built-in profile
-  `cogitatron16` that the desktop and web profile pickers show even
+  `logophor16` that the desktop and web profile pickers show even
   without a `profiles.yaml` (a user profile of the same name overrides
   it). SD card images go into a media slot.
 - A program slot (`--prg`) loads a raw binary at 0040:0000 and starts it
@@ -790,3 +850,13 @@ Decisions of this document:
 26. FBNOW (FFFF:081E) takes the framebuffer pointer over at the line's end, for split screens; VSTAT bit 2 only at the VBlank (step 4).
 27. A CPU instruction touching chip RAM starts only in a cycle with a free slot (step 4).
 28. Blitter: unused channels read 0; row-wise work with slot costs per touched word, a line pixel 2 slots; a bad pointer refuses the start with DMAERR bit 5 (step 5).
+29. Sprites: chosen at slot 640 of the line before, only inside the picture area; the foreground for SPRCOLFG is FGINDEX and up (or any non-zero index while FGINDEX is 0) (step 6).
+30. Stereoscope list formats as in section 7: counts in the argument, pointers as parameter words, the FOG command 0D added; the second table is a shade table for light and fog (step 7).
+31. Every display list starts from a reset state (step 7).
+32. Camera along +z with y up, front faces clockwise on the screen, light direction in camera space (step 7).
+33. 16-bit targets scale RGB directly by the light, blend is the average (step 7).
+34. The list runs at START; the unit is then busy for its slot costs (100 a vertex, 6 a pixel, 2/1 a cleared pixel, 2 a command), taking turns with the Blitter (step 7).
+35. Mode 1 border in RGB 5:6:5, FGINDEX unused there, "behind" sprites show over black (step 7).
+36. The machine is called Logophor 16 (owner's decision 2026-11-06; formerly Cogitatron 16).
+37. System font Sweet16mono, ISO 8859-1 (owner's choice, step 7).
+38. Panorama gets a second theme, "oscilloscope": green shades and lines only (owner's request 2026-11-06, for step 11).

@@ -42,7 +42,7 @@ table(["Machine id", "Machine", "Models (`--model`)", "Video (`--videoformat`)"]
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (default), `pal`"],
     ["`vectrex`", "Vectrex (vector display)", "`vectrex`", "–"],
     ["`imsai`", "IMSAI 8080 (front panel; terminal on F12)", "`8080`", "–"],
-    ["`cogitatron16`", "Cogitatron 16, mimic's own steampunk computer (built-in ROM, profile `cogitatron16`)", "`16`", "–"],
+    ["`logophor16`", "Logophor 16, mimic's own steampunk computer (built-in ROM, profile `logophor16`)", "`16`", "–"],
     ["`archimedes`", "Acorn Archimedes", "`a310` (default), `a305`, `a440`, `a3000`", "–"],
     ["`apple2`", "Apple II, II+, IIe", "`iie` (enhanced IIe, default), `iie-unenhanced`, "
      "`iiplus`, `ii`", "–"],
@@ -910,7 +910,7 @@ table(["Machine id", "Machine", "Models (`--model`)", "Video formats (`--videofo
     ["`mac`", "Apple Macintosh", "`plus` (default), `128k`, `512k`, `se`", "–"],
     ["`archimedes`", "Acorn Archimedes", "`a310` (default), `a305`, `a440`, `a3000`", "–"],
     ["`imsai`", "IMSAI 8080", "`8080`", "–"],
-    ["`cogitatron16`", "Cogitatron 16", "`16`", "–"],
+    ["`logophor16`", "Logophor 16", "`16`", "–"],
     ["`sim6502`", "6502 reference machine", "`default`", "–"],
 ], [0.14, 0.28, 0.34, 0.24])
 note("""A machine with a dash under video formats has one standard built in

@@ -1,4 +1,4 @@
-//! Telegraph, the Cogitatron 16's I/O chip (SPEC.md section 10). Built so
+//! Telegraph, the Logophor 16's I/O chip (SPEC.md section 10). Built so
 //! far (step 4): the interrupt controller at FFFF:4280 (INTREQ, INTENA,
 //! set/clear registers) with the fixed level of each source. Network,
 //! timers, input and the SD card follow in later steps.

@@ -1,5 +1,5 @@
 ; Primes below 1000 on the debug console: the test program of the
-; Cogitatron 16's step 2 (CPU + assembler). Trial division with REMU,
+; Logophor 16's step 2 (CPU + assembler). Trial division with REMU,
 ; decimal output through the stack, then DBGEXIT 0.
 ;
 ;   ada-asm build primes.s -o primes.bin && ada-asm run primes.bin

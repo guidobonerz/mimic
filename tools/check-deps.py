@@ -20,7 +20,7 @@ RULES = [
     ("emu-core", []),
     ("cpu-*", ["emu-core"]),
     ("chips-*", ["emu-core"]),
-    ("asm-*", ["emu-core", "cpu-*"]),             # host assemblers (Cogitatron 16: asm-ada)
+    ("asm-*", ["emu-core", "cpu-*"]),             # host assemblers (Logophor 16: asm-ada)
     ("media", ["emu-core"]),
     ("devices-input", ["emu-core"]),
     ("devices-cartridge", ["emu-core", "media"]),

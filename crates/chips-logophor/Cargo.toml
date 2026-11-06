@@ -1,6 +1,6 @@
 [package]
-name = "chips-cogitatron"
-description = "Babbage, Lumiere, Calliope and Telegraph, the chips of the fictional Cogitatron 16"
+name = "chips-logophor"
+description = "Babbage, Lumiere, Calliope and Telegraph, the chips of the fictional Logophor 16"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

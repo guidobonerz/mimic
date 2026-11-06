@@ -1,6 +1,6 @@
 [package]
 name = "asm-ada"
-description = "Assembler and linker for Ada, the CPU of the fictional Cogitatron 16"
+description = "Assembler and linker for Ada, the CPU of the fictional Logophor 16"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

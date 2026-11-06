@@ -780,7 +780,7 @@ async function configFromArgs(args) {
 let profileText = "";
 async function loadProfiles(file) {
   profileText = file ? await file.text() : "";
-  // The file's profiles and the built-in ones (the Cogitatron 16).
+  // The file's profiles and the built-in ones (the Logophor 16).
   const names = await call("profile_names", { yaml: profileText });
   const sel = $("profile");
   sel.replaceChildren(new Option("start profile…", ""), ...names.map((n) => new Option(n, n)));

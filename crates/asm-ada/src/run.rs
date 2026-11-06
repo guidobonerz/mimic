@@ -1,4 +1,4 @@
-//! A bare board to run Ada programs before the Cogitatron 16 exists as a
+//! A bare board to run Ada programs before the Logophor 16 exists as a
 //! machine: CPU, 4 MiB chip RAM + 28 MiB fast RAM, the ROM area (writable
 //! here, so programs can be placed there), and the debug port at
 //! FFFF:43F0 (SPEC.md 10.5): DBGOUT prints, DBGEXIT ends the run, DBGID

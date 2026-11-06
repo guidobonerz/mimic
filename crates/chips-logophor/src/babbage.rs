@@ -1,8 +1,8 @@
-//! Babbage, the Cogitatron 16's bus arbiter and DMA chip (SPEC.md sections
+//! Babbage, the Logophor 16's bus arbiter and DMA chip (SPEC.md sections
 //! 5 and 6): DMA control at FFFF:0000 and the Copper at FFFF:0020.
 //! Built so far (steps 4 and 5): DMACON, DMAERR, BUSCON, the Copper and
-//! the Blitter ([`crate::blitter`], registers at FFFF:0100); the
-//! Stereoscope follows in a later step.
+//! the Blitter ([`crate::blitter`], registers at FFFF:0100) and the
+//! Stereoscope ([`crate::stereoscope`], FFFF:0200).
 //!
 //! The Copper runs one instruction (two words, one chip-bus slot) per free
 //! slot it gets: [`Babbage::copper_slot`] is called by the machine for
@@ -14,6 +14,7 @@ use emu_core::{StateError, StateReader, StateWriter};
 
 use crate::blitter::{Blitter, ChipRamMut};
 use crate::lumiere::ChipRam;
+use crate::stereoscope::Stereoscope;
 
 pub const BABID: u16 = 0x0000;
 pub const DMACON: u16 = 0x0002;
@@ -84,6 +85,9 @@ pub struct Babbage {
     pc: u32,
     state: State,
     pub blitter: Blitter,
+    pub stereo: Stereoscope,
+    /// Blitter and Stereoscope take turns when both want a slot.
+    turn: bool,
     /// A start the CPU wrote failed on a pointer (DMAERR is set): the
     /// machine raises the DMA-error interrupt ([`Babbage::take_error`]).
     error_pending: bool,
@@ -121,6 +125,7 @@ impl Babbage {
             COPCON => self.copcon,
             COPIRQ => self.copirq,
             0x0100..=0x017f => self.blitter.peek(off),
+            0x0200..=0x02ff => self.stereo.peek(off),
             _ => 0,
         }
     }
@@ -129,6 +134,7 @@ impl Babbage {
     pub fn read(&mut self, off: u16) -> u16 {
         match off & !1 {
             0x0100..=0x017f => self.blitter.read(off),
+            0x0200..=0x02ff => self.stereo.read(off),
             _ => self.peek(off),
         }
     }
@@ -156,6 +162,23 @@ impl Babbage {
         self.blitter.slot(mem)
     }
 
+    /// The Stereoscope has work and its DMA is on.
+    pub fn stereo_wants(&self) -> bool {
+        self.stereo.busy() && self.dma(DMA_STEREOSCOPE)
+    }
+
+    /// Who gets a free slot both want: they take turns (SPEC.md 5);
+    /// `true` for the Stereoscope.
+    pub fn stereo_turn(&mut self) -> bool {
+        self.turn = !self.turn;
+        self.turn
+    }
+
+    /// A display list failed (S3DSTAT bit 2): DMAERR bit 6.
+    pub fn stereo_error(&mut self) {
+        self.dmaerr |= DMA_STEREOSCOPE;
+    }
+
     pub fn write(&mut self, off: u16, v: u16) {
         match off & !1 {
             DMACON => {
@@ -181,6 +204,7 @@ impl Babbage {
             0x0100..=0x017f if self.blitter.write(off, v) && !self.start_blit() => {
                 self.error_pending = true;
             }
+            0x0200..=0x02ff => self.stereo.write(off, v),
             _ => {}
         }
     }
@@ -301,7 +325,7 @@ impl Babbage {
     }
 
     pub fn save(&self, w: &mut StateWriter) {
-        w.chunk(*b"BABB", 2, |w| {
+        w.chunk(*b"BABB", 3, |w| {
             for v in [
                 self.dmacon,
                 self.dmaerr,
@@ -328,11 +352,13 @@ impl Babbage {
             }
             self.blitter.save(w);
             w.bool(self.error_pending);
+            self.stereo.save(w);
+            w.bool(self.turn);
         });
     }
 
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(*b"BABB", 2)?;
+        let (_, mut c) = r.chunk(*b"BABB", 3)?;
         let mut b = Self {
             dmacon: c.u16()? & 0x7fff,
             dmaerr: c.u16()?,
@@ -344,6 +370,8 @@ impl Babbage {
             pc: c.u32()?,
             state: State::Run,
             blitter: Blitter::default(),
+            stereo: Stereoscope::default(),
+            turn: false,
             error_pending: false,
         };
         b.state = match c.u8()? {
@@ -358,6 +386,8 @@ impl Babbage {
         };
         b.blitter.load(&mut c)?;
         b.error_pending = c.bool()?;
+        b.stereo.load(&mut c)?;
+        b.turn = c.bool()?;
         *self = b;
         Ok(())
     }

@@ -1,8 +1,8 @@
-//! Assembler with macros and linker for Ada, the CPU of the Cogitatron 16
+//! Assembler with macros and linker for Ada, the CPU of the Logophor 16
 //! (a fictional home computer of this project). Used by the tests, to
 //! build the Foundry ROM and as the host tool `ada-asm`.
 //!
-//! Specification: `docs/cogitatron16/SPEC.md` sections 3 and 12; the
+//! Specification: `docs/logophor16/SPEC.md` sections 3 and 12; the
 //! encodings come from `cpu_ada::isa`.
 //!
 //! ```text

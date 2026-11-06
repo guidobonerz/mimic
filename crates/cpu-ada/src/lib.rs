@@ -1,8 +1,8 @@
-//! Ada: the 16-bit load/store RISC CPU of the Cogitatron 16, a fictional
+//! Ada: the 16-bit load/store RISC CPU of the Logophor 16, a fictional
 //! home computer of this project (13 registers, four segment registers,
 //! 16-bit instructions, 12 MHz).
 //!
-//! Specification: `docs/cogitatron16/SPEC.md` section 3, the single source
+//! Specification: `docs/logophor16/SPEC.md` section 3, the single source
 //! of truth; the instruction table is [`isa`], shared with the assembler.
 //!
 //! Execution is instruction-exact: [`Ada::tick`] runs a whole instruction

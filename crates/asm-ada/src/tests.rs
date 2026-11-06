@@ -246,7 +246,7 @@ fn board_runs_and_reports_exit() {
 #[test]
 fn prime_program_prints_the_primes_below_1000() {
     let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../machine-cogitatron16/asm/examples/primes.s");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../machine-logophor16/asm/examples/primes.s");
     let src = std::fs::read_to_string(&path).unwrap();
     let img = build(&[("primes.s", &src)], &HostFiles, Options::default())
         .unwrap_or_else(|e| panic!("{e:?}"));

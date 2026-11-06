@@ -1,6 +1,6 @@
 [package]
 name = "cpu-ada"
-description = "Ada, the 16-bit RISC CPU of the fictional Cogitatron 16"
+description = "Ada, the 16-bit RISC CPU of the fictional Logophor 16"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

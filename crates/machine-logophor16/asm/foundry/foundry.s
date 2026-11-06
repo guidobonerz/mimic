@@ -1,16 +1,21 @@
-; Foundry, the Cogitatron 16's ROM (256 KiB at FFFB:0000-FFFE:FFFF).
+; Foundry, the Logophor 16's ROM (256 KiB at FFFB:0000-FFFE:FFFF).
 ;
-; Step 5 build: sets the palette, copies the font to chip RAM, draws a
+; Step 7 build: sets the palette, copies the font to chip RAM, draws a
 ; mode-0 test picture and a mode-4 text screen, builds a Copper list and
 ; the Blitter scene's graphics, and shows in turn every 3 seconds: the
 ; test picture, the text screen, the Copper scene (a colour gradient line
 ; by line behind the text, the screen split at line 300 into the test
-; picture) and the Blitter scene (a scrolling background, moving balls
-; with shadows). Later steps turn this into the real Foundry (self test,
-; boot loader, monitor; SPEC.md 11).
+; picture), the Blitter scene (a scrolling background, moving balls with
+; shadows), the sprite scene (256 bouncing sprites over the background,
+; hardware-scrolled) and the 3D scene (a turning, textured brass zeppelin
+; drawn by the Stereoscope in mode 1, 320 x 240 x 16 bits, double-
+; buffered with a Z buffer). Later steps turn this into the real Foundry (self
+; test, boot loader, monitor; SPEC.md 11).
 ;
 ; Built by the machine crate's build script with asm-ada; `font.inc` is
-; generated there (8 x 16 font).
+; generated there from Sweet16mono (8 x 16 font), `zeppelin.inc` and
+; `zeppelin_data.inc` (the 3D scene's display list, mesh, texture and
+; matrices) by its `zeppelin.rs`.
 
 ; ---- I/O registers (segment $FFFF, SPEC.md 6, 8.2 and 10.5) ----
 IO_SEG   = $ffff
@@ -57,7 +62,20 @@ CURSOR   = $0814
 CURSHAPE = $0816
 VSTAT    = $081c
 FBNOW    = $081e
+SPRSEG   = $0820
+SPROFS   = $0822
+SPRITES  = $2000                ; sprite table, 256 x 8 bytes
 PALETTE  = $1000
+S3DLSEG  = $0200                ; Stereoscope (SPEC.md 7)
+S3DLOFS  = $0202
+S3DTSEG  = $0204
+S3DTOFS  = $0206
+S3DPITCH = $0208
+S3DMODE  = $020a
+S3DZSEG  = $020c
+S3DZOFS  = $020e
+S3DSTART = $0210
+S3DSTAT  = $0212
 DBGOUT   = $43f0
 
 ; ---- chip RAM layout ----
@@ -75,9 +93,17 @@ BG_SEG   = $0006                ; background 640 x 240 from 0006:0000
 BUF0_SEG = $0009                ; the two 320 x 240 buffers
 BUF1_SEG = $000b
 NBOBS    = 8
+SPR_SEG  = $000d                ; sprite images at 000D:0000
+STATE_OFS = $1000               ; and the sprites' x, y, dx, dy
 XMAX     = 320-32-6             ; the shadow stays on the screen
 YMAX     = 240-32-6
+ZFB0_SEG = $0010                ; 3D scene: two 320 x 240 x 16-bit buffers
+ZFB1_SEG = $0013                ; (153 600 bytes each) and the Z buffer
+ZBUF_SEG = $0016
+SKY      = $1146                ; RGB 5:6:5, as in zeppelin.rs
 STACK_SEG = $003f
+
+        .include "zeppelin.inc"  ; ZEP_SEG ($000E), ZEP_WORDS, ZEP_MAT
 
 ATTR     = $1e                  ; yellow on blue
 FIELDS   = 180                  ; 3 seconds
@@ -126,6 +152,7 @@ init:
         bl      make_balls
         bl      make_shade
         bl      init_bobs
+        bl      init_sprites
         seg3    IO_SEG
         bl      draw_background
         reg     COP1SEG, COPPER_SEG
@@ -159,6 +186,8 @@ show:
         reg     DMACON, $0010   ; Copper off
         reg     PALETTE+2, $0015 ; text colour 1 back to blue
         bl      blitter_scene
+        bl      sprite_scene
+        bl      zeppelin_scene
         bra     show
 
 ; An unexpected exception: stop here.
@@ -1008,6 +1037,291 @@ blitter_scene:
         pop     lr
         ret
 
+; ---- the sprite scene (step 6) ----
+; 256 sprites, 8 x 8 balls in four colours, bounce over the background of
+; the Blitter scene, which scrolls by its framebuffer pointer (hardware
+; scrolling, SPEC.md 8.1). The CPU moves them right after each VBlank.
+
+; A 16-bit random number in R1 (R9: the generator's state).
+rand:
+        li      r1, #25173
+        mul     r9, r1
+        li      r1, #13849
+        add     r9, r1
+        swab    r1, r9
+        ret
+
+; An 8 x 8 ball at S3:R2 on, colours R10 + R8 (light) down. Uses R1, R3,
+; R4, R6, R7.
+ball8:
+        movi    r6, #0
+.y:
+        movi    r7, #0
+.x:
+        mov     r1, r7          ; (2x - 7)^2 + (2y - 7)^2 < 64: inside
+        add     r1, r1
+        addi    r1, #-7
+        mul     r1, r1
+        mov     r3, r6
+        add     r3, r3
+        addi    r3, #-7
+        mul     r3, r3
+        add     r1, r3
+        cmpi    r1, #64
+        bcs     .out
+        mov     r4, r7          ; light from the upper left
+        add     r4, r4
+        addi    r4, #-5
+        mul     r4, r4
+        mov     r3, r6
+        add     r3, r3
+        addi    r3, #-5
+        mul     r3, r3
+        add     r4, r3
+        movi    r3, #2
+        shr     r4, r3
+        mov     r3, r8
+        sub     r3, r4
+        add     r3, r10
+        bra     .put
+.out:
+        movi    r3, #0
+.put:
+        sbx     r3, (r2)+
+        addi    r7, #1
+        cmpi    r7, #8
+        bne     .x
+        addi    r6, #1
+        cmpi    r6, #8
+        bne     .y
+        ret
+
+; The four ball images at SPR_SEG:0000 (64 bytes each) and the sprites'
+; positions and speeds at SPR_SEG:STATE_OFS (x, y, dx, dy). Uses R1-R10.
+init_sprites:
+        push    lr
+        seg3    SPR_SEG
+        movi    r2, #0
+        movi    r10, #80        ; red
+        movi    r8, #63
+        bl      ball8
+        li      r10, #144       ; green
+        bl      ball8
+        movi    r10, #16        ; steel
+        bl      ball8
+        li      r10, #208       ; blue (48 steps)
+        movi    r8, #47
+        bl      ball8
+        li      r2, #STATE_OFS
+        li      r9, #4321
+        movi    r5, #0
+.g:
+        bl      rand
+        li      r3, #312
+        remu    r1, r3
+        swx     r1, (r2)+       ; x
+        bl      rand
+        li      r3, #232
+        remu    r1, r3
+        swx     r1, (r2)+       ; y
+        movi    r6, #2          ; dx, then dy: 1-3, either sign
+.v:
+        bl      rand
+        mov     r4, r1
+        movi    r3, #3
+        remu    r1, r3
+        addi    r1, #1
+        movi    r3, #4
+        tst     r4, r3
+        beq     .plus
+        neg     r1, r1
+.plus:
+        swx     r1, (r2)+
+        addi    r6, #-1
+        bne     .v
+        addi    r5, #1
+        li      r3, #256
+        cmp     r5, r3
+        bne     .g
+        pop     lr
+        ret
+
+; Move the 256 sprites, bouncing, and write their X and Y into the sprite
+; table. S1 = SPR_SEG, S3 = IO_SEG. Uses R1-R8.
+move_sprites:
+        li      r6, #STATE_OFS
+        li      r8, #SPRITES
+        movi    r5, #0
+.s:
+        lw      r1, 0(r6)
+        lw      r2, 2(r6)
+        lw      r3, 4(r6)
+        lw      r4, 6(r6)
+        add     r1, r3
+        bmi     .xflip
+        li      r7, #312
+        cmp     r1, r7
+        ble     .xok
+.xflip:
+        neg     r3, r3
+        add     r1, r3
+        add     r1, r3
+.xok:
+        add     r2, r4
+        bmi     .yflip
+        li      r7, #232
+        cmp     r2, r7
+        ble     .yok
+.yflip:
+        neg     r4, r4
+        add     r2, r4
+        add     r2, r4
+.yok:
+        sw      r1, 0(r6)
+        sw      r2, 2(r6)
+        sw      r3, 4(r6)
+        sw      r4, 6(r6)
+        li      r7, #$8040      ; word 0: active, 8 wide, X + 64
+        add     r7, r1
+        swx     r7, (r8)+
+        movi    r7, #64         ; word 1: 8 high, Y + 64
+        add     r7, r2
+        swx     r7, (r8)+
+        addi    r8, #4          ; words 2 and 3 stay
+        addi    r6, #8
+        addi    r5, #1
+        li      r7, #256
+        cmp     r5, r7
+        bne     .s
+        ret
+
+; The scene for FIELDS fields. Uses R1-R10.
+sprite_scene:
+        push    lr
+        li      r1, #SPR_SEG
+        mts     s1, r1
+        seg3    IO_SEG
+        reg     SPRSEG, SPR_SEG
+        reg     SPROFS, 0
+        li      r8, #SPRITES+4  ; words 2 and 3: image, 8-bit
+        movi    r5, #0
+.t:
+        mov     r1, r5
+        movi    r3, #3
+        and     r1, r3
+        add     r1, r1
+        add     r1, r1          ; image (n & 3) x 64 bytes, in 16-byte steps
+        swx     r1, (r8)+
+        movi    r1, #1
+        swx     r1, (r8)+
+        addi    r8, #4
+        addi    r5, #1
+        li      r3, #256
+        cmp     r5, r3
+        bne     .t
+        reg     FBSEG, BG_SEG
+        reg     FBOFS, 0
+        reg     PITCH, 640
+        reg     DMACON, $8002   ; sprite DMA on
+        movi    r10, #0         ; scroll
+        li      r5, #FIELDS
+.f:
+        push    r5
+        movi    r5, #1
+        bl      wait_fields
+        reg     VMODE, $8000
+        reg     BORDER, 0
+        bl      move_sprites
+        addi    r10, #1
+        li      r1, #320
+        cmp     r10, r1
+        bne     .scroll
+        movi    r10, #0
+.scroll:
+        wr      FBOFS, r10
+        pop     r5
+        addi    r5, #-1
+        bne     .f
+        reg     DMACON, $0002   ; sprite DMA off
+        li      r1, #$fffb
+        mts     s1, r1
+        pop     lr
+        ret
+
+; ---- the 3D scene (step 7) ----
+; The zeppelin's block (display list, mesh, texture) goes to ZEP_SEG; each
+; frame the CPU puts the next of 256 matrices into the list, points the
+; Stereoscope at the buffer not shown, starts it, waits for it and shows
+; that buffer from the next VBlank.
+zeppelin_scene:
+        push    lr
+        seg3    ZEP_SEG
+        li      r1, #zep_blob
+        movi    r2, #0
+        li      r3, #ZEP_WORDS
+.copy:
+        lw      r4, 0(r1)
+        swx     r4, (r2)+
+        addi    r1, #2
+        addi    r3, #-1
+        bne     .copy
+        seg3    IO_SEG
+        reg     S3DLSEG, ZEP_SEG
+        reg     S3DLOFS, 0
+        reg     S3DTOFS, 0
+        reg     S3DPITCH, 640
+        reg     S3DMODE, 1
+        reg     S3DZSEG, ZBUF_SEG
+        reg     S3DZOFS, 0
+        reg     FBOFS, 0
+        reg     PITCH, 640
+        reg     DMACON, $8040   ; Stereoscope DMA on
+        movi    r10, #0         ; frame of the turn
+        li      r8, #ZFB0_SEG  ; the buffer drawn into
+        li      r5, #FIELDS
+.f:
+        push    r5
+        seg3    ZEP_SEG         ; matrix r10 into the list
+        mov     r1, r10
+        movi    r2, #6
+        shl     r1, r2
+        li      r2, #zep_mats
+        add     r1, r2
+        li      r2, #ZEP_MAT
+        movi    r3, #32
+.m:
+        lw      r4, 0(r1)
+        swx     r4, (r2)+
+        addi    r1, #2
+        addi    r3, #-1
+        bne     .m
+        seg3    IO_SEG
+        wr      S3DTSEG, r8
+        reg     S3DSTART, 1
+        li      r2, #S3DSTAT
+        movi    r3, #1
+.w:
+        lwx     r1, (r2)        ; busy?
+        tst     r1, r3
+        bne     .w
+        wr      FBSEG, r8      ; taken over at the next VBlank
+        movi    r5, #1
+        bl      wait_fields
+        reg     VMODE, $8001    ; display on, mode 1
+        reg     BORDER, SKY
+        li      r1, #ZFB0_SEG+ZFB1_SEG
+        sub     r1, r8
+        mov     r8, r1
+        addi    r10, #1
+        li      r1, #ZEP_FRAMES-1
+        and     r10, r1
+        pop     r5
+        addi    r5, #-1
+        bne     .f
+        reg     DMACON, $0040   ; Stereoscope DMA off
+        pop     lr
+        ret
+
 ; Write the zero-terminated string at R1 (ROM) to text cell R2 in
 ; attribute R3. S3 = TEXT_SEG. Uses R1, R2, R4.
 print:
@@ -1048,16 +1362,17 @@ cop_split:                      ; WAIT 299, 820 (its blank), 5 MOVEs
 cop_tail:                       ; line 0's colour, set in line 599's blank
         .word   $2000|599, 820, (PALETTE+2)>>1, $0018
 hex:    .ascii  "0123456789ABCDEF"
-hello:  .asciz  "Foundry (step 5): test picture, text mode, Copper, Blitter\n"
-title:  .asciz  "COGITATRON 16"
-line2:  .asciz  "Foundry ROM - step 5: framebuffer, text mode, Copper, Blitter"
+hello:  .asciz  "Foundry (step 7): test picture, text mode, Copper, Blitter, sprites, 3D\n"
+title:  .asciz  "LOGOPHOR 16"
+line2:  .asciz  "Foundry ROM - step 7: framebuffer, text, Copper, Blitter, sprites, 3D"
 line3:  .asciz  "Ada 16-bit RISC at 12 MHz - 4 MiB chip RAM - 28 MiB fast RAM - Lumiere 800 x 600"
 charset_label: .asciz "Character set:"
 colour_label:  .asciz "Text colours (foreground on background):"
 blink_text:    .asciz "This line blinks."
 cursor_text:   .asciz "The cursor: "
 cursor_len = 12
-footer: .asciz  "mimic - Phase 31, step 5"
+footer: .asciz  "mimic - Phase 31, step 7"
         .align  2
 font:
         .include "font.inc"
+        .include "zeppelin_data.inc"

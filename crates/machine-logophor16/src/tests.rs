@@ -2,18 +2,18 @@
 //! golden images, the program slot, the debug port, savestates.
 //!
 //! Regenerate the golden images after an intended change with
-//! `EMU_UPDATE_REFERENCE=1 cargo test -p machine-cogitatron16` and say why
+//! `EMU_UPDATE_REFERENCE=1 cargo test -p machine-logophor16` and say why
 //! in the commit.
 
 use super::*;
 use emu_core::frame::Rgb8;
 use std::path::PathBuf;
 
-fn machine() -> Cogitatron {
-    Cogitatron::new(&MachineConfig::default()).unwrap()
+fn machine() -> Logophor {
+    Logophor::new(&MachineConfig::default()).unwrap()
 }
 
-fn frames(m: &mut Cogitatron, n: usize) {
+fn frames(m: &mut Logophor, n: usize) {
     let mut dbg = DebugHooks::new();
     for _ in 0..n {
         assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
@@ -22,11 +22,11 @@ fn frames(m: &mut Cogitatron, n: usize) {
 
 fn reference(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/reference/cogitatron16")
+        .join("../../tests/reference/logophor16")
         .join(format!("{name}.png"))
 }
 
-fn pixels(m: &Cogitatron) -> Vec<Rgb8> {
+fn pixels(m: &Logophor) -> Vec<Rgb8> {
     match m.framebuffer().pixels {
         PixelData::Rgb(p) => p.to_vec(),
         PixelData::Indexed { .. } => unreachable!("RGB frame"),
@@ -34,7 +34,7 @@ fn pixels(m: &Cogitatron) -> Vec<Rgb8> {
 }
 
 /// Compare the frame with a golden PNG (exact), or write it.
-fn golden(m: &Cogitatron, name: &str) {
+fn golden(m: &Logophor, name: &str) {
     let path = reference(name);
     let px = pixels(m);
     if std::env::var_os("EMU_UPDATE_REFERENCE").is_some() {
@@ -69,7 +69,7 @@ fn golden(m: &Cogitatron, name: &str) {
 }
 
 #[test]
-fn foundry_shows_its_four_scenes() {
+fn foundry_shows_its_six_scenes() {
     let mut m = machine();
     frames(&mut m, 120);
     assert_eq!(m.board.lumiere.mode(), 0);
@@ -83,9 +83,16 @@ fn foundry_shows_its_four_scenes() {
     // The Blitter scene: a scrolling background, balls with shadows.
     frames(&mut m, 180);
     golden(&m, "foundry-blitter");
+    // The sprite scene: 256 sprites over the hardware-scrolled background.
+    frames(&mut m, 180);
+    golden(&m, "foundry-sprites");
+    // The 3D scene: the Stereoscope's brass zeppelin in mode 1.
+    frames(&mut m, 200);
+    assert_eq!(m.board.lumiere.mode(), 1);
+    golden(&m, "foundry-zeppelin");
     assert_eq!(
         String::from_utf8_lossy(m.console()),
-        "Foundry (step 5): test picture, text mode, Copper, Blitter\n"
+        "Foundry (step 7): test picture, text mode, Copper, Blitter, sprites, 3D\n"
     );
 }
 
@@ -132,7 +139,7 @@ impl emu_core::media::MediaBackend for Mem {
     }
 }
 
-fn insert_program(m: &mut Cogitatron, bytes: Vec<u8>) {
+fn insert_program(m: &mut Logophor, bytes: Vec<u8>) {
     let media = Media {
         name: "t.bin".into(),
         kind: MediaKind::Program,
@@ -209,7 +216,7 @@ fn registers_beam_and_debug_port() {
     for _ in 0..(LINE_CYCLES as usize * 10 + 30) {
         m.step_cycle();
     }
-    let peek = |m: &Cogitatron, a: u32| DebugTarget::peek(m, CPU_SPACE, a, Size::Word).unwrap();
+    let peek = |m: &Logophor, a: u32| DebugTarget::peek(m, CPU_SPACE, a, Size::Word).unwrap();
     assert_eq!(peek(&m, 0xffff_0818), 10, "BEAMY");
     assert_eq!(peek(&m, 0xffff_081a), 100, "BEAMX: 30 cycles x 10/3");
     assert_eq!(peek(&m, 0xffff_43f4), 0xc016, "DBGID");
@@ -256,12 +263,12 @@ fn savestate_resumes_identically() {
 fn unknown_options_and_models_are_refused() {
     let mut c = MachineConfig::default();
     c.options.insert("ram".into(), "1m".into());
-    assert!(Cogitatron::new(&c).is_err());
+    assert!(Logophor::new(&c).is_err());
     let c = MachineConfig {
         model: Some("17".into()),
         ..MachineConfig::default()
     };
-    assert!(Cogitatron::new(&c).is_err());
+    assert!(Logophor::new(&c).is_err());
 }
 
 /// A program that sets up mode 0 (colour 2 green), framebuffer and Copper
@@ -301,7 +308,7 @@ fn copper_program(intena: u16) -> String {
 
 /// A Copper list (words) at 0005:0000 and colour 2 over the mode-0
 /// picture at 0002:0000.
-fn copper_setup(m: &mut Cogitatron, list: &[u16]) {
+fn copper_setup(m: &mut Logophor, list: &[u16]) {
     for (i, w) in list.iter().enumerate() {
         let at = 0x0005_0000 + 2 * i as u32;
         assert!(DebugTarget::poke(
@@ -532,7 +539,7 @@ fn the_blitter_fills_in_free_slots_and_interrupts_when_done() {
     let mut m = machine();
     insert_program(&mut m, assemble(&blitter_program(0)));
     frames(&mut m, 2);
-    let peek = |m: &Cogitatron, a: u32| DebugTarget::peek(m, CPU_SPACE, a, Size::Byte).unwrap();
+    let peek = |m: &Logophor, a: u32| DebugTarget::peek(m, CPU_SPACE, a, Size::Byte).unwrap();
     assert_eq!(peek(&m, 0x0003_0000), 0x5a);
     assert_eq!(peek(&m, 0x0003_0000 + 63 * 64 + 63), 0x5a);
     assert_eq!(peek(&m, 0x0003_0000 + 64 * 64), 0, "only 64 rows");
@@ -584,13 +591,13 @@ fn the_copper_starts_a_blit_and_waits_for_it() {
     insert_program(&mut m, assemble(&copper_program(0)));
     copper_setup(&mut m, &list);
     for (r, v) in [
-        (chips_cogitatron::blitter::BLTCON0, 0x0100),
-        (chips_cogitatron::blitter::BLTCON1, 1),
-        (chips_cogitatron::blitter::BLTDSEG, 7),
-        (chips_cogitatron::blitter::BLTDPITCH, 256),
-        (chips_cogitatron::blitter::BLTW, 256),
-        (chips_cogitatron::blitter::BLTH, 1024),
-        (chips_cogitatron::blitter::BLTCOLOR, 0x33),
+        (chips_logophor::blitter::BLTCON0, 0x0100),
+        (chips_logophor::blitter::BLTCON1, 1),
+        (chips_logophor::blitter::BLTDSEG, 7),
+        (chips_logophor::blitter::BLTDPITCH, 256),
+        (chips_logophor::blitter::BLTW, 256),
+        (chips_logophor::blitter::BLTH, 1024),
+        (chips_logophor::blitter::BLTCOLOR, 0x33),
     ] {
         m.board.babbage.write(r, v);
     }
@@ -623,6 +630,107 @@ fn the_copper_starts_a_blit_and_waits_for_it() {
 fn savestate_in_the_blitter_scene_resumes_identically() {
     let mut a = machine();
     frames(&mut a, 620);
+    for _ in 0..3000 {
+        a.step_cycle();
+    }
+    let state = a.save_state();
+    let mut b = machine();
+    b.load_state(&state).unwrap();
+    frames(&mut a, 20);
+    frames(&mut b, 20);
+    assert_eq!(a.save_state(), b.save_state());
+    assert_eq!(pixels(&a), pixels(&b));
+}
+
+#[test]
+fn savestate_in_the_sprite_scene_resumes_identically() {
+    let mut a = machine();
+    frames(&mut a, 800);
+    for _ in 0..3000 {
+        a.step_cycle();
+    }
+    let state = a.save_state();
+    let mut b = machine();
+    b.load_state(&state).unwrap();
+    frames(&mut a, 20);
+    frames(&mut b, 20);
+    assert_eq!(a.save_state(), b.save_state());
+    assert_eq!(pixels(&a), pixels(&b));
+}
+
+fn stereoscope_program(dmacon: u16) -> String {
+    format!(
+        "
+        li r1, #$ffff
+        mts s3, r1
+        li r2, #$4282
+        li r1, #$8010
+        swx r1, (r2)          ; INTENA: Stereoscope
+        li r2, #$0002
+        li r1, #{dmacon}
+        swx r1, (r2)          ; DMACON
+        li r2, #$0200
+        movi r1, #2
+        swx r1, (r2)          ; S3DLSEG: list at 0002:0000
+        li r2, #$0204
+        movi r1, #3
+        swx r1, (r2)          ; S3DTSEG: target at 0003:0000
+        li r2, #$0208
+        li r1, #320
+        swx r1, (r2)          ; S3DPITCH
+        li r2, #$0210
+        swx r1, (r2)          ; S3DSTART
+        ei
+    idle: bra idle
+        "
+    )
+}
+
+/// CLEAR 7 over the whole 320 x 240 target, then END.
+fn stereoscope_list(m: &mut Logophor) {
+    for (k, d) in [0x0a00_0007u32, 0, 0].iter().enumerate() {
+        for (i, b) in d.to_le_bytes().iter().enumerate() {
+            DebugTarget::poke(
+                m,
+                CPU_SPACE,
+                0x2_0000 + 4 * k as u32 + i as u32,
+                Size::Byte,
+                u32::from(*b),
+            );
+        }
+    }
+}
+
+#[test]
+fn the_stereoscope_runs_a_list_in_free_slots_and_interrupts() {
+    let mut m = machine();
+    stereoscope_list(&mut m);
+    insert_program(&mut m, assemble(&stereoscope_program(0xc040)));
+    for _ in 0..3_000 {
+        m.step_cycle();
+    }
+    let peek = |m: &Logophor, a: u32| DebugTarget::peek(m, CPU_SPACE, a, Size::Byte).unwrap();
+    assert!(m.board.babbage.stereo.busy(), "76 800 slots to go");
+    assert_eq!(peek(&m, 0x3_0000 + 320 * 240 - 1), 7, "drawn at the start");
+    frames(&mut m, 2);
+    assert!(!m.board.babbage.stereo.busy());
+    assert_eq!(m.cpu.cause, 11, "level 3 (Stereoscope): vector 11");
+    // Without its DMA bit the unit gets no slots.
+    let mut m = machine();
+    stereoscope_list(&mut m);
+    insert_program(&mut m, assemble(&stereoscope_program(0xc000)));
+    frames(&mut m, 3);
+    assert!(m.board.babbage.stereo.busy());
+    assert_eq!(
+        m.board.ints.peek(telegraph::INTREQ) & telegraph::INT_STEREOSCOPE,
+        0
+    );
+}
+
+#[test]
+fn savestate_in_the_3d_scene_resumes_identically() {
+    let mut a = machine();
+    frames(&mut a, 1000);
     for _ in 0..3000 {
         a.step_cycle();
     }
