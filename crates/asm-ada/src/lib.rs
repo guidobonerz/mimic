@@ -11,7 +11,7 @@
 //! ada-asm link a.ao b.ao -o prog.bin [--base …] [--listing …]
 //! ada-asm run prog.bin [--load 0040:0000] [--entry seg:off] [--cycles N]
 //! ada-asm sd card.img [--size MIB] [--boot prog.bin] [--add CARD/PATH=host-file …]
-//! ada-asm hub [--port 6516]
+//! ada-asm hub [--port 6516] [--no-gateway]   (relay + gateway 10.16.0.1)
 //! ```
 #![forbid(unsafe_code)]
 

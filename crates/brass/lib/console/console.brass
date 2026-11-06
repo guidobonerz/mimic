@@ -1,0 +1,20 @@
+// Package console: text and keys through Foundry's ROM services
+// (TRAP #1-#4; SPEC.md 11). On a board without the ROM it writes to the
+// debug port only and has no keys.
+package console
+
+// Print puts s on the console.
+func Print(s string) {
+	print(s)
+}
+
+// Println puts s and a new line on the console.
+func Println(s string) {
+	println(s)
+}
+
+// Key waits for a key and returns its character (ISO 8859-1).
+func Key() byte
+
+// Poll returns the character of a waiting key, or 0.
+func Poll() byte

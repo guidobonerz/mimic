@@ -2,10 +2,10 @@
 ; typed goes out as a broadcast frame of type $4C31 ("L1") with the
 ; sender's name; lines from the others show up as they come.
 ;
-;   ada-asm hub                                  (one, in its own window)
-;   ada-asm build chat.s -o chat.bin
-;   ada-asm sd chat.img --boot chat.bin
-;   mimic --profile logophor16 --disk chat.img --option net=127.0.0.1:6516
+;   cargo run --release -p asm-ada -- hub        (one, in its own window)
+;   cargo run --release -p asm-ada -- build crates/machine-logophor16/asm/examples/chat.s -o chat.bin
+;   cargo run --release -p asm-ada -- sd chat.img --boot chat.bin
+;   cargo run --release -p emu-desktop -- --profile logophor16 --disk chat.img --option net=127.0.0.1:6516
 ;   (a second machine the same way, with its own copy of the card)
 
 NAME_MAX = 12

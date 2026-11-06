@@ -1,0 +1,734 @@
+// Package panorama: the Logophor 16's desktop (step 11c), NeXTSTEP-like:
+// the dock on the right (48 x 48 tiles, a small steam gauge on running
+// apps), the vertical application menu at the top left with a submenu
+// that can be torn off, windows with dark title bars (minimise on the
+// left, close on the right) floating over the desktop with soft shadows,
+// minimised windows as tiles at the bottom. Flat surfaces with rounded
+// corners; buttons only lighten under the pointer. Two themes: brass on
+// greys, and the oscilloscope (greens only, drawn with lines).
+//
+// Every application is a task; its windows get their events through a
+// channel. Panorama itself is the task that runs Run.
+package panorama
+
+import (
+	"boiler"
+	"gfx"
+)
+
+// Event kinds.
+const (
+	Key     = 1 // Key: the character
+	Click   = 2 // X, Y in the window's content, Button
+	Close   = 3 // the close button: the application ends the window
+	Release = 4
+	Theme   = 5 // the theme changed: draw the content again
+)
+
+// Paper is the colour of a window's content, Ink of its text, Accent of
+// what stands out (by theme).
+func Paper() byte {
+	if scope {
+		return gfx.Black
+	}
+	return gfx.Grey1
+}
+
+func Ink() byte {
+	if scope {
+		return gfx.Grey6
+	}
+	return gfx.Grey8
+}
+
+func Accent() byte {
+	if scope {
+		return gfx.White
+	}
+	return gfx.Brass5
+}
+
+// An event for a window.
+type Event struct {
+	Kind   int
+	X, Y   int
+	Button int
+	Key    byte
+}
+
+// A window: its content is W x H pixels in Surf.
+type Window struct {
+	X, Y, W, H int
+	Title      string
+	Surf       *gfx.Surface
+	Events     chan Event
+	app        *App
+	min        bool
+	gone       bool
+}
+
+// An application in the dock.
+type App struct {
+	Name  string
+	Start func()
+	Icon  func(s *gfx.Surface, x, y int)
+	Multi bool // every start opens another (else: to the front)
+	count int
+}
+
+const (
+	titleH  = 22
+	dockX   = gfx.ScreenW - 52
+	tile    = 48
+	menuW   = 150
+	itemH   = 20
+	miniY   = gfx.ScreenH - 52
+	gaugeW  = 14
+	shadowA = 9 // shadow of the active window
+	shadowB = 5
+)
+
+var (
+	windows []*Window // bottom to top
+	apps    []*App
+	// what each screen buffer lacks (double buffering: a change goes
+	// into both): x, y, w, h; w = 0 none
+	dmg [2][4]int
+	cur int // the buffer being drawn (gfx's back screen)
+	scope   bool // the oscilloscope theme
+	// the pointer and its buttons, last tick
+	px, py, pb int
+	drag       *Window
+	dragDX     int
+	dragDY     int
+	hover      int // what the pointer is over (for lightening)
+	// the Theme submenu: open, torn off (where)
+	subOpen bool
+	subTorn bool
+	subX    int
+	subY    int
+	subDrag bool
+)
+
+// Register adds an application to the dock.
+func Register(a *App) {
+	apps = append(apps, a)
+}
+
+// NewWindow opens a window of w x h for the running application's app
+// (nil when chip RAM is full).
+func NewWindow(a *App, title string, w, h int) *Window {
+	s := gfx.NewSurface(w, h)
+	if s == nil {
+		return nil
+	}
+	win := &Window{W: w, H: h, Title: title, Surf: s, Events: make(chan Event, 16), app: a}
+	n := len(windows)
+	win.X = 190 + (n%8)*28
+	win.Y = 40 + (n%8)*24
+	boiler.Lock()
+	windows = append(windows, win)
+	a.count++
+	damageAll()
+	boiler.Unlock()
+	return win
+}
+
+// Next waits up to n hundredths of a second for an event into e (false:
+// none came).
+func (w *Window) Next(n int, e *Event) bool {
+	for {
+		select {
+		case v := <-w.Events:
+			*e = v
+			return true
+		default:
+		}
+		if n <= 0 {
+			return false
+		}
+		boiler.Sleep(1)
+		n--
+	}
+}
+
+// Clear paints the window's content in the theme's paper.
+func (w *Window) Clear() {
+	w.Surf.Fill(0, 0, w.W, w.H, Paper())
+}
+
+// Invalidate asks for the window's content to be shown again.
+func (w *Window) Invalidate() {
+	damage(w.X, w.Y+titleH, w.W, w.H)
+}
+
+// InvalidateRect: only a part of the content changed.
+func (w *Window) InvalidateRect(x, y, wd, h int) {
+	damage(w.X+x, w.Y+titleH+y, wd, h)
+}
+
+// damage adds a rectangle of the screen to what both buffers lack.
+func damage(x, y, w, h int) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	boiler.Lock()
+	for i := range 2 {
+		d := &dmg[i]
+		if d[2] == 0 {
+			d[0], d[1], d[2], d[3] = x, y, w, h
+			continue
+		}
+		x1, y1 := max(d[0]+d[2], x+w), max(d[1]+d[3], y+h)
+		d[0], d[1] = min(d[0], x), min(d[1], y)
+		d[2], d[3] = x1-d[0], y1-d[1]
+	}
+	boiler.Unlock()
+}
+
+func damageAll() {
+	damage(0, 0, gfx.ScreenW, gfx.ScreenH)
+}
+
+// A window's frame with its shadow.
+func damageFrame(w *Window) {
+	damage(w.X, w.Y, w.W+shadowA+2, w.H+titleH+shadowA+2)
+}
+
+// Done closes the window and frees its surface.
+func (w *Window) Done() {
+	boiler.Lock()
+	for i := 0; i < len(windows); i++ {
+		if windows[i] == w {
+			for k := i; k < len(windows)-1; k++ {
+				windows[k] = windows[k+1]
+			}
+			windows = windows[:len(windows)-1]
+			break
+		}
+	}
+	w.app.count--
+	w.gone = true
+	boiler.Unlock()
+	damageAll()
+	w.Surf.Free()
+}
+
+// Scope tells whether the oscilloscope theme is on.
+func Scope() bool { return scope }
+
+// SetTheme switches between brass (false) and the oscilloscope (true).
+func SetTheme(oscilloscope bool) {
+	scope = oscilloscope
+	gfx.SetTheme(oscilloscope)
+	for _, w := range windows {
+		post(w, Event{Kind: Theme})
+	}
+	damageAll()
+}
+
+// Run is Panorama: the desktop until the machine stops.
+func Run() {
+	gfx.Init()
+	boiler.SetMouseArea(gfx.ScreenW, gfx.ScreenH)
+	damageAll()
+	for {
+		input()
+		if dmg[cur][2] > 0 {
+			compose()
+		}
+		boiler.Sleep(2)
+	}
+}
+
+// ---- input ----
+
+func input() {
+	x, y, b := boiler.Mouse()
+	gfx.Pointer(x, y)
+	h := hit(x, y)
+	if h != hover {
+		hoverDamage(hover)
+		hover = h
+		hoverDamage(hover)
+	}
+	pressed := b&1 != 0 && pb&1 == 0
+	released := b&1 == 0 && pb&1 != 0
+	// a drag follows the pointer, up to where the button was let go
+	if drag != nil {
+		if x-dragDX != drag.X || y-dragDY != drag.Y {
+			damageFrame(drag)
+			drag.X, drag.Y = x-dragDX, y-dragDY
+			damageFrame(drag)
+		}
+		if b&1 == 0 {
+			drag = nil
+		}
+	}
+	if subDrag {
+		if x-dragDX != subX || y-dragDY != subY {
+			damageSub()
+			subX, subY = x-dragDX, y-dragDY
+			damageSub()
+		}
+		if b&1 == 0 {
+			subDrag = false
+		}
+	}
+	if pressed {
+		press(x, y, h)
+	}
+	if released {
+		if top := topWindow(); top != nil {
+			post(top, Event{Kind: Release, Button: 1})
+		}
+	}
+	px, py, pb = x, y, b
+	// keys to the front window
+	for {
+		c := boiler.PollKey()
+		if c == 0 {
+			break
+		}
+		if top := topWindow(); top != nil {
+			post(top, Event{Kind: Key, Key: c})
+		}
+	}
+}
+
+func post(w *Window, e Event) {
+	select {
+	case w.Events <- e:
+	default:
+	}
+}
+
+func topWindow() *Window {
+	for i := len(windows) - 1; i >= 0; i-- {
+		if !windows[i].min {
+			return windows[i]
+		}
+	}
+	return nil
+}
+
+// What is at x, y (for lightening and clicks):
+// 1000+i menu item i, 1100+i submenu item i, 1199 the submenu's title,
+// 2000+i dock tile i, 3000+i the minimised window i, 4000+i window i's
+// close button, 5000+i its minimise button, 6000+i its title bar,
+// 7000+i its content; 0 the desktop.
+func hit(x, y int) int {
+	if subOpen {
+		sx, sy := subPos()
+		if in(x, y, sx, sy, menuW, itemH) {
+			return 1199
+		}
+		for i := range len(themeItems) {
+			if in(x, y, sx, sy+itemH*(i+1), menuW, itemH) {
+				return 1100 + i
+			}
+		}
+	}
+	for i := range len(menuItems) + 1 {
+		if in(x, y, 4, 4+itemH*i, menuW, itemH) {
+			return 1000 + i
+		}
+	}
+	for i := range len(apps) + 1 {
+		if in(x, y, dockX, 4+(tile+4)*i, tile, tile) {
+			return 2000 + i
+		}
+	}
+	k := 0
+	for i := range len(windows) {
+		if windows[i].min {
+			if in(x, y, 8+k*(tile+6), miniY, tile, tile) {
+				return 3000 + i
+			}
+			k++
+		}
+	}
+	for i := len(windows) - 1; i >= 0; i-- {
+		w := windows[i]
+		if w.min {
+			continue
+		}
+		if in(x, y, w.X+w.W-18, w.Y+4, 14, 14) {
+			return 4000 + i
+		}
+		if in(x, y, w.X+4, w.Y+4, 14, 14) {
+			return 5000 + i
+		}
+		if in(x, y, w.X, w.Y, w.W, titleH) {
+			return 6000 + i
+		}
+		if in(x, y, w.X, w.Y+titleH, w.W, w.H) {
+			return 7000 + i
+		}
+	}
+	return 0
+}
+
+// hoverDamage: the element h lightens (or no longer does).
+func hoverDamage(h int) {
+	switch {
+	case h == 1199:
+		sx, sy := subPos()
+		damage(sx, sy, menuW, itemH)
+	case h >= 1100 && h < 1199:
+		sx, sy := subPos()
+		damage(sx, sy+itemH*(h-1100+1), menuW, itemH)
+	case h >= 1000 && h < 1100:
+		damage(4, 4+itemH*(h-1000), menuW, itemH)
+	case h >= 2000 && h < 3000:
+		damage(dockX, 4+(tile+4)*(h-2000), tile, tile)
+	case h >= 3000 && h < 4000:
+		k := 0
+		for i := 0; i < h-3000 && i < len(windows); i++ {
+			if windows[i].min {
+				k++
+			}
+		}
+		damage(8+k*(tile+6), miniY, tile, tile)
+	case h >= 4000 && h < 5000 && h-4000 < len(windows):
+		w := windows[h-4000]
+		damage(w.X+w.W-18, w.Y+4, 14, 14)
+	case h >= 5000 && h < 6000 && h-5000 < len(windows):
+		w := windows[h-5000]
+		damage(w.X+4, w.Y+4, 14, 14)
+	}
+}
+
+// The torn-off submenu with its shadow.
+func damageSub() {
+	sx, sy := subPos()
+	damage(sx, sy, menuW+shadowB+2, itemH*(len(themeItems)+1)+shadowB+2)
+}
+
+func in(x, y, rx, ry, rw, rh int) bool {
+	return x >= rx && y >= ry && x < rx+rw && y < ry+rh
+}
+
+func subPos() (int, int) {
+	if subTorn {
+		return subX, subY
+	}
+	return 4 + menuW + 2, 4 + itemH*themeItem
+}
+
+var menuItems = [6]string{"Info", "Archive", "Engine Room", "Teleprinter", "Theme", "Hide windows"}
+
+const themeItem = 5 // index (1 = the first item; 0 the title)
+
+var themeItems = [2]string{"Brass", "Oscilloscope"}
+
+func press(x, y, h int) {
+	damageAll()
+	switch {
+	case h == 1199:
+		// tear the submenu off: it follows the pointer
+		if !subTorn {
+			subX, subY = subPos()
+		}
+		subTorn = true
+		subDrag = true
+		dragDX, dragDY = x-subX, y-subY
+	case h >= 1100 && h < 1199:
+		SetTheme(h == 1101)
+		if !subTorn {
+			subOpen = false
+		}
+	case h == 1000:
+		// the menu's title: nothing
+	case h > 1000 && h < 1100:
+		item := h - 1001
+		switch menuItems[item] {
+		case "Info":
+			launch("Info")
+		case "Archive":
+			launch("Archive")
+		case "Engine Room":
+			launch("Engine Room")
+		case "Teleprinter":
+			launch("Teleprinter")
+		case "Theme":
+			subOpen = !subOpen || subTorn
+			if subOpen && subTorn {
+				subTorn = false
+			}
+		case "Hide windows":
+			for _, w := range windows {
+				w.min = true
+			}
+		}
+	case h == 2000:
+		launch("Info")
+	case h > 2000 && h < 3000:
+		start(apps[h-2001])
+	case h >= 3000 && h < 4000:
+		w := windows[h-3000]
+		w.min = false
+		raise(w)
+	case h >= 4000 && h < 5000:
+		post(windows[h-4000], Event{Kind: Close})
+	case h >= 5000 && h < 6000:
+		windows[h-5000].min = true
+	case h >= 6000 && h < 7000:
+		w := windows[h-6000]
+		raise(w)
+		drag = w
+		dragDX, dragDY = x-w.X, y-w.Y
+	case h >= 7000 && h < 8000:
+		w := windows[h-7000]
+		raise(w)
+		post(w, Event{Kind: Click, X: x - w.X, Y: y - w.Y - titleH, Button: 1})
+	}
+}
+
+func launch(name string) {
+	for _, a := range apps {
+		if a.Name == name {
+			start(a)
+		}
+	}
+}
+
+// start an application (or bring its window to the front).
+func start(a *App) {
+	if !a.Multi && a.count > 0 {
+		for _, w := range windows {
+			if w.app == a {
+				w.min = false
+				raise(w)
+				return
+			}
+		}
+	}
+	go a.Start()
+}
+
+func raise(w *Window) {
+	boiler.Lock()
+	for i := 0; i < len(windows); i++ {
+		if windows[i] == w {
+			for k := i; k < len(windows)-1; k++ {
+				windows[k] = windows[k+1]
+			}
+			windows[len(windows)-1] = w
+			break
+		}
+	}
+	damageAll()
+	boiler.Unlock()
+}
+
+// ---- drawing ----
+
+// Colours of the chrome by theme.
+func desk() byte {
+	if scope {
+		return gfx.Black
+	}
+	return gfx.Grey3
+}
+
+// compose draws what the back buffer lacks, then shows it.
+func compose() {
+	boiler.Lock()
+	r := dmg[cur]
+	dmg[cur][2] = 0
+	boiler.Unlock()
+	b := gfx.Back()
+	b.SetClip(r[0], r[1], r[2], r[3])
+	b.Fill(0, 0, gfx.ScreenW, gfx.ScreenH, desk())
+	if scope {
+		// the graticule of an oscilloscope
+		for x := 0; x < dockX; x += 50 {
+			b.Fill(x, 0, 1, gfx.ScreenH, gfx.Grey1)
+		}
+		for y := 0; y < gfx.ScreenH; y += 50 {
+			b.Fill(0, y, dockX, 1, gfx.Grey1)
+		}
+	} else {
+		b.Text(dockX-150, gfx.ScreenH-24, "LOGOPHOR 16", gfx.Grey4)
+	}
+	n := len(windows)
+	k := 0
+	for i := 0; i < n; i++ {
+		w := windows[i]
+		if w.min {
+			miniTile(b, w, 8+k*(tile+6), miniY, hover == 3000+i)
+			k++
+			continue
+		}
+		frame(b, w, i, i == n-1)
+	}
+	dock(b)
+	menu(b)
+	b.NoClip()
+	gfx.Flip()
+	cur = 1 - cur
+}
+
+// A floating surface: its shadow (brass) and rounded body.
+func panel(b *gfx.Surface, x, y, w, h int, body byte, depth int) {
+	if scope {
+		b.Fill(x, y, w, h, gfx.Black)
+		b.RoundBox(x, y, w, h, gfx.Grey7)
+		return
+	}
+	b.Shadow(x, y, w, h, depth)
+	b.RoundFill(x, y, w, h, body)
+}
+
+func frame(b *gfx.Surface, w *Window, i int, active bool) {
+	d := shadowB
+	if active {
+		d = shadowA
+	}
+	panel(b, w.X, w.Y, w.W, w.H+titleH, gfx.Grey1, d)
+	// title
+	ink := byte(gfx.Grey6)
+	if active {
+		ink = gfx.Brass5
+	}
+	if scope {
+		b.Fill(w.X+1, w.Y+titleH-1, w.W-2, 1, gfx.Grey6)
+		ink = gfx.Grey6
+		if active {
+			ink = gfx.White
+		}
+	}
+	tx := w.X + (w.W-8*len(w.Title))/2
+	b.Text(tx, w.Y+3, w.Title, ink)
+	// minimise (left), close (right)
+	button(b, w.X+4, w.Y+4, '_', hover == 5000+i)
+	button(b, w.X+w.W-18, w.Y+4, 'x', hover == 4000+i)
+	b.Draw(w.Surf, 0, 0, w.W, w.H, w.X, w.Y+titleH)
+	if scope {
+		b.RoundBox(w.X, w.Y, w.W, w.H+titleH, ink)
+	}
+}
+
+func button(b *gfx.Surface, x, y int, mark byte, lit bool) {
+	if scope {
+		b.Box(x, y, 14, 14, gfx.Grey6)
+	} else {
+		b.RoundFill(x, y, 14, 14, gfx.Grey2)
+	}
+	b.Char(x+3, y-1, mark, gfx.Grey7)
+	if lit {
+		b.Shade(x, y, 14, 14, true)
+	}
+}
+
+func miniTile(b *gfx.Surface, w *Window, x, y int, lit bool) {
+	panel(b, x, y, tile, tile, gfx.Grey1, shadowB)
+	name := w.Title
+	if len(name) > 5 {
+		name = name[:5]
+	}
+	b.Text(x+4, y+16, name, gfx.Brass4)
+	if lit {
+		b.Shade(x, y, tile, tile, true)
+	}
+}
+
+func dock(b *gfx.Surface) {
+	// the machine's own tile first, then the applications
+	panel(b, dockX, 4, tile, tile, gfx.Grey1, shadowB)
+	emblem(b, dockX, 4)
+	if hover == 2000 {
+		b.Shade(dockX, 4, tile, tile, true)
+	}
+	for i, a := range apps {
+		y := 4 + (tile+4)*(i+1)
+		panel(b, dockX, y, tile, tile, gfx.Grey2, shadowB)
+		if a.Icon != nil {
+			a.Icon(b, dockX, y)
+		}
+		if a.count > 0 {
+			gauge(b, dockX+tile-gaugeW-2, y+tile-gaugeW-2, a.count)
+		}
+		if hover == 2001+i {
+			b.Shade(dockX, y, tile, tile, true)
+		}
+	}
+}
+
+// The machine's emblem: a gear around a little screen.
+func emblem(b *gfx.Surface, x, y int) {
+	c := byte(gfx.Brass3)
+	for i := range 8 {
+		// eight teeth around
+		tx := []int{20, 33, 38, 33, 20, 7, 2, 7}
+		ty := []int{2, 7, 20, 33, 38, 33, 20, 7}
+		b.Fill(x+tx[i]+2, y+ty[i]+2, 4, 4, c)
+		free(tx)
+		free(ty)
+	}
+	b.RoundBox(x+8, y+8, 32, 32, c)
+	b.Fill(x+14, y+18, 20, 12, gfx.Cube+0*36+3*6+1)
+	b.Fill(x+16, y+23, 16, 1, gfx.Cube+1*36+5*6+2)
+}
+
+// A steam gauge: a little dial whose needle rises with the windows open.
+func gauge(b *gfx.Surface, x, y, n int) {
+	if scope {
+		b.Box(x, y, gaugeW, gaugeW, gfx.Grey7)
+	} else {
+		b.RoundFill(x, y, gaugeW, gaugeW, gfx.Brass2)
+	}
+	level := min(n, 3)
+	cx, cy := x+gaugeW/2, y+gaugeW-3
+	ends := [4][2]int{{-5, 0}, {-3, -5}, {3, -5}, {5, 0}}
+	needle := byte(gfx.Black + 1)
+	if scope {
+		needle = gfx.White
+	}
+	b.Line(cx, cy, cx+ends[level][0], cy+ends[level][1], needle)
+}
+
+func menu(b *gfx.Surface) {
+	// the title, then the items; each a floating flat surface
+	h := itemH * (len(menuItems) + 1)
+	panel(b, 4, 4, menuW, h, gfx.Grey2, shadowB)
+	if scope {
+		b.Fill(5, 4+itemH-1, menuW-2, 1, gfx.Grey6)
+	} else {
+		b.RoundFill(4, 4, menuW, itemH, gfx.Grey1)
+	}
+	b.Text(12, 6, "Panorama", gfx.Brass5)
+	for i, s := range menuItems {
+		y := 4 + itemH*(i+1)
+		b.Text(12, y+2, s, gfx.Grey8)
+		if i+1 == themeItem {
+			b.Text(4+menuW-14, y+2, ">", gfx.Grey7)
+		}
+		if hover == 1001+i {
+			b.Shade(5, y, menuW-2, itemH, true)
+		}
+	}
+	if subOpen {
+		sx, sy := subPos()
+		panel(b, sx, sy, menuW, itemH*(len(themeItems)+1), gfx.Grey2, shadowB)
+		if !scope {
+			b.RoundFill(sx, sy, menuW, itemH, gfx.Grey1)
+		} else {
+			b.Fill(sx+1, sy+itemH-1, menuW-2, 1, gfx.Grey6)
+		}
+		b.Text(sx+8, sy+2, "Theme", gfx.Brass5)
+		for i, s := range themeItems {
+			y := sy + itemH*(i+1)
+			mark := " "
+			if (i == 1) == scope {
+				mark = "*"
+			}
+			b.Text(sx+8, y+2, mark, gfx.Brass4)
+			b.Text(sx+20, y+2, s, gfx.Grey8)
+			if hover == 1100+i {
+				b.Shade(sx+1, y, menuW-2, itemH, true)
+			}
+		}
+	}
+}

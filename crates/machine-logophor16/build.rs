@@ -81,4 +81,36 @@ fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     std::fs::write(out.join("foundry.rom"), rom).expect("write foundry.rom");
     std::fs::write(out.join("foundry.lst"), img.listing).expect("write foundry.lst");
+    system_card(&out);
+}
+
+/// The system card (option `card=system`): Boiler, Panorama and its
+/// applications compiled from `system/` as BOOT/BOILER.BIN on a 64 MiB
+/// FAT32 card, kept sparse: the sector count, then each sector that is
+/// not all zero as its number and its 512 bytes (little-endian numbers).
+fn system_card(out: &Path) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("system");
+    // (a directory: cargo looks at everything below it)
+    println!("cargo:rerun-if-changed={}", root.display());
+    let prog = brass::build(&brass::DirSources { root })
+        .unwrap_or_else(|e| panic!("system/:\n{}", e.join("\n")));
+    let readme = b"The Logophor 16's system card: Boiler, Panorama and its applications.\n\
+        BOOT/BOILER.BIN is started by Foundry's boot loader.\n";
+    let img = asm_ada::sdimage::fat32(
+        64,
+        &[
+            ("BOOT/BOILER.BIN".into(), prog.binary),
+            ("README.TXT".into(), readme.to_vec()),
+        ],
+    )
+    .expect("system card");
+    let mut sparse = Vec::new();
+    sparse.extend_from_slice(&((img.len() / 512) as u32).to_le_bytes());
+    for (i, sector) in img.chunks(512).enumerate() {
+        if sector.iter().any(|&b| b != 0) {
+            sparse.extend_from_slice(&(i as u32).to_le_bytes());
+            sparse.extend_from_slice(sector);
+        }
+    }
+    std::fs::write(out.join("system-card.bin"), sparse).expect("write system-card.bin");
 }

@@ -431,6 +431,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "brass"
+version = "0.1.0"
+dependencies = [
+ "asm-ada",
+ "cpu-ada",
+ "emu-core",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2201,6 +2210,7 @@ name = "machine-logophor16"
 version = "0.1.0"
 dependencies = [
  "asm-ada",
+ "brass",
  "chips-logophor",
  "cpu-ada",
  "emu-core",

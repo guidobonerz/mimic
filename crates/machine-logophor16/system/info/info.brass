@@ -1,0 +1,81 @@
+// Package info: the machine's "About" window - what runs, how long, and
+// how much memory is left.
+package info
+
+import (
+	"boiler"
+	"gfx"
+	"panorama"
+	"strs"
+)
+
+var app panorama.App
+
+// App is the application for Panorama's dock.
+func App() *panorama.App {
+	app = panorama.App{Name: "Info", Start: run, Icon: icon}
+	return &app
+}
+
+func icon(s *gfx.Surface, x, y int) {
+	ink := byte(gfx.Brass4)
+	if panorama.Scope() {
+		ink = gfx.Grey7
+	}
+	s.RoundBox(x+12, y+8, 24, 32, ink)
+	s.Fill(x+22, y+14, 4, 4, ink)
+	s.Fill(x+22, y+22, 4, 12, ink)
+}
+
+func run() {
+	boiler.SetName("Info")
+	w := panorama.NewWindow(&app, "Info", 320, 168)
+	if w == nil {
+		return
+	}
+	for {
+		paint(w)
+		var e panorama.Event
+		if w.Next(100, &e) && e.Kind == panorama.Close {
+			w.Done()
+			return
+		}
+	}
+}
+
+func line(s *gfx.Surface, y int, label string, value string) {
+	s.Text(16, y, label, panorama.Ink())
+	s.Text(144, y, value, panorama.Accent())
+	free(value)
+}
+
+func paint(w *panorama.Window) {
+	w.Clear()
+	s := w.Surf
+	s.Text(16, 10, "Logophor 16", panorama.Accent())
+	s.Text(16, 28, "Foundry, Boiler, Panorama", panorama.Ink())
+	secs := int32(boiler.Ticks() / 100)
+	b := strs.Builder{}
+	b.WriteInt(secs / 60)
+	b.WriteString(" min ")
+	b.WriteInt(secs % 60)
+	b.WriteString(" s")
+	line(s, 60, "Running", b.String())
+	b.Free()
+	tasks := boiler.Tasks()
+	line(s, 80, "Tasks", strs.Itoa(len(tasks)))
+	free(tasks)
+	all, big := gfx.FreeChip()
+	line(s, 100, "Chip RAM free", kib(all))
+	line(s, 120, "largest piece", kib(big))
+	w.Invalidate()
+}
+
+func kib(n uint32) string {
+	b := strs.Builder{}
+	b.WriteInt(int32(n / 1024))
+	b.WriteString(" KiB")
+	s := b.String()
+	b.Free()
+	return s
+}

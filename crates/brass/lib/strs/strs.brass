@@ -1,0 +1,72 @@
+// Package strs: building and converting strings (BRASS.md 5: strings
+// are not added at run time).
+package strs
+
+// Itoa returns the decimal text of v (a new string; free it when done).
+func Itoa(v int) string {
+	return Itoa32(int32(v))
+}
+
+// Itoa32 returns the decimal text of v.
+func Itoa32(v int32) string {
+	var buf [12]byte
+	i := len(buf)
+	neg := v < 0
+	u := uint32(v)
+	if neg {
+		u = uint32(-v)
+	}
+	for {
+		i--
+		buf[i] = byte(u%10) + '0'
+		u = u / 10
+		if u == 0 {
+			break
+		}
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}
+
+// Builder collects bytes into a string.
+type Builder struct {
+	buf []byte
+}
+
+// WriteString appends s.
+func (b *Builder) WriteString(s string) {
+	for i := 0; i < len(s); i++ {
+		b.buf = append(b.buf, s[i])
+	}
+}
+
+// WriteByte appends c.
+func (b *Builder) WriteByte(c byte) {
+	b.buf = append(b.buf, c)
+}
+
+// String returns the bytes so far as a new string.
+func (b *Builder) String() string {
+	return string(b.buf)
+}
+
+// Len returns the number of bytes so far.
+func (b *Builder) Len() int {
+	return len(b.buf)
+}
+
+// Free gives the builder's memory back.
+func (b *Builder) Free() {
+	free(b.buf)
+	b.buf = nil
+}
+
+// WriteInt appends the decimal text of v.
+func (b *Builder) WriteInt(v int32) {
+	s := Itoa32(v)
+	b.WriteString(s)
+	free(s)
+}

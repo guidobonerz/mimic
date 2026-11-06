@@ -42,7 +42,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Video (`--videoformat
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`vectrex`", "Vectrex (Vektorbildschirm)", "`vectrex`", "–"],
     ["`imsai`", "IMSAI 8080 (Frontplatte; Terminal auf F12)", "`8080`", "–"],
-    ["`logophor16`", "Logophor 16, mimics eigener Steampunk-Rechner (ROM eingebaut, Profil `logophor16`)", "`16`", "–"],
+    ["`logophor16`", "Logophor 16, mimics eigener Steampunk-Rechner (ROM eingebaut; Profil `logophor16` startet den Desktop Panorama)", "`16`", "–"],
     ["`archimedes`", "Acorn Archimedes", "`a310` (Standard), `a305`, `a440`, `a3000`", "–"],
     ["`apple2`", "Apple II, II+, IIe", "`iie` (enhanced IIe, Standard), `iie-unenhanced`, "
      "`iiplus`, `ii`", "–"],
@@ -1238,10 +1238,12 @@ table(["Schlüssel", "Maschine", "Werte"], [
      "`1k` … `64k`; `9600`; `card|console`; `off`; `a|b` (Monitor-ROM); `HEX`"],
     ["`port1`, `port2`", "Vectrex", "`controller`, `lightpen`, `imager`; `eye`, "
      "`lines=fine|soft`"],
-    ["`rtc`, `port0`, `port1`, `net`, `mac`", "Logophor 16", "Sekunden seit 2000-01-01 "
+    ["`card`, `rtc`, `port0`, `port1`, `net`, `mac`", "Logophor 16", "`card=system` steckt die "
+     "eingebaute Systemkarte ein (Boiler und der Desktop Panorama; das Profil `logophor16` setzt das, "
+     "Schreibzugriffe gehen am Ende verloren; `--disk` tritt an ihre Stelle), `none` (Vorgabe); `rtc`: Sekunden seit 2000-01-01 "
      "(Start der Uhr; Vorgabe 2026-01-01); `mouse|joystick|none` (Vorgabe: Maus an "
      "Port 0, Joystick an Port 1); `net=HOST:PORT` verbindet mit dem Netz eines "
-     "`ada-asm hub` (Vorgabe Port 6516); `mac=02:4c:31:36:00:01`. Die SD-Karte ist ein FAT32-Image per `--disk` "
+     "`ada-asm hub` (zugleich Gateway 10.16.0.1 des Netzes: DHCP, DNS und das Internet über die Sockets des Host-Rechners; `--no-gateway` nur Verteiler) (Vorgabe Port 6516); `mac=02:4c:31:36:00:01`. Die SD-Karte ist ein FAT32-Image per `--disk` "
      "(`ada-asm sd card.img --boot prog.bin`); Foundry startet davon "
      "`BOOT/BOILER.BIN`, eine Taste während des Startbilds öffnet den Monitor"],
 ], [0.26, 0.18, 0.56])

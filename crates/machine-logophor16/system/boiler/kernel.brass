@@ -1,0 +1,602 @@
+// Package boiler: the Logophor 16's operating system kernel (SPEC.md 11,
+// step 11b). Pre-emptive multitasking with priorities on Telegraph's
+// timer (100 Hz), channels as message ports (Brass's `go`, `chan`,
+// `select` call into here), sleeping, mutexes, the keyboard.
+//
+// The package's init turns the running program into task 1 and starts
+// the clock: importing boiler is starting it.
+package boiler
+
+// A task. Its registers come first (kernel.s saves and loads them).
+type Task struct {
+	regs  [18]uint16 // R1-R12, S0-S3, PC, SR
+	ID    int
+	Prio  int
+	state int
+	wake  uint32
+	next  *Task
+	stack int // its stack segment
+	Name  string
+}
+
+const (
+	ready    = 0
+	waiting  = 1 // on a channel or a mutex: woken by wakeAll
+	sleeping = 2
+	dead     = 3
+)
+
+// Telegraph (SPEC.md 10).
+const (
+	io       = uintptr(0xffff_0000)
+	intreq   = io + 0x4280
+	intena   = io + 0x4282
+	t0cnt    = io + 0x4200
+	t0latch  = io + 0x4202
+	t0ctl    = io + 0x4204
+	tstat    = io + 0x4220
+	kbddata  = io + 0x4240
+	mouse0x  = io + 0x424a
+	mouse0y  = io + 0x424c
+	port0    = io + 0x4252
+	intTimer = 0x0040
+	// the first stack segment for new tasks, and how many there are
+	stackFirst = 0x0100
+	stackCount = 0x00f0
+)
+
+var (
+	current  *Task
+	all      *Task // every task, in a ring
+	idle     *Task
+	nextID   int
+	ticks    uint32
+	depth    int // Lock nesting
+	spare    *Task // dead tasks out of the ring, for newTask
+	nextStk  int
+	keys     [32]byte // key events (USB HID usage, bit 7 of the high byte: released)
+	keyRel   [32]bool
+	keyHead  int
+	keyCount int
+	shift    bool
+	// the mouse in port 0: the counters last seen, the pointer, buttons
+	mouseLX, mouseLY uint16
+	mouseX, mouseY   int
+	mouseB           int
+	mouseHit         int // buttons pressed since Mouse was last called
+	mouseSeen        bool
+	// the pointer's area (Panorama sets the screen's size)
+	mouseW, mouseH = 1024, 768
+)
+
+// Mouse is the pointer's position and buttons (bit 0 left, 1 right,
+// 2 middle). A button pressed since the last call counts as held once,
+// even if it is up again: no click is lost to a busy caller.
+func Mouse() (int, int, int) {
+	Lock()
+	b := mouseB | mouseHit
+	mouseHit = 0
+	Unlock()
+	return mouseX, mouseY, b
+}
+
+// SetMouseArea limits the pointer to w x h and puts it in the middle.
+func SetMouseArea(w, h int) {
+	Lock()
+	mouseW, mouseH = w, h
+	mouseX, mouseY = w/2, h/2
+	Unlock()
+}
+
+func poke16(a uintptr, v uint16) { *(*uint16)(a) = v }
+func peek16(a uintptr) uint16    { return *(*uint16)(a) }
+
+// In kernel.s.
+func installVectors()
+func disable()
+func enable()
+func halt()
+func entryPoint() uintptr
+func memcpy(dst, src uintptr, n int)
+
+func init() {
+	installVectors()
+	// The running program becomes task 1 (its stack stays where it is).
+	main := &Task{Prio: 10, Name: "main", stack: 0x003f}
+	nextID = 1
+	main.ID = nextID
+	main.next = main
+	all = main
+	current = main
+	idle = newTask("idle", 0)
+	setEntry(idle, funcAddr(idleLoop))
+	// 100 Hz: 10 000 counts of 1 MHz.
+	poke16(t0latch, 9999)
+	poke16(t0cnt, 9999)
+	poke16(t0ctl, 1|2|8)
+	poke16(intena, 0x8000|intTimer)
+	enable()
+}
+
+// Lock keeps other tasks and interrupts out (nests).
+func Lock() {
+	disable()
+	depth++
+}
+
+// Unlock undoes one Lock.
+func Unlock() {
+	depth--
+	if depth == 0 {
+		enable()
+	}
+}
+
+// Yield lets another task of the same priority run.
+func Yield() {
+	poke16(intreq, 0x8000|intTimer)
+}
+
+// Ticks is the time since Boiler started, in hundredths of a second.
+func Ticks() uint32 {
+	return ticks
+}
+
+// Sleep waits at least n hundredths of a second.
+func Sleep(n int) {
+	Lock()
+	current.wake = ticks + uint32(n)
+	current.state = sleeping
+	Unlock()
+	Yield()
+}
+
+// Self is the running task.
+func Self() *Task {
+	return current
+}
+
+// SetPriority changes the running task's priority (higher runs first).
+func SetPriority(p int) {
+	current.Prio = p
+	Yield()
+}
+
+// Key waits for a character typed (ISO 8859-1, US layout).
+func Key() byte {
+	for {
+		Lock()
+		c := nextChar()
+		if c != 0 {
+			Unlock()
+			return c
+		}
+		current.state = waiting
+		Unlock()
+		Yield()
+	}
+}
+
+// PollKey is a character typed, or 0 when none waits.
+func PollKey() byte {
+	Lock()
+	c := nextChar()
+	Unlock()
+	return c
+}
+
+// The next character from the key events (under Lock), 0: none.
+func nextChar() byte {
+	{
+		for keyCount > 0 {
+			k := keys[keyHead]
+			rel := keyRel[keyHead]
+			keyHead = (keyHead + 1) % len(keys)
+			keyCount--
+			if k == 0xe1 || k == 0xe5 {
+				shift = !rel
+				continue
+			}
+			if rel || k >= 0x39 {
+				continue
+			}
+			c := keymap[k]
+			if shift {
+				c = keymapShift[k]
+			}
+			if c != 0 {
+				return c
+			}
+		}
+	}
+	return 0
+}
+
+// ---- tasks ----
+
+// TaskInfo describes a task for Tasks.
+type TaskInfo struct {
+	ID    int
+	Prio  int
+	Name  string
+	State string
+}
+
+var stateNames = [4]string{"ready", "waiting", "sleeping", "dead"}
+
+// Tasks lists the tasks (the caller frees the slice).
+func Tasks() []TaskInfo {
+	Lock()
+	var list []TaskInfo
+	t := all
+	for {
+		if t.state != dead {
+			list = append(list, TaskInfo{t.ID, t.Prio, t.Name, stateNames[t.state]})
+		}
+		t = t.next
+		if t == all {
+			break
+		}
+	}
+	Unlock()
+	return list
+}
+
+// SetName names the running task (for Tasks).
+func SetName(name string) {
+	current.Name = name
+}
+
+func newTask(name string, prio int) *Task {
+	var t *Task
+	if spare != nil {
+		// a task the scheduler took out of the ring
+		t = spare
+		spare = t.next
+		stk := t.stack
+		*t = Task{Name: name, Prio: prio}
+		t.stack = stk
+		nextID++
+		t.ID = nextID
+		t.next = all.next
+		all.next = t
+		return t
+	}
+	t = &Task{Name: name, Prio: prio}
+	nextID++
+	t.ID = nextID
+	if nextStk == stackCount {
+		panic("Boiler: too many tasks")
+	}
+	t.stack = stackFirst + nextStk
+	nextStk++
+	// into the ring after the running task
+	t.next = all.next
+	all.next = t
+	return t
+}
+
+// setEntry: the task starts at kernel.s's trampoline, which calls fn.
+func setEntry(t *Task, fn uintptr) {
+	e := entryPoint()
+	t.regs[4] = uint16(fn >> 16) // R5:R6 = the function
+	t.regs[5] = uint16(fn)
+	t.regs[11] = 0xfffe // R12
+	t.regs[12] = uint16(e >> 16)
+	t.regs[13] = dataSegment()
+	t.regs[14] = uint16(t.stack)
+	t.regs[16] = uint16(e)
+	t.regs[17] = 0x2000 // supervisor, interrupts on
+}
+
+// The idle task halts until the next interrupt, again and again.
+func idleLoop() {
+	for {
+		halt()
+	}
+}
+
+// spawn starts fn with the argument words at args (count, then up to
+// four words) as a new task (Brass's `go`).
+func spawn(fn uintptr, args uintptr) {
+	Lock()
+	t := newTask("task", current.Prio)
+	setEntry(t, fn)
+	a := (*[5]uint16)(args)
+	for i := 0; i < int(a[0]) && i < 4; i++ {
+		t.regs[i] = a[i+1]
+	}
+	Unlock()
+	Yield()
+}
+
+// exitTask ends the running task (its function returned).
+func exitTask() {
+	Lock()
+	current.state = dead
+	Unlock()
+	Yield()
+	for {
+		halt()
+	}
+}
+
+// funcAddr and dataSegment: in kernel.s.
+func funcAddr(f func()) uintptr
+func dataSegment() uint16
+
+// schedule runs in the timer interrupt (and Yield's): time, sleepers,
+// keys, then the next task to run (highest priority first, in turn among
+// equals).
+func schedule() {
+	poke16(intreq, intTimer) // acknowledge
+	if peek16(tstat)&1 != 0 {
+		ticks++
+	}
+	// keys
+	for {
+		k := peek16(kbddata)
+		if k == 0 {
+			break
+		}
+		if keyCount < len(keys) {
+			i := (keyHead + keyCount) % len(keys)
+			keys[i] = byte(k)
+			keyRel[i] = k&0x8000 != 0
+			keyCount++
+		}
+	}
+	// the mouse: what the counters moved since the last tick
+	mx, my := peek16(mouse0x), peek16(mouse0y)
+	if mouseSeen {
+		mouseX = clamp(mouseX+int(int16(mx-mouseLX)), 0, mouseW-1)
+		mouseY = clamp(mouseY+int(int16(my-mouseLY)), 0, mouseH-1)
+	}
+	mouseLX, mouseLY, mouseSeen = mx, my, true
+	b := int(peek16(port0) >> 4 & 7)
+	mouseHit |= b &^ mouseB
+	mouseB = b
+	// wake the sleepers whose time has come, and key waiters
+	t := all
+	for {
+		if t.state == sleeping && ticks >= t.wake {
+			t.state = ready
+		}
+		if t.state == waiting && keyCount > 0 {
+			t.state = ready
+		}
+		t = t.next
+		if t == all {
+			break
+		}
+	}
+	// dead tasks leave the ring (not the running one: its registers are
+	// being saved); they keep their stack segment for the next task
+	p := all
+	for {
+		t = p.next
+		if t.state == dead && t != current {
+			p.next = t.next
+			if all == t {
+				all = p
+			}
+			t.next = spare
+			spare = t
+			continue
+		}
+		p = t
+		if p == all {
+			break
+		}
+	}
+	// the best ready task, starting after the current one
+	best := idle
+	t = current.next
+	for {
+		if t.state == ready && t.Prio > best.Prio {
+			best = t
+		}
+		if t == current {
+			break
+		}
+		t = t.next
+	}
+	current = best
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// wakeAll makes every waiting task ready (they check again).
+func wakeAll() {
+	t := all
+	for {
+		if t.state == waiting {
+			t.state = ready
+		}
+		t = t.next
+		if t == all {
+			break
+		}
+	}
+}
+
+// wait blocks the running task until wakeAll (called under Lock; returns
+// under Lock).
+func wait() {
+	current.state = waiting
+	Unlock()
+	Yield()
+	Lock()
+}
+
+// ---- channels ----
+
+// Chan is a channel's object.
+type Chan struct {
+	size   int
+	cap    int
+	slots  int
+	buf    uintptr
+	head   int
+	count  int
+	closed bool
+}
+
+func chanMake(elemSize, cap int) *Chan {
+	c := &Chan{size: elemSize, cap: cap, slots: max(cap, 1)}
+	b := make([]byte, c.slots*elemSize)
+	c.buf = uintptr(&b[0])
+	return c
+}
+
+func chanSend(c *Chan, value uintptr) {
+	if c == nil {
+		panic("send on a nil channel")
+	}
+	Lock()
+	for c.count == c.slots {
+		if c.closed {
+			Unlock()
+			panic("send on a closed channel")
+		}
+		wait()
+	}
+	if c.closed {
+		Unlock()
+		panic("send on a closed channel")
+	}
+	i := (c.head + c.count) % c.slots
+	memcpy(c.buf+uintptr(i*c.size), value, c.size)
+	c.count++
+	wakeAll()
+	// unbuffered: wait until a receiver took it
+	if c.cap == 0 {
+		for c.count > 0 && !c.closed {
+			wait()
+		}
+	}
+	Unlock()
+}
+
+func chanRecv(c *Chan, into uintptr) bool {
+	if c == nil {
+		panic("receive from a nil channel")
+	}
+	Lock()
+	for c.count == 0 {
+		if c.closed {
+			zero(into, c.size)
+			Unlock()
+			return false
+		}
+		wait()
+	}
+	memcpy(into, c.buf+uintptr(c.head*c.size), c.size)
+	c.head = (c.head + 1) % c.slots
+	c.count--
+	wakeAll()
+	Unlock()
+	return true
+}
+
+func chanClose(c *Chan) {
+	Lock()
+	if c.closed {
+		Unlock()
+		panic("close of a closed channel")
+	}
+	c.closed = true
+	wakeAll()
+	Unlock()
+}
+
+func zero(a uintptr, n int) {
+	for i := 0; i < n; i++ {
+		*(*byte)(a + uintptr(i)) = 0
+	}
+}
+
+// One select case (the compiler's 10-byte table entry).
+type selCase struct {
+	kind int
+	ch   *Chan
+	buf  uintptr
+}
+
+func selectCases(table uintptr, n int, hasDefault bool) (int, bool) {
+	Lock()
+	for {
+		for i := 0; i < n; i++ {
+			sc := (*selCase)(table + uintptr(i*10))
+			c := sc.ch
+			if c == nil {
+				continue
+			}
+			if sc.kind == 0 {
+				if c.count > 0 {
+					memcpy(sc.buf, c.buf+uintptr(c.head*c.size), c.size)
+					c.head = (c.head + 1) % c.slots
+					c.count--
+					wakeAll()
+					Unlock()
+					return i, true
+				}
+				if c.closed {
+					zero(sc.buf, c.size)
+					Unlock()
+					return i, false
+				}
+			} else if c.count < c.slots && !c.closed {
+				j := (c.head + c.count) % c.slots
+				memcpy(c.buf+uintptr(j*c.size), sc.buf, c.size)
+				c.count++
+				wakeAll()
+				Unlock()
+				return i, true
+			}
+		}
+		if hasDefault {
+			Unlock()
+			return n, false
+		}
+		wait()
+	}
+}
+
+// ---- mutexes ----
+
+// Mutex lets one task at a time in (tasks wait, not interrupts).
+type Mutex struct {
+	owner *Task
+	count int
+}
+
+// Lock takes the mutex (again, by its owner).
+func (m *Mutex) Lock() {
+	Lock()
+	for m.owner != nil && m.owner != current {
+		wait()
+	}
+	m.owner = current
+	m.count++
+	Unlock()
+}
+
+// Unlock gives it back.
+func (m *Mutex) Unlock() {
+	Lock()
+	m.count--
+	if m.count == 0 {
+		m.owner = nil
+		wakeAll()
+	}
+	Unlock()
+}

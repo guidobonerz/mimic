@@ -116,6 +116,7 @@ over at that moment.
 | 3 | CAUSE | vector number of the last exception; for TRAP bits 8–15 = n |
 | 4 | CYCLE | free-running CPU cycle counter, low 16 bits (read only) |
 | 5 | CYCLEH | high 16 bits, latched when CYCLE is read |
+| 6 | VBR | vector base: the segment whose offset $0040 holds the vector table (reset $FFFB, the ROM's; step 11) |
 
 **Reset**: S0 = $FFFB, PC = $0000, SR = S set, IPL = 7, other flags 0;
 R1–R12, S1–S3 and the shadow registers are 0.
@@ -302,7 +303,8 @@ RTI restores the IPL from SSR. An NMI can still interrupt a handler that
 has not saved them.
 
 **Vector table** **[S]**: 32 entries of 4 bytes (segment, offset) at
-`FFFB:0040` in the ROM.
+`VBR:0040`; VBR is $FFFB after reset (the ROM's table at `FFFB:0040`),
+so a system can move the table to RAM (step 11, owner's choice).
 
 | v | Cause |
 | --- | --- |
@@ -379,6 +381,15 @@ served, running on into line y + 1 if needed:
 
 In mode 3 the framebuffer's 200 slots fit the 208 slots of the horizontal
 blank exactly.
+
+**XGA fields** **[S]** (mode 5, owner's request 2026-11-06): a field that
+begins with mode 5 on runs with XGA timing: 664 slots (249 CPU cycles) a
+line, a slot two pixels (1 328 pixel clocks, about 64 MHz), 806 lines of
+which 768 show, about 59.8 fields a second; the CPU clock stays. The
+fixed DMA starts at slot 512 (x = 1 024); the framebuffer's 256 slots run
+on into the next line. The mode is looked at only when a field begins: a
+switch shows from the next field (the field it is made in keeps its
+timing).
 
 **Free slots** (all others) go, slot by slot, to the highest-priority unit
 with an access pending: 5. Copper, 6. Blitter and Stereoscope (alternating
@@ -560,6 +571,7 @@ Stereoscope's.
 | 2 | 800 × 600 | 4 bit indexed (high nibble = left pixel) | 240 000 | full screen |
 | 3 | 800 × 600 | 8 bit indexed | 480 000 | full screen |
 | 4 | 100 × 37 characters | text, 8 × 16 font | 7 400 | 800 × 592, border 4 lines top and bottom |
+| 5 | 1024 × 768 | 8 bit indexed | 786 432 | full screen, XGA timing (section 5) |
 
 After reset every Lumière register and the palette are 0 (display off,
 border palette entry 0) **[S]**. Blinking text and the cursor alternate
@@ -922,6 +934,131 @@ pointer in S2 (stack grows down, word-aligned), far pointers as
 ROM layout **[S]** (step 9): FFFB code, tables, texts and the font; FFFC
 the 3D scene's and the music's data; FFFD the start picture.
 
+### 11.1 Boiler (step 11b)
+
+Boiler is written in Brass (`crates/machine-logophor16/system/`: package
+`boiler` the kernel, `files` the file system; the program's `main` is the
+system's first task) and booted by Foundry as `BOOT/BOILER.BIN`.
+Decisions **[S]**:
+
+- Importing `boiler` starts it (its package init): the vector table is
+  copied to 003C:0040 and VBR points there; Telegraph's timer 0 runs at
+  100 Hz (latch 9 999) on level 5 (vector 13); the running program becomes
+  task 1 (priority 10, its stack 003F); an idle task (priority 0) halts.
+- Tasks: every task has a 64 KiB stack segment from $0100 on (240 at
+  most); its registers are saved in its Task on every timer interrupt;
+  the scheduler runs the ready task of the highest priority, in turn
+  among equals, and the idle task when none is ready. Yield requests the
+  timer interrupt by software (INTREQ), so a task switch is always the
+  same path. Tasks run in supervisor mode with IPL 0; Lock/Unlock turn
+  interrupts off and on (nesting).
+- Brass's `go` starts a task with the caller's priority; channels are
+  ring buffers of the element size (an unbuffered channel holds one
+  value and the sender waits until it is taken); `select` takes the
+  first ready case in order (Go chooses at random); a blocked task waits
+  until any channel or mutex changes, then checks again.
+- `Sleep(n)` in hundredths of a second; `Mutex` lets one task in (the
+  owner may lock again); `Key()` reads the keyboard (the scheduler takes
+  Telegraph's FIFO every tick; shift keys followed, US layout).
+- Files: FAT32 (read and write, 8.3 names, directories), blocks through
+  Foundry's TRAP #5/#6 into chip RAM (003B sectors, 003A FAT sectors),
+  one task at a time (a mutex). Mount, Open, Create, Read, Write, Close,
+  ReadDir, Mkdir, Remove.
+- Programs are linked with Boiler into one binary for now; loading
+  programs from the card as separate executables comes after step 11c
+  (Panorama's applications are linked in as well).
+
+### 11.2 Panorama (step 11c)
+
+Panorama is Brass too (`system/`: package `gfx` draws, `panorama` is the
+desktop, `info`, `archive` and `engine` are its applications; `main`
+registers them and runs Panorama as task 1). Decisions **[S]**:
+
+- Screen: mode 5 (1024 x 768, 8-bit pixels; mode 3's 800 x 600 until
+  the owner asked for 1024 x 768 on 2026-11-06), two buffers at
+  0020:0000 and 002C:0000, shown in turn at the VBlank. Panorama redraws only
+  what changed: every change is a rectangle added to what each buffer
+  lacks, and a buffer is composed through a clip rectangle (all of
+  `gfx`'s drawing keeps to it).
+- Chip RAM: windows' contents are surfaces (8-bit, own pitch) taken
+  first-fit from 0002:0000-001D:FFFF; 0038 holds the glyphs (the system
+  font as 8 x 16 bytes of 0/FF, drawn with the Blitter's colour key),
+  colour rows, the darken and lighten tables (for shadows and lit
+  buttons, the Blitter's shade mode) and the pointer's image.
+- Palette: 0-9 greys, 10-15 brass, 16-231 a 6 x 6 x 6 colour cube,
+  232-255 more greys. The oscilloscope theme replaces it with greens of
+  the same brightness and draws outlines instead of filled surfaces,
+  over a graticule.
+- The pointer is sprite 0 (16 x 16, 8-bit), moved every 20 ms from
+  Boiler's mouse (port 0, counters read each tick, kept inside the
+  screen). Boiler keeps a button pressed since the last look as pressed
+  once, so a busy desktop loses no click.
+- Layout (NeXTSTEP's): the dock on the right with 48 x 48 tiles (the
+  first, the machine's emblem, opens Info; running applications carry a
+  small steam gauge whose needle rises with their windows); the
+  application menu at the top left (Info, Archive, Engine Room, Theme,
+  Hide windows) with the Theme submenu, which is torn off by dragging its
+  title and then stays open; windows with a dark title bar (minimise on
+  the left, close on the right), rounded corners and a soft shadow in
+  three steps (deeper for the front window); minimised windows as tiles
+  along the bottom. Buttons and items lighten under the pointer.
+- Applications are Boiler tasks. A window's events (Key, Click with the
+  position in its content, Release, Close, Theme) come through its
+  channel of 16; Panorama never waits for an application (a full channel
+  drops the event). An application draws into its window's surface and
+  says which part changed.
+- Info shows the uptime, tasks and free chip RAM; Archive browses the
+  card in a column view; Engine Room is the command shell (help, ls, cd,
+  cat, mkdir, rm, echo, cls, ps, mem, theme, exit), as many as wanted.
+- Under Panorama, `print` and `println` reach the debug port only
+  (Foundry's console would switch the picture to text).
+- The built-in profile `logophor16` boots into Panorama: the machine
+  option `card=system` puts in a system card made at build time from
+  `system/` (BOOT/BOILER.BIN on 64 MiB FAT32, kept in memory; writes are
+  lost at the end). A card of one's own (`--disk`) takes its place.
+- Backlog (owner's request 2026-11-06): Notepad, Calendar, Web radio
+  (needs 11d's network) and a task list.
+
+### 11.3 The network (step 11d)
+
+Owner's choices 2026-11-06: Teleprinter reaches other Logophors and the
+Internet (the hub is a gateway); the stack as the brief lists it, in
+full. Decisions **[S]**:
+
+- The net: IPv4 10.16.0.0/24. The hub (`ada-asm hub`) is also a host on
+  it, the **gateway**: 10.16.0.1, MAC 02:4C:31:36:FF:01. It sees every
+  frame (it is the hub) and answers those for its MAC, broadcasts
+  included: ARP for 10.16.0.1 (and for every address outside the net:
+  the gateway's MAC), ICMP echo to 10.16.0.1.
+- DHCP (server on the gateway, UDP 67/68, RFC 2131): addresses from
+  10.16.0.10 up in the order MACs first ask, kept for the hub's run;
+  options subnet mask 255.255.255.0, router and DNS server 10.16.0.1,
+  domain `logophor`, lease 1 hour; the client's host name (option 12)
+  is remembered for DNS.
+- DNS (server on the gateway, UDP 53, RFC 1035, A records only): the
+  machines' host names (`name` or `name.logophor`), `hub` and `gateway`
+  for 10.16.0.1; other names through the host's resolver (IPv4
+  addresses); unknown: NXDOMAIN.
+- Outside the net (the Internet through the host's sockets; NAT): UDP
+  datagrams go out from a host socket per machine address and port, the
+  answers come back from the outside address. TCP is terminated in the
+  hub: a SYN to an outside address makes the hub connect there (no
+  connection: RST); then it carries the bytes both ways as a TCP peer of
+  its own (MSS 1460, the machine's window respected, retransmission after
+  1 s, FIN both ways). Pings beyond 10.16.0.1 get no answer (the host
+  gives no raw sockets).
+- `ada-asm hub --no-gateway` keeps the plain relay of step 10.
+- The machine's stack is a Boiler task (package `net`): Ethernet through
+  Telegraph's rings, ARP with a cache, IPv4 (no fragments; MTU 1500),
+  ICMP (echo answered, `Ping`), UDP, TCP (RFC 793 states, the three-way
+  handshake, a sliding window, retransmission with a timeout, FIN and
+  RST), a DHCP client at start (the host name `logophor-XXXX` from the
+  MAC's last two bytes), a DNS client.
+- Teleprinter is the network terminal: it connects by name and port
+  (TCP), shows what comes (refusing Telnet options) and sends what is
+  typed; it can also wait for a call on a port (Logophor to Logophor).
+  Engine Room gains `ifconfig`, `ping`, `host`.
+
 ## 12. Host tool chain
 
 All in Rust in mimic's workspace **[D]**:
@@ -1021,3 +1158,22 @@ Decisions of this document:
 51. Network behaviour as in section 10.1: OWN bits drive the rings, frames move at once, their DMA slots are charged after the SD card's, a wrong FCS is delivered with flag bit 1 (step 10).
 52. Default MAC 02:4C:31:36:00:01, option `mac` (step 10).
 53. ROM services TRAP #7–9 for the network; the chat is a program on the card (`asm/examples/chat.s`) (owner's choice, step 10).
+54. System register 6 VBR moves the vector table (owner's choice, step 11a).
+55. Step 11 in five parts, each accepted: 11a modes 2/3, VBR, the language Brass and its compiler; 11b Boiler's kernel; 11c Panorama; 11d the network stack and Teleprinter; 11e a game in Brass (owner's choice).
+56. The high-level language is Brass, after Go (owner's choice); its specification is `docs/logophor16/BRASS.md`.
+57. The hub serves DHCP and DNS for the machines on it (owner's choice, built in 11d).
+58. Boiler as section 11.1: tasks on the 100 Hz timer with priorities, Yield through the timer interrupt, stacks as segments from $0100, vector table at 003C:0040 (step 11b).
+59. Channels as ring buffers, select takes the first ready case, blocked tasks recheck on any change (step 11b).
+60. Boiler's file system FAT32 with 8.3 names through Foundry's block services (step 11b).
+61. Panorama on mode 3 (800 x 600, 8 bit), double-buffered, redrawn only where changed (a rectangle per buffer, drawn through a clip rectangle) (step 11c).
+62. Panorama's fixed palette (greys, brass, 6 x 6 x 6 cube); the oscilloscope theme swaps in greens of the same brightness and draws outlines (step 11c).
+63. Panorama's applications are Boiler tasks with an event channel per window; Panorama never waits for them (step 11c).
+64. Under Panorama print/println go to the debug port only (step 11c).
+65. The built-in profile boots Panorama from a system card built from `system/` (machine option `card=system`); an own card replaces it (step 11c).
+66. Notepad, Calendar, Web radio and a task list in the backlog (owner's request 2026-11-06).
+67. Loading separate executables from the card moved after step 11c (step 11c).
+68. The net 10.16.0.0/24 with the hub as gateway 10.16.0.1 (MAC 02:4C:31:36:FF:01): DHCP, DNS (machines' names, `hub`, the host's resolver), NAT for UDP, TCP terminated in the hub (owner's choice: the Internet through the hub) (step 11d).
+69. Boiler's network stack as the brief lists it, in full (owner's choice), as a task of package `net`; host name `logophor-XXXX` from the MAC (step 11d).
+70. Teleprinter: TCP by name and port, Telnet options refused, also waiting for a call; Engine Room gains ifconfig, ping, host (step 11d).
+71. Mode 5: 1024 x 768 with 8 bits a pixel and XGA field timing (664 slots and 249 CPU cycles a line, 806 lines), taken at a field's start; modes 0-4 keep SVGA; Panorama moves to mode 5 (owner's choice 2026-11-06: a new mode, not the whole machine).
+72. Boiler remembers a mouse button pressed since the last look (no lost clicks) (step 11d).

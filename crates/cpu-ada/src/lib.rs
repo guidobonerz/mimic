@@ -61,6 +61,11 @@ pub const SC_SSR: u8 = 2;
 pub const SC_CAUSE: u8 = 3;
 pub const SC_CYCLE: u8 = 4;
 pub const SC_CYCLEH: u8 = 5;
+/// Vector base: the segment whose offset $0040 holds the vector table
+/// (reset: $FFFB, the ROM's), step 11 (SPEC.md 3.11).
+pub const SC_VBR: u8 = 6;
+/// The vector table's offset in its segment.
+pub const VECTOR_OFFSET: u16 = 0x0040;
 
 /// Cycles of interrupt and exception entry.
 const ENTRY_CYCLES: u8 = 2;
@@ -78,6 +83,8 @@ pub struct Ada {
     pub ss0: u16,
     pub ssr: u16,
     pub cause: u16,
+    /// Vector base (SC_VBR).
+    pub vbr: u16,
     /// Cycles since reset (CYCLE/CYCLEH) and CYCLEH's latch.
     pub cycles: u64,
     cycleh: u16,
@@ -109,6 +116,7 @@ impl Ada {
             ..Self::default()
         };
         self.s[0] = ROM_SEGMENT;
+        self.vbr = ROM_SEGMENT;
         self.sr = S | IPL;
     }
 
@@ -208,7 +216,7 @@ impl Ada {
         let _ = level;
         self.sr |= S | IPL;
         self.cause = cause;
-        let at = VECTORS + 4 * u32::from(vector);
+        let at = Self::linear(self.vbr, VECTOR_OFFSET) + 4 * u32::from(vector);
         let seg = bus.read(at, Size::Word) as u16;
         let off = bus.read(at + 2, Size::Word) as u16;
         self.s[0] = seg;
@@ -525,6 +533,7 @@ impl Ada {
                         self.cycles as u16
                     }
                     SC_CYCLEH => self.cycleh,
+                    SC_VBR => self.vbr,
                     _ => 0,
                 };
                 self.set(rd, v);
@@ -537,6 +546,7 @@ impl Ada {
                     SC_SS0 => self.ss0 = v,
                     SC_SSR => self.ssr = v & SR_MASK,
                     SC_CAUSE => self.cause = v,
+                    SC_VBR => self.vbr = v,
                     _ => {}
                 }
                 1
@@ -661,6 +671,7 @@ impl emu_core::Cpu for Ada {
             ("ss0", self.ss0),
             ("ssr", self.ssr),
             ("cause", self.cause),
+            ("vbr", self.vbr),
         ] {
             v.push(Register {
                 name,
@@ -691,6 +702,7 @@ impl emu_core::Cpu for Ada {
             "ss0" => self.ss0 = v,
             "ssr" => self.ssr = v & SR_MASK,
             "cause" => self.cause = v,
+            "vbr" => self.vbr = v,
             _ => {}
         }
     }
@@ -701,7 +713,7 @@ impl emu_core::Cpu for Ada {
 }
 
 const TAG: [u8; 4] = *b"ADA0";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Ada {
     fn save(&self, w: &mut StateWriter) {
@@ -720,6 +732,7 @@ impl Savestate for Ada {
                 self.ssr,
                 self.cause,
                 self.cycleh,
+                self.vbr,
             ] {
                 w.u16(v);
             }
@@ -752,6 +765,7 @@ impl Savestate for Ada {
         a.ssr = c.u16()? & SR_MASK;
         a.cause = c.u16()?;
         a.cycleh = c.u16()?;
+        a.vbr = c.u16()?;
         a.cycles = c.u64()?;
         a.busy = c.u8()?.min(18);
         a.halted = c.bool()?;

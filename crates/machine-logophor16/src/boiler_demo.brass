@@ -1,0 +1,75 @@
+// The Logophor 16's system (step 11b): Boiler starts with the import;
+// this main shows its tasks, channels, priorities and files. Panorama
+// (step 11c) takes its place.
+//
+//   cargo run --release -p brass -- build crates/machine-logophor16/system -o boiler.bin
+//   cargo run --release -p asm-ada -- sd system.img --boot boiler.bin
+//   cargo run --release -p emu-desktop -- --profile logophor16 --disk system.img
+package main
+
+import (
+	"boiler"
+	"files"
+)
+
+var spins [2]int32
+
+func producer(c chan int) {
+	for i := range 5 {
+		c <- i * i
+		boiler.Sleep(2)
+	}
+	close(c)
+}
+
+// A busy task: it never waits, the timer takes the CPU from it.
+func spinner(k int) {
+	for {
+		spins[k]++
+	}
+}
+
+func main() {
+	println("Boiler: tasks, channels, files")
+	c := make(chan int)
+	go producer(c)
+	for v := range c {
+		print(v, " ")
+	}
+	println()
+	go spinner(0)
+	go spinner(1)
+	boiler.Sleep(20)
+	println("both spinners ran:", spins[0] > 0, spins[1] > 0)
+	done := make(chan bool, 1)
+	result := make(chan string)
+	go func(r chan string) {
+		r <- "message from a task"
+	}(result)
+	select {
+	case m := <-result:
+		println(m)
+	case <-done:
+		println("wrong")
+	}
+	println("ticks", boiler.Ticks() > 20)
+	if !files.Mount() {
+		println("no FAT32 card")
+		return
+	}
+	files.Mkdir("/LOGS")
+	f := files.Create("/LOGS/BOILER.TXT")
+	text := []byte("Boiler wrote this file.")
+	f.Write(text)
+	f.Close()
+	free(text)
+	for _, e := range files.ReadDir("/LOGS") {
+		println(e.Name, e.Size, e.Dir)
+	}
+	g := files.Open("/LOGS/BOILER.TXT")
+	buf := make([]byte, 64)
+	n := g.Read(buf)
+	println(string(buf[:n]))
+	r := files.Open("/BOOT/BOILER.BIN")
+	println("boot file", r.Size() > 1000)
+}

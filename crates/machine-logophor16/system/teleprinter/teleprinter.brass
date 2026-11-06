@@ -1,0 +1,269 @@
+// Package teleprinter: Panorama's network terminal (SPEC.md 11.3). It
+// asks where to: "HOST PORT" calls a machine (a Logophor by its name, or
+// any address on the Internet through the hub), "listen PORT" waits for a
+// call. Then what comes is shown and what is typed is sent and shown
+// (Enter sends CR LF); Telnet's option requests are refused.
+package teleprinter
+
+import (
+	"boiler"
+	"gfx"
+	"net"
+	"panorama"
+	"term"
+)
+
+var app panorama.App
+
+// App is the application for Panorama's dock.
+func App() *panorama.App {
+	app = panorama.App{Name: "Teleprinter", Start: run, Icon: icon, Multi: true}
+	return &app
+}
+
+func icon(s *gfx.Surface, x, y int) {
+	ink := byte(gfx.Brass4)
+	if panorama.Scope() {
+		ink = gfx.Grey7
+	}
+	// a paper roll with a line of type and a lightning bolt
+	s.RoundBox(x+8, y+8, 32, 12, ink)
+	s.Fill(x+12, y+22, 24, 18, ink)
+	s.Fill(x+15, y+26, 18, 1, panorama.Paper())
+	s.Fill(x+15, y+30, 12, 1, panorama.Paper())
+	s.Line(x+30, y+30, x+26, y+36, panorama.Paper())
+}
+
+// Telnet (RFC 854): the bytes that start commands.
+const (
+	iac  = 255
+	will = 251
+	wont = 252
+	do   = 253
+	dont = 254
+	sb   = 250
+	se   = 240
+)
+
+type printer struct {
+	t    *term.Screen
+	c    *net.Conn
+	line []byte
+	// the Telnet reader: 0 text, 1 after IAC, 2 the option of a
+	// request, 3 inside a sub-negotiation, 4 IAC inside it
+	tn  int
+	req byte
+}
+
+func run() {
+	boiler.SetName("Teleprinter")
+	t := term.New(&app, "Teleprinter")
+	if t == nil {
+		return
+	}
+	p := &printer{t: t}
+	p.ask()
+	var e panorama.Event
+	buf := make([]byte, 256)
+	for {
+		if p.t.W.Next(1, &e) {
+			switch e.Kind {
+			case panorama.Close:
+				p.quit()
+				free(buf)
+				return
+			case panorama.Theme:
+				p.t.Paint()
+			case panorama.Key:
+				p.key(e.Key)
+			}
+		}
+		if p.c != nil {
+			n, open := p.c.TryRead(buf)
+			for i := range n {
+				p.in(buf[i])
+			}
+			if n > 0 {
+				p.t.Flush()
+			}
+			if !open {
+				p.t.Puts("\n-- the line is closed --\n")
+				p.c.Close()
+				p.c = nil
+				p.ask()
+			}
+		}
+	}
+}
+
+func (p *printer) quit() {
+	if p.c != nil {
+		p.c.Close()
+	}
+	free(p.line)
+	p.t.Close()
+	free(p)
+}
+
+func (p *printer) ask() {
+	p.t.Puts("Teleprinter - HOST PORT, or listen PORT:\n> ")
+	p.t.Flush()
+}
+
+func (p *printer) key(k byte) {
+	if p.c != nil {
+		// connected: straight out, and shown here (the other side does
+		// not echo: Teleprinter refused Telnet's ECHO option)
+		switch {
+		case k == 13:
+			p.c.Write([]byte{13, 10})
+			p.t.Putc('\n')
+		case k == 8:
+			p.c.Write([]byte{k})
+			p.t.Back()
+		default:
+			p.c.Write([]byte{k})
+			p.t.Putc(k)
+		}
+		p.t.Flush()
+		return
+	}
+	switch {
+	case k == 13:
+		p.t.Putc('\n')
+		p.dial()
+		p.line = p.line[:0]
+	case k == 8:
+		if len(p.line) > 0 {
+			p.line = p.line[:len(p.line)-1]
+			p.t.Back()
+		}
+	case k >= ' ' && len(p.line) < 58:
+		p.line = append(p.line, k)
+		p.t.Putc(k)
+	}
+	p.t.Flush()
+}
+
+// dial reads "HOST PORT" or "listen PORT" from the line.
+func (p *printer) dial() {
+	i := 0
+	for i < len(p.line) && p.line[i] != ' ' {
+		i++
+	}
+	if i == 0 || i == len(p.line) {
+		p.ask()
+		return
+	}
+	host := string(p.line[:i])
+	port := 0
+	for _, c := range p.line[i+1:] {
+		if c >= '0' && c <= '9' && port < 6553 {
+			port = port*10 + int(c-'0')
+		}
+	}
+	if port == 0 {
+		p.t.Puts("which port?\n")
+		free(host)
+		p.ask()
+		return
+	}
+	if host == "listen" {
+		p.listen(uint16(port))
+	} else {
+		p.t.Puts("calling ")
+		p.t.Puts(host)
+		p.t.Puts(" ...\n")
+		p.t.Flush()
+		p.c = net.Dial(host, uint16(port))
+		if p.c == nil {
+			p.t.Puts("no connection\n")
+			p.ask()
+		} else {
+			p.t.Puts("connected\n")
+		}
+	}
+	free(host)
+	p.t.Flush()
+}
+
+// listen waits for a call on port (Escape or closing the window stops).
+func (p *printer) listen(port uint16) {
+	l := net.ListenTCP(port)
+	if l == nil {
+		p.t.Puts("the port is taken\n")
+		p.ask()
+		return
+	}
+	p.t.Puts("waiting for a call ...\n")
+	p.t.Flush()
+	var e panorama.Event
+	for {
+		if c := l.TryAccept(); c != nil {
+			p.c = c
+			p.t.Puts("a call came\n")
+			break
+		}
+		if p.t.W.Next(1, &e) && (e.Kind == panorama.Close || e.Kind == panorama.Key && e.Key == 27) {
+			p.t.Puts("stopped waiting\n")
+			p.ask()
+			if e.Kind == panorama.Close {
+				p.t.W.Events <- e // for the main loop
+			}
+			break
+		}
+	}
+	l.Close()
+}
+
+// in shows a byte that came, minding Telnet's commands.
+func (p *printer) in(b byte) {
+	switch p.tn {
+	case 0:
+		switch {
+		case b == iac:
+			p.tn = 1
+		case b == 10:
+			p.t.Putc('\n')
+		case b == 8:
+			p.t.Back()
+		case b >= ' ' || b == 9:
+			if b == 9 {
+				b = ' '
+			}
+			p.t.Putc(b)
+		}
+	case 1:
+		switch b {
+		case iac:
+			p.t.Putc(b)
+			p.tn = 0
+		case will, wont, do, dont:
+			p.req = b
+			p.tn = 2
+		case sb:
+			p.tn = 3
+		default:
+			p.tn = 0
+		}
+	case 2:
+		// refuse: WILL -> DONT, DO -> WONT
+		switch p.req {
+		case will:
+			p.c.Write([]byte{iac, dont, b})
+		case do:
+			p.c.Write([]byte{iac, wont, b})
+		}
+		p.tn = 0
+	case 3:
+		if b == iac {
+			p.tn = 4
+		}
+	case 4:
+		if b == se {
+			p.tn = 0
+		} else {
+			p.tn = 3
+		}
+	}
+}

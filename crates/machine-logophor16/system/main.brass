@@ -1,0 +1,29 @@
+// The Logophor 16's system: Boiler (the kernel starts with its import)
+// and Panorama, the desktop, with its applications.
+//
+//   cargo run --release -p brass -- build crates/machine-logophor16/system -o boiler.bin
+//   cargo run --release -p asm-ada -- sd system.img --boot boiler.bin
+//   cargo run --release -p emu-desktop -- --profile logophor16 --disk system.img
+package main
+
+import (
+	"archive"
+	"boiler"
+	"engine"
+	"files"
+	"info"
+	"net"
+	"panorama"
+	"teleprinter"
+)
+
+func main() {
+	boiler.SetName("Panorama")
+	files.Mount()
+	net.Start()
+	panorama.Register(info.App())
+	panorama.Register(archive.App())
+	panorama.Register(engine.App())
+	panorama.Register(teleprinter.App())
+	panorama.Run()
+}

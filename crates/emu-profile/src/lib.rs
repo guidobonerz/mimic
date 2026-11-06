@@ -57,8 +57,10 @@ pub const FILE_NAME: &str = "profiles.yaml";
 /// same name wins): machines that need no user files.
 pub const BUILTIN: &str = "profiles:
   logophor16:
-    description: Logophor 16, mimic's own steampunk computer (built-in ROM)
+    description: Logophor 16, mimic's own steampunk computer (built-in ROM, boots Panorama)
     machine: logophor16
+    options:
+      card: system
 ";
 
 /// Which frontend a command line is for (they take different flags).

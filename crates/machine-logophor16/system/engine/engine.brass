@@ -1,0 +1,448 @@
+// Package engine: Engine Room, Panorama's command shell. Every start
+// opens another window with its own working directory.
+//
+// Commands: help, ls [dir], cd dir, cat file, mkdir dir, rm path,
+// echo text, cls, ps, mem, theme brass|scope, ifconfig, ping host,
+// host name, exit.
+package engine
+
+import (
+	"boiler"
+	"files"
+	"gfx"
+	"net"
+	"panorama"
+	"strs"
+	"term"
+)
+
+var app panorama.App
+
+// App is the application for Panorama's dock.
+func App() *panorama.App {
+	app = panorama.App{Name: "Engine Room", Start: run, Icon: icon, Multi: true}
+	return &app
+}
+
+func icon(s *gfx.Surface, x, y int) {
+	ink := byte(gfx.Brass4)
+	if panorama.Scope() {
+		ink = gfx.Grey7
+	}
+	// a furnace door with a prompt
+	s.RoundBox(x+6, y+10, 36, 28, ink)
+	s.Char(x+12, y+16, '>', ink)
+	s.Fill(x+22, y+29, 10, 2, ink)
+}
+
+// A shell: its screen, the working directory, the line being typed.
+type shell struct {
+	t    *term.Screen
+	cwd  []byte
+	line []byte
+}
+
+func run() {
+	boiler.SetName("Engine Room")
+	t := term.New(&app, "Engine Room")
+	if t == nil {
+		return
+	}
+	w := t.W
+	sh := &shell{t: t}
+	sh.cwd = append(sh.cwd, '/')
+	sh.t.Puts("Engine Room - type help\n")
+	sh.prompt()
+	for {
+		e := <-w.Events
+		switch e.Kind {
+		case panorama.Close:
+			sh.quit()
+			return
+		case panorama.Theme:
+			sh.t.Paint()
+		case panorama.Key:
+			if !sh.key(e.Key) {
+				sh.quit()
+				return
+			}
+		}
+	}
+}
+
+func (sh *shell) quit() {
+	free(sh.cwd)
+	free(sh.line)
+	sh.t.Close()
+	free(sh)
+}
+
+func (sh *shell) prompt() {
+	for _, c := range sh.cwd {
+		sh.t.Putc(c)
+	}
+	sh.t.Puts("> ")
+	sh.t.Flush()
+}
+
+// key takes a typed character; false: the shell ends.
+func (sh *shell) key(c byte) bool {
+	switch c {
+	case 13:
+		sh.t.Putc('\n')
+		ok := sh.command()
+		sh.line = sh.line[:0]
+		if !ok {
+			return false
+		}
+		sh.prompt()
+		return true
+	case 8:
+		if len(sh.line) > 0 {
+			sh.line = sh.line[:len(sh.line)-1]
+			sh.t.Back()
+		}
+	default:
+		if c >= ' ' && len(sh.line) < 120 {
+			sh.line = append(sh.line, c)
+			sh.t.Putc(c)
+		}
+	}
+	sh.t.Flush()
+	return true
+}
+
+// ---- commands ----
+
+// The words of the line (new strings; free with freeWords).
+func words(line []byte) []string {
+	var out []string
+	i := 0
+	for i < len(line) {
+		for i < len(line) && line[i] == ' ' {
+			i++
+		}
+		start := i
+		for i < len(line) && line[i] != ' ' {
+			i++
+		}
+		if i > start {
+			out = append(out, string(line[start:i]))
+		}
+	}
+	return out
+}
+
+func freeWords(ws []string) {
+	for _, s := range ws {
+		free(s)
+	}
+	free(ws)
+}
+
+// path makes an argument absolute (a new string).
+func (sh *shell) path(arg string) string {
+	var b strs.Builder
+	if len(arg) == 0 || arg[0] != '/' {
+		b.WriteString(string(sh.cwd))
+		if sh.cwd[len(sh.cwd)-1] != '/' {
+			b.WriteByte('/')
+		}
+	}
+	b.WriteString(arg)
+	s := b.String()
+	b.Free()
+	return s
+}
+
+// command runs the line; false: exit.
+func (sh *shell) command() bool {
+	ws := words(sh.line)
+	if len(ws) == 0 {
+		free(ws)
+		return true
+	}
+	arg := ""
+	if len(ws) > 1 {
+		arg = ws[1]
+	}
+	ok := true
+	switch ws[0] {
+	case "help":
+		sh.t.Puts("help ls cd cat mkdir rm echo cls ps mem theme\n")
+		sh.t.Puts("ifconfig ping host exit\n")
+	case "ls":
+		sh.ls(arg)
+	case "cd":
+		sh.cd(arg)
+	case "cat":
+		sh.cat(arg)
+	case "mkdir":
+		p := sh.path(arg)
+		if len(arg) == 0 || !files.Mkdir(p) {
+			sh.t.Puts("mkdir: cannot make it\n")
+		}
+		free(p)
+	case "rm":
+		p := sh.path(arg)
+		if len(arg) == 0 || !files.Remove(p) {
+			sh.t.Puts("rm: cannot remove it\n")
+		}
+		free(p)
+	case "echo":
+		for i := 1; i < len(ws); i++ {
+			if i > 1 {
+				sh.t.Putc(' ')
+			}
+			sh.t.Puts(ws[i])
+		}
+		sh.t.Putc('\n')
+	case "cls":
+		sh.t.Clear()
+	case "ps":
+		sh.ps()
+	case "mem":
+		all, big := gfx.FreeChip()
+		sh.t.Puts("chip RAM free ")
+		sh.t.Putn(int32(all/1024), 0)
+		sh.t.Puts(" KiB, largest ")
+		sh.t.Putn(int32(big/1024), 0)
+		sh.t.Puts(" KiB\n")
+	case "theme":
+		switch arg {
+		case "brass":
+			panorama.SetTheme(false)
+		case "scope":
+			panorama.SetTheme(true)
+		default:
+			sh.t.Puts("theme brass|scope\n")
+		}
+	case "ifconfig":
+		sh.ifconfig()
+	case "ping":
+		sh.ping(arg)
+	case "host":
+		sh.host(arg)
+	case "exit":
+		ok = false
+	default:
+		sh.t.Puts(ws[0])
+		sh.t.Puts(": no such command\n")
+	}
+	freeWords(ws)
+	return ok
+}
+
+func (sh *shell) ls(arg string) {
+	p := sh.path(arg)
+	list := files.ReadDir(p)
+	free(p)
+	if list == nil {
+		sh.t.Puts("ls: empty or not there\n")
+		return
+	}
+	for _, e := range list {
+		sh.t.Puts(e.Name)
+		if e.Dir {
+			sh.t.Puts("/")
+			for i := len(e.Name) + 1; i < 14; i++ {
+				sh.t.Putc(' ')
+			}
+			sh.t.Puts("     dir")
+		} else {
+			for i := len(e.Name); i < 14; i++ {
+				sh.t.Putc(' ')
+			}
+			sh.t.Putn(int32(e.Size), 8)
+		}
+		sh.t.Putc('\n')
+		free(e.Name)
+	}
+	free(list)
+}
+
+func (sh *shell) cd(arg string) {
+	if len(arg) == 0 || arg == "/" {
+		sh.cwd = sh.cwd[:0]
+		sh.cwd = append(sh.cwd, '/')
+		return
+	}
+	if arg == ".." {
+		i := len(sh.cwd) - 1
+		for i > 0 && sh.cwd[i] != '/' {
+			i--
+		}
+		sh.cwd = sh.cwd[:max(i, 1)]
+		return
+	}
+	p := sh.path(arg)
+	if !isDir(p) {
+		sh.t.Puts("cd: no such directory\n")
+		free(p)
+		return
+	}
+	sh.cwd = sh.cwd[:0]
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 32
+		}
+		sh.cwd = append(sh.cwd, c)
+	}
+	free(p)
+}
+
+// Whether p is a directory: looked up in its parent.
+func isDir(p string) bool {
+	i := len(p) - 1
+	for i > 0 && p[i] != '/' {
+		i--
+	}
+	parent := p[:i]
+	name := p[i+1:]
+	list := files.ReadDir(parent)
+	found := false
+	for _, e := range list {
+		if e.Dir && same(e.Name, name) {
+			found = true
+		}
+		free(e.Name)
+	}
+	free(list)
+	return found
+}
+
+func same(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if x >= 'a' && x <= 'z' {
+			x -= 32
+		}
+		if y >= 'a' && y <= 'z' {
+			y -= 32
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
+func (sh *shell) cat(arg string) {
+	p := sh.path(arg)
+	f := files.Open(p)
+	free(p)
+	if f == nil {
+		sh.t.Puts("cat: no such file\n")
+		return
+	}
+	buf := make([]byte, 64)
+	for {
+		n := f.Read(buf)
+		if n == 0 {
+			break
+		}
+		for i := range n {
+			c := buf[i]
+			if c == '\n' || c >= ' ' {
+				sh.t.Putc(c)
+			}
+		}
+	}
+	free(buf)
+	f.Close()
+	if sh.t.X != 0 {
+		sh.t.Putc('\n')
+	}
+}
+
+func (sh *shell) ps() {
+	sh.t.Puts("  ID PRIO STATE    NAME\n")
+	list := boiler.Tasks()
+	for _, t := range list {
+		sh.t.Putn(int32(t.ID), 4)
+		sh.t.Putn(int32(t.Prio), 5)
+		sh.t.Putc(' ')
+		sh.t.Puts(t.State)
+		for i := len(t.State); i < 9; i++ {
+			sh.t.Putc(' ')
+		}
+		sh.t.Puts(t.Name)
+		sh.t.Putc('\n')
+	}
+	free(list)
+}
+
+// ---- network ----
+
+// putIP writes an address dotted.
+func (sh *shell) putIP(a uint32) {
+	s := net.IPString(a)
+	sh.t.Puts(s)
+	free(s)
+}
+
+func (sh *shell) ifconfig() {
+	m := net.MAC()
+	sh.t.Puts("ether ")
+	sh.t.Puts(m)
+	free(m)
+	sh.t.Puts("  name ")
+	sh.t.Puts(net.Hostname())
+	sh.t.Putc('\n')
+	if !net.Up() {
+		sh.t.Puts("no address yet (asking DHCP)\n")
+	} else {
+		sh.t.Puts("inet ")
+		sh.putIP(net.Addr())
+		sh.t.Puts(" mask ")
+		sh.putIP(net.Mask())
+		sh.t.Puts("\ngateway ")
+		sh.putIP(net.Router())
+		sh.t.Puts(" dns ")
+		sh.putIP(net.DNS())
+		sh.t.Putc('\n')
+	}
+	sh.t.Puts("frames in ")
+	sh.t.Putn(int32(net.RxFrames), 0)
+	sh.t.Puts(", out ")
+	sh.t.Putn(int32(net.TxFrames), 0)
+	sh.t.Putc('\n')
+}
+
+func (sh *shell) ping(arg string) {
+	a, ok := net.Resolve(arg)
+	if !ok {
+		sh.t.Puts("ping: unknown host\n")
+		return
+	}
+	for range 3 {
+		sh.t.Puts("from ")
+		sh.putIP(a)
+		ms := net.Ping(a)
+		if ms < 0 {
+			sh.t.Puts(": no answer\n")
+		} else {
+			sh.t.Puts(": ")
+			sh.t.Putn(int32(ms*10), 0)
+			sh.t.Puts(" ms\n")
+		}
+		sh.t.Flush()
+	}
+}
+
+func (sh *shell) host(arg string) {
+	a, ok := net.Resolve(arg)
+	if !ok {
+		sh.t.Puts(arg)
+		sh.t.Puts(": not found\n")
+		return
+	}
+	sh.t.Puts(arg)
+	sh.t.Puts(" has address ")
+	sh.putIP(a)
+	sh.t.Putc('\n')
+}

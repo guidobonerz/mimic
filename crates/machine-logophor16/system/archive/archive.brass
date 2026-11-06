@@ -1,0 +1,192 @@
+// Package archive: Panorama's file manager with a column view. Each
+// column lists a directory; a click on a directory opens it in the next
+// column (the columns move left when there are more than fit), a click
+// on a file shows its name and size at the bottom.
+package archive
+
+import (
+	"boiler"
+	"files"
+	"gfx"
+	"panorama"
+	"strs"
+)
+
+const (
+	shown  = 3   // columns in the window
+	colW   = 168 // a column's width
+	rowH   = 18
+	top    = 24 // below the path
+	rowsIn = 12 // rows a column shows
+	maxCol = 8  // directory depth followed
+)
+
+var app panorama.App
+
+// App is the application for Panorama's dock.
+func App() *panorama.App {
+	app = panorama.App{Name: "Archive", Start: run, Icon: icon}
+	return &app
+}
+
+func icon(s *gfx.Surface, x, y int) {
+	ink := byte(gfx.Brass4)
+	if panorama.Scope() {
+		ink = gfx.Grey7
+	}
+	// a drawer cabinet: three drawers with handles
+	s.RoundBox(x+10, y+6, 28, 36, ink)
+	for k := range 3 {
+		s.Fill(x+12, y+16+k*10, 24, 1, ink)
+		s.Fill(x+21, y+11+k*10, 6, 2, ink)
+	}
+}
+
+// A column: a directory's path and entries, the entry chosen (-1 none).
+type column struct {
+	path    string
+	entries []files.Entry
+	sel     int
+}
+
+type browser struct {
+	w     *panorama.Window
+	cols  [maxCol]column
+	n     int // columns open
+	first int // the leftmost column shown
+	info  string
+}
+
+func run() {
+	boiler.SetName("Archive")
+	w := panorama.NewWindow(&app, "Archive", shown*colW+8, top+rowsIn*rowH+28)
+	if w == nil {
+		return
+	}
+	b := &browser{w: w}
+	b.open(0, "/")
+	b.paint()
+	for {
+		e := <-w.Events
+		switch e.Kind {
+		case panorama.Close:
+			for i := range b.n {
+				b.drop(i)
+			}
+			free(b.info)
+			w.Done()
+			free(b)
+			return
+		case panorama.Theme:
+			b.paint()
+		case panorama.Click:
+			b.click(e.X, e.Y)
+		}
+	}
+}
+
+// open lists the directory path in column i (closing those after it).
+func (b *browser) open(i int, path string) {
+	for k := i; k < b.n; k++ {
+		b.drop(k)
+	}
+	b.cols[i] = column{path: path, entries: files.ReadDir(path), sel: -1}
+	b.n = i + 1
+	b.first = max(0, b.n-shown)
+}
+
+func (b *browser) drop(i int) {
+	c := &b.cols[i]
+	for _, e := range c.entries {
+		free(e.Name)
+	}
+	free(c.entries)
+	if c.path != "/" {
+		free(c.path)
+	}
+	c.entries = nil
+}
+
+func (b *browser) click(x, y int) {
+	ci := b.first + (x-4)/colW
+	row := (y - top) / rowH
+	if x < 4 || y < top || ci >= b.n || row >= rowsIn {
+		return
+	}
+	c := &b.cols[ci]
+	if row >= len(c.entries) {
+		return
+	}
+	c.sel = row
+	e := c.entries[row]
+	var sb strs.Builder
+	sb.WriteString(c.path)
+	if c.path != "/" {
+		sb.WriteByte('/')
+	}
+	sb.WriteString(e.Name)
+	path := sb.String()
+	sb.Free()
+	free(b.info)
+	b.info = ""
+	if e.Dir && ci+1 < maxCol {
+		b.open(ci+1, path)
+	} else {
+		for k := ci + 1; k < b.n; k++ {
+			b.drop(k)
+		}
+		b.n = ci + 1
+		b.first = max(0, b.n-shown)
+		sb.WriteString(path)
+		sb.WriteString("  ")
+		sb.WriteInt(int32(e.Size))
+		sb.WriteString(" bytes")
+		b.info = sb.String()
+		sb.Free()
+		free(path)
+	}
+	b.paint()
+}
+
+func (b *browser) paint() {
+	w := b.w
+	s := w.Surf
+	w.Clear()
+	ink, accent := panorama.Ink(), panorama.Accent()
+	// the path of the last column
+	last := &b.cols[b.n-1]
+	s.Text(6, 4, last.path, accent)
+	s.Fill(0, top-3, w.W, 1, gfx.Grey3)
+	for k := range shown {
+		ci := b.first + k
+		x := 4 + k*colW
+		if k > 0 {
+			s.Fill(x-2, top, 1, rowsIn*rowH, gfx.Grey3)
+		}
+		if ci >= b.n {
+			continue
+		}
+		c := &b.cols[ci]
+		for r := 0; r < len(c.entries) && r < rowsIn; r++ {
+			e := c.entries[r]
+			y := top + r*rowH
+			if r == c.sel {
+				if panorama.Scope() {
+					s.Box(x, y, colW-6, rowH, accent)
+				} else {
+					s.RoundFill(x, y, colW-6, rowH, gfx.Grey3)
+				}
+			}
+			s.Text(x+4, y+1, e.Name, ink)
+			if e.Dir {
+				s.Char(x+colW-18, y+1, '>', accent)
+			}
+		}
+		if len(c.entries) > rowsIn {
+			s.Text(x+4, top+rowsIn*rowH-4, "...", ink)
+		}
+	}
+	s.Fill(0, top+rowsIn*rowH+2, w.W, 1, gfx.Grey3)
+	s.Text(6, top+rowsIn*rowH+6, b.info, ink)
+	w.Invalidate()
+}

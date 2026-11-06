@@ -21,6 +21,7 @@ RULES = [
     ("cpu-*", ["emu-core"]),
     ("chips-*", ["emu-core"]),
     ("asm-*", ["emu-core", "cpu-*"]),             # host assemblers (Logophor 16: asm-ada)
+    ("brass", ["emu-core", "cpu-*", "asm-*"]),    # Logophor 16's Brass compiler (host tool)
     ("media", ["emu-core"]),
     ("devices-input", ["emu-core"]),
     ("devices-cartridge", ["emu-core", "media"]),
@@ -32,7 +33,7 @@ RULES = [
     ("emu-cheats", ["emu-core"]),                 # cheat files, imports, search                           # start profiles: frontends only
     ("media-backends", ["emu-core", "media"]),  # host folders as D64 images
     ("drives-*", ["emu-core", "cpu-*", "chips-*", "media"]),
-    ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "asm-*"]),  # asm-*: ROMs built from sources
+    ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "asm-*", "brass"]),  # asm-*, brass: ROMs and systems built from sources
     # Also the catalogue of pluggable port devices for the frontends.
     ("emu-machines", ["emu-core", "machine-*", "devices-input", "devices-net"]),
     ("emu-debug", ["emu-core", "emu-preview", "video-crt", "emu-cheats"]),  # golden rule 1; preview encoders for gfx_get

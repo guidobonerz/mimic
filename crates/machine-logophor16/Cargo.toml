@@ -15,8 +15,10 @@ chips-logophor.workspace = true
 
 [build-dependencies]
 asm-ada.workspace = true
+brass.workspace = true
 png.workspace = true
 
 [dev-dependencies]
+brass.workspace = true
 png.workspace = true
 asm-ada.workspace = true

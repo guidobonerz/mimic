@@ -42,7 +42,7 @@ table(["Machine id", "Machine", "Models (`--model`)", "Video (`--videoformat`)"]
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (default), `pal`"],
     ["`vectrex`", "Vectrex (vector display)", "`vectrex`", "–"],
     ["`imsai`", "IMSAI 8080 (front panel; terminal on F12)", "`8080`", "–"],
-    ["`logophor16`", "Logophor 16, mimic's own steampunk computer (built-in ROM, profile `logophor16`)", "`16`", "–"],
+    ["`logophor16`", "Logophor 16, mimic's own steampunk computer (built-in ROM; profile `logophor16` boots the desktop Panorama)", "`16`", "–"],
     ["`archimedes`", "Acorn Archimedes", "`a310` (default), `a305`, `a440`, `a3000`", "–"],
     ["`apple2`", "Apple II, II+, IIe", "`iie` (enhanced IIe, default), `iie-unenhanced`, "
      "`iiplus`, `ii`", "–"],
@@ -1206,9 +1206,11 @@ table(["Key", "Machine", "Values"], [
      "`1k` … `64k`; `9600`; `card|console`; `off`; `a|b` (monitor ROM); `HEX`"],
     ["`port1`, `port2`", "Vectrex", "`controller`, `lightpen`, `imager`; `eye`, "
      "`lines=fine|soft`"],
-    ["`rtc`, `port0`, `port1`, `net`, `mac`", "Logophor 16", "seconds since 2000-01-01 "
+    ["`card`, `rtc`, `port0`, `port1`, `net`, `mac`", "Logophor 16", "`card=system` puts in the "
+     "built-in system card (Boiler and the desktop Panorama; the profile `logophor16` sets it, "
+     "writes are lost at the end; `--disk` takes its place), `none` (default); `rtc`: seconds since 2000-01-01 "
      "(the clock's start; default 2026-01-01); `mouse|joystick|none` (defaults: mouse in "
-     "port 0, joystick in port 1); `net=HOST:PORT` joins the network of an `ada-asm hub` "
+     "port 0, joystick in port 1); `net=HOST:PORT` joins the network of an `ada-asm hub` (also the net's gateway 10.16.0.1: DHCP, DNS and the Internet through the host's sockets; `--no-gateway` relays only) "
      "(default port 6516); `mac=02:4c:31:36:00:01`. The SD card is a FAT32 image given with `--disk` "
      "(`ada-asm sd card.img --boot prog.bin`); Foundry starts `BOOT/BOILER.BIN` "
      "from it, a key held while the start picture shows opens its monitor"],

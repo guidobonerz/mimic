@@ -1,11 +1,11 @@
 //! Lumière, the Logophor 16's video chip (SPEC.md section 8): registers
 //! at FFFF:0800, the palette at FFFF:1000, and the picture from chip RAM.
 //!
-//! Built so far (steps 3, 4, 6 and 7): modes 0 and 1 (320 × 240, 8-bit
-//! indexed or 16-bit RGB 5:6:5, pixels doubled and centred), mode 4
+//! Built: modes 0 and 1 (320 × 240, 8-bit indexed or 16-bit RGB 5:6:5,
+//! pixels doubled and centred), modes 2 and 3 (800 × 600, 4 or 8 bits
+//! indexed; mode 2's high nibble is the left pixel; step 11), mode 4
 //! (100 × 37 text, 8 × 16 font from chip RAM, blink and cursor) and the
-//! 256 sprites (SPEC.md 8.3). Modes 2 and 3 follow; until then they show
-//! the border colour. In mode 1 the border colour is RGB 5:6:5 too,
+//! 256 sprites (SPEC.md 8.3). In mode 1 the border colour is RGB 5:6:5 too,
 //! FGINDEX has no effect, and a sprite "behind" shows where the
 //! background is black.
 //!
@@ -36,9 +36,15 @@
 use emu_core::frame::Rgb8;
 use emu_core::{StateError, StateReader, StateWriter};
 
-/// Picture size (SPEC.md 2).
+/// Picture size (SPEC.md 2): SVGA, modes 0-4.
 pub const WIDTH: u32 = 800;
 pub const HEIGHT: u32 = 600;
+/// Lines of an SVGA field.
+pub const LINES: u16 = 628;
+/// Mode 5's XGA picture (SPEC.md 8.1) and its field's lines.
+pub const XGA_WIDTH: u32 = 1024;
+pub const XGA_HEIGHT: u32 = 768;
+pub const XGA_LINES: u16 = 806;
 
 /// Register offsets in segment FFFF.
 pub const VMODE: u16 = 0x0800;
@@ -88,17 +94,19 @@ pub struct Beam {
 }
 
 impl Beam {
-    fn vblank(self) -> bool {
-        self.y >= HEIGHT as u16
+    fn vblank(self, height: u32) -> bool {
+        u32::from(self.y) >= height
     }
-    fn hblank(self) -> bool {
-        self.x >= WIDTH as u16
+    fn hblank(self, width: u32) -> bool {
+        u32::from(self.x) >= width
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lumiere {
     vmode: u16,
+    /// This field runs with XGA timing (mode 5 at its start).
+    xga: bool,
     /// Written framebuffer pointer, and the one taken over.
     fb: (u16, u16),
     fb_active: (u16, u16),
@@ -141,6 +149,7 @@ impl Default for Lumiere {
     fn default() -> Self {
         Self {
             vmode: 0,
+            xga: false,
             fb: (0, 0),
             fb_active: (0, 0),
             pitch: 0,
@@ -165,9 +174,9 @@ impl Default for Lumiere {
             sprite_dma: false,
             col: [0; 16],
             colfg: 0,
-            line_cur: vec![0; WIDTH as usize],
-            line_next: vec![0; WIDTH as usize],
-            pixels: vec![Rgb8::default(); (WIDTH * HEIGHT) as usize],
+            line_cur: vec![0; XGA_WIDTH as usize],
+            line_next: vec![0; XGA_WIDTH as usize],
+            pixels: vec![Rgb8::default(); (XGA_WIDTH * XGA_HEIGHT) as usize],
         }
     }
 }
@@ -188,6 +197,7 @@ fn area(mode: u16) -> Option<(u16, u16, u16)> {
     match mode {
         0 | 1 => Some((60, 480, 2)),
         2 | 3 => Some((0, 600, 1)),
+        5 => Some((0, 768, 1)),
         4 => Some((4, 592, 16)),
         _ => None,
     }
@@ -224,6 +234,36 @@ impl Lumiere {
         self.vmode & 0x8000 != 0
     }
 
+    /// This field runs with XGA timing (mode 5 when it began).
+    pub fn xga(&self) -> bool {
+        self.xga
+    }
+
+    /// This field's picture: width, height (pixels) and lines.
+    pub fn width(&self) -> u32 {
+        if self.xga {
+            XGA_WIDTH
+        } else {
+            WIDTH
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        if self.xga {
+            XGA_HEIGHT
+        } else {
+            HEIGHT
+        }
+    }
+
+    pub fn lines(&self) -> u16 {
+        if self.xga {
+            XGA_LINES
+        } else {
+            LINES
+        }
+    }
+
     pub fn palette(&self) -> &[u16; 256] {
         &self.palette
     }
@@ -247,6 +287,7 @@ impl Lumiere {
         }
         Some(match self.mode() {
             0 | 1 => ((y - top) / 2, 320),
+            5 => (y, XGA_WIDTH as usize),
             _ => (y, WIDTH as usize),
         })
     }
@@ -382,8 +423,8 @@ impl Lumiere {
             BEAMY => beam.y,
             BEAMX => beam.x,
             VSTAT => {
-                u16::from(beam.vblank())
-                    | u16::from(beam.hblank()) << 1
+                u16::from(beam.vblank(self.height()))
+                    | u16::from(beam.hblank(self.width())) << 1
                     | u16::from(self.taken_over) << 2
             }
             PALETTE..=0x11fe => self.palette[usize::from((off - PALETTE) / 2)],
@@ -466,6 +507,7 @@ impl Lumiere {
             1 => u16::from(first_of_row) * 160,
             2 => 100,
             3 => 200,
+            5 => 256,
             _ => u16::from(first_of_row) * 50 + 25,
         }
     }
@@ -491,15 +533,15 @@ impl Lumiere {
     /// Put out line `y` up to pixel `x` (exclusive) with the registers as
     /// they are now.
     pub fn draw_to(&mut self, y: u16, x: u16, mem: &dyn ChipRam) {
-        if y != self.line || u32::from(y) >= HEIGHT {
+        if y != self.line || u32::from(y) >= self.height() {
             return;
         }
-        let end = x.min(WIDTH as u16);
+        let end = x.min(self.width() as u16);
         if end <= self.drawn {
             return;
         }
         let mut px = std::mem::take(&mut self.pixels);
-        let base = usize::from(y) * WIDTH as usize;
+        let base = usize::from(y) * self.width() as usize;
         let span = &mut px[base + usize::from(self.drawn)..base + usize::from(end)];
         let from = self.drawn;
         self.span(y, from, span, mem);
@@ -510,7 +552,7 @@ impl Lumiere {
     /// The end of line `y`: put the rest out, step the row, take an FBNOW
     /// pointer over.
     pub fn end_line(&mut self, y: u16, mem: &dyn ChipRam) {
-        self.draw_to(y, WIDTH as u16, mem);
+        self.draw_to(y, self.width() as u16, mem);
         if let Some((top, lines, per_row)) = area(self.mode()) {
             if self.display_on() && (top..top + lines).contains(&y) {
                 self.row_line += 1;
@@ -527,7 +569,13 @@ impl Lumiere {
         // The sprites chosen in this line's blank show on the next.
         std::mem::swap(&mut self.line_cur, &mut self.line_next);
         self.line_next.fill(0);
-        self.line = if y + 1 >= 628 { 0 } else { y + 1 };
+        self.line = if y + 1 >= self.lines() {
+            // a new field: its timing from the mode now
+            self.xga = self.mode() == 5;
+            0
+        } else {
+            y + 1
+        };
         self.drawn = 0;
     }
 
@@ -573,6 +621,22 @@ impl Lumiere {
                     };
                 }
             }
+            2 => {
+                // 4 bits a pixel, the high nibble the left one.
+                for (i, p) in out.iter_mut().enumerate() {
+                    let x = usize::from(from) + i;
+                    let b = mem.chip_byte(self.row_addr.wrapping_add((x / 2) as u32));
+                    let index = if x % 2 == 0 { b >> 4 } else { b & 15 };
+                    *p = self.over(index, x);
+                }
+            }
+            3 | 5 => {
+                for (i, p) in out.iter_mut().enumerate() {
+                    let x = usize::from(from) + i;
+                    let index = mem.chip_byte(self.row_addr.wrapping_add(x as u32));
+                    *p = self.over(index, x);
+                }
+            }
             4 => {
                 let font = u32::from(self.font.0) << 16 | u32::from(self.font.1);
                 let blink = self.blink_on();
@@ -616,7 +680,7 @@ impl Lumiere {
     }
 
     pub fn save(&self, w: &mut StateWriter) {
-        w.chunk(*b"LUMI", 3, |w| {
+        w.chunk(*b"LUMI", 4, |w| {
             for v in [
                 self.vmode,
                 self.fb.0,
@@ -659,13 +723,15 @@ impl Lumiere {
                 w.u16(*v);
             }
             w.u16(self.colfg);
+            w.bool(self.xga);
         });
     }
 
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(*b"LUMI", 3)?;
+        let (_, mut c) = r.chunk(*b"LUMI", 4)?;
         let mut n = Self {
             vmode: c.u16()? & 0x8007,
+            xga: false,
             fb: (c.u16()?, c.u16()?),
             fb_active: (c.u16()?, c.u16()?),
             pitch: c.u16()?,
@@ -690,8 +756,8 @@ impl Lumiere {
             sprite_dma: false,
             col: [0; 16],
             colfg: 0,
-            line_cur: vec![0; WIDTH as usize],
-            line_next: vec![0; WIDTH as usize],
+            line_cur: vec![0; XGA_WIDTH as usize],
+            line_next: vec![0; XGA_WIDTH as usize],
             pixels: Vec::new(),
         };
         for p in &mut n.palette {
@@ -702,8 +768,8 @@ impl Lumiere {
         n.now_pending = c.bool()?;
         n.row_addr = c.u32()?;
         n.row_line = c.u16()? & 15;
-        n.line = c.u16()?.min(627);
-        n.drawn = c.u16()?.min(WIDTH as u16);
+        n.line = c.u16()?.min(XGA_LINES - 1);
+        n.drawn = c.u16()?.min(XGA_WIDTH as u16);
         n.spr_base = (c.u16()?, c.u16()?);
         n.sprite_dma = c.bool()?;
         for v in n
@@ -716,6 +782,7 @@ impl Lumiere {
             *v = c.u16()?;
         }
         n.colfg = c.u16()?;
+        n.xga = c.bool()?;
         // Only now, after everything loaded: the picture stays.
         n.pixels = std::mem::take(&mut self.pixels);
         *self = n;
@@ -994,5 +1061,92 @@ mod mode1_tests {
             (rgb565(0x001f), rgb565(0xf800)),
             "behind red"
         );
+    }
+}
+
+#[cfg(test)]
+mod hires_tests {
+    use super::*;
+
+    struct Ram(Vec<u8>);
+    impl ChipRam for Ram {
+        fn chip_byte(&self, a: u32) -> u8 {
+            self.0.get(a as usize).copied().unwrap_or(0)
+        }
+    }
+
+    fn show(mode: u16, pitch: u16, ram: &Ram) -> Lumiere {
+        let mut l = Lumiere::new();
+        l.set_dma(true);
+        l.write(VMODE, 0x8000 | mode);
+        l.write(FBSEG, 1);
+        l.write(PITCH, pitch);
+        for i in 0..256u16 {
+            l.write(PALETTE + 2 * i, i);
+        }
+        l.vblank();
+        for y in 0..600 {
+            l.end_line(y, ram);
+        }
+        l
+    }
+
+    #[test]
+    fn mode_5_switches_the_next_field_to_xga() {
+        let mut ram = vec![0; 0x1_0000 + 1024 * 768];
+        ram[0x1_0000] = 9;
+        ram[0x1_0000 + 1024 * 767 + 1023] = 99;
+        let ram = Ram(ram);
+        let mut l = Lumiere::new();
+        l.set_dma(true);
+        l.write(VMODE, 0x8005);
+        l.write(FBSEG, 1);
+        l.write(PITCH, 1024);
+        for i in 0..256u16 {
+            l.write(PALETTE + 2 * i, i);
+        }
+        // The field it was switched in keeps SVGA's 628 lines.
+        assert!(!l.xga());
+        for y in 0..LINES {
+            l.end_line(y, &ram);
+        }
+        assert!(l.xga());
+        assert_eq!((l.width(), l.height(), l.lines()), (1024, 768, 806));
+        assert_eq!(l.fetch_slots(0), 256);
+        l.vblank();
+        for y in 0..XGA_LINES {
+            l.end_line(y, &ram);
+        }
+        assert_eq!(l.pixels()[0], rgb565(9));
+        assert_eq!(l.pixels()[767 * 1024 + 1023], rgb565(99));
+        assert!(l.xga());
+        // back to mode 3: the next field is SVGA again
+        l.write(VMODE, 0x8003);
+        for y in 0..XGA_LINES {
+            l.end_line(y, &ram);
+        }
+        assert!(!l.xga());
+        assert_eq!((l.width(), l.height(), l.lines()), (800, 600, 628));
+    }
+
+    #[test]
+    fn modes_2_and_3_fill_800_by_600() {
+        let mut ram = vec![0; 0x1_0000 + 800 * 600];
+        ram[0x1_0000] = 7; // mode 3: pixel (0, 0)
+        ram[0x1_0000 + 800 * 599 + 799] = 200; // (799, 599)
+        let l = show(3, 800, &Ram(ram));
+        assert_eq!(l.pixels()[0], rgb565(7));
+        assert_eq!(l.pixels()[599 * 800 + 799], rgb565(200));
+        assert_eq!(l.fetch_slots(10), 200);
+        let mut ram = vec![0; 0x1_0000 + 400 * 600];
+        ram[0x1_0000] = 0x5a; // mode 2: pixels 5 and 10
+        ram[0x1_0000 + 400 * 2 + 399] = 0x0f;
+        let l = show(2, 400, &Ram(ram));
+        assert_eq!((l.pixels()[0], l.pixels()[1]), (rgb565(5), rgb565(10)));
+        assert_eq!(
+            (l.pixels()[2 * 800 + 798], l.pixels()[2 * 800 + 799]),
+            (rgb565(0), rgb565(15))
+        );
+        assert_eq!(l.fetch_slots(10), 100);
     }
 }

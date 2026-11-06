@@ -15,9 +15,11 @@ const USAGE: &str = "usage:
   ada-asm sd CARD.img [--size MIB] [--boot PROGRAM.bin] [--add CARD/PATH=HOSTFILE …]
       (a FAT32 SD card for the Logophor 16; --boot puts the program at
        BOOT/BOILER.BIN, which Foundry loads at 0040:0000 and starts)
-  ada-asm hub [--port PORT]
+  ada-asm hub [--port PORT] [--no-gateway]
       (the Logophor 16s' network: machines started with
-       --option net=HOST:PORT meet here; default port 6516)";
+       --option net=HOST:PORT meet here; default port 6516; the hub is
+       also the gateway 10.16.0.1 with DHCP, DNS and the way to the
+       Internet, --no-gateway makes it a plain relay)";
 
 struct Args {
     inputs: Vec<String>,
@@ -30,6 +32,7 @@ struct Args {
     size: u32,
     add: Vec<(String, String)>,
     port: u16,
+    gateway: bool,
 }
 
 fn parse(args: &[String], hub: bool) -> Result<Args, String> {
@@ -44,6 +47,7 @@ fn parse(args: &[String], hub: bool) -> Result<Args, String> {
         size: 64,
         add: Vec::new(),
         port: asm_ada::hub::DEFAULT_PORT,
+        gateway: true,
     };
     let mut it = args.iter();
     while let Some(x) = it.next() {
@@ -60,6 +64,7 @@ fn parse(args: &[String], hub: bool) -> Result<Args, String> {
             "--entry" => a.entry = Some(parse_seg_off(&value()?)?),
             "--cycles" => a.cycles = value()?.parse().map_err(|_| "--cycles N".to_string())?,
             "--port" => a.port = value()?.parse().map_err(|_| "--port PORT".to_string())?,
+            "--no-gateway" => a.gateway = false,
             "--size" => a.size = value()?.parse().map_err(|_| "--size MIB".to_string())?,
             "--boot" => a.add.push(("BOOT/BOILER.BIN".into(), value()?)),
             "--add" => {
@@ -178,12 +183,15 @@ fn main() -> ExitCode {
             match std::net::UdpSocket::bind(&addr) {
                 Ok(socket) => {
                     println!(
-                        "Logophor 16 network hub on UDP port {} (Ctrl+C ends it)",
-                        a.port
+                        "Logophor 16 network hub on UDP port {}{} (Ctrl+C ends it)",
+                        a.port,
+                        if a.gateway { ", gateway 10.16.0.1" } else { "" }
                     );
                     let stop = std::sync::atomic::AtomicBool::new(false);
-                    asm_ada::hub::run(&socket, &stop, &mut |line| println!("{line}"))
-                        .map_err(|e| vec![format!("hub: {e}")])
+                    asm_ada::hub::run_with(&socket, &stop, a.gateway, &mut |line| {
+                        println!("{line}")
+                    })
+                    .map_err(|e| vec![format!("hub: {e}")])
                 }
                 Err(e) => Err(vec![format!("{addr}: {e}")]),
             }

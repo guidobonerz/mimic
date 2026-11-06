@@ -1,0 +1,703 @@
+// Package files: Boiler's file system, FAT32 on the SD card (SPEC.md 11,
+// step 11b): 512-byte sectors, 8.3 names (no long names), paths with `/`.
+// Blocks go through Foundry's TRAP #5/#6 into chip-RAM buffers (sectors
+// at 003B:0000, FAT sectors at 003A:0000); a Boiler mutex keeps one task
+// at a time in here.
+package files
+
+import "boiler"
+
+// A file opened for reading or writing.
+type File struct {
+	first    uint32 // first cluster (0: empty)
+	size     uint32
+	pos      uint32
+	clus     uint32 // the cluster holding pos (0: not yet)
+	clusPos  uint32 // the position clus starts at
+	dirLBA   uint32 // its directory entry
+	dirOff   int
+	writable bool
+	dirty    bool
+}
+
+// A directory entry.
+type Entry struct {
+	Name string
+	Size uint32
+	Dir  bool
+}
+
+const (
+	secSeg  = 0x003b
+	fatSeg  = 0x003a
+	eoc     = 0x0fff_ffff
+	noLBA   = 0xffff_ffff
+	attrDir = 0x10
+)
+
+var (
+	mu       boiler.Mutex
+	mounted  bool
+	fatLBA   uint32
+	dataLBA  uint32
+	rootClus uint32
+	fatSize  uint32
+	nfats    int
+	spc      uint32
+	clusters uint32
+	secLBA   uint32 = noLBA
+	fatLBAc  uint32 = noLBA
+	fatDirty bool
+	hint     uint32 = 2
+)
+
+// In files.s: Foundry's block services.
+func readBlocks(blk uint32, count int, seg int) int
+func writeBlocks(blk uint32, count int, seg int) int
+
+func at(seg int, i int) *byte { return (*byte)(uintptr(seg)<<16 + uintptr(i)) }
+
+func b8(seg, i int) byte { return *at(seg, i) }
+
+func w16(seg, i int) uint16 { return uint16(b8(seg, i)) | uint16(b8(seg, i+1))<<8 }
+
+func w32(seg, i int) uint32 { return uint32(w16(seg, i)) | uint32(w16(seg, i+2))<<16 }
+
+func set8(seg, i int, v byte) { *at(seg, i) = v }
+
+func set16(seg, i int, v uint16) {
+	set8(seg, i, byte(v))
+	set8(seg, i+1, byte(v>>8))
+}
+
+func set32(seg, i int, v uint32) {
+	set16(seg, i, uint16(v))
+	set16(seg, i+2, uint16(v>>16))
+}
+
+// The sector at lba into the sector buffer.
+func load(lba uint32) bool {
+	if lba == secLBA {
+		return true
+	}
+	secLBA = noLBA
+	if readBlocks(lba, 1, secSeg) != 0 {
+		return false
+	}
+	secLBA = lba
+	return true
+}
+
+// The sector buffer back to its sector.
+func store() bool {
+	return writeBlocks(secLBA, 1, secSeg) == 0
+}
+
+// ---- the FAT ----
+
+func flushFat() bool {
+	if !fatDirty {
+		return true
+	}
+	for k := 0; k < nfats; k++ {
+		if writeBlocks(fatLBAc+uint32(k)*fatSize, 1, fatSeg) != 0 {
+			return false
+		}
+	}
+	fatDirty = false
+	return true
+}
+
+func fatSector(c uint32) bool {
+	lba := fatLBA + c/128
+	if lba == fatLBAc {
+		return true
+	}
+	if !flushFat() {
+		return false
+	}
+	fatLBAc = noLBA
+	if readBlocks(lba, 1, fatSeg) != 0 {
+		return false
+	}
+	fatLBAc = lba
+	return true
+}
+
+func next(c uint32) uint32 {
+	if !fatSector(c) {
+		return eoc
+	}
+	return w32(fatSeg, int(c%128)*4) & 0x0fff_ffff
+}
+
+func setNext(c, v uint32) {
+	if fatSector(c) {
+		i := int(c%128) * 4
+		set32(fatSeg, i, w32(fatSeg, i)&0xf000_0000|v)
+		fatDirty = true
+	}
+}
+
+func last(c uint32) bool { return c < 2 || c >= 0x0fff_fff8 }
+
+func clusterLBA(c uint32) uint32 { return dataLBA + (c-2)*spc }
+
+// A new cluster (zeroed), linked after prev (0: none); 0 when full.
+func alloc(prev uint32) uint32 {
+	for n := uint32(0); n < clusters; n++ {
+		c := hint
+		hint++
+		if hint >= clusters+2 {
+			hint = 2
+		}
+		if next(c) != 0 {
+			continue
+		}
+		setNext(c, eoc)
+		if prev != 0 {
+			setNext(prev, c)
+		}
+		// zero its sectors
+		secLBA = noLBA
+		for i := 0; i < 512; i++ {
+			set8(secSeg, i, 0)
+		}
+		for s := uint32(0); s < spc; s++ {
+			writeBlocks(clusterLBA(c)+s, 1, secSeg)
+		}
+		return c
+	}
+	return 0
+}
+
+func freeChain(c uint32) {
+	for !last(c) {
+		n := next(c)
+		setNext(c, 0)
+		c = n
+	}
+}
+
+// ---- mounting ----
+
+// Mount reads the card's FAT32 volume (again).
+func Mount() bool {
+	mu.Lock()
+	secLBA = noLBA
+	fatLBAc = noLBA
+	fatDirty = false
+	mounted = false
+	ok := mount()
+	mu.Unlock()
+	return ok
+}
+
+func mount() bool {
+	if !load(0) {
+		return false
+	}
+	part := uint32(0)
+	if !(b8(secSeg, 82) == 'F' && b8(secSeg, 85) == '3' && b8(secSeg, 86) == '2') {
+		t := b8(secSeg, 450)
+		if t != 0x0b && t != 0x0c {
+			return false
+		}
+		part = w32(secSeg, 454)
+		if !load(part) {
+			return false
+		}
+	}
+	if w16(secSeg, 11) != 512 || w16(secSeg, 510) != 0xaa55 {
+		return false
+	}
+	spc = uint32(b8(secSeg, 13))
+	fatLBA = part + uint32(w16(secSeg, 14))
+	nfats = int(b8(secSeg, 16))
+	fatSize = w32(secSeg, 36)
+	rootClus = w32(secSeg, 44)
+	total := w32(secSeg, 32)
+	dataLBA = fatLBA + uint32(nfats)*fatSize
+	if spc == 0 || nfats == 0 {
+		return false
+	}
+	clusters = (total - (dataLBA - part)) / spc
+	mounted = true
+	return true
+}
+
+// ---- names and directories ----
+
+// The 8.3 form of a path component; false when it does not fit.
+func name83(s string, out *[11]byte) bool {
+	for i := range 11 {
+		out[i] = ' '
+	}
+	dot := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == '.' {
+			dot = i
+		}
+	}
+	base, ext := s, ""
+	if dot >= 0 {
+		base, ext = s[:dot], s[dot+1:]
+	}
+	if len(base) == 0 || len(base) > 8 || len(ext) > 3 {
+		return false
+	}
+	for i := 0; i < len(base); i++ {
+		out[i] = upper(base[i])
+	}
+	for i := 0; i < len(ext); i++ {
+		out[8+i] = upper(ext[i])
+	}
+	return true
+}
+
+func upper(c byte) byte {
+	if c >= 'a' && c <= 'z' {
+		return c - 32
+	}
+	return c
+}
+
+// Where an entry was found.
+type place struct {
+	lba   uint32
+	off   int
+	first uint32
+	size  uint32
+	dir   bool
+}
+
+// Find name in the directory starting at cluster dir.
+func find(dir uint32, name *[11]byte, p *place) bool {
+	c := dir
+	for !last(c) {
+		for s := uint32(0); s < spc; s++ {
+			lba := clusterLBA(c) + s
+			if !load(lba) {
+				return false
+			}
+			for off := 0; off < 512; off += 32 {
+				first := b8(secSeg, off)
+				if first == 0 {
+					return false
+				}
+				attr := b8(secSeg, off+11)
+				if first == 0xe5 || attr&0x0f == 0x0f || attr&0x08 != 0 {
+					continue
+				}
+				same := true
+				for i := range 11 {
+					if b8(secSeg, off+i) != name[i] {
+						same = false
+						break
+					}
+				}
+				if same {
+					p.lba = lba
+					p.off = off
+					p.first = uint32(w16(secSeg, off+20))<<16 | uint32(w16(secSeg, off+26))
+					p.size = w32(secSeg, off+28)
+					p.dir = attr&attrDir != 0
+					return true
+				}
+			}
+		}
+		c = next(c)
+	}
+	return false
+}
+
+// Walk a path: the directory holding its last component, that
+// component's 8.3 name, and (found) its place.
+func walk(path string, parent *uint32, name *[11]byte, p *place) (bool, bool) {
+	dir := rootClus
+	i := 0
+	for i < len(path) && path[i] == '/' {
+		i++
+	}
+	for {
+		j := i
+		for j < len(path) && path[j] != '/' {
+			j++
+		}
+		if j == i || !name83(path[i:j], name) {
+			return false, false
+		}
+		*parent = dir
+		found := find(dir, name, p)
+		k := j
+		for k < len(path) && path[k] == '/' {
+			k++
+		}
+		if k >= len(path) {
+			return true, found
+		}
+		if !found || !p.dir {
+			return false, false
+		}
+		dir = p.first
+		if dir == 0 {
+			dir = rootClus
+		}
+		i = k
+	}
+}
+
+// A free entry in directory dir (it grows when full): its place.
+func freeEntry(dir uint32, p *place) bool {
+	c := dir
+	prev := uint32(0)
+	for !last(c) {
+		for s := uint32(0); s < spc; s++ {
+			lba := clusterLBA(c) + s
+			if !load(lba) {
+				return false
+			}
+			for off := 0; off < 512; off += 32 {
+				f := b8(secSeg, off)
+				if f == 0 || f == 0xe5 {
+					p.lba = lba
+					p.off = off
+					return true
+				}
+			}
+		}
+		prev = c
+		c = next(c)
+	}
+	n := alloc(prev)
+	if n == 0 {
+		return false
+	}
+	p.lba = clusterLBA(n)
+	p.off = 0
+	return load(p.lba)
+}
+
+// Write a directory entry at p.
+func putEntry(p *place, name *[11]byte, attr byte, first, size uint32) bool {
+	if !load(p.lba) {
+		return false
+	}
+	for i := range 11 {
+		set8(secSeg, p.off+i, name[i])
+	}
+	set8(secSeg, p.off+11, attr)
+	for i := 12; i < 32; i++ {
+		set8(secSeg, p.off+i, 0)
+	}
+	date := uint16((2026-1980)<<9 | 1<<5 | 1)
+	set16(secSeg, p.off+16, date)
+	set16(secSeg, p.off+24, date)
+	set16(secSeg, p.off+20, uint16(first>>16))
+	set16(secSeg, p.off+26, uint16(first))
+	set32(secSeg, p.off+28, size)
+	return store()
+}
+
+// ---- the calls ----
+
+// Open opens an existing file for reading; nil when it is not there.
+func Open(path string) *File {
+	mu.Lock()
+	var parent uint32
+	var name [11]byte
+	var p place
+	f := (*File)(nil)
+	if mounted {
+		if ok, found := walk(path, &parent, &name, &p); ok && found && !p.dir {
+			f = &File{first: p.first, size: p.size, dirLBA: p.lba, dirOff: p.off}
+		}
+	}
+	mu.Unlock()
+	return f
+}
+
+// Create makes a new empty file (an existing one is emptied) for writing.
+func Create(path string) *File {
+	mu.Lock()
+	f := create(path)
+	flushFat()
+	mu.Unlock()
+	return f
+}
+
+func create(path string) *File {
+	if !mounted {
+		return nil
+	}
+	var parent uint32
+	var name [11]byte
+	var p place
+	ok, found := walk(path, &parent, &name, &p)
+	if !ok {
+		return nil
+	}
+	if found {
+		if p.dir {
+			return nil
+		}
+		freeChain(p.first)
+	} else if !freeEntry(parent, &p) {
+		return nil
+	}
+	if !putEntry(&p, &name, 0x20, 0, 0) {
+		return nil
+	}
+	return &File{dirLBA: p.lba, dirOff: p.off, writable: true}
+}
+
+// Mkdir makes a directory (its parent must exist).
+func Mkdir(path string) bool {
+	mu.Lock()
+	ok := mkdir(path)
+	flushFat()
+	mu.Unlock()
+	return ok
+}
+
+func mkdir(path string) bool {
+	if !mounted {
+		return false
+	}
+	var parent uint32
+	var name [11]byte
+	var p place
+	ok, found := walk(path, &parent, &name, &p)
+	if !ok || found || !freeEntry(parent, &p) {
+		return false
+	}
+	c := alloc(0)
+	if c == 0 {
+		return false
+	}
+	if !putEntry(&p, &name, attrDir, c, 0) {
+		return false
+	}
+	// "." and ".."
+	var dot, dotdot [11]byte
+	for i := range 11 {
+		dot[i] = ' '
+		dotdot[i] = ' '
+	}
+	dot[0] = '.'
+	dotdot[0] = '.'
+	dotdot[1] = '.'
+	up := parent
+	if up == rootClus {
+		up = 0
+	}
+	q := place{lba: clusterLBA(c), off: 0}
+	if !putEntry(&q, &dot, attrDir, c, 0) {
+		return false
+	}
+	q.off = 32
+	return putEntry(&q, &dotdot, attrDir, up, 0)
+}
+
+// Remove deletes a file (not a directory).
+func Remove(path string) bool {
+	mu.Lock()
+	var parent uint32
+	var name [11]byte
+	var p place
+	done := false
+	if mounted {
+		if ok, found := walk(path, &parent, &name, &p); ok && found && !p.dir {
+			freeChain(p.first)
+			if load(p.lba) {
+				set8(secSeg, p.off, 0xe5)
+				done = store()
+			}
+		}
+	}
+	flushFat()
+	mu.Unlock()
+	return done
+}
+
+// ReadDir lists a directory ("" or "/": the root).
+func ReadDir(path string) []Entry {
+	mu.Lock()
+	var out []Entry
+	if mounted {
+		dir := rootClus
+		ok := true
+		if len(path) > 0 && path != "/" {
+			var parent uint32
+			var name [11]byte
+			var p place
+			ok2, found := walk(path, &parent, &name, &p)
+			ok = ok2 && found && p.dir
+			dir = p.first
+			if dir == 0 {
+				dir = rootClus
+			}
+		}
+		if ok {
+			out = list(dir)
+		}
+	}
+	mu.Unlock()
+	return out
+}
+
+func list(dir uint32) []Entry {
+	var out []Entry
+	c := dir
+	for !last(c) {
+		for s := uint32(0); s < spc; s++ {
+			if !load(clusterLBA(c) + s) {
+				return out
+			}
+			for off := 0; off < 512; off += 32 {
+				first := b8(secSeg, off)
+				if first == 0 {
+					return out
+				}
+				attr := b8(secSeg, off+11)
+				if first == 0xe5 || attr&0x0f == 0x0f || attr&0x08 != 0 || first == '.' {
+					continue
+				}
+				var nb [12]byte
+				n := 0
+				for i := range 8 {
+					if c := b8(secSeg, off+i); c != ' ' {
+						nb[n] = c
+						n++
+					}
+				}
+				if b8(secSeg, off+8) != ' ' {
+					nb[n] = '.'
+					n++
+					for i := 8; i < 11; i++ {
+						if c := b8(secSeg, off+i); c != ' ' {
+							nb[n] = c
+							n++
+						}
+					}
+				}
+				out = append(out, Entry{Name: string(nb[:n]), Size: w32(secSeg, off+28), Dir: attr&attrDir != 0})
+			}
+		}
+		c = next(c)
+	}
+	return out
+}
+
+// Size is the file's length in bytes.
+func (f *File) Size() uint32 { return f.size }
+
+// Read reads up to len(b) bytes; 0 at the end.
+func (f *File) Read(b []byte) int {
+	mu.Lock()
+	n := 0
+	for n < len(b) && f.pos < f.size {
+		if !f.seekCluster(false) {
+			break
+		}
+		in := f.pos - f.clusPos
+		lba := clusterLBA(f.clus) + in/512
+		if !load(lba) {
+			break
+		}
+		off := int(in % 512)
+		for off < 512 && n < len(b) && f.pos < f.size {
+			b[n] = b8(secSeg, off)
+			n++
+			off++
+			f.pos++
+		}
+	}
+	mu.Unlock()
+	return n
+}
+
+// Write appends b (a file from Create); the bytes written.
+func (f *File) Write(b []byte) int {
+	if !f.writable {
+		return 0
+	}
+	mu.Lock()
+	n := 0
+	for n < len(b) {
+		if !f.seekCluster(true) {
+			break
+		}
+		in := f.pos - f.clusPos
+		lba := clusterLBA(f.clus) + in/512
+		if !load(lba) {
+			break
+		}
+		off := int(in % 512)
+		for off < 512 && n < len(b) {
+			set8(secSeg, off, b[n])
+			n++
+			off++
+			f.pos++
+		}
+		if !store() {
+			break
+		}
+		if f.pos > f.size {
+			f.size = f.pos
+		}
+		f.dirty = true
+	}
+	mu.Unlock()
+	return n
+}
+
+// The cluster of pos into clus (grow: allocate at the end).
+func (f *File) seekCluster(grow bool) bool {
+	csize := spc * 512
+	if f.clus == 0 || f.pos < f.clusPos {
+		if f.first == 0 {
+			if !grow {
+				return false
+			}
+			f.first = alloc(0)
+			if f.first == 0 {
+				return false
+			}
+		}
+		f.clus = f.first
+		f.clusPos = 0
+	}
+	for f.pos >= f.clusPos+csize {
+		nx := next(f.clus)
+		if last(nx) {
+			if !grow {
+				return false
+			}
+			nx = alloc(f.clus)
+			if nx == 0 {
+				return false
+			}
+		}
+		f.clus = nx
+		f.clusPos += csize
+	}
+	return true
+}
+
+// Close writes a written file's size and first cluster into its entry.
+func (f *File) Close() {
+	if !f.dirty {
+		return
+	}
+	mu.Lock()
+	flushFat()
+	if load(f.dirLBA) {
+		set16(secSeg, f.dirOff+20, uint16(f.first>>16))
+		set16(secSeg, f.dirOff+26, uint16(f.first))
+		set32(secSeg, f.dirOff+28, f.size)
+		store()
+	}
+	f.dirty = false
+	mu.Unlock()
+}

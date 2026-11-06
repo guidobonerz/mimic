@@ -1,0 +1,46 @@
+// The primes below 100 in Brass, on the Logophor 16's console:
+//
+//   cargo run --release -p brass -- build crates/brass/examples/primes -o primes.bin
+//   cargo run --release -p asm-ada -- sd primes.img --boot primes.bin
+//   cargo run --release -p emu-desktop -- --profile logophor16 --disk primes.img
+//
+// (or `brass` and `ada-asm` after `cargo install --path crates/brass` and
+// `cargo install --path crates/asm-ada`)
+package main
+
+import (
+	"console"
+	"strs"
+)
+
+func isPrime(n int) bool {
+	if n < 2 {
+		return false
+	}
+	for d := 2; d*d <= n; d++ {
+		if n%d == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func main() {
+	console.Println("Brass on the Logophor 16")
+	var line strs.Builder
+	count := 0
+	for n := range 100 {
+		if isPrime(n) {
+			s := strs.Itoa(n)
+			line.WriteString(s)
+			line.WriteByte(' ')
+			free(s)
+			count++
+		}
+	}
+	text := line.String()
+	console.Println(text)
+	println("primes below 100:", count)
+	line.Free()
+	free(text)
+}

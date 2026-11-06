@@ -1,0 +1,542 @@
+package net
+
+import "boiler"
+
+// TCP segment flags.
+const (
+	finF = 1
+	synF = 2
+	rstF = 4
+	pshF = 8
+	ackF = 16
+)
+
+// A TCP connection (RFC 793). Its buffers hold 2 KiB each way: what is
+// written stays until the other side acknowledges it.
+type Conn struct {
+	alive    bool // the slot is in use
+	held     bool // the program has it (until Close)
+	accepted bool // a listener's connection Accept has given out
+	ln       *Listener
+	state    int
+	lport    uint16
+	rport    uint16
+	rip      uint32
+	iss      uint32
+	sndUna   uint32 // the oldest byte not acknowledged
+	sndNxt   uint32 // the next byte to send
+	sndMax   uint32 // the highest sent so far (retransmission goes back)
+	sndWnd   uint32 // the other side's window
+	rcvNxt   uint32
+	tx       []byte // the data from sndUna on
+	txLen    int
+	rx       []byte // a ring of what came
+	rxHead   int
+	rxLen    int
+	closing  bool // Close was called: FIN after the data
+	finSent  bool
+	finAcked bool
+	finSeq   uint32
+	peerFin  bool
+	reset    bool
+	last     uint32 // when the retransmission timer started
+	rto      uint32 // the retransmission timeout (ticks)
+	tries    int
+	since    uint32 // when TIME-WAIT began
+}
+
+// A listening port.
+type Listener struct {
+	port uint16
+	used bool
+}
+
+func newConn() *Conn {
+	for i := range maxTCP {
+		c := &conns[i]
+		if !c.alive {
+			*c = Conn{alive: true, held: true, rto: 100}
+			c.tx = make([]byte, bufLen)
+			c.rx = make([]byte, bufLen)
+			nextISS += 0x0001_0000
+			c.iss = nextISS
+			c.sndUna, c.sndNxt, c.sndMax = c.iss, c.iss, c.iss
+			return c
+		}
+	}
+	return nil
+}
+
+func (c *Conn) release() {
+	free(c.tx)
+	free(c.rx)
+	c.tx, c.rx = nil, nil
+	c.alive = false
+}
+
+func (c *Conn) window() int { return bufLen - c.rxLen }
+
+// seg sends a segment with these flags, sequence number and data.
+func (c *Conn) seg(flags byte, seq uint32, data []byte) bool {
+	n := len(data)
+	t := txbuf[:]
+	hl := 20
+	if flags&synF != 0 {
+		hl = 24
+	}
+	put16(t, 34, c.lport)
+	put16(t, 36, c.rport)
+	put32(t, 38, seq)
+	ack := uint32(0)
+	if flags&ackF != 0 {
+		ack = c.rcvNxt
+	}
+	put32(t, 42, ack)
+	t[46], t[47] = byte(hl/4)<<4, flags
+	put16(t, 48, uint16(c.window()))
+	put16(t, 50, 0)
+	put16(t, 52, 0)
+	if hl == 24 {
+		t[54], t[55] = 2, 4 // maximum segment size
+		put16(t, 56, mss)
+	}
+	copy(t[34+hl:34+hl+n], data)
+	sum := csum(t[34:34+hl+n], 0)
+	sum += ip>>16 + ip&0xffff + c.rip>>16 + c.rip&0xffff + 6 + uint32(hl+n)
+	put16(t, 50, fold(sum))
+	return ipSend(c.rip, 6, hl+n)
+}
+
+func (c *Conn) bumpMax() {
+	if int32(c.sndNxt-c.sndMax) > 0 {
+		c.sndMax = c.sndNxt
+	}
+}
+
+// output sends what may go: a SYN, data within the window, the FIN.
+func (c *Conn) output() {
+	switch c.state {
+	case SynSent, SynRcvd:
+		if c.sndNxt == c.iss {
+			fl := byte(synF)
+			if c.state == SynRcvd {
+				fl |= ackF
+			}
+			if c.sndUna == c.sndMax {
+				c.last = now()
+			}
+			if c.seg(fl, c.iss, nil) {
+				c.sndNxt = c.iss + 1
+				c.bumpMax()
+			}
+		}
+		return
+	case Established, CloseWait, FinWait1, Closing, LastAck:
+	default:
+		return
+	}
+	wnd := int(min(c.sndWnd, 4096))
+	for {
+		off := int(c.sndNxt - c.sndUna)
+		if off < c.txLen {
+			n := min(min(c.txLen-off, mss), wnd-off)
+			if n <= 0 {
+				return
+			}
+			if c.sndUna == c.sndMax {
+				c.last = now()
+			}
+			if !c.seg(ackF|pshF, c.sndNxt, c.tx[off:off+n]) {
+				return
+			}
+			c.sndNxt += uint32(n)
+			c.bumpMax()
+			continue
+		}
+		if c.closing && !c.finAcked && off == c.txLen {
+			if c.sndUna == c.sndMax {
+				c.last = now()
+			}
+			if c.seg(ackF|finF, c.sndNxt, nil) {
+				c.finSent = true
+				c.finSeq = c.sndNxt
+				c.sndNxt++
+				c.bumpMax()
+			}
+		}
+		return
+	}
+}
+
+// timer: TIME-WAIT's end, retransmission, sending what waits.
+func (c *Conn) timer(t uint32) {
+	if !c.alive {
+		return
+	}
+	if c.state == TimeWait && t-c.since > 100 {
+		c.state = Closed
+	}
+	if c.state == Closed {
+		if !c.held {
+			c.release()
+		}
+		return
+	}
+	if c.sndMax != c.sndUna && t-c.last >= c.rto {
+		c.tries++
+		if c.tries > 8 {
+			c.reset = true
+			c.state = Closed
+			return
+		}
+		c.rto = min(c.rto*2, 800)
+		c.sndNxt = c.sndUna // go back
+		c.last = t
+	}
+	c.output()
+}
+
+// rstTo answers a segment no connection takes.
+func rstTo(src uint32, sport, dport uint16, seq, ackn uint32, flags byte, n int) {
+	var tc Conn
+	tc.lport, tc.rport, tc.rip = dport, sport, src
+	if flags&ackF != 0 {
+		tc.seg(rstF, ackn, nil)
+		return
+	}
+	k := uint32(n)
+	if flags&synF != 0 {
+		k++
+	}
+	if flags&finF != 0 {
+		k++
+	}
+	tc.rcvNxt = seq + k
+	tc.seg(rstF|ackF, 0, nil)
+}
+
+func tcpIn(src, dst uint32, p []byte) {
+	if len(p) < 20 {
+		return
+	}
+	hl := int(p[12]>>4) * 4
+	if hl < 20 || hl > len(p) {
+		return
+	}
+	sum := csum(p, 0) + src>>16 + src&0xffff + dst>>16 + dst&0xffff + 6 + uint32(len(p))
+	if fold(sum) != 0 {
+		return
+	}
+	sport, dport := get16(p, 0), get16(p, 2)
+	seq, ackn := get32(p, 4), get32(p, 8)
+	flags := p[13]
+	wnd := uint32(get16(p, 14))
+	data := p[hl:]
+	var c *Conn
+	for i := range maxTCP {
+		k := &conns[i]
+		if k.alive && k.state != Closed && k.lport == dport && k.rport == sport && k.rip == src {
+			c = k
+		}
+	}
+	if c == nil {
+		if flags&rstF != 0 {
+			return
+		}
+		if flags&synF != 0 && flags&ackF == 0 {
+			for i := range len(listeners) {
+				l := &listeners[i]
+				if l.used && l.port == dport {
+					c = newConn()
+					if c == nil {
+						break
+					}
+					c.ln = l
+					c.state = SynRcvd
+					c.lport, c.rport, c.rip = dport, sport, src
+					c.rcvNxt = seq + 1
+					c.sndWnd = wnd
+					c.output()
+					return
+				}
+			}
+		}
+		rstTo(src, sport, dport, seq, ackn, flags, len(data))
+		return
+	}
+	c.input(flags, seq, ackn, wnd, data)
+}
+
+func (c *Conn) input(flags byte, seq, ackn, wnd uint32, data []byte) {
+	if flags&rstF != 0 {
+		if c.state == SynSent && !(flags&ackF != 0 && ackn == c.iss+1) {
+			return
+		}
+		c.reset = true
+		c.state = Closed
+		return
+	}
+	if c.state == SynSent {
+		if flags&synF != 0 && flags&ackF != 0 && ackn == c.iss+1 {
+			c.rcvNxt = seq + 1
+			c.sndUna, c.sndNxt, c.sndMax = ackn, ackn, ackn
+			c.sndWnd = wnd
+			c.state = Established
+			c.tries, c.rto = 0, 100
+			c.seg(ackF, c.sndNxt, nil)
+		}
+		return
+	}
+	if flags&synF != 0 {
+		// the other side did not hear our answer: again
+		if c.state == SynRcvd {
+			c.sndNxt = c.iss
+			c.output()
+		} else {
+			c.seg(ackF, c.sndNxt, nil)
+		}
+		return
+	}
+	if flags&ackF == 0 {
+		return
+	}
+	if c.state == SynRcvd {
+		if ackn != c.iss+1 {
+			return
+		}
+		c.sndUna, c.sndNxt, c.sndMax = ackn, ackn, ackn
+		c.state = Established
+		c.tries, c.rto = 0, 100
+	}
+	// what the other side acknowledges
+	if int32(ackn-c.sndUna) > 0 && int32(ackn-c.sndMax) <= 0 {
+		n := int(ackn - c.sndUna)
+		d := min(n, c.txLen)
+		if d > 0 {
+			copy(c.tx, c.tx[d:c.txLen])
+			c.txLen -= d
+		}
+		if c.finSent && ackn == c.finSeq+1 {
+			c.finAcked = true
+		}
+		c.sndUna = ackn
+		if int32(c.sndNxt-c.sndUna) < 0 {
+			c.sndNxt = c.sndUna
+		}
+		c.tries, c.rto = 0, 100
+		c.last = now()
+	}
+	c.sndWnd = wnd
+	if c.finAcked {
+		switch c.state {
+		case FinWait1:
+			c.state = FinWait2
+		case Closing:
+			c.state = TimeWait
+			c.since = now()
+		case LastAck:
+			c.state = Closed
+			return
+		}
+	}
+	// data, and the other side's FIN
+	if len(data) > 0 || flags&finF != 0 {
+		if seq == c.rcvNxt && (c.state == Established || c.state == FinWait1 || c.state == FinWait2) {
+			take := min(len(data), bufLen-c.rxLen)
+			for i := range take {
+				c.rx[(c.rxHead+c.rxLen+i)%bufLen] = data[i]
+			}
+			c.rxLen += take
+			c.rcvNxt += uint32(take)
+			if flags&finF != 0 && take == len(data) {
+				c.rcvNxt++
+				c.peerFin = true
+				switch c.state {
+				case Established:
+					c.state = CloseWait
+				case FinWait1:
+					c.state = Closing
+				case FinWait2:
+					c.state = TimeWait
+					c.since = now()
+				}
+			}
+		}
+		c.seg(ackF, c.sndNxt, nil)
+	}
+	c.output()
+}
+
+// ---- for programs ----
+
+// Dial connects to host (a name or a dotted address) at port; nil when
+// it cannot (no name, refused, no answer within 8 tries).
+func Dial(host string, port uint16) *Conn {
+	addr, ok := Resolve(host)
+	if !ok {
+		return nil
+	}
+	return DialIP(addr, port)
+}
+
+// DialIP connects to an address.
+func DialIP(addr uint32, port uint16) *Conn {
+	if !Up() {
+		return nil
+	}
+	mu.Lock()
+	c := newConn()
+	if c == nil {
+		mu.Unlock()
+		return nil
+	}
+	c.lport, c.rport, c.rip = ephemeral(), port, addr
+	c.state = SynSent
+	c.output()
+	mu.Unlock()
+	for {
+		mu.Lock()
+		st := c.state
+		mu.Unlock()
+		if st >= Established {
+			return c
+		}
+		if st == Closed {
+			c.Close()
+			return nil
+		}
+		boiler.Sleep(1)
+	}
+}
+
+// ListenTCP waits for connections on port; nil when it is taken.
+func ListenTCP(port uint16) *Listener {
+	mu.Lock()
+	var l *Listener
+	for i := range len(listeners) {
+		if listeners[i].used && listeners[i].port == port {
+			mu.Unlock()
+			return nil
+		}
+	}
+	for i := range len(listeners) {
+		if !listeners[i].used {
+			l = &listeners[i]
+			*l = Listener{port: port, used: true}
+			break
+		}
+	}
+	mu.Unlock()
+	return l
+}
+
+// TryAccept gives a connection that came, or nil.
+func (l *Listener) TryAccept() *Conn {
+	mu.Lock()
+	for i := range maxTCP {
+		c := &conns[i]
+		if c.alive && c.ln == l && !c.accepted && c.state >= Established {
+			c.accepted = true
+			mu.Unlock()
+			return c
+		}
+	}
+	mu.Unlock()
+	return nil
+}
+
+// Accept waits for a connection.
+func (l *Listener) Accept() *Conn {
+	for {
+		if c := l.TryAccept(); c != nil {
+			return c
+		}
+		boiler.Sleep(1)
+	}
+}
+
+// Close stops listening.
+func (l *Listener) Close() {
+	mu.Lock()
+	l.used = false
+	mu.Unlock()
+}
+
+// TryRead takes what came (up to len(b) bytes) without waiting; open is
+// false once nothing more will come.
+func (c *Conn) TryRead(b []byte) (int, bool) {
+	mu.Lock()
+	n := min(len(b), c.rxLen)
+	for i := range n {
+		b[i] = c.rx[(c.rxHead+i)%bufLen]
+	}
+	c.rxHead = (c.rxHead + n) % bufLen
+	c.rxLen -= n
+	open := c.rxLen > 0 || !(c.peerFin || c.reset || c.state == Closed)
+	if n > 0 && (c.state == Established || c.state == FinWait1 || c.state == FinWait2) {
+		c.seg(ackF, c.sndNxt, nil) // the window opened
+	}
+	mu.Unlock()
+	return n, open
+}
+
+// Read waits for data: the bytes read, 0 at the end.
+func (c *Conn) Read(b []byte) int {
+	for {
+		n, open := c.TryRead(b)
+		if n > 0 || !open {
+			return n
+		}
+		boiler.Sleep(1)
+	}
+}
+
+// Write sends b (waiting while the buffer is full): the bytes taken,
+// fewer when the connection ends.
+func (c *Conn) Write(b []byte) int {
+	sent := 0
+	for sent < len(b) {
+		mu.Lock()
+		if c.state != Established && c.state != CloseWait {
+			mu.Unlock()
+			return sent
+		}
+		n := min(len(b)-sent, bufLen-c.txLen)
+		copy(c.tx[c.txLen:c.txLen+n], b[sent:sent+n])
+		c.txLen += n
+		sent += n
+		c.output()
+		mu.Unlock()
+		if sent < len(b) {
+			boiler.Sleep(1)
+		}
+	}
+	return sent
+}
+
+// Close ends the connection (after the data written) and gives it up.
+func (c *Conn) Close() {
+	mu.Lock()
+	switch c.state {
+	case Established:
+		c.state = FinWait1
+		c.closing = true
+	case CloseWait:
+		c.state = LastAck
+		c.closing = true
+	case SynSent, SynRcvd:
+		c.state = Closed
+	}
+	c.held = false
+	c.output()
+	mu.Unlock()
+}
+
+// State is the connection's state's name.
+func (c *Conn) State() string { return stateNames[c.state] }
+
+// Remote is the other side's address and port.
+func (c *Conn) Remote() (uint32, uint16) { return c.rip, c.rport }
+
+// Reset tells whether the other side reset the connection.
+func (c *Conn) Reset() bool { return c.reset }

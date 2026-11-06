@@ -626,3 +626,15 @@ fn savestate_round_trip() {
         .load(&mut StateReader::new(&bytes[..bytes.len() - 1]))
         .is_err());
 }
+
+#[test]
+fn the_vector_base_moves_the_table() {
+    // Vectors at 0010:0040: entry 4 (TRAP) -> 0010:0200.
+    let (mut cpu, mut ram) = setup(&[Op::Trap { n: 1 }]);
+    ram.put_word(Ada::linear(0x0010, 0x0040 + 16), 0x0010);
+    ram.put_word(Ada::linear(0x0010, 0x0040 + 18), 0x0200);
+    assert_eq!(cpu.vbr, ROM_SEGMENT, "reset: the ROM's table");
+    cpu.vbr = 0x0010;
+    run(&mut cpu, &mut ram, 1);
+    assert_eq!((cpu.s[0], cpu.pc), (0x0010, 0x0200));
+}

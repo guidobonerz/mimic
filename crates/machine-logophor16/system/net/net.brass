@@ -1,0 +1,802 @@
+// Package net: Boiler's network stack (SPEC.md 11.3, step 11d) as a task
+// of its own: Ethernet through Telegraph's rings (Foundry's TRAP #7-9),
+// ARP with a cache, IPv4 (no fragments), ICMP echo, UDP, TCP (RFC 793's
+// states, sliding window, retransmission), a DHCP client and a DNS
+// client. Addresses are uint32 in network order of significance
+// (10.16.0.1 = 0x0a100001).
+//
+// Sources: RFC 791 (IPv4), 792 (ICMP), 768 (UDP), 793 (TCP), 826 (ARP),
+// 1035 (DNS), 2131/2132 (DHCP), 1071 (the Internet checksum).
+package net
+
+import (
+	"boiler"
+	"strs"
+)
+
+// In net.s.
+func trapOpen() int
+func trapSend(off uint16, n int) int
+func trapRecv(off uint16) (int, int)
+
+const (
+	io     = uintptr(0xffff_0000)
+	netmac = io + 0x4002
+	ethIP  = 0x0800
+	ethARP = 0x0806
+	mss    = 1024 // what we send at most in a segment, and announce
+	bufLen = 2048 // a TCP connection's buffers, each way
+	maxTCP = 8
+	maxUDP = 6
+)
+
+// TCP states (RFC 793).
+const (
+	Closed = iota
+	Listen
+	SynSent
+	SynRcvd
+	Established
+	FinWait1
+	FinWait2
+	CloseWait
+	Closing
+	LastAck
+	TimeWait
+)
+
+var stateNames = [11]string{"CLOSED", "LISTEN", "SYN-SENT", "SYN-RECEIVED", "ESTABLISHED",
+	"FIN-WAIT-1", "FIN-WAIT-2", "CLOSE-WAIT", "CLOSING", "LAST-ACK", "TIME-WAIT"}
+
+var (
+	mu       boiler.Mutex
+	started  bool
+	mac      [6]byte
+	ip       uint32 // 0 until DHCP gives one
+	mask     uint32
+	router   uint32
+	dnsIP    uint32
+	hostname string
+	domain   [32]byte
+	domainN  int
+	lease    uint32 // ticks when the address was given
+	txbuf    [1536]byte
+	rxbuf    [1536]byte
+	arpbuf   [42]byte
+	// the ARP cache: address, MAC, when learnt
+	arpIP  [16]uint32
+	arpMAC [16][6]byte
+	arpAt  [16]uint32
+	arpN   int
+	// DHCP's progress: 0 discover, 1 request sent, 2 bound
+	dhcpState int
+	dhcpXid   uint32
+	dhcpOffer uint32
+	dhcpSrv   uint32
+	dhcpNext  uint32
+	// ping: the reply's sequence number and when it came
+	pingSeq   uint16
+	pingGot   uint16
+	pingWait  bool
+	nextPort  uint16 = 49152
+	nextISS   uint32 = 0x4c160000
+	conns     [maxTCP]Conn
+	listeners [4]Listener
+	udps      [maxUDP]UDPConn
+	// counters for ifconfig
+	RxFrames, TxFrames uint32
+)
+
+// Start brings the network up: the rings, the MAC, the stack's task.
+func Start() {
+	if started {
+		return
+	}
+	started = true
+	trapOpen()
+	for i := range 3 {
+		w := *(*uint16)(netmac + uintptr(2*i))
+		mac[2*i], mac[2*i+1] = byte(w>>8), byte(w)
+	}
+	var b strs.Builder
+	b.WriteString("logophor-")
+	hex(&b, mac[4])
+	hex(&b, mac[5])
+	hostname = b.String()
+	b.Free()
+	dhcpXid = 0x4c160000 | uint32(mac[4])<<8 | uint32(mac[5])
+	go loop()
+}
+
+func hex(b *strs.Builder, v byte) {
+	const digits = "0123456789abcdef"
+	b.WriteByte(digits[v>>4])
+	b.WriteByte(digits[v&15])
+}
+
+// Up tells whether the machine has its address.
+func Up() bool { return dhcpState == 2 }
+
+// Addr, Mask, Router and DNS: the configuration DHCP gave.
+func Addr() uint32   { return ip }
+func Mask() uint32   { return mask }
+func Router() uint32 { return router }
+func DNS() uint32    { return dnsIP }
+
+// Hostname is this machine's name on the net.
+func Hostname() string { return hostname }
+
+// MAC is the hardware address as text.
+func MAC() string {
+	var b strs.Builder
+	for i := range 6 {
+		if i > 0 {
+			b.WriteByte(':')
+		}
+		hex(&b, mac[i])
+	}
+	s := b.String()
+	b.Free()
+	return s
+}
+
+// ---- the task ----
+
+func loop() {
+	boiler.SetName("net")
+	for {
+		mu.Lock()
+		for {
+			n, _ := trapRecv(uint16(uintptr(&rxbuf[0])))
+			if n == 0 {
+				break
+			}
+			RxFrames++
+			frame(rxbuf[:n])
+		}
+		timers()
+		mu.Unlock()
+		boiler.Sleep(1)
+	}
+}
+
+func now() uint32 { return boiler.Ticks() }
+
+// ---- bytes ----
+
+func get16(b []byte, i int) uint16 { return uint16(b[i])<<8 | uint16(b[i+1]) }
+
+func get32(b []byte, i int) uint32 {
+	return uint32(b[i])<<24 | uint32(b[i+1])<<16 | uint32(b[i+2])<<8 | uint32(b[i+3])
+}
+
+func put16(b []byte, i int, v uint16) {
+	b[i], b[i+1] = byte(v>>8), byte(v)
+}
+
+func put32(b []byte, i int, v uint32) {
+	b[i], b[i+1], b[i+2], b[i+3] = byte(v>>24), byte(v>>16), byte(v>>8), byte(v)
+}
+
+// The Internet checksum (RFC 1071): add 16-bit words to sum.
+func csum(b []byte, sum uint32) uint32 {
+	n := len(b)
+	for i := 0; i+1 < n; i += 2 {
+		sum += uint32(b[i])<<8 | uint32(b[i+1])
+	}
+	if n&1 != 0 {
+		sum += uint32(b[n-1]) << 8
+	}
+	return sum
+}
+
+func fold(sum uint32) uint16 {
+	for sum>>16 != 0 {
+		sum = sum&0xffff + sum>>16
+	}
+	return ^uint16(sum)
+}
+
+// ---- Ethernet and ARP ----
+
+func frame(f []byte) {
+	if len(f) < 14 {
+		return
+	}
+	switch get16(f, 12) {
+	case ethARP:
+		arpIn(f)
+	case ethIP:
+		ipIn(f)
+	}
+}
+
+func arpIn(f []byte) {
+	if len(f) < 42 || get16(f, 14) != 1 || get16(f, 16) != ethIP {
+		return
+	}
+	op := get16(f, 20)
+	spa := get32(f, 28)
+	tpa := get32(f, 38)
+	learn(spa, f[22:28])
+	if op == 1 && ip != 0 && tpa == ip {
+		// a request for us: the reply
+		a := arpbuf[:]
+		copy(a[0:6], f[22:28])
+		copy(a[6:12], mac[:])
+		put16(a, 12, ethARP)
+		put16(a, 14, 1)
+		put16(a, 16, ethIP)
+		a[18], a[19] = 6, 4
+		put16(a, 20, 2)
+		copy(a[22:28], mac[:])
+		put32(a, 28, ip)
+		copy(a[32:38], f[22:28])
+		put32(a, 38, spa)
+		trapSend(uint16(uintptr(&arpbuf[0])), 42)
+		TxFrames++
+	}
+}
+
+// learn puts an address's MAC in the cache (the oldest goes).
+func learn(addr uint32, m []byte) {
+	if addr == 0 {
+		return
+	}
+	k := -1
+	for i := range arpN {
+		if arpIP[i] == addr {
+			k = i
+		}
+	}
+	if k < 0 {
+		if arpN < len(arpIP) {
+			k = arpN
+			arpN++
+		} else {
+			k = 0
+			for i := range arpN {
+				if arpAt[i] < arpAt[k] {
+					k = i
+				}
+			}
+		}
+	}
+	arpIP[k] = addr
+	copy(arpMAC[k][:], m)
+	arpAt[k] = now()
+}
+
+// arpAsk sends a request for addr.
+func arpAsk(addr uint32) {
+	a := arpbuf[:]
+	for i := range 6 {
+		a[i] = 0xff
+		a[32+i] = 0
+	}
+	copy(a[6:12], mac[:])
+	put16(a, 12, ethARP)
+	put16(a, 14, 1)
+	put16(a, 16, ethIP)
+	a[18], a[19] = 6, 4
+	put16(a, 20, 1)
+	copy(a[22:28], mac[:])
+	put32(a, 28, ip)
+	put32(a, 38, addr)
+	trapSend(uint16(uintptr(&arpbuf[0])), 42)
+	TxFrames++
+}
+
+// ---- IPv4 ----
+
+// ipSend sends txbuf's payload of n bytes (from offset 34) to dst; false
+// when the next hop's MAC is not known yet (an ARP request went out; the
+// packet is lost and its sender tries again).
+func ipSend(dst uint32, proto byte, n int) bool {
+	t := txbuf[:]
+	if dst == 0xffff_ffff {
+		for i := range 6 {
+			t[i] = 0xff
+		}
+	} else {
+		hop := dst
+		if mask != 0 && dst&mask != ip&mask {
+			hop = router
+		}
+		k := -1
+		for i := range arpN {
+			if arpIP[i] == hop {
+				k = i
+			}
+		}
+		if k < 0 {
+			arpAsk(hop)
+			return false
+		}
+		copy(t[0:6], arpMAC[k][:])
+	}
+	copy(t[6:12], mac[:])
+	put16(t, 12, ethIP)
+	t[14], t[15] = 0x45, 0
+	put16(t, 16, uint16(20+n))
+	put16(t, 18, uint16(now()))
+	put16(t, 20, 0x4000) // don't fragment
+	t[22], t[23] = 64, proto
+	put16(t, 24, 0)
+	put32(t, 26, ip)
+	put32(t, 30, dst)
+	put16(t, 24, fold(csum(t[14:34], 0)))
+	trapSend(uint16(uintptr(&txbuf[0])), 34+n)
+	TxFrames++
+	return true
+}
+
+func ipIn(f []byte) {
+	if len(f) < 34 || f[14]>>4 != 4 {
+		return
+	}
+	hl := int(f[14]&15) * 4
+	total := int(get16(f, 16))
+	if hl < 20 || total < hl || 14+total > len(f) {
+		return
+	}
+	if get16(f, 20)&0x3fff != 0 {
+		return // a fragment
+	}
+	src, dst := get32(f, 26), get32(f, 30)
+	if dst != ip && dst != 0xffff_ffff && !(ip == 0 && dhcpState < 2) {
+		return
+	}
+	if mask == 0 || src&mask == ip&mask {
+		learn(src, f[6:12])
+	}
+	p := f[14+hl : 14+total]
+	switch f[23] {
+	case 1:
+		icmpIn(src, p)
+	case 6:
+		tcpIn(src, dst, p)
+	case 17:
+		udpIn(src, dst, p)
+	}
+}
+
+// ---- ICMP ----
+
+func icmpIn(src uint32, p []byte) {
+	if len(p) < 8 || fold(csum(p, 0)) != 0 {
+		return
+	}
+	switch p[0] {
+	case 8: // echo request: the same back as a reply
+		n := len(p)
+		if n > 1400 {
+			return
+		}
+		copy(txbuf[34:34+n], p)
+		txbuf[34] = 0
+		put16(txbuf[:], 36, 0)
+		put16(txbuf[:], 36, fold(csum(txbuf[34:34+n], 0)))
+		ipSend(src, 1, n)
+	case 0: // echo reply
+		if get16(p, 4) == 0x4c16 {
+			pingGot = get16(p, 6)
+		}
+	}
+}
+
+// Ping sends an echo request to dst and waits up to a second for the
+// reply: the time it took in hundredths of a second, or -1.
+func Ping(dst uint32) int {
+	mu.Lock()
+	pingSeq++
+	seq := pingSeq
+	mu.Unlock()
+	t0 := now()
+	for try := 0; try < 2; try++ {
+		mu.Lock()
+		t := txbuf[:]
+		t[34], t[35] = 8, 0
+		put16(t, 36, 0)
+		put16(t, 38, 0x4c16)
+		put16(t, 40, seq)
+		for i := range 32 {
+			t[42+i] = byte('a' + i%26)
+		}
+		put16(t, 36, fold(csum(t[34:74], 0)))
+		sent := ipSend(dst, 1, 40)
+		mu.Unlock()
+		for now()-t0 < uint32(50*(try+1)) {
+			if pingGot == seq {
+				return int(now() - t0)
+			}
+			boiler.Sleep(1)
+		}
+		if sent {
+			break
+		}
+	}
+	return -1
+}
+
+// ---- UDP ----
+
+// A UDP endpoint: a port and the datagrams that came (four at most).
+type UDPConn struct {
+	port  uint16
+	used  bool
+	data  [4][]byte
+	from  [4]uint32
+	fport [4]uint16
+	n     int
+}
+
+// ListenUDP opens a UDP port (0: any free one); nil when none is left.
+func ListenUDP(port uint16) *UDPConn {
+	mu.Lock()
+	var u *UDPConn
+	if port == 0 {
+		port = ephemeral()
+	}
+	for i := range maxUDP {
+		if !udps[i].used {
+			u = &udps[i]
+			*u = UDPConn{port: port, used: true}
+			break
+		}
+	}
+	mu.Unlock()
+	return u
+}
+
+func ephemeral() uint16 {
+	nextPort++
+	if nextPort < 49152 {
+		nextPort = 49152
+	}
+	return nextPort
+}
+
+// Port is the endpoint's local port.
+func (u *UDPConn) Port() uint16 { return u.port }
+
+// SendTo sends b (1400 bytes at most) to dst:port; false when it could
+// not go yet (the next hop is being looked up: try again).
+func (u *UDPConn) SendTo(dst uint32, port uint16, b []byte) bool {
+	if len(b) > 1400 {
+		return false
+	}
+	mu.Lock()
+	ok := udpSend(u.port, dst, port, b)
+	mu.Unlock()
+	return ok
+}
+
+func udpSend(sport uint16, dst uint32, dport uint16, b []byte) bool {
+	n := len(b)
+	t := txbuf[:]
+	put16(t, 34, sport)
+	put16(t, 36, dport)
+	put16(t, 38, uint16(8+n))
+	put16(t, 40, 0)
+	copy(t[42:42+n], b)
+	sum := csum(t[34:42+n], 0)
+	sum += ip>>16 + ip&0xffff + dst>>16 + dst&0xffff + 17 + uint32(8+n)
+	c := fold(sum)
+	if c == 0 {
+		c = 0xffff
+	}
+	put16(t, 40, c)
+	return ipSend(dst, 17, 8+n)
+}
+
+// RecvFrom takes a datagram into b: its length (0: none waiting), the
+// sender's address and port.
+func (u *UDPConn) RecvFrom(b []byte) (int, uint32, uint16) {
+	mu.Lock()
+	if u.n == 0 {
+		mu.Unlock()
+		return 0, 0, 0
+	}
+	d := u.data[0]
+	from, fport := u.from[0], u.fport[0]
+	n := copy(b, d)
+	free(d)
+	for i := 1; i < u.n; i++ {
+		u.data[i-1], u.from[i-1], u.fport[i-1] = u.data[i], u.from[i], u.fport[i]
+	}
+	u.n--
+	mu.Unlock()
+	return n, from, fport
+}
+
+// Close gives the port back.
+func (u *UDPConn) Close() {
+	mu.Lock()
+	for i := range u.n {
+		free(u.data[i])
+	}
+	u.n = 0
+	u.used = false
+	mu.Unlock()
+}
+
+func udpIn(src, dst uint32, p []byte) {
+	if len(p) < 8 {
+		return
+	}
+	n := int(get16(p, 4))
+	if n < 8 || n > len(p) {
+		return
+	}
+	sport, dport := get16(p, 0), get16(p, 2)
+	data := p[8:n]
+	if dport == 68 {
+		dhcpIn(data)
+		return
+	}
+	for i := range maxUDP {
+		u := &udps[i]
+		if u.used && u.port == dport && u.n < len(u.data) {
+			d := make([]byte, len(data))
+			copy(d, data)
+			u.data[u.n], u.from[u.n], u.fport[u.n] = d, src, sport
+			u.n++
+			return
+		}
+	}
+}
+
+// ---- DHCP (client) ----
+
+func timers() {
+	t := now()
+	if dhcpState < 2 && t >= dhcpNext {
+		dhcpNext = t + 200
+		dhcpSend()
+	}
+	for i := range maxTCP {
+		conns[i].timer(t)
+	}
+}
+
+func dhcpSend() {
+	var m [300]byte
+	b := m[:]
+	b[0], b[1], b[2] = 1, 1, 6
+	put32(b, 4, dhcpXid)
+	put16(b, 10, 0x8000) // answers by broadcast
+	copy(b[28:34], mac[:])
+	put32(b, 236, 0x63825363)
+	i := 240
+	b[i], b[i+1] = 53, 1
+	if dhcpState == 0 {
+		b[i+2] = 1 // DISCOVER
+		i += 3
+	} else {
+		b[i+2] = 3 // REQUEST
+		b[i+3], b[i+4] = 50, 4
+		put32(b, i+5, dhcpOffer)
+		b[i+9], b[i+10] = 54, 4
+		put32(b, i+11, dhcpSrv)
+		i += 15
+	}
+	b[i], b[i+1] = 12, byte(len(hostname))
+	copy(b[i+2:], []byte(hostname))
+	i += 2 + len(hostname)
+	b[i], b[i+1], b[i+2], b[i+3], b[i+4], b[i+5] = 55, 4, 1, 3, 6, 15
+	b[i+6] = 255
+	old := ip
+	ip = 0
+	udpSend(68, 0xffff_ffff, 67, b[:i+7])
+	ip = old
+}
+
+func dhcpIn(d []byte) {
+	if len(d) < 240 || d[0] != 2 || get32(d, 4) != dhcpXid || get32(d, 236) != 0x63825363 {
+		return
+	}
+	yi := get32(d, 16)
+	kind := 0
+	var srv, m, r, dns uint32
+	for i := 240; i < len(d) && d[i] != 255; {
+		if d[i] == 0 {
+			i++
+			continue
+		}
+		if i+1 >= len(d) {
+			break
+		}
+		l := int(d[i+1])
+		if i+2+l > len(d) {
+			break
+		}
+		o := d[i+2 : i+2+l]
+		switch d[i] {
+		case 53:
+			if l >= 1 {
+				kind = int(o[0])
+			}
+		case 54:
+			if l >= 4 {
+				srv = get32(o, 0)
+			}
+		case 1:
+			if l >= 4 {
+				m = get32(o, 0)
+			}
+		case 3:
+			if l >= 4 {
+				r = get32(o, 0)
+			}
+		case 6:
+			if l >= 4 {
+				dns = get32(o, 0)
+			}
+		case 15:
+			domainN = copy(domain[:], o)
+		}
+		i += 2 + l
+	}
+	switch {
+	case kind == 2 && dhcpState == 0: // OFFER
+		dhcpOffer, dhcpSrv = yi, srv
+		dhcpState = 1
+		dhcpNext = 0
+	case kind == 5 && dhcpState == 1: // ACK
+		ip, mask, router, dnsIP = yi, m, r, dns
+		dhcpState = 2
+		lease = now()
+	case kind == 6: // NAK: from the start
+		dhcpState = 0
+		dhcpNext = 0
+	}
+}
+
+// ---- DNS (client) ----
+
+// Resolve gives a name's address: a dotted address is read as it is,
+// anything else is asked of the DNS server (three tries of a second);
+// false when it has none.
+func Resolve(name string) (uint32, bool) {
+	if a, ok := ParseIP(name); ok {
+		return a, true
+	}
+	if !Up() || len(name) == 0 || len(name) > 200 {
+		return 0, false
+	}
+	u := ListenUDP(0)
+	if u == nil {
+		return 0, false
+	}
+	var q [256]byte
+	b := q[:]
+	id := uint16(now())
+	put16(b, 0, id)
+	put16(b, 2, 0x0100) // recursion desired
+	put16(b, 4, 1)
+	n := 12
+	start := 0
+	for i := 0; i <= len(name); i++ {
+		if i == len(name) || name[i] == '.' {
+			l := i - start
+			if l == 0 || l > 63 {
+				u.Close()
+				return 0, false
+			}
+			b[n] = byte(l)
+			for k := range l {
+				b[n+1+k] = name[start+k]
+			}
+			n += 1 + l
+			start = i + 1
+		}
+	}
+	b[n] = 0
+	put16(b, n+1, 1) // A
+	put16(b, n+3, 1) // IN
+	n += 5
+	var ans [512]byte
+	addr, found := uint32(0), false
+	for try := 0; try < 3 && !found; try++ {
+		u.SendTo(dnsIP, 53, b[:n])
+		t0 := now()
+		for now()-t0 < 100 {
+			k, _, _ := u.RecvFrom(ans[:])
+			if k > 0 {
+				addr, found = dnsAnswer(ans[:k], id)
+				if found || get16(ans[:], 2)&15 == 3 {
+					try = 3
+				}
+				break
+			}
+			boiler.Sleep(1)
+		}
+	}
+	u.Close()
+	return addr, found
+}
+
+// skipName steps over a (maybe compressed) name; -1 when it is broken.
+func skipName(d []byte, i int) int {
+	for i < len(d) {
+		l := int(d[i])
+		if l == 0 {
+			return i + 1
+		}
+		if l&0xc0 == 0xc0 {
+			return i + 2
+		}
+		i += 1 + l
+	}
+	return -1
+}
+
+func dnsAnswer(d []byte, id uint16) (uint32, bool) {
+	if len(d) < 12 || get16(d, 0) != id || get16(d, 2)&0x8000 == 0 || get16(d, 2)&15 != 0 {
+		return 0, false
+	}
+	i := 12
+	for range get16(d, 4) {
+		i = skipName(d, i)
+		if i < 0 {
+			return 0, false
+		}
+		i += 4
+	}
+	for range get16(d, 6) {
+		i = skipName(d, i)
+		if i < 0 || i+10 > len(d) {
+			return 0, false
+		}
+		typ, l := get16(d, i), int(get16(d, i+8))
+		if typ == 1 && l == 4 && i+14 <= len(d) {
+			return get32(d, i+10), true
+		}
+		i += 10 + l
+	}
+	return 0, false
+}
+
+// ParseIP reads a dotted address ("10.16.0.1").
+func ParseIP(s string) (uint32, bool) {
+	var a uint32
+	part, digits, dots := 0, 0, 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == '.' {
+			if digits == 0 || part > 255 {
+				return 0, false
+			}
+			a = a<<8 | uint32(part)
+			part, digits = 0, 0
+			if i < len(s) {
+				dots++
+			}
+			continue
+		}
+		c := s[i]
+		if c < '0' || c > '9' || digits == 3 {
+			return 0, false
+		}
+		part = part*10 + int(c-'0')
+		digits++
+	}
+	return a, dots == 3
+}
+
+// IPString writes an address dotted (a new string).
+func IPString(a uint32) string {
+	var b strs.Builder
+	for i := 3; i >= 0; i-- {
+		b.WriteInt(int32(a >> (8 * uint32(i)) & 255))
+		if i > 0 {
+			b.WriteByte('.')
+		}
+	}
+	s := b.String()
+	b.Free()
+	return s
+}
+
+// Domain is the domain DHCP named ("" when none).
+func Domain() string { return string(domain[:domainN]) }

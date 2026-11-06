@@ -19,6 +19,7 @@ cpu-spc700 = { path = "crates/cpu-spc700" }
 cpu-8080 = { path = "crates/cpu-8080" }
 cpu-ada = { path = "crates/cpu-ada" }
 asm-ada = { path = "crates/asm-ada" }
+brass = { path = "crates/brass" }
 cpu-arm = { path = "crates/cpu-arm" }
 cpu-6809 = { path = "crates/cpu-6809" }
 cpu-z80 = { path = "crates/cpu-z80" }

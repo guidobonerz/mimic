@@ -20,9 +20,13 @@ monitor_start:
         mts     s2, r1
         li      r12, #$fffe
         seg1    ROM_SEG
-        call      con_init
+        ldv     r1, SV_CONON    ; a program's console output stays
+        cmpi    r1, #0
+        bne     .keep
+        call    con_init
+.keep:
         li      r1, #mon_title
-        call      con_puts
+        call    con_puts
 monitor_loop:
         li      r1, #mon_prompt
         call      con_puts

@@ -41,7 +41,8 @@ fn golden(m: &Logophor, name: &str) {
     if std::env::var_os("EMU_UPDATE_REFERENCE").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let file = std::fs::File::create(&path).unwrap();
-        let mut enc = png::Encoder::new(file, lumiere::WIDTH, lumiere::HEIGHT);
+        let f = m.framebuffer();
+        let mut enc = png::Encoder::new(file, f.width, f.height);
         enc.set_color(png::ColorType::Rgb);
         let mut w = enc.write_header().unwrap();
         let data: Vec<u8> = px.iter().flat_map(|c| [c.r, c.g, c.b]).collect();
@@ -55,7 +56,12 @@ fn golden(m: &Logophor, name: &str) {
     let mut r = dec.read_info().unwrap();
     let mut buf = vec![0; r.output_buffer_size()];
     let info = r.next_frame(&mut buf).unwrap();
-    assert_eq!((info.width, info.height), (lumiere::WIDTH, lumiere::HEIGHT));
+    let f = m.framebuffer();
+    assert_eq!(
+        (info.width, info.height),
+        (f.width, f.height),
+        "{name}: picture size"
+    );
     let differ = px
         .iter()
         .zip(buf.chunks(3))
@@ -135,7 +141,9 @@ impl emu_core::media::MediaBackend for Mem {
         b.copy_from_slice(&self.0[o..o + b.len()]);
         Ok(())
     }
-    fn write(&mut self, _o: u64, _d: &[u8]) -> Result<(), MediaError> {
+    fn write(&mut self, o: u64, d: &[u8]) -> Result<(), MediaError> {
+        let o = o as usize;
+        self.0[o..o + d.len()].copy_from_slice(d);
         Ok(())
     }
     fn commit(&mut self) -> Result<(), MediaError> {
@@ -881,6 +889,23 @@ fn sysvar(m: &Logophor, off: u32) -> u16 {
 /// Type `text` (US layout) a key a field.
 fn type_text(m: &mut Logophor, text: &str) {
     for ch in text.chars() {
+        press(m, ch);
+        frames(m, 1);
+    }
+}
+
+/// Type on `m` while `other` runs along (a field each per key).
+fn type_on(m: &mut Logophor, other: &mut Logophor, text: &str) {
+    for ch in text.chars() {
+        press(m, ch);
+        frames(m, 1);
+        frames(other, 1);
+    }
+}
+
+/// A key's press and release (US layout) into the input queue.
+fn press(m: &mut Logophor, ch: char) {
+    {
         let (usage, shift) = match ch {
             'a'..='z' => (4 + (ch as u8 - b'a'), false),
             'A'..='Z' => (4 + (ch as u8 - b'A'), true),
@@ -888,6 +913,8 @@ fn type_text(m: &mut Logophor, text: &str) {
             '0' => (0x27, false),
             '\n' => (0x28, false),
             ' ' => (0x2c, false),
+            '-' => (0x2d, false),
+            '.' => (0x37, false),
             ':' => (0x33, true),
             '?' => (0x38, true),
             _ => panic!("type {ch:?}"),
@@ -911,7 +938,6 @@ fn type_text(m: &mut Logophor, text: &str) {
         if shift {
             key(0xe1, false);
         }
-        frames(m, 1);
     }
 }
 
@@ -1074,10 +1100,95 @@ fn telegraph_options_timers_clock_and_ports() {
 
 // ---- step 10: the network ----
 
-/// A hub in memory: what one machine sends reaches the others' inboxes.
+/// A hub in memory: what one machine sends reaches the others' inboxes;
+/// with a gateway (`ada-asm hub`'s) also DHCP, DNS and the test Internet.
 #[derive(Default)]
 struct HubState {
     inbox: Vec<std::collections::VecDeque<Vec<u8>>>,
+    gateway: Option<(asm_ada::hub::Gateway, TestInternet)>,
+    /// machine 0's polls of the socket: the gateway's clock
+    polls: u64,
+}
+
+impl HubState {
+    fn broadcast(&mut self, frames: Vec<Vec<u8>>) {
+        for f in frames {
+            let d = asm_ada::hub::datagram(&f);
+            for q in &mut self.inbox {
+                q.push_back(d.clone());
+            }
+        }
+    }
+}
+
+/// The Internet as the tests see it: `bbs.example` (93.184.216.34) answers
+/// on port 23 with a greeting and sends every line that comes back in
+/// capitals.
+#[derive(Default)]
+struct TestInternet {
+    names: std::collections::VecDeque<(u32, Option<std::net::Ipv4Addr>)>,
+    conns: std::collections::BTreeMap<u32, std::collections::VecDeque<u8>>,
+    lines: std::collections::BTreeMap<u32, Vec<u8>>,
+}
+
+const BBS: std::net::Ipv4Addr = std::net::Ipv4Addr::new(93, 184, 216, 34);
+
+impl asm_ada::hub::Outside for TestInternet {
+    fn resolve(&mut self, id: u32, name: &str) -> bool {
+        let a = (name == "bbs.example").then_some(BBS);
+        self.names.push_back((id, a));
+        true
+    }
+    fn resolved(&mut self) -> Option<(u32, Option<std::net::Ipv4Addr>)> {
+        self.names.pop_front()
+    }
+    fn udp_send(&mut self, _: std::net::SocketAddrV4, _: std::net::SocketAddrV4, _: &[u8]) {}
+    fn udp_recv(&mut self) -> Option<(std::net::SocketAddrV4, std::net::SocketAddrV4, Vec<u8>)> {
+        None
+    }
+    fn udp_close(&mut self, _: std::net::SocketAddrV4) {}
+    fn tcp_connect(&mut self, id: u32, to: std::net::SocketAddrV4) {
+        if to == std::net::SocketAddrV4::new(BBS, 23) {
+            let hello = b"Welcome to the test BBS\r\n".iter().copied().collect();
+            self.conns.insert(id, hello);
+        }
+    }
+    fn tcp_connect_state(&mut self, id: u32) -> asm_ada::hub::outside::Connect {
+        if self.conns.contains_key(&id) {
+            asm_ada::hub::outside::Connect::Open
+        } else {
+            asm_ada::hub::outside::Connect::Failed
+        }
+    }
+    fn tcp_send(&mut self, id: u32, data: &[u8]) -> Option<usize> {
+        let q = self.conns.get_mut(&id)?;
+        let line = self.lines.entry(id).or_default();
+        for &b in data {
+            line.push(b.to_ascii_uppercase());
+            if b == b'\n' {
+                q.extend(line.drain(..));
+            }
+        }
+        Some(data.len())
+    }
+    fn tcp_recv(&mut self, id: u32, buf: &mut [u8]) -> asm_ada::hub::outside::TcpRead {
+        use asm_ada::hub::outside::TcpRead;
+        let Some(q) = self.conns.get_mut(&id) else {
+            return TcpRead::Failed;
+        };
+        let n = q.len().min(buf.len());
+        if n == 0 {
+            return TcpRead::Nothing;
+        }
+        for (b, c) in buf.iter_mut().zip(q.drain(..n)) {
+            *b = c;
+        }
+        TcpRead::Data(n)
+    }
+    fn tcp_shutdown(&mut self, _: u32) {}
+    fn tcp_close(&mut self, id: u32) {
+        self.conns.remove(&id);
+    }
 }
 
 struct HubNet {
@@ -1106,11 +1217,25 @@ impl emu_core::host::NetBackend for HubNet {
                     q.push_back(data.to_vec());
                 }
             }
+            let now = hub.polls * 2 / 5;
+            if let Some((gw, inet)) = &mut hub.gateway {
+                let out = gw.frame(&data[5..data.len() - 4], now, inet);
+                hub.broadcast(out);
+            }
         }
         Ok(data.len())
     }
     fn recv(&mut self, _: NetHandle, buf: &mut [u8]) -> Result<Recv, host::NetError> {
         let mut hub = self.hub.lock().unwrap();
+        if self.me == 0 {
+            // about 40 polls a field: 2/5 of a millisecond each
+            hub.polls += 1;
+            let now = hub.polls * 2 / 5;
+            if let Some((gw, inet)) = &mut hub.gateway {
+                let out = gw.poll(now, inet);
+                hub.broadcast(out);
+            }
+        }
         Ok(Recv::Data(match hub.inbox[self.me].pop_front() {
             Some(d) => {
                 buf[..d.len()].copy_from_slice(&d);
@@ -1153,6 +1278,7 @@ fn chat_machines() -> (Logophor, Logophor) {
     let img = asm_ada::sdimage::fat32(64, &[("BOOT/BOILER.BIN".into(), assemble(&src))]).unwrap();
     let hub = std::sync::Arc::new(std::sync::Mutex::new(HubState {
         inbox: vec![Default::default(), Default::default()],
+        ..HubState::default()
     }));
     let config = MachineConfig {
         options: [("net".into(), "hub:6516".into())].into(),
@@ -1227,4 +1353,436 @@ fn without_a_hub_the_link_stays_down() {
         };
         assert!(Logophor::new(&c).is_err(), "{bad}");
     }
+}
+
+// ---- step 11a: Brass programs on the machine ----
+
+#[test]
+fn a_brass_program_boots_from_the_card_and_prints() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../brass/examples/primes");
+    let prog =
+        brass::build(&brass::DirSources { root }).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    let img = asm_ada::sdimage::fat32(64, &[("BOOT/BOILER.BIN".into(), prog.binary)]).unwrap();
+    let mut m = machine();
+    insert_card(&mut m, img);
+    frames(&mut m, 400);
+    assert_eq!(text_row(&m, 0), "Brass on the Logophor 16");
+    assert!(
+        text_row(&m, 1).starts_with("2 3 5 7 11 13"),
+        "{}",
+        text_row(&m, 1)
+    );
+    assert_eq!(text_row(&m, 2), "primes below 100: 25");
+    assert_eq!(m.board.exit, Some(0), "main returned");
+    // After main the monitor (TRAP #0) takes over below the output.
+    assert!(text_row(&m, 3).starts_with("Logophor 16 - Foundry emergency monitor"));
+}
+
+// ---- step 11b: Boiler ----
+
+/// The system's packages from `system/` with `main` in its place.
+fn system_with_main(main: &str) -> Vec<u8> {
+    let sys = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("system");
+    let mut pkgs = std::collections::BTreeMap::new();
+    for e in std::fs::read_dir(&sys).unwrap() {
+        let dir = e.unwrap().path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let mut files = Vec::new();
+        for f in std::fs::read_dir(&dir).unwrap() {
+            let p = f.unwrap().path();
+            files.push((
+                p.display().to_string(),
+                std::fs::read_to_string(&p).unwrap(),
+            ));
+        }
+        files.sort();
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        pkgs.insert(name, files);
+    }
+    pkgs.insert("main".into(), vec![("main.brass".into(), main.to_string())]);
+    brass::build(&brass::MemSources(pkgs))
+        .unwrap_or_else(|e| panic!("{}", e.join("\n")))
+        .binary
+}
+
+/// The system (Boiler, Panorama and its main) compiled from `system/`.
+fn system_binary() -> Vec<u8> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("system");
+    brass::build(&brass::DirSources { root })
+        .unwrap_or_else(|e| panic!("{}", e.join("\n")))
+        .binary
+}
+
+#[test]
+fn boiler_runs_tasks_channels_and_select() {
+    let demo = system_with_main(include_str!("boiler_demo.brass"));
+    let img = asm_ada::sdimage::fat32(64, &[("BOOT/BOILER.BIN".into(), demo)]).unwrap();
+    let mut m = machine();
+    insert_card(&mut m, img);
+    frames(&mut m, 600);
+    let console = String::from_utf8_lossy(m.console()).into_owned();
+    assert!(
+        console.contains("Boiler: tasks, channels, files\n0 1 4 9 16 \n"),
+        "{console}"
+    );
+    assert!(
+        console.contains("both spinners ran: true true"),
+        "{console}"
+    );
+    assert!(
+        console.contains("message from a task\nticks true"),
+        "{console}"
+    );
+}
+
+#[test]
+fn boiler_reads_the_keyboard() {
+    let sys = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("system/boiler");
+    let mut pkgs = std::collections::BTreeMap::new();
+    let mut boiler_files = Vec::new();
+    for e in std::fs::read_dir(&sys).unwrap() {
+        let p = e.unwrap().path();
+        boiler_files.push((
+            p.display().to_string(),
+            std::fs::read_to_string(&p).unwrap(),
+        ));
+    }
+    pkgs.insert("boiler".to_string(), boiler_files);
+    pkgs.insert(
+        "main".to_string(),
+        vec![(
+            "main.brass".to_string(),
+            r#"
+package main
+
+import "boiler"
+
+func main() {
+    println("type:")
+    for {
+        c := boiler.Key()
+        if c == 13 {
+            break
+        }
+        print(string([]byte{c}))
+    }
+    println()
+    println("done")
+}
+"#
+            .to_string(),
+        )],
+    );
+    let prog =
+        brass::build(&brass::MemSources(pkgs)).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    let img = asm_ada::sdimage::fat32(64, &[("BOOT/BOILER.BIN".into(), prog.binary)]).unwrap();
+    let mut m = machine();
+    insert_card(&mut m, img);
+    frames(&mut m, 200);
+    type_text(&mut m, "Gear 7\n");
+    frames(&mut m, 10);
+    let console = String::from_utf8_lossy(m.console()).into_owned();
+    assert!(console.ends_with("type:\nGear 7\ndone\n"), "{console:?}");
+}
+
+// ---- step 11c: Panorama ----
+
+fn mouse(m: &mut Logophor, dx: i16, dy: i16, buttons: u8) {
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(PortId(0)),
+        event: InputEvent::MouseRel { dx, dy, buttons },
+    });
+    frames(m, 3);
+}
+
+/// Move the pointer from `from` to `to` in steps the mouse counters can
+/// carry between two ticks.
+fn point(m: &mut Logophor, from: (i16, i16), to: (i16, i16)) {
+    let (mut x, mut y) = from;
+    while (x, y) != to {
+        let dx = (to.0 - x).clamp(-100, 100);
+        let dy = (to.1 - y).clamp(-100, 100);
+        mouse(m, dx, dy, 0);
+        x += dx;
+        y += dy;
+    }
+}
+
+fn panorama() -> Logophor {
+    let img = asm_ada::sdimage::fat32(
+        64,
+        &[
+            ("BOOT/BOILER.BIN".into(), system_binary()),
+            ("README.TXT".into(), b"Logophor 16 system card".to_vec()),
+            ("DOCS/BRASS.TXT".into(), vec![b'b'; 1234]),
+            ("DOCS/GEARS/SPROCKET.DAT".into(), vec![7; 4096]),
+        ],
+    )
+    .unwrap();
+    let mut m = machine();
+    insert_card(&mut m, img);
+    frames(&mut m, 400);
+    m
+}
+
+#[test]
+fn panorama_shows_its_desktop() {
+    let m = panorama();
+    golden(&m, "panorama-desktop");
+}
+
+fn click(m: &mut Logophor) {
+    mouse(m, 0, 0, 1);
+    mouse(m, 0, 0, 0);
+}
+
+#[test]
+fn engine_room_runs_commands() {
+    let mut m = panorama();
+    // the menu's "Engine Room"
+    point(&mut m, (512, 384), (60, 72));
+    click(&mut m);
+    frames(&mut m, 30);
+    type_text(&mut m, "ls\n");
+    type_text(&mut m, "ps\n");
+    type_text(&mut m, "mem\n");
+    frames(&mut m, 30);
+    golden(&m, "panorama-engine-room");
+}
+
+#[test]
+fn archive_browses_directories_in_columns() {
+    let mut m = panorama();
+    // the menu's "Archive", then DOCS, GEARS and SPROCKET.DAT
+    point(&mut m, (512, 384), (60, 52));
+    click(&mut m);
+    frames(&mut m, 40);
+    let row = |r: i16| 40 + 22 + 24 + 9 + 18 * r;
+    point(&mut m, (60, 52), (214, row(2)));
+    click(&mut m);
+    frames(&mut m, 30);
+    point(&mut m, (214, row(2)), (382, row(1)));
+    click(&mut m);
+    frames(&mut m, 30);
+    point(&mut m, (382, row(1)), (550, row(0)));
+    click(&mut m);
+    frames(&mut m, 30);
+    golden(&m, "panorama-archive");
+}
+
+/// Press the button at `from`, move to `to` with it held, let go.
+fn drag(m: &mut Logophor, from: (i16, i16), to: (i16, i16)) {
+    mouse(m, 0, 0, 1);
+    let (mut x, mut y) = from;
+    while (x, y) != to {
+        let dx = (to.0 - x).clamp(-60, 60);
+        let dy = (to.1 - y).clamp(-60, 60);
+        mouse(m, dx, dy, 1);
+        x += dx;
+        y += dy;
+    }
+    mouse(m, 0, 0, 0);
+}
+
+#[test]
+fn windows_move_minimise_and_the_theme_turns_to_the_oscilloscope() {
+    let mut m = panorama();
+    // Info from the dock, Engine Room from the menu
+    point(&mut m, (512, 384), (994, 80));
+    click(&mut m);
+    frames(&mut m, 30);
+    point(&mut m, (994, 80), (60, 72));
+    click(&mut m);
+    frames(&mut m, 30);
+    // Info's title bar (behind Engine Room) to the lower right
+    point(&mut m, (60, 72), (300, 50));
+    drag(&mut m, (300, 50), (420, 380));
+    frames(&mut m, 20);
+    // Engine Room minimised: a tile at the bottom
+    point(&mut m, (420, 380), (225, 71));
+    click(&mut m);
+    frames(&mut m, 20);
+    golden(&m, "panorama-windows");
+    // Theme: the submenu, torn off, then Oscilloscope
+    point(&mut m, (225, 71), (60, 112));
+    click(&mut m);
+    frames(&mut m, 20);
+    point(&mut m, (60, 112), (200, 110));
+    drag(&mut m, (200, 110), (500, 220));
+    frames(&mut m, 20);
+    point(&mut m, (500, 220), (500, 262));
+    click(&mut m);
+    frames(&mut m, 60);
+    golden(&m, "panorama-scope");
+}
+
+#[test]
+fn the_system_card_boots_into_panorama() {
+    let config = MachineConfig {
+        options: [("card".into(), "system".into())].into(),
+        ..MachineConfig::default()
+    };
+    let mut m = Logophor::new(&config).unwrap();
+    frames(&mut m, 400);
+    golden(&m, "panorama-desktop");
+    let bad = MachineConfig {
+        options: [("card".into(), "rom".into())].into(),
+        ..MachineConfig::default()
+    };
+    assert!(Logophor::new(&bad).is_err());
+}
+
+// ---- step 11d: the network ----
+
+/// Machines booting Panorama from the system card, on an in-memory hub
+/// with the gateway; machine k has the MAC 02:4C:31:36:00:0(k+1).
+fn net_machines(n: usize) -> Vec<Logophor> {
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(HubState {
+        inbox: vec![Default::default(); n],
+        gateway: Some((asm_ada::hub::Gateway::new(), TestInternet::default())),
+        polls: 0,
+    }));
+    let mut ms: Vec<Logophor> = (0..n)
+        .map(|me| {
+            let config = MachineConfig {
+                options: [
+                    ("card".into(), "system".into()),
+                    ("net".into(), "hub:6516".into()),
+                    ("mac".into(), format!("02:4c:31:36:00:{:02x}", me + 1)),
+                ]
+                .into(),
+                ..MachineConfig::default()
+            };
+            let mut m = Logophor::new(&config).unwrap();
+            m.attach_host(HostServices::new(
+                Some(Box::new(HubNet {
+                    hub: hub.clone(),
+                    me,
+                })),
+                None,
+            ));
+            m
+        })
+        .collect();
+    // boot side by side, then give DHCP its time
+    for _ in 0..600 {
+        for m in &mut ms {
+            frames(m, 1);
+        }
+    }
+    ms
+}
+
+#[test]
+fn engine_room_shows_the_address_pings_and_looks_up_names() {
+    let mut ms = net_machines(1);
+    let m = &mut ms[0];
+    point(m, (512, 384), (60, 72));
+    click(m);
+    frames(m, 30);
+    type_text(m, "ifconfig\n");
+    frames(m, 20);
+    type_text(m, "ping hub\n");
+    frames(m, 200);
+    type_text(m, "host logophor-0001\n");
+    frames(m, 120);
+    type_text(m, "host nowhere.example\n");
+    frames(m, 200);
+    golden(m, "net-engine-room");
+}
+
+#[test]
+fn teleprinter_calls_another_logophor() {
+    let mut ms = net_machines(2);
+    let (a, b) = ms.split_at_mut(1);
+    let (a, b) = (&mut a[0], &mut b[0]);
+    // the menu's Teleprinter on both; B waits for a call on port 23
+    for m in [&mut *a, &mut *b] {
+        point(m, (512, 384), (60, 92));
+        click(m);
+        frames(m, 30);
+    }
+    type_on(b, a, "listen 23\n");
+    type_on(a, b, "logophor-0002 23\n");
+    for _ in 0..200 {
+        frames(a, 1);
+        frames(b, 1);
+    }
+    type_on(a, b, "Hello from 1\n");
+    for _ in 0..120 {
+        frames(a, 1);
+        frames(b, 1);
+    }
+    type_on(b, a, "Hello from 2\n");
+    for _ in 0..120 {
+        frames(a, 1);
+        frames(b, 1);
+    }
+    golden(a, "net-teleprinter-1");
+    golden(b, "net-teleprinter-2");
+}
+
+#[test]
+fn teleprinter_reaches_the_internet_through_the_hub() {
+    let mut ms = net_machines(1);
+    let m = &mut ms[0];
+    point(m, (512, 384), (60, 92));
+    click(m);
+    frames(m, 30);
+    type_text(m, "bbs.example 23\n");
+    frames(m, 200);
+    type_text(m, "brass and steam\n");
+    frames(m, 120);
+    golden(m, "net-teleprinter-bbs");
+}
+
+#[test]
+fn mode_5_runs_the_fields_with_xga_timing() {
+    // Palette 1 green, mode 5 from 0002:0000 (whatever RAM holds there).
+    let src = "
+        li r1, #$ffff
+        mts s3, r1
+        li r2, #$0002
+        li r1, #$c001
+        swx r1, (r2)          ; DMACON: framebuffer DMA on
+        li r2, #$1002
+        li r1, #$07e0
+        swx r1, (r2)          ; palette 1: green
+        li r2, #$0802
+        li r1, #2
+        swx r1, (r2)          ; FBSEG
+        li r2, #$0806
+        li r1, #1024
+        swx r1, (r2)          ; PITCH
+        li r2, #$080a
+        li r1, #1
+        swx r1, (r2)          ; BORDER: palette 1
+        li r2, #$0800
+        li r1, #$8005
+        swx r1, (r2)          ; display on, mode 5
+    stop: bra stop
+    ";
+    let mut m = machine();
+    insert_program(&mut m, assemble(src));
+    frames(&mut m, 3);
+    let f = m.framebuffer();
+    assert_eq!((f.width, f.height), (1024, 768));
+    assert_eq!(f.signal.lines_per_field, 806);
+    // A field: 806 lines of 249 CPU cycles (40 master ticks a cycle).
+    let t0 = m.now().0;
+    frames(&mut m, 1);
+    assert_eq!(m.now().0 - t0, 806 * 249 * 40);
+    // A savestate taken in an XGA field resumes the same.
+    let state = m.save_state();
+    frames(&mut m, 2);
+    let (after, t) = (pixels(&m), m.now());
+    let mut n = machine();
+    n.load_state(&state).unwrap();
+    frames(&mut n, 2);
+    assert_eq!(pixels(&n), after);
+    assert_eq!(n.now(), t);
 }

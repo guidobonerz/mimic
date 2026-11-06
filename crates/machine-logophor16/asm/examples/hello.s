@@ -2,9 +2,9 @@
 ; BOOT/BOILER.BIN at 0040:0000. It greets on the console (TRAP #4) and
 ; then types what is typed (TRAP #2, TRAP #1).
 ;
-;   ada-asm build hello.s -o hello.bin
-;   ada-asm sd card.img --boot hello.bin
-;   mimic-headless --machine logophor16 --disk card.img --frames 300 --snapshot hello.png
+;   cargo run --release -p asm-ada -- build crates/machine-logophor16/asm/examples/hello.s -o hello.bin
+;   cargo run --release -p asm-ada -- sd card.img --boot hello.bin
+;   cargo run --release -p emu-desktop -- --profile logophor16 --disk card.img
 
         .section text
         .org    $00400000

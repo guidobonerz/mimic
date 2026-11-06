@@ -52,6 +52,69 @@ use emu_core::{
 /// The Foundry ROM, assembled by the build script.
 pub static FOUNDRY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/foundry.rom"));
 
+/// The system card (option `card=system`, build.rs: Boiler and Panorama
+/// as BOOT/BOILER.BIN), sparse: the sector count, then every sector that
+/// is not all zero as its number and its 512 bytes.
+static SYSTEM_CARD: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/system-card.bin"));
+
+/// A card image kept as its non-zero sectors (the system card: 64 MiB of
+/// which a few hundred KiB are used). Writes stay in memory.
+struct SparseCard {
+    sectors: u32,
+    data: std::collections::BTreeMap<u32, [u8; 512]>,
+}
+
+impl SparseCard {
+    fn system() -> Self {
+        let n = u32::from_le_bytes(SYSTEM_CARD[..4].try_into().expect("system card"));
+        let data = SYSTEM_CARD[4..]
+            .chunks(516)
+            .map(|c| {
+                let i = u32::from_le_bytes(c[..4].try_into().expect("system card"));
+                let mut s = [0; 512];
+                s.copy_from_slice(&c[4..]);
+                (i, s)
+            })
+            .collect();
+        Self { sectors: n, data }
+    }
+}
+
+impl emu_core::media::MediaBackend for SparseCard {
+    fn len(&self) -> u64 {
+        u64::from(self.sectors) * 512
+    }
+
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), MediaError> {
+        if offset + buf.len() as u64 > self.len() {
+            return Err(MediaError::OutOfRange);
+        }
+        for (k, b) in buf.iter_mut().enumerate() {
+            let at = offset + k as u64;
+            *b = self
+                .data
+                .get(&((at / 512) as u32))
+                .map_or(0, |s| s[(at % 512) as usize]);
+        }
+        Ok(())
+    }
+
+    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), MediaError> {
+        if offset + data.len() as u64 > self.len() {
+            return Err(MediaError::OutOfRange);
+        }
+        for (k, &b) in data.iter().enumerate() {
+            let at = offset + k as u64;
+            self.data.entry((at / 512) as u32).or_insert([0; 512])[(at % 512) as usize] = b;
+        }
+        Ok(())
+    }
+
+    fn commit(&mut self) -> Result<(), MediaError> {
+        Ok(())
+    }
+}
+
 pub const CPU: DeviceId = DeviceId("cpu");
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 const SLOT_PROGRAM: SlotId = SlotId(0);
@@ -74,7 +137,6 @@ pub const LINES: u16 = 628;
 pub const VISIBLE_LINES: u16 = 600;
 /// Master ticks (480 MHz) per CPU cycle and per line.
 const TICKS_PER_CYCLE: u64 = 40;
-const TICKS_PER_LINE: u64 = TICKS_PER_CYCLE * LINE_CYCLES as u64;
 
 const RAM_SEGMENTS: u32 = 0x200;
 /// The end of chip RAM (segments 0–$3F).
@@ -83,6 +145,42 @@ const CHIP_END: u32 = 0x0040_0000;
 /// horizontal blank, x = 800).
 const LINE_SLOTS: u16 = 848;
 const FIXED_START: u16 = 640;
+
+/// A field's timing (SPEC.md 5, 8.1): SVGA for modes 0-4, XGA when mode 5
+/// is on at the field's start. The CPU clock stays; a line has
+/// `line_cycles` CPU cycles of 8/3 slots, a slot `x_num/x_den` pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Timing {
+    line_cycles: u16,
+    lines: u16,
+    visible: u16,
+    line_slots: u16,
+    fixed_start: u16,
+    x_num: u16,
+    x_den: u16,
+}
+
+const SVGA: Timing = Timing {
+    line_cycles: LINE_CYCLES,
+    lines: LINES,
+    visible: VISIBLE_LINES,
+    line_slots: LINE_SLOTS,
+    fixed_start: FIXED_START,
+    x_num: 5,
+    x_den: 4,
+};
+
+/// 249 cycles = 664 slots a line, a slot two pixels (1 328 a line), 806
+/// lines of which 768 show: about 59.8 fields a second.
+const XGA: Timing = Timing {
+    line_cycles: 249,
+    lines: lumiere::XGA_LINES,
+    visible: lumiere::XGA_HEIGHT as u16,
+    line_slots: 664,
+    fixed_start: 512,
+    x_num: 2,
+    x_den: 1,
+};
 const ROM_FIRST: u32 = 0xfffb;
 const ROM_SIZE: usize = 0x4_0000;
 /// Where the program slot loads and starts a binary.
@@ -479,6 +577,8 @@ pub struct Logophor {
     line: u16,
     cycle: u16,
     fields: u64,
+    /// The master clock (ticks) at the start of this field.
+    field_ticks: u64,
     field_done: bool,
     /// This line's fixed DMA: slots from FIXED_START, and slots at its
     /// start the last line's ran into.
@@ -513,9 +613,21 @@ impl Logophor {
         let mut board = Board::new();
         let mut ports = [PortDev::Mouse, PortDev::Joystick];
         let mut peer = None;
+        let mut system_card = false;
         for (k, v) in &config.options {
             match k.as_str() {
                 "roms" => {}
+                "card" => {
+                    system_card = match v.as_str() {
+                        "system" => true,
+                        "none" => false,
+                        _ => {
+                            return Err(ConfigError::Invalid(format!(
+                                "card={v}: system (the built-in system card) or none"
+                            )))
+                        }
+                    }
+                }
                 "rtc" => {
                     let s = v.parse::<u32>().map_err(|_| {
                         ConfigError::Invalid(format!("rtc={v}: seconds since 2000-01-01"))
@@ -557,12 +669,23 @@ impl Logophor {
             }
         }
         board.input = Input::new(ports);
+        if system_card {
+            let media = Media {
+                name: "system card".into(),
+                kind: MediaKind::Disk,
+                backend: Box::new(SparseCard::system()),
+            };
+            board
+                .insert(media)
+                .map_err(|e| ConfigError::Invalid(format!("card=system: {e:?}")))?;
+        }
         Ok(Self {
             cpu: Ada::new(),
             board,
             line: 0,
             cycle: 0,
             fields: 0,
+            field_ticks: 0,
             field_done: false,
             fixed: 0,
             carry: 0,
@@ -611,26 +734,37 @@ impl Logophor {
         self.cpu = cpu;
     }
 
+    /// This field's timing.
+    fn timing(&self) -> Timing {
+        if self.board.lumiere.xga() {
+            XGA
+        } else {
+            SVGA
+        }
+    }
+
     /// The end of a line: put it out, VBlank, field end, the next line's
     /// fixed DMA.
     fn end_line(&mut self) {
+        let t = self.timing();
         {
             let Board { ram, lumiere, .. } = &mut self.board;
             lumiere.end_line(self.line, &ChipView(&ram[..CHIP_END as usize]));
         }
-        self.carry = (FIXED_START + self.fixed).saturating_sub(LINE_SLOTS);
+        self.carry = (t.fixed_start + self.fixed).saturating_sub(t.line_slots);
         self.board.calliope.end_line();
         if self.line.is_multiple_of(TUNNEL_LINES) && self.tunnel.peer.is_some() {
             self.service_tunnel();
         }
         self.line += 1;
-        if self.line == VISIBLE_LINES {
+        if self.line == t.visible {
             self.board.lumiere.vblank();
             self.board.ints.raise(telegraph::INT_VBLANK);
         }
-        if self.line == LINES {
+        if self.line == t.lines {
             self.line = 0;
             self.fields += 1;
+            self.field_ticks += u64::from(t.lines) * u64::from(t.line_cycles) * TICKS_PER_CYCLE;
             self.field_done = true;
             self.board.babbage.field_start();
         }
@@ -641,7 +775,7 @@ impl Logophor {
     /// Slot 640: the fixed DMA for the next line, its framebuffer row and
     /// the sprites Lumière chooses for it now.
     fn prepare_fetch(&mut self) {
-        let next = if self.line + 1 == LINES {
+        let next = if self.line + 1 == self.timing().lines {
             0
         } else {
             self.line + 1
@@ -678,7 +812,8 @@ impl Logophor {
 
     /// Slot `s` of this line belongs to the fixed DMA.
     fn fixed_slot(&self, s: u16) -> bool {
-        s < self.carry || (FIXED_START..FIXED_START + self.fixed).contains(&s)
+        let start = self.timing().fixed_start;
+        s < self.carry || (start..start + self.fixed).contains(&s)
     }
 
     /// Carry out what a Copper instruction did at (`y`, `x`).
@@ -700,16 +835,17 @@ impl Logophor {
     /// returns the slots left free.
     fn slots(&mut self) -> u32 {
         let c = u32::from(self.cycle);
+        let t = self.timing();
         let (mut free, mut cpu_served) = (0, false);
         for s in (c * 8 / 3)..((c + 1) * 8 / 3) {
             let s = s as u16;
-            if s == FIXED_START {
+            if s == t.fixed_start {
                 self.prepare_fetch();
             }
             if self.fixed_slot(s) {
                 continue;
             }
-            let (y, x) = (self.line, s * 5 / 4);
+            let (y, x) = (self.line, s * t.x_num / t.x_den);
             let b = &mut self.board.babbage;
             if b.copper_active() && (!b.copper_waiting() || b.copper_compare(y, x)) {
                 let action = {
@@ -799,13 +935,14 @@ impl Logophor {
             self.cpu.tick(&mut bus)
         };
         self.cycle += 1;
-        if self.cycle == LINE_CYCLES {
+        if self.cycle == self.timing().line_cycles {
             self.cycle = 0;
             self.end_line();
         }
         // The beam for the next cycle's register reads (and the debugger).
+        let t = self.timing();
         self.board.beam = Beam {
-            x: self.cycle * 10 / 3,
+            x: self.cycle * 8 * t.x_num / (3 * t.x_den),
             y: self.line,
         };
         let dbg = dbg?;
@@ -1022,16 +1159,20 @@ impl Machine for Logophor {
     }
 
     fn framebuffer(&self) -> FrameRef<'_> {
+        let l = &self.board.lumiere;
+        let (w, h) = (l.width(), l.height());
+        let t = self.timing();
         FrameRef {
-            width: lumiere::WIDTH,
-            height: lumiere::HEIGHT,
-            pixels: PixelData::Rgb(self.board.lumiere.pixels()),
+            width: w,
+            height: h,
+            pixels: PixelData::Rgb(&l.pixels()[..(w * h) as usize]),
             luma_chroma: None,
             signal: SignalInfo {
-                pixel_clock_hz: 40_000_000,
-                active_pixels: lumiere::WIDTH,
-                total_pixels: 1060,
-                lines_per_field: u32::from(LINES),
+                // 1060 pixel clocks a line at 40 MHz; XGA: 1328 at 64 MHz
+                pixel_clock_hz: if t == XGA { 64_000_000 } else { 40_000_000 },
+                active_pixels: w,
+                total_pixels: u32::from(t.line_slots * t.x_num / t.x_den),
+                lines_per_field: u32::from(t.lines),
                 standard: VideoStandard::Ntsc,
                 output: OutputType::Rgb,
                 field: FieldParity::Progressive,
@@ -1151,9 +1292,11 @@ impl Machine for Logophor {
     }
 
     fn now(&self) -> Cycle {
+        let t = self.timing();
         Cycle(
-            (self.fields * u64::from(LINES) + u64::from(self.line)) * TICKS_PER_LINE
-                + u64::from(self.cycle) * TICKS_PER_CYCLE,
+            self.field_ticks
+                + (u64::from(self.line) * u64::from(t.line_cycles) + u64::from(self.cycle))
+                    * TICKS_PER_CYCLE,
         )
     }
 
@@ -1212,7 +1355,7 @@ impl Machine for Logophor {
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
-        w.chunk(*b"C16M", 2, |w| {
+        w.chunk(*b"C16M", 3, |w| {
             // RAM by segment, all-zero segments as one byte.
             for (seg, touched) in self.board.ram.chunks(1 << 16).zip(self.board.touched) {
                 if !touched || seg.iter().all(|b| *b == 0) {
@@ -1229,6 +1372,7 @@ impl Machine for Logophor {
             w.u16(self.board.exit.unwrap_or(0));
             w.u16(self.fixed);
             w.u16(self.carry);
+            w.u64(self.field_ticks);
         });
         self.cpu.save(&mut w);
         self.board.lumiere.save(&mut w);
@@ -1248,7 +1392,7 @@ impl Machine for Logophor {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"C16M", 2)?;
+        let (_, mut c) = r.chunk(*b"C16M", 3)?;
         let mut ram = vec![0; self.board.ram.len()];
         let mut touched = [false; RAM_SEGMENTS as usize];
         for (seg, t) in ram.chunks_mut(1 << 16).zip(touched.iter_mut()) {
@@ -1263,7 +1407,7 @@ impl Machine for Logophor {
         }
         let line = c.u16()?;
         let cycle = c.u16()?;
-        if line >= LINES || cycle >= LINE_CYCLES {
+        if line >= XGA.lines || cycle >= SVGA.line_cycles {
             return Err(StateError::Invalid("beam position"));
         }
         let fields = c.u64()?;
@@ -1271,6 +1415,7 @@ impl Machine for Logophor {
         let exit = c.u16()?;
         let fixed = c.u16()?.min(LINE_SLOTS);
         let carry = c.u16()?.min(LINE_SLOTS);
+        let field_ticks = c.u64()?;
         let mut cpu = self.cpu.clone();
         cpu.load(&mut r)?;
         let mut lumiere = self.board.lumiere.clone();
@@ -1317,6 +1462,7 @@ impl Machine for Logophor {
         self.line = line;
         self.cycle = cycle;
         self.fields = fields;
+        self.field_ticks = field_ticks;
         self.field_done = false;
         Ok(())
     }

@@ -1,0 +1,164 @@
+// Package term: a text screen of 60 x 16 characters in a Panorama window,
+// for Engine Room and Teleprinter. It draws only the cells that changed
+// (Flush), or everything (Paint, after scrolling or a theme change).
+package term
+
+import (
+	"panorama"
+	"strs"
+)
+
+const (
+	Cols = 60
+	Rows = 16
+	cols = Cols
+	rows = Rows
+)
+
+// A screen: its window, the characters, the cursor.
+type Screen struct {
+	W     *panorama.Window
+	cells [rows][cols]byte
+	X, Y  int
+	// cells changed since the last flush (y*cols+x); full: all of them
+	touched [48]int
+	nt      int
+	full    bool
+}
+
+// New opens a window of the screen's size for app.
+func New(app *panorama.App, title string) *Screen {
+	w := panorama.NewWindow(app, title, cols*8+8, rows*16+8)
+	if w == nil {
+		return nil
+	}
+	t := &Screen{W: w}
+	t.Clear()
+	return t
+}
+
+// Close closes the window.
+func (t *Screen) Close() {
+	t.W.Done()
+	free(t)
+}
+
+// Back takes the character left of the cursor away (in its line).
+func (t *Screen) Back() {
+	if t.X > 0 {
+		t.touch(t.X, t.Y)
+		t.X--
+		t.cells[t.Y][t.X] = ' '
+	}
+}
+
+
+// Clear empties the screen.
+func (t *Screen) Clear() {
+	for y := range rows {
+		for x := range cols {
+			t.cells[y][x] = ' '
+		}
+	}
+	t.X, t.Y = 0, 0
+	t.Paint()
+}
+
+// Paint draws the whole window.
+func (t *Screen) Paint() {
+	t.full, t.nt = false, 0
+	w := t.W
+	w.Clear()
+	for y := range rows {
+		for x := range cols {
+			if c := t.cells[y][x]; c != ' ' {
+				w.Surf.Char(4+8*x, 4+16*y, c, panorama.Ink())
+			}
+		}
+	}
+	// the cursor
+	w.Surf.Fill(4+8*t.X, 4+16*t.Y+14, 8, 2, panorama.Accent())
+	w.Invalidate()
+}
+
+// touch notes a cell to draw at the next flush.
+func (t *Screen) touch(x, y int) {
+	if t.nt == len(t.touched) {
+		t.full = true
+		return
+	}
+	t.touched[t.nt] = y*cols + x
+	t.nt++
+}
+
+// Flush draws what changed: the touched cells and the cursor's.
+func (t *Screen) Flush() {
+	if t.full {
+		t.Paint()
+		return
+	}
+	for i := range t.nt {
+		t.cell(t.touched[i]%cols, t.touched[i]/cols)
+	}
+	t.nt = 0
+	t.cell(t.X, t.Y)
+}
+
+// cell draws one cell (with the cursor when it is there).
+func (t *Screen) cell(x, y int) {
+	s := t.W.Surf
+	px, py := 4+8*x, 4+16*y
+	s.Fill(px, py, 8, 16, panorama.Paper())
+	if c := t.cells[y][x]; c != ' ' {
+		s.Char(px, py, c, panorama.Ink())
+	}
+	if x == t.X && y == t.Y {
+		s.Fill(px, py+14, 8, 2, panorama.Accent())
+	}
+	t.W.InvalidateRect(px, py, 8, 16)
+}
+
+// Putc writes a character at the cursor (10: a new line; it scrolls).
+func (t *Screen) Putc(c byte) {
+	t.touch(t.X, t.Y)
+	if c == '\n' {
+		t.X = 0
+		t.Y++
+	} else {
+		t.cells[t.Y][t.X] = c
+		t.X++
+		if t.X == cols {
+			t.X = 0
+			t.Y++
+		}
+	}
+	if t.Y == rows {
+		// scroll
+		for y := 1; y < rows; y++ {
+			t.cells[y-1] = t.cells[y]
+		}
+		for x := range cols {
+			t.cells[rows-1][x] = ' '
+		}
+		t.Y = rows - 1
+		t.full = true
+	}
+}
+
+// Puts writes a string.
+func (t *Screen) Puts(s string) {
+	for i := 0; i < len(s); i++ {
+		t.Putc(s[i])
+	}
+}
+
+// Putn writes a number right-aligned in width cells.
+func (t *Screen) Putn(v int32, width int) {
+	s := strs.Itoa32(v)
+	for i := len(s); i < width; i++ {
+		t.Putc(' ')
+	}
+	t.Puts(s)
+	free(s)
+}
+
