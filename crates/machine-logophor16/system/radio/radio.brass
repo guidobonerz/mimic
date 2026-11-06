@@ -1,0 +1,639 @@
+// Package radio: Panorama's web radio. It fetches a station's stream over
+// HTTP (through the hub's gateway), takes its Icecast/Shoutcast metadata
+// (station name, the title now playing) out of the stream and hands the
+// audio bytes to Phonograph (SPEC.md 9.1), which decodes MP3 or AAC.
+//
+// Stations: /RADIO/STATIONS.TXT on the card (a line "Name|http://host[:port]/path"),
+// else the built-in list. Only http:// works: the Logophor has no TLS.
+package radio
+
+import (
+	"boiler"
+	"files"
+	"gfx"
+	"net"
+	"panorama"
+	"strs"
+)
+
+// Phonograph's registers (SPEC.md 9.1) and Babbage's DMACON.
+const (
+	io     = uintptr(0xffff_0000)
+	dmacon = io + 0x0002
+	master = io + 0x3100
+	phcon  = io + 0x3202
+	phseg  = io + 0x3204
+	phofs  = io + 0x3206
+	phsize = io + 0x3208
+	phwr   = io + 0x320a
+	phrd   = io + 0x320c
+	phstat = io + 0x320e
+	phrate = io + 0x3210
+	phchan = io + 0x3212
+	phkbps = io + 0x3214
+	phvol  = io + 0x3216
+	phlevl = io + 0x3218
+	phlevr = io + 0x321a
+
+	ringSize = 16384
+	rowH     = 20
+	listY    = 28
+	maxSt    = 12
+	winW     = 520
+)
+
+func poke16(a uintptr, v uint16) { *(*uint16)(a) = v }
+func peek16(a uintptr) uint16    { return *(*uint16)(a) }
+
+var app panorama.App
+
+// App is the application for Panorama's dock.
+func App() *panorama.App {
+	app = panorama.App{Name: "Radio", Start: run, Icon: icon}
+	return &app
+}
+
+func icon(s *gfx.Surface, x, y int) {
+	ink := byte(gfx.Brass4)
+	if panorama.Scope() {
+		ink = gfx.Grey7
+	}
+	// a horn gramophone
+	s.RoundBox(x+8, y+30, 24, 10, ink)
+	s.Line(x+20, y+30, x+30, y+14, ink)
+	s.Line(x+30, y+14, x+42, y+6, ink)
+	s.Line(x+30, y+14, x+40, y+22, ink)
+	s.Line(x+42, y+6, x+40, y+22, ink)
+}
+
+// A station: its name and where its stream is.
+type station struct {
+	name string
+	host string
+	port uint16
+	path string
+}
+
+type radio struct {
+	w       *panorama.Window
+	st      [maxSt]station
+	n       int
+	playing int // the station on (-1 none)
+	c       *net.Conn
+	ring    *gfx.Surface // the ring buffer in chip RAM (a surface of 16 KiB)
+	wr      int
+	// the HTTP answer: headers until an empty line, then the stream
+	inHead  bool
+	code    int
+	line    []byte
+	format  int // 0 MP3, 1 AAC
+	metaint int // audio bytes between metadata blocks (0: none)
+	left    int // audio bytes until the next block
+	metaN   int // metadata bytes still to come
+	meta    []byte
+	hops    int // redirects followed
+	gen     int // counts the connections (a redirect opens a new one)
+	name    string
+	title   string
+	status  string
+	vol     int
+	last    uint32 // when the meters were drawn
+}
+
+func run() {
+	boiler.SetName("Radio")
+	w := panorama.NewWindow(&app, "Radio", winW, listY+maxSt*rowH+110)
+	if w == nil {
+		return
+	}
+	ring := gfx.NewSurface(ringSize, 1)
+	if ring == nil {
+		w.Done()
+		return
+	}
+	r := &radio{w: w, ring: ring, playing: -1, vol: 100, status: "click a station"}
+	r.load()
+	r.paint()
+	var e panorama.Event
+	buf := make([]byte, 2048)
+	busy := false
+	for {
+		wait := 1
+		if busy {
+			wait = 0 // data flows: no pause
+		}
+		if w.Next(wait, &e) {
+			switch e.Kind {
+			case panorama.Close:
+				r.stop()
+				ring.Free()
+				free(buf)
+				free(r.line)
+				free(r.meta)
+				w.Done()
+				free(r)
+				return
+			case panorama.Theme:
+				r.paint()
+			case panorama.Click:
+				r.click(e.X, e.Y)
+			case panorama.Key:
+				r.key(e.Key)
+			}
+		}
+		busy = r.c != nil && r.pump(buf)
+		if t := boiler.Ticks(); r.playing >= 0 && t-r.last >= 10 {
+			r.last = t
+			r.meters()
+		}
+	}
+}
+
+// ---- the stations ----
+
+// The built-in stations (owner's choice 2026-11-06; checked that day:
+// each answers over http with a redirect to its stream host).
+var builtin = [9]string{
+	"Deutschlandfunk|http://st01.dlf.de/dlf/01/128/mp3/stream.mp3",
+	"Deutschlandfunk Kultur|http://st02.dlf.de/dlf/02/128/mp3/stream.mp3",
+	"Deutschlandfunk Nova|http://st03.dlf.de/dlf/03/128/mp3/stream.mp3",
+	"WDR 2|http://wdr-wdr2-rheinland.icecast.wdr.de/wdr/wdr2/rheinland/mp3/128/stream.mp3",
+	"1LIVE|http://wdr-1live-live.icecast.wdr.de/wdr/1live/live/mp3/128/stream.mp3",
+	"WDR 3|http://wdr-wdr3-live.icecast.wdr.de/wdr/wdr3/live/mp3/128/stream.mp3",
+	"WDR 5|http://wdr-wdr5-live.icecast.wdr.de/wdr/wdr5/live/mp3/128/stream.mp3",
+	"Radio Bob|http://streams.radiobob.de/bob-live/mp3-128/mediaplayer",
+	"Radio Bob Alternative|http://streams.radiobob.de/bob-alternative/mp3-128/mediaplayer",
+}
+
+func (r *radio) load() {
+	f := files.Open("/RADIO/STATIONS.TXT")
+	if f != nil {
+		buf := make([]byte, 4096)
+		n := f.Read(buf)
+		f.Close()
+		start := 0
+		for i := 0; i <= n; i++ {
+			if i == n || buf[i] == '\n' || buf[i] == '\r' {
+				if i > start {
+					r.add(string(buf[start:i]))
+				}
+				start = i + 1
+			}
+		}
+		free(buf)
+	}
+	if r.n == 0 {
+		for _, s := range builtin {
+			r.add(s)
+		}
+	}
+}
+
+// add takes a line "Name|http://host[:port]/path".
+func (r *radio) add(line string) {
+	bar := -1
+	for i := 0; i < len(line); i++ {
+		if line[i] == '|' {
+			bar = i
+			break
+		}
+	}
+	if bar <= 0 || r.n == maxSt {
+		return
+	}
+	var s station
+	if !parseURL(line[bar+1:], &s) {
+		return
+	}
+	s.name = string([]byte(line[:bar]))
+	r.st[r.n] = s
+	r.n++
+}
+
+// parseURL reads http://host[:port]/path into s (new strings).
+func parseURL(u string, s *station) bool {
+	const pre = "http://"
+	if len(u) <= len(pre) || !same(u[:len(pre)], pre) {
+		return false
+	}
+	u = u[len(pre):]
+	end := len(u)
+	for i := 0; i < len(u); i++ {
+		if u[i] == '/' {
+			end = i
+			break
+		}
+	}
+	hostport := u[:end]
+	s.port = 80
+	for i := 0; i < len(hostport); i++ {
+		if hostport[i] == ':' {
+			p := 0
+			for k := i + 1; k < len(hostport); k++ {
+				c := hostport[k]
+				if c >= '0' && c <= '9' && p < 6553 {
+					p = p*10 + int(c-'0')
+				}
+			}
+			s.port = uint16(p)
+			hostport = hostport[:i]
+			break
+		}
+	}
+	s.host = string([]byte(hostport))
+	if end == len(u) {
+		s.path = string([]byte("/"))
+	} else {
+		s.path = string([]byte(u[end:]))
+	}
+	return len(s.host) > 0
+}
+
+func same(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if lower(a[i]) != lower(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func lower(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + 32
+	}
+	return c
+}
+
+// ---- playing ----
+
+func (r *radio) click(x, y int) {
+	i := (y - listY) / rowH
+	if y < listY || i >= r.n {
+		return
+	}
+	if i == r.playing {
+		r.stop()
+		r.status = "stopped"
+		r.paint()
+		return
+	}
+	r.stop()
+	r.playing = i
+	r.hops = 0
+	r.connect(&r.st[i])
+}
+
+func (r *radio) key(k byte) {
+	switch k {
+	case '+', '=':
+		r.vol = min(r.vol+10, 127)
+	case '-':
+		r.vol = max(r.vol-10, 0)
+	case 's', 'S':
+		r.stop()
+		r.status = "stopped"
+	default:
+		return
+	}
+	poke16(phvol, uint16(r.vol))
+	r.paint()
+}
+
+func (r *radio) connect(s *station) {
+	r.status = "calling the station ..."
+	r.paint()
+	free(r.name)
+	free(r.title)
+	r.name, r.title = "", ""
+	c := net.Dial(s.host, s.port)
+	if c == nil {
+		r.status = "no connection"
+		r.playing = -1
+		r.paint()
+		return
+	}
+	var b strs.Builder
+	b.WriteString("GET ")
+	b.WriteString(s.path)
+	b.WriteString(" HTTP/1.0\r\nHost: ")
+	b.WriteString(s.host)
+	b.WriteString("\r\nIcy-MetaData: 1\r\nUser-Agent: Logophor16-Radio/1.0\r\n\r\n")
+	req := b.String()
+	b.Free()
+	c.Write([]byte(req))
+	free(req)
+	r.c = c
+	r.gen++
+	r.inHead, r.code, r.metaint, r.metaN = true, 0, 0, 0
+	r.line = r.line[:0]
+	r.format = 0
+	r.status = "waiting for the station ..."
+	r.paint()
+}
+
+func (r *radio) stop() {
+	poke16(phcon, 0)
+	if r.c != nil {
+		r.c.Close()
+		r.c = nil
+	}
+	r.playing = -1
+}
+
+// pump moves what came from the station into Phonograph's ring; true
+// when something came.
+func (r *radio) pump(buf []byte) bool {
+	if r.c == nil {
+		return false
+	}
+	room := (int(peek16(phrd)) - r.wr - 1) & (ringSize - 1)
+	if !r.inHead && room < 64 {
+		return false
+	}
+	gen := r.gen
+	n, open := r.c.TryRead(buf[:min(len(buf), max(room, 64))])
+	ring := (*[ringSize]byte)(r.ring.Base)
+	// (a redirect in the headers opens another connection, which may get
+	// the old one's memory: the rest of this answer is dropped then)
+	for i := 0; i < n && r.gen == gen && r.c != nil; {
+		if r.inHead || r.metaN > 0 || r.metaint > 0 && r.left == 0 {
+			r.byteIn(buf[i])
+			i++
+			continue
+		}
+		// a run of audio bytes: up to the next metadata block or the
+		// ring's end, copied at once
+		run := min(n-i, ringSize-r.wr)
+		if r.metaint > 0 {
+			run = min(run, r.left)
+			r.left -= run
+		}
+		copy(ring[r.wr:r.wr+run], buf[i:i+run])
+		r.wr = (r.wr + run) & (ringSize - 1)
+		i += run
+	}
+	if r.gen != gen || r.c == nil {
+		return true
+	}
+	if r.wr != int(peek16(phwr)) {
+		poke16(phwr, uint16(r.wr))
+	}
+	if !open {
+		r.stop()
+		r.status = "the station ended the stream"
+		r.paint()
+	}
+	return n > 0
+}
+
+func (r *radio) byteIn(b byte) {
+	if r.inHead {
+		r.header(b)
+		return
+	}
+	if r.metaN > 0 {
+		r.meta = append(r.meta, b)
+		r.metaN--
+		if r.metaN == 0 {
+			r.metadata()
+		}
+		return
+	}
+	if r.metaint > 0 {
+		if r.left == 0 {
+			// a metadata block: its length / 16 first
+			r.metaN = int(b) * 16
+			r.left = r.metaint
+			r.meta = r.meta[:0]
+			return
+		}
+		r.left--
+	}
+	poke8(r.ring.Base+uintptr(r.wr), b)
+	r.wr = (r.wr + 1) & (ringSize - 1)
+}
+
+func poke8(a uintptr, v byte) { *(*byte)(a) = v }
+
+// header takes the HTTP answer's header bytes, a line at a time.
+func (r *radio) header(b byte) {
+	if b == '\r' {
+		return
+	}
+	if b != '\n' {
+		if len(r.line) < 400 {
+			r.line = append(r.line, b)
+		}
+		return
+	}
+	l := string(r.line)
+	r.line = r.line[:0]
+	if r.code == 0 {
+		// "HTTP/1.0 200 OK" or "ICY 200 OK"
+		sp := 0
+		for sp < len(l) && l[sp] != ' ' {
+			sp++
+		}
+		for k := sp + 1; k < len(l) && l[k] >= '0' && l[k] <= '9'; k++ {
+			r.code = r.code*10 + int(l[k]-'0')
+		}
+		if r.code == 0 {
+			r.code = -1
+		}
+		free(l)
+		return
+	}
+	if len(l) == 0 {
+		free(l)
+		r.body()
+		return
+	}
+	colon := 0
+	for colon < len(l) && l[colon] != ':' {
+		colon++
+	}
+	if colon < len(l) {
+		key := l[:colon]
+		v := l[colon+1:]
+		for len(v) > 0 && v[0] == ' ' {
+			v = v[1:]
+		}
+		switch {
+		case same(key, "icy-metaint"):
+			n := 0
+			for k := 0; k < len(v); k++ {
+				c := v[k]
+				if c >= '0' && c <= '9' && n < 3276 {
+					n = n*10 + int(c-'0')
+				}
+			}
+			r.metaint = n
+		case same(key, "icy-name"):
+			free(r.name)
+			r.name = string([]byte(v))
+		case same(key, "content-type"):
+			if len(v) >= 9 && same(v[:9], "audio/aac") {
+				r.format = 1
+			}
+		case same(key, "location"):
+			if r.code >= 300 && r.code < 400 {
+				var s station
+				if parseURL(v, &s) && r.hops < 3 {
+					r.hops++
+					r.c.Close()
+					r.c = nil
+					free(l)
+					r.connect(&s)
+					free(s.host)
+					free(s.path)
+					return
+				}
+				r.stop()
+				r.status = "moved to https: the Logophor has no TLS"
+				free(l)
+				r.paint()
+				return
+			}
+		}
+	}
+	free(l)
+}
+
+// body: the headers are done; the stream starts.
+func (r *radio) body() {
+	if r.code != 200 {
+		r.stop()
+		var b strs.Builder
+		b.WriteString("the station answered ")
+		b.WriteInt(int32(r.code))
+		r.status = b.String()
+		b.Free()
+		r.paint()
+		return
+	}
+	r.inHead = false
+	r.left = r.metaint
+	// Phonograph on: the ring from where it stands
+	poke16(dmacon, 0x8000|0x80)
+	if peek16(master) == 0 {
+		poke16(master, 100)
+	}
+	poke16(phseg, uint16(r.ring.Base>>16))
+	poke16(phofs, uint16(r.ring.Base))
+	poke16(phsize, ringSize)
+	poke16(phvol, uint16(r.vol))
+	r.wr = int(peek16(phrd))
+	poke16(phwr, uint16(r.wr))
+	poke16(phcon, uint16(1|r.format<<1))
+	r.status = "playing"
+	r.paint()
+}
+
+// metadata reads StreamTitle='...'; out of a block.
+func (r *radio) metadata() {
+	const key = "StreamTitle='"
+	m := r.meta
+	for i := 0; i+len(key) <= len(m); i++ {
+		hit := true
+		for k := range len(key) {
+			if m[i+k] != key[k] {
+				hit = false
+				break
+			}
+		}
+		if hit {
+			j := i + len(key)
+			k := j
+			for k < len(m) && !(m[k] == '\'' && (k+1 == len(m) || m[k+1] == ';')) {
+				k++
+			}
+			free(r.title)
+			r.title = string(m[j:k])
+			r.paint()
+			return
+		}
+	}
+}
+
+// ---- drawing ----
+
+func (r *radio) paint() {
+	w := r.w
+	s := w.Surf
+	w.BeginPaint()
+	w.Clear()
+	s.Text(8, 4, r.status, panorama.Accent())
+	for i := range r.n {
+		y := listY + i*rowH
+		if i == r.playing {
+			if panorama.Scope() {
+				s.Box(4, y, winW-8, rowH, panorama.Accent())
+			} else {
+				s.RoundFill(4, y, winW-8, rowH, gfx.Grey3)
+			}
+		}
+		s.Text(12, y+2, r.st[i].name, panorama.Ink())
+	}
+	y := listY + maxSt*rowH + 8
+	if r.playing >= 0 {
+		name := r.name
+		if len(name) == 0 {
+			name = r.st[r.playing].name
+		}
+		s.Text(8, y, name, panorama.Accent())
+		s.Text(8, y+18, r.title, panorama.Ink())
+		r.info(y + 36)
+	}
+	s.Text(8, y+82, "click a station (again: stop), + - volume, S stop", gfx.Grey5)
+	w.Invalidate()
+	w.EndPaint()
+}
+
+// info: the stream's rate, channels and bit rate.
+func (r *radio) info(y int) {
+	if r.inHead {
+		return
+	}
+	var b strs.Builder
+	rate := int32(peek16(phrate))
+	b.WriteInt(rate / 100)
+	b.WriteByte('.')
+	b.WriteInt(rate / 10 % 10)
+	b.WriteString(" kHz ")
+	if peek16(phchan) == 1 {
+		b.WriteString("mono ")
+	} else {
+		b.WriteString("stereo ")
+	}
+	b.WriteInt(int32(peek16(phkbps)))
+	b.WriteString(" kbit/s ")
+	if r.format == 1 {
+		b.WriteString("AAC")
+	} else {
+		b.WriteString("MP3")
+	}
+	t := b.String()
+	b.Free()
+	r.w.Surf.Fill(8, y, winW-16, 16, panorama.Paper())
+	r.w.Surf.Text(8, y, t, gfx.Grey6)
+	free(t)
+}
+
+// meters: the left and right level as bars.
+func (r *radio) meters() {
+	s := r.w.Surf
+	y := listY + maxSt*rowH + 8 + 58
+	full := winW - 16
+	for k := range 2 {
+		lev := int32(peek16(phlevl + uintptr(2*k)))
+		n := int(lev * int32(full) / 32768)
+		s.Fill(8, y+k*10, full, 6, gfx.Grey2)
+		s.Fill(8, y+k*10, n, 6, panorama.Accent())
+	}
+	r.info(listY + maxSt*rowH + 8 + 36)
+	r.w.InvalidateRect(8, y-22, full, 40)
+}

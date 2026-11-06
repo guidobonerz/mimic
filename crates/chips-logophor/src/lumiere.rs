@@ -9,7 +9,7 @@
 //! FGINDEX has no effect, and a sprite "behind" shows where the
 //! background is black.
 //!
-//! Sprites: at the start of the horizontal blank (chip-bus slot 640) the
+//! Sprites: at the start of the horizontal blank (the fixed DMA's start) the
 //! machine calls [`Lumiere::select_sprites`] for the next line: up to 32
 //! active sprites covering it, lowest numbers first, have their row
 //! fetched into a line buffer (one slot per 32-bit word of the row, part
@@ -24,7 +24,7 @@
 //!
 //! The picture is put out up to the beam ([`Lumiere::draw_to`]) before
 //! anything changes a register, so a write in the middle of a line shows
-//! from that pixel on (the Copper's colour splits). The framebuffer pointer
+//! from that pixel on (the Jacquard's colour splits). The framebuffer pointer
 //! is taken over at the VBlank, or with a write to FBNOW from the next
 //! line (split screens); from there the rows count anew (`row_addr`,
 //! `row_line`). Without framebuffer DMA (DMACON bit 0) the screen shows
@@ -84,6 +84,12 @@ const BLINK_FIELDS: u64 = 32;
 /// Chip RAM as the video chip sees it (linear addresses).
 pub trait ChipRam {
     fn chip_byte(&self, addr: u32) -> u8;
+
+    /// The `len` bytes from `addr` on, when they lie in chip RAM in one
+    /// piece (a fast path for whole rows; `None`: byte by byte).
+    fn chip_bytes(&self, _addr: u32, _len: usize) -> Option<&[u8]> {
+        None
+    }
 }
 
 /// The beam: line `y` (0–627), pixel `x` (0–1059).
@@ -121,6 +127,8 @@ pub struct Lumiere {
     /// VSTAT bit 2: pointer taken over (cleared on read).
     taken_over: bool,
     palette: [u16; 256],
+    /// The palette as RGB (follows `palette`; not machine state).
+    rgb: [Rgb8; 256],
     fields: u64,
     /// Framebuffer DMA on (Babbage's DMACON bit 0).
     dma: bool,
@@ -162,6 +170,7 @@ impl Default for Lumiere {
             curshape: 0,
             taken_over: false,
             palette: [0; 256],
+            rgb: [rgb565(0); 256],
             fields: 0,
             dma: false,
             now_pending: false,
@@ -228,6 +237,12 @@ impl Lumiere {
 
     pub fn mode(&self) -> u16 {
         self.vmode & 7
+    }
+
+    /// VMODE bit 13: the monitor shows the picture on its green phosphor
+    /// tube (SPEC.md 8.2): the frame is reported as monochrome.
+    pub fn green_tube(&self) -> bool {
+        self.vmode & 0x2000 != 0
     }
 
     pub fn display_on(&self) -> bool {
@@ -454,7 +469,7 @@ impl Lumiere {
     pub fn write(&mut self, off: u16, v: u16) {
         let off = off & !1;
         match off {
-            VMODE => self.vmode = v & 0x8007,
+            VMODE => self.vmode = v & 0xa007,
             FBSEG => self.fb.0 = v,
             FBOFS => self.fb.1 = v,
             PITCH => self.pitch = v,
@@ -467,7 +482,11 @@ impl Lumiere {
             CURSOR => self.cursor = v,
             CURSHAPE => self.curshape = v & 0xff,
             FBNOW => self.now_pending = true,
-            PALETTE..=0x11fe => self.palette[usize::from((off - PALETTE) / 2)] = v,
+            PALETTE..=0x11fe => {
+                let i = usize::from((off - PALETTE) / 2);
+                self.palette[i] = v;
+                self.rgb[i] = rgb565(v);
+            }
             SPRSEG => self.spr_base.0 = v,
             SPROFS => self.spr_base.1 = v,
             SPRITES..=0x27fe => self.sprites[usize::from((off - SPRITES) / 2)] = v,
@@ -513,7 +532,15 @@ impl Lumiere {
     }
 
     fn colour(&self, index: u8) -> Rgb8 {
-        rgb565(self.palette[usize::from(index)])
+        self.rgb[usize::from(index)]
+    }
+
+    /// No sprite pixel in mode pixels `from..to` of the line being put
+    /// out (then a background pixel is just its colour).
+    fn no_sprites(&self, from: usize, to: usize) -> bool {
+        self.line_cur
+            .get(from..to)
+            .is_some_and(|s| s.iter().all(|&v| v == 0))
     }
 
     /// A mode-1 pixel of RGB 5:6:5 `bg` with the sprites over it.
@@ -592,6 +619,9 @@ impl Lumiere {
             return;
         };
         let line = self.row_line.min(per_row - 1);
+        if self.span_fast(from, out, mem) {
+            return;
+        }
         match self.mode() {
             0 => {
                 for (i, p) in out.iter_mut().enumerate() {
@@ -643,7 +673,9 @@ impl Lumiere {
                 let (first, last) = (self.curshape & 15, self.curshape >> 4 & 15);
                 let cursor_row = u32::from((y - top) / per_row) * 100;
                 let bank = self.txtbank as u8;
-                // One character cell at a time.
+                // One character cell at a time; without sprite pixels in
+                // the span a pixel is just its colour.
+                let plain = self.no_sprites(usize::from(from), usize::from(from) + out.len());
                 let mut cell = u32::MAX;
                 let (mut bits, mut fg, mut bg) = (0u8, 0u8, 0u8);
                 for (i, p) in out.iter_mut().enumerate() {
@@ -672,10 +704,100 @@ impl Lumiere {
                     } else {
                         bg
                     };
-                    *p = self.over(index, usize::from(x));
+                    *p = if plain {
+                        self.rgb[usize::from(index)]
+                    } else {
+                        self.over(index, usize::from(x))
+                    };
                 }
             }
             _ => out.fill(border),
+        }
+    }
+
+    /// [`Lumiere::span`] for the bitmap modes when the pixels' bytes lie in
+    /// chip RAM in one piece: the same pixels, with the bytes taken from
+    /// one slice instead of one by one through `mem`, and without looking
+    /// at the sprites where the line has none; `false` when it does not
+    /// apply.
+    fn span_fast(&mut self, from: u16, out: &mut [Rgb8], mem: &dyn ChipRam) -> bool {
+        let (from, n) = (usize::from(from), out.len());
+        let to = from + n;
+        match self.mode() {
+            mode @ (0 | 1) => {
+                // pixels 80..720 show mode pixels (x - 80) / 2, the rest
+                // is border
+                let (x0, x1) = (from.clamp(80, 720), to.clamp(80, 720));
+                if x0 >= x1 {
+                    return false;
+                }
+                let (m0, m1) = ((x0 - 80) / 2, (x1 - 81) / 2 + 1);
+                let wide = usize::from(mode) + 1;
+                let Some(row) = mem.chip_bytes(
+                    self.row_addr.wrapping_add((wide * m0) as u32),
+                    wide * (m1 - m0),
+                ) else {
+                    return false;
+                };
+                let border = if mode == 1 {
+                    rgb565(self.border)
+                } else {
+                    self.colour(self.border as u8)
+                };
+                let plain = self.no_sprites(m0, m1);
+                for (i, p) in out.iter_mut().enumerate() {
+                    let x = from + i;
+                    *p = if (x0..x1).contains(&x) {
+                        let mx = (x - 80) / 2;
+                        let k = mx - m0;
+                        match (mode, plain) {
+                            (0, true) => self.rgb[usize::from(row[k])],
+                            (0, false) => self.over(row[k], mx),
+                            (_, true) => rgb565(u16::from_le_bytes([row[2 * k], row[2 * k + 1]])),
+                            _ => self.over16(u16::from_le_bytes([row[2 * k], row[2 * k + 1]]), mx),
+                        }
+                    } else {
+                        border
+                    };
+                }
+                true
+            }
+            2 => {
+                // 4 bits a pixel, the high nibble the left one
+                let (b0, b1) = (from / 2, (to - 1) / 2 + 1);
+                let Some(row) = mem.chip_bytes(self.row_addr.wrapping_add(b0 as u32), b1 - b0)
+                else {
+                    return false;
+                };
+                let plain = self.no_sprites(from, to);
+                for (i, p) in out.iter_mut().enumerate() {
+                    let x = from + i;
+                    let b = row[x / 2 - b0];
+                    let index = if x % 2 == 0 { b >> 4 } else { b & 15 };
+                    *p = if plain {
+                        self.rgb[usize::from(index)]
+                    } else {
+                        self.over(index, x)
+                    };
+                }
+                true
+            }
+            3 | 5 => {
+                let Some(row) = mem.chip_bytes(self.row_addr.wrapping_add(from as u32), n) else {
+                    return false;
+                };
+                if self.no_sprites(from, to) {
+                    for (p, &b) in out.iter_mut().zip(row) {
+                        *p = self.rgb[usize::from(b)];
+                    }
+                } else {
+                    for (i, (p, &b)) in out.iter_mut().zip(row).enumerate() {
+                        *p = self.over(b, from + i);
+                    }
+                }
+                true
+            }
+            _ => false,
         }
     }
 
@@ -730,7 +852,7 @@ impl Lumiere {
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
         let (_, mut c) = r.chunk(*b"LUMI", 4)?;
         let mut n = Self {
-            vmode: c.u16()? & 0x8007,
+            vmode: c.u16()? & 0xa007,
             xga: false,
             fb: (c.u16()?, c.u16()?),
             fb_active: (c.u16()?, c.u16()?),
@@ -744,6 +866,7 @@ impl Lumiere {
             curshape: c.u16()? & 0xff,
             taken_over: c.bool()?,
             palette: [0; 256],
+            rgb: [rgb565(0); 256],
             fields: 0,
             dma: false,
             now_pending: false,
@@ -763,6 +886,7 @@ impl Lumiere {
         for p in &mut n.palette {
             *p = c.u16()?;
         }
+        n.rgb = n.palette.map(rgb565);
         n.fields = c.u64()?;
         n.dma = c.bool()?;
         n.now_pending = c.bool()?;
@@ -820,7 +944,7 @@ mod tests {
     fn registers_vstat_and_the_pointer_latch() {
         let mut l = Lumiere::new();
         l.write(VMODE, 0xffff);
-        assert_eq!(l.peek(VMODE, Beam::default()), 0x8007, "unused bits");
+        assert_eq!(l.peek(VMODE, Beam::default()), 0xa007, "unused bits");
         l.write(FBSEG, 2);
         l.write(PALETTE + 2 * 255, 0x1234);
         assert_eq!(l.peek(PALETTE + 510, Beam::default()), 0x1234);
@@ -1148,5 +1272,84 @@ mod hires_tests {
             (rgb565(0), rgb565(15))
         );
         assert_eq!(l.fetch_slots(10), 100);
+    }
+}
+
+#[cfg(test)]
+mod fast_span_tests {
+    use super::*;
+
+    /// Chip RAM byte by byte only, and with whole rows (the fast path).
+    struct Bytes(Vec<u8>);
+    impl ChipRam for Bytes {
+        fn chip_byte(&self, a: u32) -> u8 {
+            self.0.get(a as usize).copied().unwrap_or(0)
+        }
+    }
+    struct Rows(Vec<u8>);
+    impl ChipRam for Rows {
+        fn chip_byte(&self, a: u32) -> u8 {
+            self.0.get(a as usize).copied().unwrap_or(0)
+        }
+        fn chip_bytes(&self, a: u32, len: usize) -> Option<&[u8]> {
+            self.0.get(a as usize..a as usize + len)
+        }
+    }
+
+    /// Every bitmap mode, with and without sprites, with writes in the
+    /// middle of lines and pointers running off the end of chip RAM: the
+    /// fast path puts out the same pixels and collisions.
+    #[test]
+    fn whole_rows_give_the_same_picture() {
+        let mut seed = 0x1234_5678u32;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let ram: Vec<u8> = (0..0x10_0000).map(|_| rnd() as u8).collect();
+        for mode in [0u16, 1, 2, 3, 4, 5] {
+            for sprites in [false, true] {
+                let run = |mem: &dyn ChipRam| {
+                    let mut l = Lumiere::new();
+                    l.set_dma(true);
+                    l.set_sprite_dma(sprites);
+                    l.write(VMODE, 0x8000 | mode);
+                    l.write(BORDER, 0x1f3);
+                    l.write(PITCH, 1000);
+                    l.write(FBSEG, 0x0e);
+                    l.write(FBOFS, 0x2000);
+                    l.write(FONTSEG, 1);
+                    l.write(SPRSEG, 3);
+                    for i in 0..256u16 {
+                        l.write(PALETTE + 2 * i, i.wrapping_mul(0x9e37));
+                    }
+                    for n in 0..8u16 {
+                        l.write(SPRITES + 8 * n, 0x8000 | (n * 80 + 70) | (n % 3) << 11);
+                        l.write(SPRITES + 8 * n + 2, (n * 37 + 60) | 3 << 10 | (n & 1) << 12);
+                        l.write(SPRITES + 8 * n + 4, n * 5);
+                        l.write(SPRITES + 8 * n + 6, (n & 1) | n << 8);
+                    }
+                    // two fields: the second has mode 5's timing
+                    for _ in 0..2 {
+                        l.vblank();
+                        for y in 0..l.lines() {
+                            l.select_sprites(y + 1, mem);
+                            if y % 7 == 3 {
+                                l.draw_to(y, y * 3 % 900, mem);
+                                l.write(PALETTE + 2 * (y & 255), y);
+                                l.draw_to(y, y * 5 % 1100, mem);
+                                l.write(BORDER, y);
+                            }
+                            l.end_line(y, mem);
+                        }
+                    }
+                    (l.pixels().to_vec(), l.col, l.colfg)
+                };
+                let (a, b) = (run(&Bytes(ram.clone())), run(&Rows(ram.clone())));
+                assert!(a == b, "mode {mode}, sprites {sprites}");
+            }
+        }
     }
 }

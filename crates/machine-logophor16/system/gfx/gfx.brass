@@ -1,17 +1,21 @@
 // Package gfx: drawing for Panorama (step 11c) on mode 5, 1024 x 768
 // with 8 bits a pixel. Surfaces live in chip RAM; filling, copying, text
-// and shading go through Babbage's Blitter.
+// and shading go through Babbage's Lithograph.
 //
 // Chip RAM under Panorama: 0002:0000-001D:FFFF surfaces (a first-fit
 // heap), 0020:0000 and 002C:0000 the two screens (768 KiB each),
 // 0038:0000 the glyphs (256 x 8 x 16, built from Foundry's font at
 // 0001:0000), 0038:8000 a row of 8 pixels of every colour, 0038:8800 the
 // darkening table, 0038:8900 the lightening table, 0038:8A00 the
-// pointer's sprite image.
+// pointer's sprite image, 0038:8B00 the shadow tables (soft: the desk's
+// grey a fine step darker, other colours kept; edge: other colours a
+// step darker, the desk's greys kept).
 //
 // Palette: 0-9 greys (black to white), 10-15 brass (dark to light),
-// 16-231 a 6 x 6 x 6 colour cube, 232-255 more greys. The oscilloscope
-// theme replaces every colour by a green of its brightness.
+// 16-231 a 6 x 6 x 6 colour cube, 232-250 more greys (the skin's tones
+// under Panorama), 251-252 British racing green (title bars), 253-255
+// the desk's shadow greys between Grey3 and Grey2. The oscilloscope theme replaces every colour by a green of its
+// brightness.
 package gfx
 
 import "boiler"
@@ -26,7 +30,7 @@ type Surface struct {
 	clipOn             bool
 }
 
-// A Blitter job: its registers in order (SPEC.md 6.3).
+// A Lithograph job: its registers in order (SPEC.md 6.3).
 type job struct {
 	con0, con1             uint16
 	aSeg, aOfs, bSeg, bOfs uint16
@@ -54,6 +58,8 @@ const (
 	colours = uintptr(0x0038_8000)
 	darken  = uintptr(0x0038_8800)
 	lighten = uintptr(0x0038_8900)
+	soft    = uintptr(0x0038_8B00)
+	edge    = uintptr(0x0038_8C00)
 	pointer = uintptr(0x0038_8a00)
 	font    = uintptr(0x0001_0000)
 
@@ -92,6 +98,11 @@ const (
 	Brass5  = 15
 	Cube    = 16
 	MoreGry = 232
+	// British racing green and a darker one (title bars)
+	RacingGreen     = 251
+	RacingGreenDark = 252
+	// the desk's shadow greys (253-255)
+	DeskRamp = 253
 )
 
 var (
@@ -124,7 +135,7 @@ func ofs(a uintptr) uint16 { return uint16(a) }
 // Init sets mode 3 up: palette, tables, glyphs, screens, the pointer.
 func Init() {
 	consoleOff()
-	poke16(dmacon, 0x8000|0x4000|0x01|0x02|0x20) // master, framebuffer, sprites, Blitter
+	poke16(dmacon, 0x8000|0x4000|0x01|0x02|0x20) // master, framebuffer, sprites, Lithograph
 	buildPalette()
 	buildGlyphs()
 	heap = []block{{at: heapStart, size: uint32(heapEnd - heapStart), free: true}}
@@ -137,7 +148,7 @@ func Init() {
 	poke16(fbofs, 0)
 	poke16(pitch, ScreenW)
 	poke16(border, 0)
-	poke16(vmode, 0x8005)
+	SetTheme(green) // the palette and the monitor's tube (mode 5 on)
 	buildPointer()
 }
 
@@ -163,15 +174,42 @@ func buildPalette() {
 			}
 		}
 	}
-	for i := range 24 {
-		v := 8 + i*10
+	for i := range RacingGreen - MoreGry {
+		v := 8 + i*12
 		rgb[MoreGry+i] = rgb565(v, v, v)
+	}
+	rgb[RacingGreen] = rgb565(0, 66, 37)
+	rgb[RacingGreenDark] = rgb565(0, 44, 26)
+	// the desk's grey (85) down to Grey2 (56) in fine steps
+	for i := range 3 {
+		v := 78 - 7*i
+		rgb[DeskRamp+i] = rgb565(v, v, v)
 	}
 	// darker and lighter by about a fifth
 	for i := range 256 {
 		poke8(darken+uintptr(i), byte(shift(i, -1)))
 		poke8(lighten+uintptr(i), byte(shift(i, 1)))
+		poke8(soft+uintptr(i), byte(i))
+		poke8(edge+uintptr(i), byte(shift(i, -1)))
 	}
+	poke8(darken+uintptr(RacingGreen), RacingGreenDark)
+	poke8(darken+uintptr(RacingGreenDark), Black)
+	poke8(edge+uintptr(RacingGreen), RacingGreenDark)
+	poke8(edge+uintptr(RacingGreenDark), Black)
+	poke8(lighten+uintptr(RacingGreen), Cube+0*36+2*6+1)
+	poke8(lighten+uintptr(RacingGreenDark), RacingGreen)
+	for i := range 3 {
+		poke8(darken+uintptr(DeskRamp+i), Grey2)
+		poke8(lighten+uintptr(DeskRamp+i), Grey3)
+		poke8(edge+uintptr(DeskRamp+i), byte(DeskRamp+i))
+	}
+	// soft: Grey3, 253, 254, 255, Grey2
+	poke8(soft+uintptr(Grey3), DeskRamp)
+	poke8(soft+uintptr(DeskRamp), DeskRamp+1)
+	poke8(soft+uintptr(DeskRamp+1), DeskRamp+2)
+	poke8(soft+uintptr(DeskRamp+2), Grey2)
+	poke8(edge+uintptr(Grey3), Grey3)
+	poke8(edge+uintptr(Grey2), Grey2)
 	SetTheme(false)
 	// a row of 8 pixels in every colour
 	for c := range 256 {
@@ -220,6 +258,27 @@ func SetTheme(oscilloscope bool) {
 		}
 		poke16(palette+uintptr(2*i), c)
 	}
+	// the monitor's tube: green phosphor for the oscilloscope (VMODE bit
+	// 13), the RGB tube otherwise
+	if oscilloscope {
+		poke16(vmode, 0x8005|0x2000)
+	} else {
+		poke16(vmode, 0x8005)
+	}
+}
+
+// SetEntries sets palette entries from `from` on to RGB 5:6:5 words
+// (little-endian bytes) and shows them in the theme; darker and lighter
+// name each entry's shade-table neighbours (palette indices, for shadows
+// and lit buttons).
+func SetEntries(from int, colours, darker, lighter []byte) {
+	n := len(colours) / 2
+	for i := range n {
+		rgb[from+i] = uint16(colours[2*i]) | uint16(colours[2*i+1])<<8
+		poke8(darken+uintptr(from+i), darker[i])
+		poke8(lighten+uintptr(from+i), lighter[i])
+	}
+	SetTheme(green)
 }
 
 // Oscilloscope tells whether the green theme is on.
@@ -430,12 +489,17 @@ func (s *Surface) Fill(x, y, w, h int, c byte) {
 
 // Shade darkens (or lightens) a rectangle through a table.
 func (s *Surface) Shade(x, y, w, h int, lighter bool) {
-	if !s.clip(&x, &y, &w, &h) {
-		return
-	}
 	t := darken
 	if lighter {
 		t = lighten
+	}
+	s.shadeBy(x, y, w, h, t)
+}
+
+// shadeBy maps a rectangle's pixels through the table at t.
+func (s *Surface) shadeBy(x, y, w, h int, t uintptr) {
+	if !s.clip(&x, &y, &w, &h) {
+		return
 	}
 	mu.Lock()
 	d := s.addr(x, y)
@@ -449,24 +513,59 @@ func (s *Surface) Shade(x, y, w, h int, lighter bool) {
 
 // Draw copies the w x h area of src at sx, sy to x, y.
 func (s *Surface) Draw(src *Surface, sx, sy, w, h, x, y int) {
-	// clip against the destination, then the source moves along
-	x0, y0, x1, y1 := s.bounds()
-	if x < x0 {
-		sx += x0 - x
-		w -= x0 - x
-		x = x0
+	s.draw(src, sx, sy, w, h, x, y, 0)
+}
+
+// DrawKey copies like Draw, leaving out the source's pixels of colour 0
+// (the Lithograph's colour key on A).
+func (s *Surface) DrawKey(src *Surface, sx, sy, w, h, x, y int) {
+	s.draw(src, sx, sy, w, h, x, y, keyA)
+}
+
+// DrawFlip copies like Draw, the area mirrored in X and/or Y (the
+// Lithograph's flips: LTHCON1 bits 2 and 3).
+func (s *Surface) DrawFlip(src *Surface, sx, sy, w, h, x, y int, flipX, flipY bool) {
+	flags := uint16(0)
+	if flipX {
+		flags |= 4
 	}
-	if y < y0 {
-		sy += y0 - y
-		h -= y0 - y
-		y = y0
+	if flipY {
+		flags |= 8
+	}
+	s.draw(src, sx, sy, w, h, x, y, flags)
+}
+
+func (s *Surface) draw(src *Surface, sx, sy, w, h, x, y int, flags uint16) {
+	// clip against the destination, then the source moves along: from
+	// the side clipped off, or for a mirrored walk from the other side
+	x0, y0, x1, y1 := s.bounds()
+	cl, cr, ct, cb := 0, 0, 0, 0
+	if x < x0 {
+		cl = x0 - x
 	}
 	if x+w > x1 {
-		w = x1 - x
+		cr = x + w - x1
+	}
+	if y < y0 {
+		ct = y0 - y
 	}
 	if y+h > y1 {
-		h = y1 - y
+		cb = y + h - y1
 	}
+	if flags&4 != 0 {
+		sx += cr
+	} else {
+		sx += cl
+	}
+	if flags&8 != 0 {
+		sy += cb
+	} else {
+		sy += ct
+	}
+	x += cl
+	y += ct
+	w -= cl + cr
+	h -= ct + cb
 	if sx+w > src.W {
 		w = src.W - sx
 	}
@@ -479,7 +578,7 @@ func (s *Surface) Draw(src *Surface, sx, sy, w, h, x, y int) {
 	mu.Lock()
 	a := src.addr(sx, sy)
 	d := s.addr(x, y)
-	j = job{con0: opCopy, con1: size8, w: uint16(w), h: uint16(h)}
+	j = job{con0: opCopy, con1: size8 | flags, w: uint16(w), h: uint16(h)}
 	j.aSeg, j.aOfs, j.aPitch = seg(a), ofs(a), uint16(src.Pitch)
 	j.dSeg, j.dOfs, j.dPitch = seg(d), ofs(d), uint16(s.Pitch)
 	run(&j)
@@ -513,7 +612,7 @@ func (s *Surface) Text(x, y int, str string, ink byte) int {
 	return 8 * len(str)
 }
 
-// Line draws a line (Bresenham, through the Blitter).
+// Line draws a line (Bresenham, through the Lithograph).
 func (s *Surface) Line(x0, y0, x1, y1 int, c byte) {
 	if !s.clipLine(&x0, &y0, &x1, &y1) {
 		return
@@ -630,12 +729,42 @@ func (s *Surface) RoundBox(x, y, w, h int, c byte) {
 	s.Fill(x+w-2, y+h-3, 1, 1, c)
 }
 
-// Shadow darkens a soft shadow below and right of a w x h area at x, y:
-// three steps, the inner ones darker.
+// Shadow draws two thin lines below and right of a w x h area at x, y:
+// the inner one darker than the outer. On the plain grey desk they take
+// its fine greys (the soft table: two steps inside, three for a deep
+// shadow such as the active window's, one outside); over other colours
+// (the wallpaper, windows) the inner line is two steps darker, the outer
+// one (the edge table).
 func (s *Surface) Shadow(x, y, w, h, depth int) {
-	for k := 1; k <= 3; k++ {
-		o := depth * k / 3
-		s.Shade(x+o, y+h, w-o, depth-o+1, false)
-		s.Shade(x+w, y+o, depth-o+1, h-o, false)
+	steps := 2
+	if depth > 6 {
+		steps = 3
+	}
+	for k := 0; k < steps; k++ {
+		s.shadeBy(x+1, y+h, w, 1, soft)
+		s.shadeBy(x+w, y+1, 1, h, soft)
+	}
+	for k := 0; k < 2; k++ {
+		s.shadeBy(x+1, y+h, w, 1, edge)
+		s.shadeBy(x+w, y+1, 1, h, edge)
+	}
+	s.shadeBy(x+2, y+h+1, w, 1, soft)
+	s.shadeBy(x+w+1, y+2, 1, h, soft)
+	s.shadeBy(x+2, y+h+1, w, 1, edge)
+	s.shadeBy(x+w+1, y+2, 1, h, edge)
+}
+
+// Put writes bytes into a surface from address a on (a row or part of
+// one), split where it crosses a 64 KiB segment.
+func Put(a uintptr, data []byte) {
+	n := len(data)
+	room := n
+	// (int is 16 bits: the room left in the segment is counted in uint32)
+	if left := uint32(0x10000) - uint32(a&0xffff); left < uint32(n) {
+		room = int(left)
+	}
+	copy((*[0x7fff]byte)(a)[:room], data[:room])
+	if room < n {
+		copy((*[0x7fff]byte)(a + uintptr(room))[:n-room], data[room:])
 	}
 }

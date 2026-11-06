@@ -343,9 +343,11 @@ func (c *Conn) input(flags byte, seq, ackn, wnd uint32, data []byte) {
 	if len(data) > 0 || flags&finF != 0 {
 		if seq == c.rcvNxt && (c.state == Established || c.state == FinWait1 || c.state == FinWait2) {
 			take := min(len(data), bufLen-c.rxLen)
-			for i := range take {
-				c.rx[(c.rxHead+c.rxLen+i)%bufLen] = data[i]
-			}
+			// into the ring: up to its end, then from its start
+			at := (c.rxHead + c.rxLen) % bufLen
+			first := min(take, bufLen-at)
+			copy(c.rx[at:at+first], data[:first])
+			copy(c.rx[:take-first], data[first:take])
 			c.rxLen += take
 			c.rcvNxt += uint32(take)
 			if flags&finF != 0 && take == len(data) {
@@ -467,9 +469,9 @@ func (l *Listener) Close() {
 func (c *Conn) TryRead(b []byte) (int, bool) {
 	mu.Lock()
 	n := min(len(b), c.rxLen)
-	for i := range n {
-		b[i] = c.rx[(c.rxHead+i)%bufLen]
-	}
+	first := min(n, bufLen-c.rxHead)
+	copy(b[:first], c.rx[c.rxHead:c.rxHead+first])
+	copy(b[first:n], c.rx[:n-first])
 	c.rxHead = (c.rxHead + n) % bufLen
 	c.rxLen -= n
 	open := c.rxLen > 0 || !(c.peerFin || c.reset || c.state == Closed)

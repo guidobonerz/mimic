@@ -95,6 +95,10 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 # Real-hardware media backends (optional features of media-backends).
 libloading = "0.8"
 serialport = { version = "4", default-features = false }
+# Phonograph (Logophor 16): MP3 and AAC decoders, MPL-2.0.
+symphonia-core = "0.5.5"
+symphonia-bundle-mp3 = { version = "0.5.5", default-features = false, features = ["mp3"] }
+symphonia-codec-aac = "0.5.5"
 
 # Thin LTO: measured 2026-10-25 against the default profile and against
 # codegen-units = 1 and fat LTO (six machines, interleaved best-of-4 CPU

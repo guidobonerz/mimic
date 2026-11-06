@@ -1,0 +1,350 @@
+// Package comets: Comet Sweep, a game of green vector lines in a
+// Panorama window. The ship turns (left, right), thrusts (up) and fires
+// (space); comets break into smaller ones when hit; everything wraps
+// round the edges. Three ships; a sweep of the sky brings more comets.
+package comets
+
+import (
+	"boiler"
+	"gfx"
+	"panorama"
+	"strs"
+)
+
+const (
+	scrW = 512
+	scrH = 384
+	sub  = 8 // positions in eighths of a pixel
+	maxC = 24
+	maxS = 6
+	maxL = 256 // lines drawn in a frame
+)
+
+// USB HID usages of the keys played with.
+const (
+	keyRight = 0x4f
+	keyLeft  = 0x50
+	keyUp    = 0x52
+	keySpace = 0x2c
+)
+
+var sine = [32]int{0, 12, 24, 36, 45, 53, 59, 63, 64, 63, 59, 53, 45, 36, 24, 12,
+	0, -12, -24, -36, -45, -53, -59, -63, -64, -63, -59, -53, -45, -36, -24, -12}
+
+func sin(a int) int { return sine[a&31] }
+func cos(a int) int { return sine[(a+8)&31] }
+
+var app panorama.App
+
+// App is the game for Panorama (not in the dock).
+func App() *panorama.App {
+	app = panorama.App{Name: "Comet Sweep", Start: run}
+	return &app
+}
+
+type comet struct {
+	alive  bool
+	x, y   int
+	vx, vy int
+	size   int // 3 big, 2, 1 small
+	shape  [8]int
+}
+
+type shot struct {
+	life   int
+	x, y   int
+	vx, vy int
+}
+
+type game struct {
+	w        *panorama.Window
+	s        *gfx.Surface
+	x, y     int
+	vx, vy   int
+	angle    int
+	thrust   bool
+	safe     int // frames the new ship cannot be hit
+	lives    int
+	score    int32
+	wave     int
+	over     bool
+	fired    bool
+	cs       [maxC]comet
+	ss       [maxS]shot
+	seed     uint32
+	lines    [maxL][4]int
+	nl       int
+	oldText  bool
+	frame    int
+}
+
+func (g *game) random(n int) int {
+	g.seed = g.seed*1103515245 + 12345
+	return int(g.seed>>16&0x7fff) % n
+}
+
+func run() {
+	boiler.SetName("Comet Sweep")
+	w := panorama.NewWindow(&app, "Comet Sweep", scrW, scrH)
+	if w == nil {
+		return
+	}
+	g := &game{w: w, s: w.Surf, seed: 0x4c16}
+	g.start()
+	var e panorama.Event
+	for {
+		for w.Next(0, &e) {
+			switch e.Kind {
+			case panorama.Close:
+				w.Done()
+				free(g)
+				return
+			case panorama.Theme:
+				g.clear()
+			}
+		}
+		g.step()
+		w.BeginPaint()
+		g.draw()
+		w.EndPaint()
+		boiler.Sleep(2)
+	}
+}
+
+func (g *game) start() {
+	g.lives, g.score, g.wave, g.over = 3, 0, 0, false
+	g.ship()
+	g.next()
+	g.clear()
+}
+
+func (g *game) clear() {
+	g.s.Fill(0, 0, scrW, scrH, gfx.Black)
+	g.nl = 0
+	g.w.Invalidate()
+}
+
+// ship: a new one in the middle, at rest.
+func (g *game) ship() {
+	g.x, g.y = scrW/2*sub, scrH/2*sub
+	g.vx, g.vy, g.angle = 0, 0, 24
+	g.safe = 120
+}
+
+// next: the following wave, big comets away from the middle.
+func (g *game) next() {
+	g.wave++
+	for i := range g.ss {
+		g.ss[i].life = 0
+	}
+	for i := 0; i < 3+g.wave && i < 8; i++ {
+		x, y := g.random(scrW), g.random(scrH/4)
+		if g.random(2) == 0 {
+			y = scrH - 1 - y
+		}
+		g.spawn(x*sub, y*sub, 3)
+	}
+}
+
+func (g *game) spawn(x, y, size int) {
+	for i := range maxC {
+		c := &g.cs[i]
+		if c.alive {
+			continue
+		}
+		*c = comet{alive: true, x: x, y: y, size: size}
+		a := g.random(32)
+		speed := (4 - size) * 3 + g.random(4) + g.wave
+		c.vx, c.vy = cos(a)*speed/16, sin(a)*speed/16
+		for k := range 8 {
+			c.shape[k] = 9 + g.random(4)
+		}
+		return
+	}
+}
+
+func radius(size int) int {
+	return [4]int{0, 7, 14, 24}[size]
+}
+
+func wrap(v, max int) int {
+	if v < 0 {
+		return v + max
+	}
+	if v >= max {
+		return v - max
+	}
+	return v
+}
+
+// near: within r pixels of each other (positions in eighths)?
+func near(x0, y0, x1, y1, r int) bool {
+	dx, dy := int32((x0-x1)/sub), int32((y0-y1)/sub)
+	return dx*dx+dy*dy < int32(r)*int32(r)
+}
+
+func (g *game) step() {
+	g.frame++
+	if g.over {
+		if boiler.Held(keySpace) && !g.fired {
+			g.start()
+		}
+		g.fired = boiler.Held(keySpace)
+		return
+	}
+	// the ship
+	if boiler.Held(keyLeft) {
+		g.angle--
+	}
+	if boiler.Held(keyRight) {
+		g.angle++
+	}
+	g.angle &= 31
+	g.thrust = boiler.Held(keyUp)
+	if g.thrust {
+		g.vx += cos(g.angle) / 8
+		g.vy += sin(g.angle) / 8
+	}
+	g.vx -= g.vx / 32
+	g.vy -= g.vy / 32
+	g.vx, g.vy = max(min(g.vx, 48), -48), max(min(g.vy, 48), -48)
+	g.x, g.y = wrap(g.x+g.vx, scrW*sub), wrap(g.y+g.vy, scrH*sub)
+	if g.safe > 0 {
+		g.safe--
+	}
+	// fire on the press
+	space := boiler.Held(keySpace)
+	if space && !g.fired {
+		for i := range maxS {
+			sh := &g.ss[i]
+			if sh.life == 0 {
+				sh.life = 40
+				sh.x, sh.y = g.x+cos(g.angle)*sub/6, g.y+sin(g.angle)*sub/6
+				sh.vx, sh.vy = g.vx+cos(g.angle)/2, g.vy+sin(g.angle)/2
+				break
+			}
+		}
+	}
+	g.fired = space
+	for i := range maxS {
+		sh := &g.ss[i]
+		if sh.life > 0 {
+			sh.life--
+			sh.x, sh.y = wrap(sh.x+sh.vx, scrW*sub), wrap(sh.y+sh.vy, scrH*sub)
+		}
+	}
+	// the comets: move, hits, the ship
+	left := 0
+	for i := range maxC {
+		c := &g.cs[i]
+		if !c.alive {
+			continue
+		}
+		c.x, c.y = wrap(c.x+c.vx, scrW*sub), wrap(c.y+c.vy, scrH*sub)
+		for k := range maxS {
+			sh := &g.ss[k]
+			if sh.life > 0 && near(sh.x, sh.y, c.x, c.y, radius(c.size)) {
+				sh.life = 0
+				g.hit(c)
+				break
+			}
+		}
+		if c.alive && g.safe == 0 && near(g.x, g.y, c.x, c.y, radius(c.size)+5) {
+			g.hit(c)
+			g.lives--
+			if g.lives == 0 {
+				g.over = true
+			} else {
+				g.ship()
+			}
+		}
+		if c.alive {
+			left++
+		}
+	}
+	if left == 0 && !g.over {
+		g.next()
+	}
+}
+
+// hit breaks a comet: two smaller ones, or dust.
+func (g *game) hit(c *comet) {
+	c.alive = false
+	g.score += [4]int32{0, 100, 50, 20}[c.size]
+	if c.size > 1 {
+		g.spawn(c.x, c.y, c.size-1)
+		g.spawn(c.x, c.y, c.size-1)
+	}
+}
+
+// line draws (and remembers, to wipe it next frame).
+func (g *game) line(x0, y0, x1, y1 int, ink byte) {
+	if g.nl < maxL {
+		g.lines[g.nl] = [4]int{x0, y0, x1, y1}
+		g.nl++
+	}
+	g.s.Line(x0, y0, x1, y1, ink)
+}
+
+func (g *game) draw() {
+	// wipe what the last frame drew
+	for i := range g.nl {
+		l := g.lines[i]
+		g.s.Line(l[0], l[1], l[2], l[3], gfx.Black)
+	}
+	g.nl = 0
+	for i := range maxC {
+		c := &g.cs[i]
+		if !c.alive {
+			continue
+		}
+		cx, cy, r := c.x/sub, c.y/sub, radius(c.size)
+		var px, py [8]int
+		for k := range 8 {
+			q := r * c.shape[k] / 12
+			px[k], py[k] = cx+cos(k*4)*q/64, cy+sin(k*4)*q/64
+		}
+		for k := range 8 {
+			n := (k + 1) & 7
+			g.line(px[k], py[k], px[n], py[n], gfx.Grey7)
+		}
+	}
+	for i := range maxS {
+		sh := &g.ss[i]
+		if sh.life > 0 {
+			x, y := sh.x/sub, sh.y/sub
+			g.line(x, y, x+1, y+1, gfx.White)
+		}
+	}
+	if !g.over && (g.safe == 0 || g.frame&4 != 0) {
+		x, y, a := g.x/sub, g.y/sub, g.angle
+		nx, ny := x+cos(a)*10/64, y+sin(a)*10/64
+		lx, ly := x+cos(a+13)*8/64, y+sin(a+13)*8/64
+		rx, ry := x+cos(a+19)*8/64, y+sin(a+19)*8/64
+		g.line(nx, ny, lx, ly, gfx.White)
+		g.line(nx, ny, rx, ry, gfx.White)
+		g.line(lx, ly, rx, ry, gfx.White)
+		if g.thrust && g.frame&2 != 0 {
+			fx, fy := x-cos(a)*9/64, y-sin(a)*9/64
+			g.line((lx+rx)/2, (ly+ry)/2, fx, fy, gfx.Grey6)
+		}
+	}
+	// score and ships, at the top
+	g.s.Fill(0, 0, scrW, 16, gfx.Black)
+	var b strs.Builder
+	b.WriteInt(g.score)
+	t := b.String()
+	b.Free()
+	g.s.Text(8, 0, t, gfx.Grey7)
+	free(t)
+	for k := range g.lives {
+		x := scrW - 16 - 14*k
+		g.s.Line(x, 2, x-4, 12, gfx.Grey7)
+		g.s.Line(x, 2, x+4, 12, gfx.Grey7)
+	}
+	if g.over {
+		g.s.Text(scrW/2-36, scrH/2-16, "GAME OVER", gfx.White)
+		g.s.Text(scrW/2-80, scrH/2+4, "space: another sweep", gfx.Grey6)
+	}
+	g.w.Invalidate()
+}

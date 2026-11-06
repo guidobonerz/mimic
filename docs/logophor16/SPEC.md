@@ -17,7 +17,7 @@ brief left room are marked **[S]** and listed in section 14.
 3. CPU "Ada"
 4. Memory map
 5. Chip bus and DMA slots
-6. Babbage: DMA control, Copper, Blitter
+6. Babbage: DMA control, Jacquard, Lithograph
 7. Babbage: Stereoscope (3D unit)
 8. Lumière: video and sprites
 9. Calliope: sound
@@ -33,8 +33,8 @@ brief left room are marked **[S]** and listed in section 14.
 
 | Part | Name | Summary |
 | --- | --- | --- |
-| CPU | **Ada** | 16-bit RISC, load/store, 13 registers, 12 MHz, 32-bit addresses through segments |
-| DMA, Blitter, Copper, 3D | **Babbage** | chip-bus arbiter, Copper, Blitter, 3D unit **Stereoscope** |
+| CPU | **Ada** | 16-bit RISC, load/store, 13 registers, 36 MHz, 32-bit addresses through segments |
+| DMA, Lithograph, Jacquard, 3D | **Babbage** | chip-bus arbiter, Jacquard, Lithograph, 3D unit **Stereoscope** |
 | Video | **Lumière** | linear chunky framebuffer, 256-colour palette (RGB 5:6:5), 256 sprites |
 | Sound | **Calliope** | 8 DMA sample channels, stereo, 48 kHz |
 | I/O and network | **Telegraph** | Ethernet-like network, timers, interrupt controller, keyboard, mouse, joysticks, SD card |
@@ -60,13 +60,16 @@ cycles per line:
 | Clock | Frequency | Per line | Per frame |
 | --- | --- | --- | --- |
 | Pixel clock | 40 MHz | 1060 | 665 680 |
-| Chip bus slot | 32 MHz | 848 | 532 544 |
-| CPU cycle (Ada) | 12 MHz | 318 | 199 704 |
-| Virtual master | 480 MHz | 12 720 | 7 988 160 |
+| Chip bus slot | 96 MHz | 2544 | 1 597 632 |
+| CPU cycle (Ada) | 36 MHz | 954 | 599 112 |
+| Virtual master | 1 440 MHz | 38 160 | 23 964 480 |
 
-The three clocks stand 10 : 8 : 3 (pixels : slots : CPU cycles). The
-emulator counts master ticks (`Machine::now`): pixel = 12, slot = 15, CPU
-cycle = 40 master ticks.
+The three clocks stand 10 : 24 : 9 (pixels : slots : CPU cycles). The
+emulator counts master ticks (`Machine::now`): pixel = 36, slot = 15, CPU
+cycle = 40 master ticks. **[S]** The CPU and the chip bus ran at 12 and
+32 MHz up to 2026-11-06 and were tripled on the owner's request (as fast
+as the emulator still keeps real time; `chips_logophor::CLOCK`); the
+picture, Calliope's 48 kHz and the timers' 1 MHz kept their rates.
 
 | | Visible | Front porch | Sync | Back porch | Total |
 | --- | --- | --- | --- | --- | --- |
@@ -346,11 +349,12 @@ extra cycle (the refill).
 
 | Offset | Unit |
 | --- | --- |
-| 0000–07FF | Babbage: DMA control, Copper, Blitter, Stereoscope |
+| 0000–07FF | Babbage: DMA control, Jacquard, Lithograph, Stereoscope |
 | 0800–0FFF | Lumière: video mode, framebuffer, sprites control |
 | 1000–11FF | palette: 256 × RGB 5:6:5 |
 | 2000–27FF | sprite table: 256 × 8 bytes (inside the chip) |
 | 3000–31FF | Calliope |
+| 3200–32FF | Phonograph: compressed audio decoder |
 | 4000–41FF | Telegraph: network |
 | 4200–43FF | Telegraph: timers, interrupts, input, SD card, debug port |
 
@@ -366,9 +370,9 @@ DMA-error interrupt; the unit stops.
 ## 5. Chip bus and DMA slots
 
 One slot = one 32-bit chip-RAM access (4 bytes, on a 4-byte boundary;
-16-bit and byte accesses also take a whole slot). 848 slots a line.
+16-bit and byte accesses also take a whole slot). 2 544 slots a line.
 
-**Fixed DMA** for line y + 1 starts at slot 640 of line y (horizontal
+**Fixed DMA** for line y + 1 starts at slot 1 920 of line y (horizontal
 blank, `x` = 800) and takes consecutive slots in this order until all are
 served, running on into line y + 1 if needed:
 
@@ -379,56 +383,56 @@ served, running on into line y + 1 if needed:
 | 3 | Calliope | 1 per active channel: up to 8 |
 | 4 | Telegraph | up to 8 (network descriptors/data, SD card) |
 
-In mode 3 the framebuffer's 200 slots fit the 208 slots of the horizontal
-blank exactly.
+The horizontal blank holds 624 slots, so the whole fixed DMA (at most
+472 slots) fits into it.
 
 **XGA fields** **[S]** (mode 5, owner's request 2026-11-06): a field that
-begins with mode 5 on runs with XGA timing: 664 slots (249 CPU cycles) a
-line, a slot two pixels (1 328 pixel clocks, about 64 MHz), 806 lines of
-which 768 show, about 59.8 fields a second; the CPU clock stays. The
-fixed DMA starts at slot 512 (x = 1 024); the framebuffer's 256 slots run
-on into the next line. The mode is looked at only when a field begins: a
+begins with mode 5 on runs with XGA timing: 1 992 slots (747 CPU cycles)
+a line, three slots two pixels (1 328 pixel clocks, about 64 MHz), 806
+lines of which 768 show, about 59.8 fields a second; the CPU clock stays.
+The fixed DMA starts at slot 1 536 (x = 1 024); the framebuffer's 256
+slots fit into the horizontal blank. The mode is looked at only when a field begins: a
 switch shows from the next field (the field it is made in keeps its
 timing).
 
 **Free slots** (all others) go, slot by slot, to the highest-priority unit
-with an access pending: 5. Copper, 6. Blitter and Stereoscope (alternating
+with an access pending: 5. Jacquard, 6. Lithograph and Stereoscope (alternating
 when both wait), 7. CPU. With `BUSCON` bit 0 set the CPU comes before the
-Blitter and Stereoscope.
+Lithograph and Stereoscope.
 
 A CPU cycle spans 8/3 slots (cycle c: slots ⌊8c/3⌋ to ⌊8(c+1)/3⌋ − 1).
 A CPU chip-RAM access waits until it gets a slot; the wait is counted in
 CPU cycles: an instruction that is fetched from chip RAM or loads or
 stores there starts only in a cycle with a free slot left after the
-fixed DMA and the Copper **[S]** (one free slot covers all its accesses,
+fixed DMA and the Jacquard **[S]** (one free slot covers all its accesses,
 an emulator simplification).
 
 All DMA is off after reset (DMACON = 0): the ROM turns the framebuffer
 DMA on.
 
-## 6. Babbage: DMA control, Copper, Blitter
+## 6. Babbage: DMA control, Jacquard, Lithograph
 
 ### 6.1 Control registers (FFFF:0000)
 
 | Offset | Name | R/W | Meaning |
 | --- | --- | --- | --- |
 | 0000 | BABID | R | chip id $BA01 |
-| 0002 | DMACON | S/C | bit 0 framebuffer, 1 sprites, 2 Calliope, 3 Telegraph, 4 Copper, 5 Blitter, 6 Stereoscope, 14 master enable |
+| 0002 | DMACON | S/C | bit 0 framebuffer, 1 sprites, 2 Calliope, 3 Telegraph, 4 Jacquard, 5 Lithograph, 6 Stereoscope, 7 Phonograph, 14 master enable |
 | 0004 | DMAERR | R/W1C | bits as DMACON: unit stopped by a pointer outside chip RAM |
-| 0006 | BUSCON | R/W | bit 0: CPU before Blitter/Stereoscope |
+| 0006 | BUSCON | R/W | bit 0: CPU before Lithograph/Stereoscope |
 
-### 6.2 Copper (FFFF:0020)
+### 6.2 Jacquard (FFFF:0020)
 
 | Offset | Name | Meaning |
 | --- | --- | --- |
-| 0020/0022 | COP1SEG/COP1OFS | list 1 start |
-| 0024/0026 | COP2SEG/COP2OFS | list 2 start |
-| 0028 | COPJMP1 | write: restart at list 1 now |
-| 002A | COPJMP2 | write: restart at list 2 now |
-| 002C | COPCON | bit 0: Copper may write Babbage registers (0000–07FF) |
-| 002E | COPIRQ | value of the last `IRQ` instruction (read) |
+| 0020/0022 | JAQ1SEG/JAQ1OFS | list 1 start |
+| 0024/0026 | JAQ2SEG/JAQ2OFS | list 2 start |
+| 0028 | JAQJMP1 | write: restart at list 1 now |
+| 002A | JAQJMP2 | write: restart at list 2 now |
+| 002C | JAQCON | bit 0: Jacquard may write Babbage registers (0000–07FF) |
+| 002E | JAQIRQ | value of the last `IRQ` instruction (read) |
 
-The Copper restarts at list 1 when a field begins (line 0, x 0) **[S]**
+The Jacquard restarts at list 1 when a field begins (line 0, x 0) **[S]**
 (at the VBlank every WAIT for a visible line would hold at once; a list
 sets up line 0 with a WAIT in the blank of line 599). It executes one
 instruction (two words, one slot) per free slot it gets; a WAIT compares
@@ -439,54 +443,54 @@ the type:
 | Type | Name | Word 0 | Word 1 |
 | --- | --- | --- | --- |
 | 000 | MOVE | bits 12–0: register word index (FFFF:0000 + 2 × index, up to FFFF:3FFE) | value |
-| 001 | WAIT | bits 9–0: y | bits 10–0: x; bit 15: also wait for the Blitter to finish |
+| 001 | WAIT | bits 9–0: y | bits 10–0: x; bit 15: also wait for the Lithograph to finish |
 | 010 | SKIP | bits 9–0: y | bits 10–0: x; skip the next instruction if the beam is at or past (y, x) |
 | 011 | JUMP | bit 0: list (0 = list 1, 1 = list 2) | – |
-| 100 | BLIT | – | – : start the Blitter job prepared in its registers |
-| 101 | IRQ | – | value for COPIRQ; raises the Copper interrupt |
+| 100 | LITH | – | – : start the Lithograph job prepared in its registers |
+| 101 | IRQ | – | value for JAQIRQ; raises the Jacquard interrupt |
 | 110 | STOP | – | – : wait for the next field |
 | 111 | – | reserved (acts as STOP) | |
 
 WAIT holds until the beam is at or past (y, x) (y first, then x) and,
-with bit 15, the Blitter is idle. A MOVE into Babbage without COPCON
-bit 0 stops the Copper and sets DMAERR bit 4 (DMA-error interrupt).
+with bit 15, the Lithograph is idle. A MOVE into Babbage without JAQCON
+bit 0 stops the Jacquard and sets DMAERR bit 4 (DMA-error interrupt).
 
-### 6.3 Blitter (FFFF:0100)
+### 6.3 Lithograph (FFFF:0100)
 
 | Offset | Name | Meaning |
 | --- | --- | --- |
-| 0100 | BLTCON0 | bits 3–0 ROP; 4 use A; 5 use B; 6 use D; 8–9 op: 0 copy/ROP, 1 fill, 2 line, 3 shade |
-| 0102 | BLTCON1 | bits 1–0 pixel size (0 = 4, 1 = 8, 2 = 16 bits); 2 flip X; 3 flip Y; 4 colour key on A; 5 nibble phase of A, 6 of B, 7 of D (4-bit: start at the high nibble = 0) |
-| 0104/0106 | BLTASEG/OFS | source A |
-| 0108/010A | BLTBSEG/OFS | source B |
-| 010C/010E | BLTDSEG/OFS | destination D |
-| 0110 | BLTAPITCH | bytes from one row to the next (signed) |
-| 0112 | BLTBPITCH | |
-| 0114 | BLTDPITCH | |
-| 0116 | BLTW | width in pixels (1–4096) / line: dx |
-| 0118 | BLTH | height in rows (1–4096) / line: dy |
-| 011A | BLTKEY | colour key (A pixels equal to it are skipped) |
-| 011C | BLTCOLOR | fill and line colour |
-| 011E/0120 | BLTTSEG/OFS | 256-byte shade table |
-| 0122 | BLTLINE | line: bit 0 x steps −1, bit 1 y steps −1, bit 2 y is the major axis |
-| 0124 | BLTSTART | write: start |
-| 0126 | BLTSTAT | bit 0 busy, bit 1 done (cleared on read) |
+| 0100 | LTHCON0 | bits 3–0 ROP; 4 use A; 5 use B; 6 use D; 8–9 op: 0 copy/ROP, 1 fill, 2 line, 3 shade |
+| 0102 | LTHCON1 | bits 1–0 pixel size (0 = 4, 1 = 8, 2 = 16 bits); 2 flip X; 3 flip Y; 4 colour key on A; 5 nibble phase of A, 6 of B, 7 of D (4-bit: start at the high nibble = 0) |
+| 0104/0106 | LTHASEG/OFS | source A |
+| 0108/010A | LTHBSEG/OFS | source B |
+| 010C/010E | LTHDSEG/OFS | destination D |
+| 0110 | LTHAPITCH | bytes from one row to the next (signed) |
+| 0112 | LTHBPITCH | |
+| 0114 | LTHDPITCH | |
+| 0116 | LTHW | width in pixels (1–4096) / line: dx |
+| 0118 | LTHH | height in rows (1–4096) / line: dy |
+| 011A | LTHKEY | colour key (A pixels equal to it are skipped) |
+| 011C | LTHCOLOR | fill and line colour |
+| 011E/0120 | LTHTSEG/OFS | 256-byte shade table |
+| 0122 | LTHLINE | line: bit 0 x steps −1, bit 1 y steps −1, bit 2 y is the major axis |
+| 0124 | LTHSTART | write: start |
+| 0126 | LTHSTAT | bit 0 busy, bit 1 done (cleared on read) |
 
 ROP: for each bit, D = ROP[ (A << 1) | B ] (bit index into the 4-bit
 value); $C = A (copy), $A = B, $8 = A AND B, $E = A OR B, $6 = A XOR B.
-Op fill: D = BLTCOLOR over the rectangle. Op line: Bresenham from D, BLTW
-× BLTH as dx × dy, BLTLINE directions, colour BLTCOLOR. Op shade:
-D = TABLE[B] where A (if used) is not BLTKEY, else D = B — darkening and
+Op fill: D = LTHCOLOR over the rectangle. Op line: Bresenham from D, LTHW
+× LTHH as dx × dy, LTHLINE directions, colour LTHCOLOR. Op shade:
+D = TABLE[B] where A (if used) is not LTHKEY, else D = B — darkening and
 lightening for Panorama's shadows. With the colour key, A pixels equal to
-BLTKEY leave D unchanged. Flips mirror the source walk. Each 32-bit
-access is one slot. Completion raises the Blitter interrupt.
+LTHKEY leave D unchanged. Flips mirror the source walk. Each 32-bit
+access is one slot. Completion raises the Lithograph interrupt.
 
 **[S]** Details: a channel that is not used reads 0; a job works a row
 at a time, a row costing, for each channel it uses, the 32-bit words its
-bytes touch (a line pixel costs two slots); BLTSTART, or the Copper's
-BLIT, with a used pointer outside chip RAM starts nothing, sets DMAERR
-bit 5 and raises the DMA-error interrupt (the Copper stops too); the
-registers must not change while BLTSTAT bit 0 says busy.
+bytes touch (a line pixel costs two slots); LTHSTART, or the Jacquard's
+LITH, with a used pointer outside chip RAM starts nothing, sets DMAERR
+bit 5 and raises the DMA-error interrupt (the Jacquard stops too); the
+registers must not change while LTHSTAT bit 0 says busy.
 
 ## 7. Babbage: Stereoscope (FFFF:0200)
 
@@ -550,7 +554,7 @@ average of source and destination.
 S3DSTAT: START while busy is ignored. The list runs when it is started
 and the unit then stays busy for the slots its work costs: 100 a vertex,
 6 a pixel reaching the Z test, 2 a cleared pixel with the Z buffer (1
-without), 2 a command. It takes free chip-bus slots as the Blitter does
+without), 2 a command. It takes free chip-bus slots as the Lithograph does
 (taking turns with it, DMACON bit 6); then done is set and the
 Stereoscope interrupt raised. A bad list (unknown command, a pointer
 beyond chip RAM, more than 2^20 commands) sets error, stops the list
@@ -586,11 +590,18 @@ FGINDEX has no effect, and a sprite with the "behind" bit shows only
 where the background pixel is 0 (black); sprites keep their palette
 colours.
 
+The monitor **[S]** (owner's request 2026-11-06): it has two tubes, an
+RGB tube with visible raster lines and a green phosphor tube that glows
+and fades slowly; VMODE bit 13 selects the green one (Panorama sets it in
+its oscilloscope theme). The picture's bytes are the same either way; in
+mimic the frame is marked monochrome with bit 13, and the monitor
+profiles `logophor`/`logophor-scope` (video-crt) follow the switch.
+
 ### 8.2 Registers
 
 | Offset | Name | Meaning |
 | --- | --- | --- |
-| 0800 | VMODE | bits 2–0 mode; bit 15 display on (off: border colour only) |
+| 0800 | VMODE | bits 2–0 mode; bit 13 the monitor's green phosphor tube; bit 15 display on (off: border colour only) |
 | 0802/0804 | FBSEG/FBOFS | framebuffer start; taken over at the VBlank |
 | 0806 | PITCH | bytes per framebuffer row (the framebuffer may be wider than the screen) |
 | 0808 | FINEX | 4-bit mode: start at the low nibble (bit 0) |
@@ -630,7 +641,7 @@ the framebuffer pixel is 0 (modes 0, 2, 3) or black (mode 1). Palette
 indices ≥ FGINDEX lie in front of all sprites.
 
 **[S]** Details: the choice for a line is made at the start of the
-horizontal blank before it (chip-bus slot 640), as part of the fixed DMA
+horizontal blank before it (chip-bus slot 1 920), as part of the fixed DMA
 (each chosen sprite's row costs the 32-bit words it touches); a change of
 the table shows from the next line on. Sprites show only inside the
 mode's picture area. A sprite pixel touches the "foreground" (SPRCOLFG)
@@ -679,15 +690,15 @@ Behaviour **[S]** (step 8):
   AUDLLEN = 0 it stops (AUDCTL bit 0 and AUDSTAT bit 0 clear). With bit 6
   each such end raises the channel's interrupt (AUDIRQ bit n, AUDSTAT bit
   1; Telegraph source 5). The last sample sounds for its full period.
-- DMA: at slot 640 every channel that plays samples, has 4 bytes free in
+- DMA: at slot 1 920 every channel that plays samples, has 4 bytes free in
   its FIFO and data left takes one slot of the fixed DMA (after Lumière)
   and reads the aligned 32-bit word with its next bytes (only those from
   the pointer on). Without DMACON bit 2 no channel fetches. A channel
   whose FIFO is empty keeps its last sample and goes on when data comes
   (it plays slower than AUDPER asks).
-- Timing: a channel takes a new sample every AUDPER ticks of 4 MHz (3 CPU
+- Timing: a channel takes a new sample every AUDPER ticks of 4 MHz (9 CPU
   cycles each); the channels are advanced and mixed once per output
-  sample, every 250 CPU cycles (48 kHz).
+  sample, every 750 CPU cycles (48 kHz).
 - Envelope (AUDCTL bit 4): a level 0–255 stepped at the end of every
   line; attack rises by its rate to 255, decay falls to the sustain
   level, release (gate closed) to 0. A rate counts in 1/256 of a level a
@@ -700,6 +711,88 @@ Behaviour **[S]** (step 8):
   keeps the right at full and lowers the left to 0. Mix: Σ sample ×
   AUDVOL/127 × level/255 × pan gain, × AUDMASTER/127, clipped to 16 bits.
 - A channel modulates with its new samples; channel 7 cannot modulate.
+
+### 9.1 Phonograph: compressed audio (FFFF:3200)
+
+Added 2026-11-06 on the owner's request (for the web radio): a decoder
+for MP3 (MPEG-1/2 Layer III) and AAC (AAC-LC in ADTS frames), as a
+chip, so the CPU only moves the stream's bytes **[S]**.
+
+| Offset | Name | Meaning |
+| --- | --- | --- |
+| 3200 | PHID | read: $F0E1 |
+| 3202 | PHCON | bit 0 on, bit 1 format (0 MP3, 1 AAC/ADTS), bit 2 interrupt when the ring is half empty |
+| 3204/3206 | PHSEG/PHOFS | the ring buffer of compressed bytes in chip RAM |
+| 3208 | PHSIZE | its size in bytes: a power of two, 256–32 768 |
+| 320A | PHWR | the CPU's index: bytes written up to here (0 – size−1) |
+| 320C | PHRD | read: the chip's index: bytes taken up to here |
+| 320E | PHSTAT | bit 0 decoding, 1 starved (no whole frame in the ring: silence), 2 bad data skipped since the last read, 3 interrupt pending (bits 2 and 3 cleared on read) |
+| 3210 | PHRATE | read: the stream's sample rate / 10 (4 410 for 44.1 kHz) |
+| 3212 | PHCHAN | read: channels (1 or 2) |
+| 3214 | PHKBPS | read: the last frame's bit rate in kbit/s (MP3; AAC: from the frame's size) |
+| 3216 | PHVOL | volume 0–127 |
+| 3218/321A | PHLEVL/PHLEVR | read: peak level (0–32 767) of each side since the last read |
+| 321C/321E | PHFRMH/PHFRML | read: frames decoded since PHCON bit 0 was set (32 bits) |
+
+Behaviour **[S]**:
+
+- With PHCON bit 0 (and DMACON bit 7) the chip takes the bytes from PHRD
+  up to PHWR (the ring wraps at PHSIZE; PHRD = PHWR: empty, so at most
+  size − 1 bytes are in it). It looks for a frame header (MP3: 11 sync
+  bits and a valid header; AAC: the ADTS sync word with layer 0) and
+  decodes a frame only when all its bytes are in the ring; bytes before a
+  header are skipped (PHSTAT bit 2). Setting bit 0 starts afresh (PHRD =
+  PHWR is not changed; the frame count is reset).
+- Output: the decoded samples are resampled (linear) to 48 kHz stereo
+  (mono on both sides) and added to Calliope's mix before clipping, ×
+  PHVOL / 127 × AUDMASTER / 127. The chip decodes the next frame when
+  less than one frame of output is left; with no whole frame waiting it
+  plays silence and sets PHSTAT bit 1 until one comes.
+- Interrupt: with PHCON bit 2, each time the free space in the ring
+  reaches half of PHSIZE, PHSTAT bit 3 and Telegraph source 12.
+- DMA: the bytes a frame takes are charged to the following lines' fixed
+  DMA, a slot for 4 bytes, after Calliope (128 kbit/s: about one slot
+  every 9.4 lines).
+- Savestate: registers, indices and counters; the decoder's inner state
+  and the decoded samples not yet played are not kept: after loading,
+  decoding starts again at the next frame (an MP3 frame that needs bits
+  of the frames before it may sound wrong once).
+
+Details **[S]** (fixed while building it):
+
+- Frames taken: MP3 Layer III only, bit-rate index 1–14 (free format is
+  refused), sample-rate index 0–2, MPEG-1, 2 and 2.5; ADTS with profile
+  LC, sampling index 0–12, channel configuration 1 or 2 and one raw data
+  block (a frame's CRC is skipped, not checked). Anything else is bad
+  data: one byte is skipped and the search goes on (PHSTAT bit 2); so is
+  a frame longer than PHSIZE − 1.
+- The chip works once a line, at slot 1 920: when less than a frame of
+  output is left it takes at most one whole frame (and the bad bytes
+  before it). Every byte taken is owed to the fixed DMA, one slot a line
+  while bytes are owed (a 417-byte frame: 105 slots).
+- A frame the decoder refuses plays as silence of its length (1 152,
+  576 or 1 024 samples) and sets bit 2, so PHRD, DMA and interrupts never
+  depend on the decoder; PHFRM counts every frame taken.
+- PHSTAT bit 0 is PHCON bit 0 with DMACON bit 7; bit 1 is set when an
+  output sample finds nothing decoded and cleared when a frame is.
+  PHLEVL/PHLEVR are the peaks before PHVOL. PHKBPS for AAC: the ADTS
+  frame's length × 8 × rate / 1 024 / 1 000.
+- PHSIZE is clamped to 256–32 768 and rounded down to a power of two
+  (reset 256); PHWR and PHRD are kept modulo the size. PHVOL resets to 0.
+  PHCON bit 0 from 0 to 1 clears the frame count, rate, channels, bit
+  rate, the starved bit, the decoded samples and the decoder; from 1 to
+  0 the decoded samples are dropped. A ring outside chip RAM clears
+  PHCON bit 0 and sets DMAERR bit 7 (DMA-error interrupt).
+- The half-empty interrupt fires when the frames taken in a line move
+  the free space (size − 1 − used) from below PHSIZE / 2 to it or more.
+  Resampling is linear with the exact step rate / 48 000.
+- After loading a savestate the samples that were waiting play as
+  silence; everything but the sound and the peaks stays as without the
+  load.
+
+Emulator: the decoders are Symphonia's (MPL-2.0, `symphonia-core`,
+`symphonia-bundle-mp3`, `symphonia-codec-aac` 0.5.5); on an FPGA a
+decoder core or a VS1053-like chip behind the same registers.
 
 ## 10. Telegraph (FFFF:4000)
 
@@ -758,6 +851,21 @@ program on the card):
   The machine looks at the socket every 16 lines through mimic's host
   network services, which a recording journals (deterministic replay);
   without them (the web frontend, `--net off`) the link stays down.
+- **[S]** `--option net=host` (decision 83): no hub; the hub's gateway
+  (section 11.3: 10.16.0.1 with ARP, ping, DHCP, DNS, UDP and TCP to the
+  outside) runs inside the machine and reaches the Internet through the
+  same host network services, so a single machine needs no `ada-asm hub`.
+  The frames go to the gateway every 16 lines, its answers come in as
+  received frames; the link is up while the host services exist. The
+  host services connect by name and have no lookup of their own, so DNS
+  gives each outside name a stand-in address from 198.18.0.0/15 (RFC
+  2544's benchmarking net, never routed) and a connection to it goes out
+  by the name; an address written as a number goes out as it is. Every
+  name gets an address (a name that does not exist fails when connected
+  to), and a machine's FIN does not half-close the host connection. Only
+  the machine itself is on this net. The built-in profile `logophor16`
+  uses `net=host`. Neither variant is machine state: a savestate load
+  keeps the tunnel or the gateway as they are.
 
 ### 10.2 Timers and real-time clock (FFFF:4200)
 
@@ -793,13 +901,13 @@ card is an image file (whole 512-byte blocks) in a media slot.
 
 Behaviour **[S]** (step 9):
 
-- Timers count at 1 MHz (every 12th CPU cycle). A running timer at 0
+- Timers count at 1 MHz (every 36th CPU cycle). A running timer at 0
   underflows on its next count: TSTAT bit n, the timer interrupt with
   TnCTL bit 3, then TnLATCH again (bit 1) or it stops (bit 0 clears);
   so it underflows every TnLATCH + 1 counts. With bit 2 timer n counts
   timer n − 1's underflows (timer 0 ignores the bit). TnCNT is readable
   and writable.
-- The clock's second turns every 12 000 000 CPU cycles. A write to RTCHI
+- The clock's second turns every 36 000 000 CPU cycles. A write to RTCHI
   waits for the write to RTCLO, which sets the clock and starts the
   second anew; reading RTCHI latches RTCLO for the next read. The alarm
   interrupt comes when the low 16 bits of the new second equal RTCALARM.
@@ -831,9 +939,9 @@ Behaviour **[S]** (step 9):
 | Bit | Source | Level |
 | --- | --- | --- |
 | 0 | VBlank | 4 |
-| 1 | Copper (IRQ instruction) | 4 |
+| 1 | Jacquard (IRQ instruction) | 4 |
 | 2 | DMA error | 4 |
-| 3 | Blitter done | 3 |
+| 3 | Lithograph done | 3 |
 | 4 | Stereoscope done | 3 |
 | 5 | Calliope (any channel, see AUDIRQ) | 6 |
 | 6 | Timers (see TSTAT) | 5 |
@@ -842,6 +950,7 @@ Behaviour **[S]** (step 9):
 | 9 | Mouse/joystick ports | 1 |
 | 10 | SD card | 1 |
 | 11 | RTC alarm | 1 |
+| 12 | Phonograph (see PHSTAT) | 6 |
 | 14 | NMI (host key or debugger) | 7 |
 
 A source's level is pending while its INTREQ and INTENA bits are both
@@ -982,25 +1091,84 @@ registers them and runs Panorama as task 1). Decisions **[S]**:
   `gfx`'s drawing keeps to it).
 - Chip RAM: windows' contents are surfaces (8-bit, own pitch) taken
   first-fit from 0002:0000-001D:FFFF; 0038 holds the glyphs (the system
-  font as 8 x 16 bytes of 0/FF, drawn with the Blitter's colour key),
-  colour rows, the darken and lighten tables (for shadows and lit
-  buttons, the Blitter's shade mode) and the pointer's image.
+  font as 8 x 16 bytes of 0/FF, drawn with the Lithograph's colour key),
+  colour rows, the darken and lighten tables (for lit buttons, the
+  Lithograph's shade mode), the pointer's image and the shadow tables
+  (soft: the desk's grey a fine step darker; edge: other colours a step
+  darker).
 - Palette: 0-9 greys, 10-15 brass, 16-231 a 6 x 6 x 6 colour cube,
-  232-255 more greys. The oscilloscope theme replaces it with greens of
-  the same brightness and draws outlines instead of filled surfaces,
-  over a graticule.
+  232-250 the skin's 19 leather and brass tones (greys without a skin),
+  251-252 British racing green (#004225) and a darker one for the title
+  bars, 253-255 the desk's shadow greys (78, 71, 64 between Grey3 and
+  Grey2).
+  The oscilloscope theme replaces it with greens of the same brightness
+  and draws outlines instead of filled surfaces, over a graticule.
+- The skin (owner's artwork 2026-11-06, `system/panorama/tile.png`: an
+  aged leather panel in a brass frame with a screw in each corner):
+  `tile.rs` makes it at build time into `PANORAMA/TILE.RAW` on the
+  system card (19 palette words with their darker and lighter
+  neighbours for the shade tables, the panel at 48 x 48 for the dock's
+  and the minimised windows' tiles, the panel at 160 x 160 for the
+  windows). A window in the brass theme is drawn from the 160 x 160
+  picture: its corners (12 x 12, the screws), rail pieces of 24 pixels
+  from each side's middle repeated along the sides, and the leather
+  from its middle (96 x 96) repeated, mirrored in turn so the seams
+  meet; the content sits 12 pixels inside the frame on the left, right
+  and bottom, the title bar on the top rail. Without the file the
+  desktop stays plain; the oscilloscope theme keeps its outlines.
+- Application tiles (owner's artwork 2026-11-06,
+  `system/panorama/icons/`: Info, Archive, Engine Room, Radio,
+  Pathfinder, Steamworks): 48 x 48 pictures after the skin in
+  `TILE.RAW`, each under its application's name (16 bytes); the skin's
+  19 tones are chosen over
+  the panel and these pictures together. In the brass theme the dock
+  shows an application's picture in place of its drawn tile and symbol;
+  the oscilloscope theme and applications without one keep the drawn
+  symbols.
+- Wallpaper (owner's artwork 2026-11-06, `system/panorama/wallpaper.png`,
+  aged leather): the top left quarter of the picture at 1024 x 768
+  (512 x 384, 192 KiB of chip RAM) follows the skin in `TILE.RAW`;
+  Panorama draws it four times, mirrored into the other quarters (the
+  Lithograph's flips), as the desk of the brass theme. Without it the
+  desk is plain grey; the oscilloscope theme keeps its graticule.
+- Title bars in British racing green (owner's request 2026-11-06; the
+  darker green for windows not in front) between the frame's corners,
+  the title in brass. Window buttons from the owner's artwork
+  (`system/panorama/buttons.png`, 18 x 18 with alpha, after the
+  wallpaper in `TILE.RAW`; drawn with the colour key 0): minimise on
+  the left, maximise and close (a skull) on the right.
+- Maximise (owner's choice 2026-11-06: a real change of size): the
+  button grows the window's frame up to the dock and the screen's
+  bottom, a second press puts it back. A window's frame has its own size
+  (CW x CH) apart from its content (W x H): content smaller than the
+  frame sits in its middle on Paper. A window an application marks
+  Resizable gets a Resize event with the new size; the application calls
+  `SetSize` (a new surface, the old one freed; false when chip RAM is
+  short) and draws again. Engine Room and Teleprinter (the text screen
+  `term`, up to 120 x 46 characters) and Archive (more columns and rows)
+  follow it; the games, Info and Radio keep their content in the middle.
+- **[S]** Only Panorama's task changes the window list: a window an
+  application opens or closes (`Done`) is noted and taken in (or out,
+  its surfaces freed) between two passes of Panorama's loop, so drawing
+  and hit tests never meet a window half gone (an application closing
+  its window while Panorama drew it ended in the monitor).
 - The pointer is sprite 0 (16 x 16, 8-bit), moved every 20 ms from
   Boiler's mouse (port 0, counters read each tick, kept inside the
   screen). Boiler keeps a button pressed since the last look as pressed
   once, so a busy desktop loses no click.
-- Layout (NeXTSTEP's): the dock on the right with 48 x 48 tiles (the
-  first, the machine's emblem, opens Info; running applications carry a
-  small steam gauge whose needle rises with their windows); the
+- Layout (NeXTSTEP's): the dock on the right with 48 x 48 tiles, one
+  per application (running applications carry a small steam gauge whose
+  needle rises with their windows; the machine's emblem tile that opened
+  Info again is gone, owner's request 2026-11-06); the
   application menu at the top left (Info, Archive, Engine Room, Theme,
   Hide windows) with the Theme submenu, which is torn off by dragging its
   title and then stays open; windows with a dark title bar (minimise on
-  the left, close on the right), rounded corners and a soft shadow in
-  three steps (deeper for the front window); minimised windows as tiles
+  the left, close on the right), rounded corners and a shadow of two
+  thin lines below and right (owner's request 2026-11-06: the old
+  shadow of three wide steps was too coarse): on the desk the inner line
+  two of the desk's fine greys darker (three for the front window), the
+  outer one, over other colours the inner line one step darker;
+  menus and tiles alike; minimised windows as tiles
   along the bottom. Buttons and items lighten under the pointer.
 - Applications are Boiler tasks. A window's events (Key, Click with the
   position in its content, Release, Close, Theme) come through its
@@ -1016,8 +1184,8 @@ registers them and runs Panorama as task 1). Decisions **[S]**:
   option `card=system` puts in a system card made at build time from
   `system/` (BOOT/BOILER.BIN on 64 MiB FAT32, kept in memory; writes are
   lost at the end). A card of one's own (`--disk`) takes its place.
-- Backlog (owner's request 2026-11-06): Notepad, Calendar, Web radio
-  (needs 11d's network) and a task list.
+- Backlog (owner's request 2026-11-06): Notepad, Calendar and a task
+  list (the web radio was built on 2026-11-06, section 11.5).
 
 ### 11.3 The network (step 11d)
 
@@ -1059,6 +1227,50 @@ full. Decisions **[S]**:
   typed; it can also wait for a call on a port (Logophor to Logophor).
   Engine Room gains `ifconfig`, `ping`, `host`.
 
+### 11.4 Games (step 11e)
+
+Owner's choices 2026-11-06: his own game Pathfinder as the public game,
+Steamworks as well, and Comet Sweep hidden. Decisions **[S]**:
+
+- **Pathfinder** (`system/pathfinder`) is the owner's tip-over puzzle
+  for GUI64 on the C64 (`gui64_apps/Pathfinder`), ported to Brass with
+  its rules, its 10 levels and its texts: towers of 1-4 boxes on 6 x 6
+  cells, a reachable tower is tipped over and lies on as many free cells
+  as it was high, the level is solved when the red box can be reached.
+  Cursor keys or W/A/S/D, Return or Space, U undo, R restart; the mouse
+  chooses and tips; GUI64's game menu becomes the keys N and P (next and
+  previous level).
+- **Steamworks** (`system/steamworks`): pipe pieces on 8 x 6 cells are
+  turned by clicks until the steam runs from the boiler on the left to the
+  engine on the right with no pipe open; levels are mazes made from the
+  level's number and turned at random (always solvable).
+- Panorama keeps a hidden game. Its way in is not documented.
+- For games, Boiler gives the keys held now (`Held`, by USB HID usage),
+  the cursor keys as characters ($81-$84) and the mouse buttons pressed
+  since the last look; a window can be locked while a frame is drawn in
+  steps (`BeginPaint`/`EndPaint`), so Panorama never shows half a frame.
+
+### 11.5 Radio (2026-11-06, owner's request)
+
+Radio (`system/radio`) plays Internet radio through the hub's gateway and
+Phonograph (section 9.1). Decisions **[S]**:
+
+- Stations: `/RADIO/STATIONS.TXT` on the card, a line
+  `Name|http://host[:port]/path`, up to 12; without the file a built-in
+  list (owner's choice: Deutschlandfunk, DLF Kultur, DLF Nova, WDR 2,
+  1LIVE, WDR 3, WDR 5, Radio Bob, Radio Bob Alternative; all redirect to
+  their stream hosts, checked 2026-11-06). Only `http://`:
+  the Logophor has no TLS, so a station that moves to `https://` is
+  reported as such; `http://` redirects are followed (three at most).
+- HTTP/1.0 with `Icy-MetaData: 1`: the answer's status (`HTTP/1.x` or
+  `ICY`), `icy-metaint`, `icy-name` and `content-type` (`audio/aac…`:
+  AAC, otherwise MP3) are read; metadata blocks are taken out of the
+  stream and their `StreamTitle` shown; the audio bytes go into a 16 KiB
+  ring in chip RAM for Phonograph.
+- The window: the stations (a click plays one, a second click stops),
+  the station's name, the title, rate, channels, bit rate and format, a
+  level meter for each side; + and − set the volume, S stops.
+
 ## 12. Host tool chain
 
 All in Rust in mimic's workspace **[D]**:
@@ -1069,7 +1281,7 @@ All in Rust in mimic's workspace **[D]**:
   (`sp` = r12, `lr` = r11), `#imm`, `off(rb)`, labels with `:`,
   directives `.org .seg .word .byte .ascii .align .include .macro`.
 - Emulator: mimic's frontends and debugger (breakpoints, stepping, memory;
-  Copper list, sprites and framebuffer through mimic's graphics views).
+  Jacquard list, sprites and framebuffer through mimic's graphics views).
 - Later phases: PNG → chunky converter with a 5:6:5 palette, SD image
   tool, C back end (`char` 8, `int` 16, `long` 32, pointers 32 bits).
 
@@ -1092,7 +1304,7 @@ All in Rust in mimic's workspace **[D]**:
   host tool `ada-asm run` does; the debug console's output stays in the
   machine. The machine option `roms` is accepted and ignored (the ROM is
   built in).
-- Savestates, debugger targets (`cpu`; Copper and Blitter as devices),
+- Savestates, debugger targets (`cpu`; Jacquard and Lithograph as devices),
   memory spaces (cpu, chip, fast, rom), chips() register dumps from day
   one, as for every mimic machine.
 
@@ -1117,10 +1329,10 @@ Decisions of this document:
 10. Op D: MULHU, MULHS, DIVU, DIVS, REMU, REMS, NEG, SXB, ZXB, SWAB; DIV/REM 18 cycles, divide-by-zero exception.
 11. Op E: TRAP, RTI, EI, DI, HALT, MTSR, MFSR, MFSC, MTSC, NOP, BRK.
 12. Vector table at FFFB:0040, 32 entries; reset entry branches over it.
-13. Fixed DMA starts at the horizontal blank, in the brief's priority order; free slots by priority; BUSCON for CPU before Blitter.
+13. Fixed DMA starts at the horizontal blank, in the brief's priority order; free slots by priority; BUSCON for CPU before Lithograph.
 14. Calliope gets one slot per channel and line (32 bytes/line, not 16) and a 4 MHz period clock.
-15. Copper: 8 instruction types incl. STOP; MOVE reaches FFFF:0000–3FFE.
-16. Interrupt levels: Calliope 6, timers 5, VBlank/Copper/DMA error 4, Blitter/3D 3, network 2, input/SD/RTC 1, NMI 7.
+15. Jacquard: 8 instruction types incl. STOP; MOVE reaches FFFF:0000–3FFE.
+16. Interrupt levels: Calliope 6, timers 5, VBlank/Jacquard/DMA error 4, Lithograph/3D 3, network 2, input/SD/RTC 1, NMI 7.
 17. Keyboard reports USB HID usages; SD card is a DMA block device.
 18. Sprite width stays 8/16/32 (value 3 reserved); coordinates offset by 64; in modes 0/1 in 320 × 240 pixels.
 19. Modes 0/1 are shown pixel-doubled, centred in 800 × 600.
@@ -1129,16 +1341,16 @@ Decisions of this document:
 22. Calling convention R1–R4 arguments, R5–R9 callee-saved.
 23. Unused instruction fields must be 0 (else illegal), step 2.
 24. Lumière's registers and palette are 0 after reset; blink and cursor phase 32 fields (step 3).
-25. The Copper restarts at the field start, not at the VBlank; a WAIT compares without taking a slot (step 4).
+25. The Jacquard restarts at the field start, not at the VBlank; a WAIT compares without taking a slot (step 4).
 26. FBNOW (FFFF:081E) takes the framebuffer pointer over at the line's end, for split screens; VSTAT bit 2 only at the VBlank (step 4).
 27. A CPU instruction touching chip RAM starts only in a cycle with a free slot (step 4).
-28. Blitter: unused channels read 0; row-wise work with slot costs per touched word, a line pixel 2 slots; a bad pointer refuses the start with DMAERR bit 5 (step 5).
+28. Lithograph: unused channels read 0; row-wise work with slot costs per touched word, a line pixel 2 slots; a bad pointer refuses the start with DMAERR bit 5 (step 5).
 29. Sprites: chosen at slot 640 of the line before, only inside the picture area; the foreground for SPRCOLFG is FGINDEX and up (or any non-zero index while FGINDEX is 0) (step 6).
 30. Stereoscope list formats as in section 7: counts in the argument, pointers as parameter words, the FOG command 0D added; the second table is a shade table for light and fog (step 7).
 31. Every display list starts from a reset state (step 7).
 32. Camera along +z with y up, front faces clockwise on the screen, light direction in camera space (step 7).
 33. 16-bit targets scale RGB directly by the light, blend is the average (step 7).
-34. The list runs at START; the unit is then busy for its slot costs (100 a vertex, 6 a pixel, 2/1 a cleared pixel, 2 a command), taking turns with the Blitter (step 7).
+34. The list runs at START; the unit is then busy for its slot costs (100 a vertex, 6 a pixel, 2/1 a cleared pixel, 2 a command), taking turns with the Lithograph (step 7).
 35. Mode 1 border in RGB 5:6:5, FGINDEX unused there, "behind" sprites show over black (step 7).
 36. The machine is called Logophor 16 (owner's decision 2026-11-06; formerly Cogitatron 16).
 37. System font Sweet16mono, ISO 8859-1 (owner's choice, step 7).
@@ -1177,3 +1389,17 @@ Decisions of this document:
 70. Teleprinter: TCP by name and port, Telnet options refused, also waiting for a call; Engine Room gains ifconfig, ping, host (step 11d).
 71. Mode 5: 1024 x 768 with 8 bits a pixel and XGA field timing (664 slots and 249 CPU cycles a line, 806 lines), taken at a field's start; modes 0-4 keep SVGA; Panorama moves to mode 5 (owner's choice 2026-11-06: a new mode, not the whole machine).
 72. Boiler remembers a mouse button pressed since the last look (no lost clicks) (step 11d).
+73. Step 11e's games: the owner's Pathfinder (ported from GUI64) and Steamworks in the dock, and a hidden game (owner's choice).
+74. Boiler: `Held` keys, cursor keys as $81-$84, `Mouse` returns the presses since the last call; Panorama: windows locked while a frame is painted (step 11e).
+75. Step 11 accepted 2026-11-06; step 12 (the optional FPGA core) moved to mimic's backlog (owner's choice).
+76. Phonograph (section 9.1), a decoder chip for MP3 and AAC (owner's choice 2026-11-06), for the radio; Symphonia in the emulator.
+77. Radio (section 11.5): stations from the card or a built-in list, HTTP with Icecast metadata, http only (no TLS) (owner's choice 2026-11-06: chip and app together).
+78. Babbage's Blitter renamed Lithograph (owner's request 2026-11-06): registers LTH… (were BLT…), the Copper instruction LITH (was BLIT); the CPU's branch BLT keeps its name.
+79. Babbage's Copper renamed Jacquard (owner's request 2026-11-06): registers JAQ… (were COP…: JAQ1SEG, JAQJMP1, JAQCON, JAQIRQ …).
+80. The monitor's two tubes (VMODE bit 13): RGB with raster lines, green phosphor with glow for the oscilloscope theme; shown by the CRT stage, raw pictures unchanged (owner's choice 2026-11-06).
+81. Panorama's skin from the owner's leather-panel artwork: the dock's tiles at 48 x 48, the windows from a 160 x 160 picture cut into corners, rails and the leather, 24 palette entries for its tones (owner's request 2026-11-06).
+82. CPU and chip bus three times as fast: Ada at 36 MHz, 2 544 slots a line (1 992 in XGA fields), the fixed DMA from slot 1 920 (1 536); the slot numbers in decisions 29 and 40 are those of the old clock (owner's request 2026-11-06 "as fast as possible", in real time: the emulator runs the Foundry at about 1.4 times real time on the development PC with this factor, too little for four).
+83. `net=host`: the hub's gateway inside the machine through mimic's host network services, DNS answering stand-in addresses from 198.18.0.0/15 for outside names (the services connect by name); the built-in profile uses it (owner's choice 2026-11-06, after the radio did not play without a hub).
+84. Application tiles from the owner's artwork in the dock (brass theme; Steamworks' too), no emblem tile, shadows as two thin lines over three fine desk greys (palette 253-255, the skin down to 21 tones); the window list changes only in Panorama's task (owner's report 2026-11-06: closing a window crashed the system).
+85. Wallpaper (a mirrored quarter of the owner's leather picture), title bars in British racing green, window buttons from the owner's artwork (owner's requests 2026-11-06); palette 251-252 for the greens, the skin down to 19 tones.
+86. Maximise: the frame grows to the screen, Resizable applications get a Resize event and SetSize their content, the others keep it in the middle (owner's choice 2026-11-06).

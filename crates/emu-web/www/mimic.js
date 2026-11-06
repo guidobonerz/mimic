@@ -404,7 +404,7 @@ void main() {
 // params: see video_crt::gpu::params (20 floats as 5 vec4):
 // [0] src_size.xy out_size.zw, [1] tint.xyz scanlines.w,
 // [2] gamma.x persistence.y origin.zw, [3] mask_kind.x mask_strength.y
-// mask_pitch.z bloom.w, [4] curvature.x vignette.y.
+// mask_pitch.z bloom.w, [4] curvature.x vignette.y glow.z.
 const CRT_FRAGMENT = `#version 300 es
 precision highp float;
 uniform sampler2D source;
@@ -484,9 +484,10 @@ void main() {
     float falloff = min(offset / max(beam, 0.01), 1.0);
     lit = col * (1.0 - u[1].w * falloff * falloff);
     float bloom = clamp(u[3].w, 0.0, 1.0);
-    if (bloom > 0.0) {
+    float shine = clamp(u[4].z, 0.0, 1.0);
+    if (bloom > 0.0 || shine > 0.0) {
       vec3 g = mix(glow(x0, sy), glow(x0 + 1, sy), t);
-      lit = lit + bloom * g * g;
+      lit = lit + bloom * g * g + 2.0 * shine * g;
     }
     lit = lit * u[1].xyz * mask(screen);
     float vignette = clamp(u[4].y, 0.0, 1.0);

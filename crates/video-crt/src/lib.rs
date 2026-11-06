@@ -62,7 +62,7 @@ pub mod gpu {
             profile.bloom,
             profile.curvature,
             profile.vignette,
-            0.0,
+            profile.glow,
             0.0,
         ]
     }

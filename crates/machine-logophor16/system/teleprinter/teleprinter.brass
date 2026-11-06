@@ -74,6 +74,8 @@ func run() {
 				return
 			case panorama.Theme:
 				p.t.Paint()
+			case panorama.Resize:
+				p.t.Resize(e.X, e.Y)
 			case panorama.Key:
 				p.key(e.Key)
 			}

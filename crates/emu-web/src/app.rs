@@ -514,6 +514,13 @@ impl Running {
     /// The current picture as RGBA: woven fields, raw or through the CPU
     /// CRT path.
     fn render(&mut self) {
+        // A monitor with two tubes (the Logophor 16's) follows the
+        // machine's switch between them.
+        let output = self.machine.framebuffer().signal.output;
+        if let Some(p) = self.crt.as_ref().and_then(|p| p.for_output(output)) {
+            self.crt = Some(p);
+            self.history = video_crt::Crt::new();
+        }
         let m = self.machine.as_ref();
         let frame = m.framebuffer();
         self.aspect = video_crt::cpu::pixel_aspect(&frame);

@@ -20,11 +20,13 @@
 //! 2. **Beam**: the field line under the (curved) position, linearly
 //!    resampled along the line; the beam is narrower for dark colours, so
 //!    `scanlines` darkens the gap between lines more for dark pixels.
-//! 3. **Bloom** (halation): a fixed 7-tap glow of the source (centre 0.2,
+//! 3. **Bloom** (halation) and **glow**: a fixed 7-tap glow of the source (centre 0.2,
 //!    ±1 pixel 0.15, ±2 pixels 0.1, the lines above and below 0.15), its
 //!    square times `bloom` added on top of the beam: bright areas glow
 //!    into their neighbours and fill the gaps between scanlines, dark
 //!    areas hardly glow.
+//!    `glow` adds the same blur linearly (twice it at 1.0): thin bright
+//!    lines glow too, as on a phosphor screen.
 //! 4. **Tint** (monochrome phosphors).
 //! 5. **Mask** in screen pixels (fixed to the glass, not curved): within a
 //!    triad of `mask_pitch` pixels each phosphor's weight is a triangle,
@@ -213,6 +215,8 @@ impl Source {
 /// Render at vertical `scale` (see [`output_size`]). Stateless: the
 /// profile's `persistence` needs [`Crt`].
 pub fn render(frame: &FrameRef<'_>, profile: &Profile, scale: u32) -> Image {
+    let switched = profile.for_output(frame.signal.output);
+    let profile = switched.as_ref().unwrap_or(profile);
     let (width, height) = output_size(frame, profile, scale);
     render_size(frame, profile, width, height)
 }
@@ -239,7 +243,8 @@ pub fn render_size(frame: &FrameRef<'_>, profile: &Profile, width: u32, height: 
         return Image { width, height, rgb };
     }
     let bloom = profile.bloom.clamp(0.0, 1.0);
-    let src = Source::new(frame, bloom > 0.0);
+    let glow = profile.glow.clamp(0.0, 1.0);
+    let src = Source::new(frame, bloom > 0.0 || glow > 0.0);
     let lut = gamma_lut(profile.gamma);
     let curvature = profile.curvature.clamp(0.0, 0.25);
     let vignette = profile.vignette.clamp(0.0, 1.0);
@@ -267,6 +272,7 @@ pub fn render_size(frame: &FrameRef<'_>, profile: &Profile, width: u32, height: 
         lut: &lut,
         scanlines: profile.scanlines,
         bloom,
+        glow,
         tint: profile.tint,
         vignette,
     };
@@ -400,6 +406,7 @@ struct Stage<'a> {
     lut: &'a [u8; 256],
     scanlines: f32,
     bloom: f32,
+    glow: f32,
     tint: [f32; 3],
     vignette: f32,
 }
@@ -431,12 +438,12 @@ impl Stage<'_> {
         let falloff = (offset / beam.max(0.01)).min(1.0);
         let k = 1.0 - self.scanlines * falloff * falloff;
         let mut v = [c[0] * k, c[1] * k, c[2] * k];
-        if self.bloom > 0.0 {
+        if self.bloom > 0.0 || self.glow > 0.0 {
             let ga = self.src.glow[row + x0];
             let gb = self.src.glow[row + x1];
             for ch in 0..3 {
                 let g = ga[ch] * (1.0 - t) + gb[ch] * t;
-                v[ch] += self.bloom * g * g / 255.0;
+                v[ch] += self.bloom * g * g / 255.0 + 2.0 * self.glow * g;
             }
         }
         for (x, tint) in v.iter_mut().zip(self.tint) {
@@ -478,6 +485,9 @@ impl Crt {
 
     /// [`render`] with persistence.
     pub fn render(&mut self, frame: &FrameRef<'_>, profile: &Profile, scale: u32) -> &Image {
+        // a monitor with two tubes follows the machine's switch
+        let switched = profile.for_output(frame.signal.output);
+        let profile = switched.as_ref().unwrap_or(profile);
         let (width, height) = output_size(frame, profile, scale);
         self.render_size(frame, profile, width, height)
     }

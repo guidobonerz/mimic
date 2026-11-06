@@ -76,6 +76,14 @@ impl StateWriter {
         Self::default()
     }
 
+    /// A writer with room for `bytes` (a big state written every frame
+    /// for rewinding should not grow its buffer step by step).
+    pub fn with_capacity(bytes: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(bytes),
+        }
+    }
+
     pub fn into_bytes(self) -> Vec<u8> {
         self.buf
     }

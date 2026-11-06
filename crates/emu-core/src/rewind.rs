@@ -202,6 +202,10 @@ pub fn diff(newer: &[u8], older: &[u8]) -> Vec<u8> {
     let mut i = 0;
     while i < n {
         let start = i;
+        // equal stretches a block at a time (the same runs, found faster)
+        while i + 64 <= n && newer[i..i + 64] == older[i..i + 64] {
+            i += 64;
+        }
         while i < n && newer[i] == older[i] {
             i += 1;
         }

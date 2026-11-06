@@ -6,7 +6,7 @@
 //! **[S]** (decided here, recorded in SPEC.md 10): the timers count at
 //! 1 MHz (every 12th CPU cycle); a running timer at 0 underflows on its
 //! next count and reloads TnLATCH (bit 1) or stops, so it underflows every
-//! TnLATCH + 1 counts. The clock's seconds turn every 12 000 000 CPU
+//! TnLATCH + 1 counts. The clock's seconds turn every 36 000 000 CPU
 //! cycles; a write to RTCHI waits for the write to RTCLO, which sets the
 //! clock and starts the second anew; reading RTCHI latches RTCLO for the
 //! next read. The clock starts from the machine's `rtc` option (never the
@@ -18,7 +18,7 @@
 
 use emu_core::{StateError, StateReader, StateWriter};
 
-use crate::blitter::ChipRamMut;
+use crate::lithograph::ChipRamMut;
 
 pub const T0CNT: u16 = 0x4200;
 pub const TSTAT: u16 = 0x4220;
@@ -49,9 +49,9 @@ pub const TCTL_RELOAD: u16 = 1 << 1;
 pub const TCTL_CASCADE: u16 = 1 << 2;
 pub const TCTL_IRQ: u16 = 1 << 3;
 
-/// CPU cycles per timer count (12 MHz / 1 MHz) and per second.
-const TIMER_DIV: u32 = 12;
-const CYCLES_PER_SECOND: u32 = 12_000_000;
+/// CPU cycles per timer count (the CPU clock / 1 MHz) and per second.
+const TIMER_DIV: u32 = 12 * crate::CLOCK;
+const CYCLES_PER_SECOND: u32 = 12_000_000 * crate::CLOCK;
 const CHIP_END: u32 = 0x0040_0000;
 /// SD bytes per line (8 slots of 4 bytes).
 const SD_BYTES_PER_LINE: u32 = 32;
@@ -141,6 +141,50 @@ impl Timers {
             }
             RTCALARM => self.alarm = v,
             _ => {}
+        }
+    }
+
+    /// Cycles from now to the first one in which [`Timers::cycle`] may do
+    /// more than count (0: this cycle): the clock's second turning or a
+    /// running timer reaching 0. [`Timers::skip`] may pass fewer.
+    pub fn cycles_to_event(&self) -> u32 {
+        let mut n = CYCLES_PER_SECOND - 1 - self.sub;
+        if self.ctl.iter().any(|c| c & TCTL_RUN != 0) {
+            // the cycle of the next count, then TIMER_DIV a count
+            let next = TIMER_DIV - 1 - self.prescale;
+            for k in 0..4 {
+                let ctl = self.ctl[k];
+                // a cascaded timer counts only when its neighbour runs out
+                if ctl & TCTL_RUN != 0 && (k == 0 || ctl & TCTL_CASCADE == 0) {
+                    n = n.min(next + u32::from(self.cnt[k]) * TIMER_DIV);
+                }
+            }
+        }
+        n
+    }
+
+    /// `n` cycles without an event (fewer than [`Timers::cycles_to_event`]):
+    /// the same as `n` calls of [`Timers::cycle`], which only count then.
+    pub fn skip(&mut self, n: u32) {
+        if n == 0 {
+            return;
+        }
+        debug_assert!(n <= self.cycles_to_event());
+        self.sub += n;
+        if self.ctl.iter().all(|c| c & TCTL_RUN == 0) {
+            self.prescale = 0;
+            return;
+        }
+        let total = self.prescale + n;
+        self.prescale = total % TIMER_DIV;
+        let counts = (total / TIMER_DIV) as u16;
+        if counts > 0 {
+            for k in 0..4 {
+                let ctl = self.ctl[k];
+                if ctl & TCTL_RUN != 0 && (k == 0 || ctl & TCTL_CASCADE == 0) {
+                    self.cnt[k] -= counts;
+                }
+            }
         }
     }
 
@@ -635,9 +679,9 @@ mod tests {
         t.write(T0CNT + 8, 1);
         t.write(T0CNT + 12, TCTL_RUN | TCTL_CASCADE);
         let mut irqs = Vec::new();
-        for c in 0..12 * 20 {
+        for c in 0..TIMER_DIV * 20 {
             if t.cycle().timer {
-                irqs.push(c / 12);
+                irqs.push(c / TIMER_DIV);
             }
         }
         // 2, 1, 0, underflow (count 3), then every 5 counts.

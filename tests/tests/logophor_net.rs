@@ -151,3 +151,143 @@ fn two_logophors_chat_through_the_hub_over_udp() {
     t.join().unwrap();
     assert!(seen, "{}", screen(&mut ms[1]));
 }
+
+fn mouse(m: &mut Logophor, dx: i16, dy: i16, buttons: u8) {
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(emu_core::port::PortId(0)),
+        event: InputEvent::MouseRel { dx, dy, buttons },
+    });
+    frames(m, 3);
+}
+
+fn point(m: &mut Logophor, from: (i16, i16), to: (i16, i16)) {
+    let (mut x, mut y) = from;
+    while (x, y) != to {
+        let (dx, dy) = ((to.0 - x).clamp(-100, 100), (to.1 - y).clamp(-100, 100));
+        mouse(m, dx, dy, 0);
+        x += dx;
+        y += dy;
+    }
+}
+
+/// `net=host`: the system card's radio plays its first built-in station
+/// (Deutschlandfunk) through the gateway in the machine and the host's
+/// real network, without a hub (needs the Internet).
+#[test]
+#[ignore]
+fn net_host_plays_a_real_station() {
+    let config = MachineConfig {
+        options: [
+            ("card".into(), "system".into()),
+            ("net".into(), "host".into()),
+        ]
+        .into(),
+        ..MachineConfig::default()
+    };
+    let mut m = Logophor::new(&config).unwrap();
+    m.attach_host(HostServices::new(
+        Some(Box::new(media_backends::net::StdNet::new(true))),
+        None,
+    ));
+    frames(&mut m, 600);
+    point(&mut m, (512, 384), (994, 236));
+    mouse(&mut m, 0, 0, 1);
+    mouse(&mut m, 0, 0, 0);
+    frames(&mut m, 60);
+    point(&mut m, (994, 236), (230, 40 + 22 + 28 + 10));
+    mouse(&mut m, 0, 0, 1);
+    mouse(&mut m, 0, 0, 0);
+    let reg = |m: &mut Logophor, off: u32| {
+        let t = m.debug_target(machine_logophor16::CPU).unwrap();
+        t.peek(MemSpaceId(0), 0xffff_0000 + off, Size::Word)
+            .unwrap()
+    };
+    // up to 30 s of the machine's time for DNS, the redirect and the stream
+    let mut decoded = 0;
+    for _ in 0..30 {
+        frames(&mut m, 60);
+        decoded = reg(&mut m, 0x321c) << 16 | reg(&mut m, 0x321e);
+        eprintln!(
+            "PHSTAT {:04x} rate {} frames {decoded}",
+            reg(&mut m, 0x320e),
+            reg(&mut m, 0x3210)
+        );
+        if decoded > 200 {
+            break;
+        }
+    }
+    assert!(decoded > 200, "decoded {decoded} frames");
+    assert_eq!(reg(&mut m, 0x3210), 4800, "48 kHz (the ARD streams)");
+}
+
+/// Development aid: the radio over `net=host` for EMU_SECONDS (default 60)
+/// of machine time: per second the decoded frames, the ring's fill, the
+/// starved flag and how long the host took (needs the Internet).
+#[test]
+#[ignore]
+fn net_host_radio_watch() {
+    let secs: usize = std::env::var("EMU_SECONDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let station: usize = std::env::var("EMU_STATION")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let config = MachineConfig {
+        options: [
+            ("card".into(), "system".into()),
+            ("net".into(), "host".into()),
+        ]
+        .into(),
+        ..MachineConfig::default()
+    };
+    let mut m = Logophor::new(&config).unwrap();
+    m.attach_host(HostServices::new(
+        Some(Box::new(media_backends::net::StdNet::new(true))),
+        None,
+    ));
+    frames(&mut m, 600);
+    point(&mut m, (512, 384), (994, 236));
+    mouse(&mut m, 0, 0, 1);
+    mouse(&mut m, 0, 0, 0);
+    frames(&mut m, 60);
+    let y = 40 + 22 + 28 + 10 + 20 * station as i16;
+    point(&mut m, (994, 236), (230, y));
+    mouse(&mut m, 0, 0, 1);
+    mouse(&mut m, 0, 0, 0);
+    let reg = |m: &mut Logophor, off: u32| {
+        let t = m.debug_target(machine_logophor16::CPU).unwrap();
+        t.peek(MemSpaceId(0), 0xffff_0000 + off, Size::Word)
+            .unwrap()
+    };
+    let mut last = 0;
+    let mut audio = Vec::new();
+    for s in 0..secs {
+        let t0 = std::time::Instant::now();
+        frames(&mut m, 60);
+        let host_ms = t0.elapsed().as_millis();
+        // in real time, as a frontend runs it (60 fields: 998.5 ms)
+        if let Some(rest) = std::time::Duration::from_micros(998_500).checked_sub(t0.elapsed()) {
+            std::thread::sleep(rest);
+        }
+        audio.clear();
+        m.audio(&mut audio);
+        let quiet = audio
+            .chunks(96)
+            .filter(|c| c.iter().all(|v| v.unsigned_abs() < 8))
+            .count();
+        let decoded = reg(&mut m, 0x321c) << 16 | reg(&mut m, 0x321e);
+        let fill = (reg(&mut m, 0x320a) + 16384 - reg(&mut m, 0x320c)) % 16384;
+        eprintln!(
+            "{s:3}: frames +{:3} ring {fill:5} PHSTAT {:04x} rate {} kbps {} host {host_ms} ms, silent ms {quiet}",
+            decoded - last,
+            reg(&mut m, 0x320e),
+            reg(&mut m, 0x3210),
+            reg(&mut m, 0x3214),
+        );
+        last = decoded;
+    }
+}

@@ -50,6 +50,7 @@ func line(s *gfx.Surface, y int, label string, value string) {
 }
 
 func paint(w *panorama.Window) {
+	w.BeginPaint()
 	w.Clear()
 	s := w.Surf
 	s.Text(16, 10, "Logophor 16", panorama.Accent())
@@ -69,6 +70,7 @@ func paint(w *panorama.Window) {
 	line(s, 100, "Chip RAM free", kib(all))
 	line(s, 120, "largest piece", kib(big))
 	w.Invalidate()
+	w.EndPaint()
 }
 
 func kib(n uint32) string {

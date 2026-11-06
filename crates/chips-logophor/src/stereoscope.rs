@@ -15,13 +15,13 @@
 //! camera space; the list runs at once when started and the unit then
 //! stays busy for the slots its work costs (100 a vertex, 6 a pixel
 //! tested, 2 a pixel cleared with the Z buffer, 1 without, 2 a command),
-//! taking free chip-bus slots as the Blitter does. Internally the unit
+//! taking free chip-bus slots as the Lithograph does. Internally the unit
 //! computes in double precision; the fixed-point formats are its
 //! interface.
 
 use emu_core::{StateError, StateReader, StateWriter};
 
-use crate::blitter::ChipRamMut;
+use crate::lithograph::ChipRamMut;
 
 pub const S3DLSEG: u16 = 0x0200;
 pub const S3DLOFS: u16 = 0x0202;
@@ -197,6 +197,21 @@ impl Stereoscope {
     /// A START was written: the machine calls [`Stereoscope::run`].
     pub fn take_start(&mut self) -> bool {
         std::mem::take(&mut self.start_pending)
+    }
+
+    /// Calls of [`Stereoscope::slot`] up to and including the one that
+    /// finishes the job.
+    pub fn slots_to_finish(&self) -> u64 {
+        self.remaining.max(1)
+    }
+
+    /// `n` slots (fewer than [`Stereoscope::slots_to_finish`]): the same as
+    /// `n` calls of [`Stereoscope::slot`], which only count then.
+    pub fn skip_slots(&mut self, n: u64) {
+        debug_assert!(!self.busy || n < self.slots_to_finish());
+        if self.busy {
+            self.remaining -= n;
+        }
     }
 
     /// One free slot for a busy unit; `true` when its work is done.

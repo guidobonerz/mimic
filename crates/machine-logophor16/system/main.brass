@@ -9,11 +9,15 @@ package main
 import (
 	"archive"
 	"boiler"
+	"comets"
 	"engine"
 	"files"
 	"info"
 	"net"
 	"panorama"
+	"radio"
+	"pathfinder"
+	"steamworks"
 	"teleprinter"
 )
 
@@ -25,5 +29,9 @@ func main() {
 	panorama.Register(archive.App())
 	panorama.Register(engine.App())
 	panorama.Register(teleprinter.App())
+	panorama.Register(radio.App())
+	panorama.Register(pathfinder.App())
+	panorama.Register(steamworks.App())
+	panorama.RegisterHidden(comets.App())
 	panorama.Run()
 }

@@ -1,0 +1,159 @@
+package steamworks
+
+import (
+	"boiler"
+	"gfx"
+	"panorama"
+	"strs"
+)
+
+const (
+	tile = 48
+	left = 16 // room for the boiler's and the engine's stubs
+	top  = 24 // the line with level and moves
+)
+
+var app panorama.App
+
+// App is the application for Panorama's dock.
+func App() *panorama.App {
+	app = panorama.App{Name: "Steamworks", Start: run, Icon: icon}
+	return &app
+}
+
+func icon(s *gfx.Surface, x, y int) {
+	ink := byte(gfx.Brass4)
+	if panorama.Scope() {
+		ink = gfx.Grey7
+	}
+	// a pipe bend and a tee
+	s.Fill(x+8, y+20, 20, 8, ink)
+	s.Fill(x+20, y+8, 8, 32, ink)
+	s.Fill(x+28, y+28, 12, 8, ink)
+}
+
+type game struct {
+	w      *panorama.Window
+	b      Board
+	lit    [H][W]bool
+	solved bool
+}
+
+func run() {
+	boiler.SetName("Steamworks")
+	w := panorama.NewWindow(&app, "Steamworks", W*tile+2*left, top+H*tile+8)
+	if w == nil {
+		return
+	}
+	g := &game{w: w}
+	g.b.Deal(1)
+	g.paint()
+	for {
+		e := <-w.Events
+		switch e.Kind {
+		case panorama.Close:
+			w.Done()
+			free(g)
+			return
+		case panorama.Theme:
+			g.paint()
+		case panorama.Click:
+			g.click(e.X, e.Y)
+		}
+	}
+}
+
+func (g *game) click(x, y int) {
+	if g.solved {
+		g.b.Deal(g.b.Level + 1)
+		g.paint()
+		return
+	}
+	tx, ty := (x-left)/tile, (y-top)/tile
+	if x < left || y < top || tx >= W || ty >= H {
+		return
+	}
+	g.b.Click(tx, ty)
+	g.paint()
+}
+
+// pipeInk: a pipe's colour, with steam or without.
+func pipeInk(steam bool) byte {
+	switch {
+	case panorama.Scope() && steam:
+		return gfx.White
+	case panorama.Scope():
+		return gfx.Grey5
+	case steam:
+		return gfx.Brass5
+	}
+	return gfx.Brass2
+}
+
+func (g *game) paint() {
+	w := g.w
+	s := w.Surf
+	g.solved = g.b.Steam(&g.lit)
+	w.BeginPaint()
+	w.Clear()
+	var t strs.Builder
+	t.WriteString("Level ")
+	t.WriteInt(int32(g.b.Level))
+	t.WriteString("   moves ")
+	t.WriteInt(int32(g.b.Moves))
+	if g.solved {
+		t.WriteString("   steam up! click on")
+	}
+	line := t.String()
+	t.Free()
+	s.Text(8, 4, line, panorama.Accent())
+	free(line)
+	for y := range H {
+		for x := range W {
+			g.piece(x, y)
+		}
+	}
+	// the boiler's and the engine's stubs
+	s.Fill(0, top+g.b.InRow*tile+tile/2-4, left, 8, pipeInk(g.lit[g.b.InRow][0]))
+	s.Fill(left+W*tile, top+g.b.OutRow*tile+tile/2-4, left, 8, pipeInk(g.solved))
+	w.Invalidate()
+	w.EndPaint()
+}
+
+func (g *game) piece(x, y int) {
+	s := g.w.Surf
+	px, py := left+x*tile, top+y*tile
+	if panorama.Scope() {
+		s.Box(px+1, py+1, tile-2, tile-2, gfx.Grey2)
+	} else {
+		s.RoundFill(px+1, py+1, tile-2, tile-2, gfx.Grey2)
+	}
+	p := g.b.Pipes[y][x]
+	ink := pipeInk(g.lit[y][x])
+	c := tile / 2
+	if p&North != 0 {
+		g.arm(px+c-4, py, 8, c+4, ink)
+	}
+	if p&South != 0 {
+		g.arm(px+c-4, py+c-4, 8, c+4, ink)
+	}
+	if p&West != 0 {
+		g.arm(px, py+c-4, c+4, 8, ink)
+	}
+	if p&East != 0 {
+		g.arm(px+c-4, py+c-4, c+4, 8, ink)
+	}
+	// a piece with one opening is a valve: a hub to see it
+	if p == North || p == East || p == South || p == West {
+		g.arm(px+c-8, py+c-8, 16, 16, ink)
+	}
+}
+
+// arm draws one pipe section: filled in brass, outlined on the scope.
+func (g *game) arm(x, y, w, h int, ink byte) {
+	if panorama.Scope() {
+		g.w.Surf.Box(x, y, w, h, ink)
+	} else {
+		g.w.Surf.Fill(x, y, w, h, ink)
+	}
+}

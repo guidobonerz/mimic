@@ -448,6 +448,11 @@ impl Gfx {
             let view = texture.create_view(&Default::default());
             self.texture = Some((texture, view, frame.width, frame.height));
         }
+        // A monitor with two tubes (the Logophor 16's) follows the
+        // machine's switch between them.
+        if let Some(p) = self.profile.for_output(frame.signal.output) {
+            self.set_profile(p);
+        }
         // Signal stage on the CPU, CRT stage in the shader.
         let decoded = video_crt::signal::process_rgba(
             frame.width,

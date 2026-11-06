@@ -4,7 +4,7 @@
 //! Registers of channel n at FFFF:3000 + $20 × n, AUDMASTER at 3100,
 //! AUDIRQ at 3102. Each channel that plays samples fetches one aligned
 //! 32-bit word a line in the fixed DMA (the machine asks
-//! [`Calliope::fetch_line`] at slot 640) into an 8-byte FIFO; playback
+//! [`Calliope::fetch_line`] at the fixed DMA's start) into an 8-byte FIFO; playback
 //! takes 1 or 2 bytes a sample from it at 4 MHz / AUDPER.
 //!
 //! **[S]** (decided here, recorded in SPEC.md 9): writing AUDCTL bit 0
@@ -26,7 +26,7 @@
 //! clipped to 16 bits. A modulating channel is silent; its new sample sets
 //! channel n + 1's volume (bits 15–9) or period (the sample, at least 16).
 //! Channel 7 cannot modulate. The channels advance in batches of one
-//! output sample (250 CPU cycles), the FIFO is filled at slot 640.
+//! output sample ([`CYCLES_PER_SAMPLE`]), the FIFO is filled at the fixed DMA's start.
 
 use emu_core::{StateError, StateReader, StateWriter};
 
@@ -60,8 +60,8 @@ pub const CTL_ENVELOPE: u16 = 1 << 4;
 pub const CTL_NOISE: u16 = 1 << 5;
 pub const CTL_IRQ: u16 = 1 << 6;
 
-/// CPU cycles per output sample (12 MHz / 48 kHz).
-pub const CYCLES_PER_SAMPLE: u32 = 250;
+/// CPU cycles per output sample (the CPU clock / 48 kHz).
+pub const CYCLES_PER_SAMPLE: u32 = 250 * crate::CLOCK;
 /// 4 MHz ticks per output sample, in thirds (83⅓).
 const THIRDS_PER_SAMPLE: u32 = 250;
 const ENV_MAX: u32 = 255 << 8;
@@ -379,7 +379,7 @@ impl Calliope {
         self.irq_bits() != 0
     }
 
-    /// Slot 640: every channel that wants data takes its slot (when the
+    /// The fixed DMA's start: every channel that wants data takes its slot (when the
     /// DMA is on) and fills its FIFO; the slots taken.
     pub fn fetch_line(&mut self, dma: bool, mem: &dyn ChipRam) -> u16 {
         if !dma {
@@ -407,15 +407,40 @@ impl Calliope {
     /// One CPU cycle; every [`CYCLES_PER_SAMPLE`] the channels advance and
     /// a stereo sample is mixed. `true` when a channel interrupt is new.
     pub fn cycle(&mut self) -> bool {
+        self.cycle_with(|| [0, 0])
+    }
+
+    /// [`Calliope::cycle`] with an outside source added to the mix before
+    /// clipping (the Phonograph, SPEC.md 9.1): `extra` gives a stereo
+    /// sample × 127 (its own volume) when an output sample is mixed; it
+    /// is scaled by 1/127 and AUDMASTER/127.
+    #[inline]
+    pub fn cycle_with(&mut self, extra: impl FnOnce() -> [i32; 2]) -> bool {
         self.cycles += 1;
         if self.cycles < CYCLES_PER_SAMPLE {
             return false;
         }
         self.cycles = 0;
-        self.output_sample()
+        self.output_sample(extra())
     }
 
-    fn output_sample(&mut self) -> bool {
+    /// Cycles from now to the one that mixes the next output sample
+    /// (0: this cycle). [`Calliope::skip`] may pass fewer than that.
+    #[inline]
+    pub fn cycles_to_sample(&self) -> u32 {
+        CYCLES_PER_SAMPLE - 1 - self.cycles
+    }
+
+    /// `n` CPU cycles in which no sample is mixed (fewer than
+    /// [`Calliope::cycles_to_sample`]): the same as `n` calls of
+    /// [`Calliope::cycle`].
+    #[inline]
+    pub fn skip(&mut self, n: u32) {
+        debug_assert!(n <= self.cycles_to_sample());
+        self.cycles += n;
+    }
+
+    fn output_sample(&mut self, extra: [i32; 2]) -> bool {
         let mut new_irq = false;
         for n in 0..8 {
             if !self.ch[n].playing {
@@ -456,6 +481,10 @@ impl Calliope {
             l += v * i64::from(gl);
             r += v * i64::from(gr);
         }
+        // An outside sample × 127 is on the scale of a channel's sample ×
+        // volume: × level 255 × pan gain 240.
+        l += i64::from(extra[0]) * 255 * 240;
+        r += i64::from(extra[1]) * 255 * 240;
         let scale = 127 * 255 * 240 * 127;
         let m = i64::from(self.master);
         let clip = |x: i64| (x * m / scale).clamp(-32768, 32767) as i16;
@@ -712,6 +741,33 @@ mod tests {
         let l = left(&run(&mut c, &ram, 12, true).0);
         assert_eq!(l[2], (0x4000i32 * 63 / 127) as i16);
         assert_eq!(l[5], (0x4000i32 * 31 / 127) as i16);
+    }
+
+    #[test]
+    fn an_outside_source_joins_the_mix_before_clipping() {
+        let mut c = Calliope::new();
+        c.write(AUDMASTER, 64);
+        let mut out = Vec::new();
+        for _ in 0..CYCLES_PER_SAMPLE {
+            c.cycle_with(|| [0x4000 * 127, -0x7fff * 127]);
+        }
+        c.take_output(&mut out);
+        assert_eq!(
+            out,
+            [
+                (0x4000i32 * 64 / 127) as i16,
+                (-0x7fffi32 * 64 / 127) as i16
+            ]
+        );
+        // With a channel at full scale the sum clips.
+        let (mut c, ram) = channel(&[0x7f; 4], 4, 4, 0);
+        run(&mut c, &ram, 3, true);
+        for _ in 0..CYCLES_PER_SAMPLE {
+            c.cycle_with(|| [0x7fff * 127, 0]);
+        }
+        let mut out = Vec::new();
+        c.take_output(&mut out);
+        assert_eq!(out[0], 32767);
     }
 
     #[test]

@@ -1,10 +1,10 @@
-; gfx.run(j *job): wait for the Blitter, write the job's 18 words into
+; gfx.run(j *job): wait for the Lithograph, write the job's 18 words into
 ; its registers (FFFF:0100-0123), start it, wait until it is done.
 gfx__run:
         push    r10
         li      r10, #$ffff
         mts     s3, r10
-        li      r4, #$0126      ; BLTSTAT
+        li      r4, #$0126      ; LTHSTAT
         movi    r3, #1
 .w:
         lwx     r9, (r4)
@@ -19,7 +19,7 @@ gfx__run:
         swx     r9, (r4)+
         addi    r3, #-1
         bne     .c
-        swx     r9, (r4)        ; BLTSTART
+        swx     r9, (r4)        ; LTHSTART
         li      r4, #$0126
         movi    r3, #1
 .d:

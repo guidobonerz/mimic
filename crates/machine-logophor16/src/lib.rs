@@ -6,31 +6,40 @@
 //!
 //! Specification: `docs/logophor16/SPEC.md`. Built so far (steps 3–8
 //! of Phase 31): the CPU, the memory map, Lumière (modes 0, 1 and 4,
-//! sprites), Babbage (DMA control, Copper, Blitter, Stereoscope), Calliope
-//! (8 sample channels, stereo at 48 kHz), Telegraph's interrupt controller, the
+//! sprites), Babbage (DMA control, Jacquard, Lithograph, Stereoscope), Calliope
+//! (8 sample channels, stereo at 48 kHz) with the Phonograph (MP3/AAC from
+//! a ring in chip RAM, mixed into Calliope's output), Telegraph's interrupt controller, the
 //! debug port (FFFF:43F0: console output kept in the machine, exit code),
 //! a program slot that loads a raw binary at 0040:0000 and starts it.
 //!
-//! Timing: a line is 318 CPU cycles, 848 chip-bus slots and 1060 pixels
-//! (40 MHz), a field 628 lines. Each CPU cycle covers 8/3 slots: the fixed
-//! DMA (the next line's framebuffer fetch, from slot 640 on, running into
-//! the next line if it must) takes its slots, the Copper the free ones it
+//! Timing: the CPU runs at `chips_logophor::CLOCK` x 12 MHz (36 MHz). A
+//! line is 318 x CLOCK CPU cycles, 848 x CLOCK chip-bus slots and 1060
+//! pixels (40 MHz), a field 628 lines. Each CPU cycle covers 8/3 slots:
+//! the fixed DMA (the next line's framebuffer fetch, from slot 640 x
+//! CLOCK on, running into
+//! the next line if it must) takes its slots, the Jacquard the free ones it
 //! wants, and a CPU instruction that reads or writes chip RAM (or is
 //! fetched from it) starts only in a cycle with a free slot left
 //! (SPEC.md 5; a simplification: one free slot covers all of the
 //! instruction's accesses). Lumière puts the picture out up to the beam
 //! before each register write, so writes in a line show where they
-//! happen. [`Machine::now`] counts master ticks of 480 MHz (CPU cycle =
-//! 40, pixel = 12; SPEC.md 2).
+//! happen. [`Machine::now`] counts master ticks, 40 to a CPU cycle
+//! (SPEC.md 2).
 #![forbid(unsafe_code)]
 
+mod hostnet;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_bench;
+#[cfg(test)]
+mod tests_phonograph;
 
-use chips_logophor::babbage::{self, Babbage, CopperAction};
-use chips_logophor::blitter::ChipRamMut;
+use chips_logophor::babbage::{self, Babbage, JacquardAction};
 use chips_logophor::calliope::{self, Calliope};
+use chips_logophor::lithograph::ChipRamMut;
 use chips_logophor::lumiere::{self, Beam, ChipRam, Lumiere};
+use chips_logophor::phonograph::{self, Phonograph};
 use chips_logophor::telegraph::{self, Interrupts};
 use chips_logophor::telegraph_io::{Input, PortDev, Sd, SdCard, Timers};
 use chips_logophor::telegraph_net::{self, Net};
@@ -131,20 +140,25 @@ const HELLO_FIELDS: u64 = 120;
 /// (hello: the hub learns where this machine is).
 pub const TUNNEL_MAGIC: &[u8; 4] = b"LGN1";
 
+/// The clock factor (`chips_logophor::CLOCK`: CLOCK x 12 MHz).
+const CLK: u16 = chips_logophor::CLOCK as u16;
+
 /// CPU cycles a line, lines a field, visible lines (SPEC.md 2).
-pub const LINE_CYCLES: u16 = 318;
+pub const LINE_CYCLES: u16 = 318 * CLK;
 pub const LINES: u16 = 628;
 pub const VISIBLE_LINES: u16 = 600;
-/// Master ticks (480 MHz) per CPU cycle and per line.
+/// Master ticks per CPU cycle (the master clock is 40 times the CPU's) and
+/// per millisecond.
 const TICKS_PER_CYCLE: u64 = 40;
+const TICKS_PER_MS: u64 = TICKS_PER_CYCLE * 12_000 * CLK as u64;
 
 const RAM_SEGMENTS: u32 = 0x200;
 /// The end of chip RAM (segments 0–$3F).
 const CHIP_END: u32 = 0x0040_0000;
 /// Chip-bus slots a line, and the slot where the fixed DMA starts (the
 /// horizontal blank, x = 800).
-const LINE_SLOTS: u16 = 848;
-const FIXED_START: u16 = 640;
+const LINE_SLOTS: u16 = 848 * CLK;
+const FIXED_START: u16 = 640 * CLK;
 
 /// A field's timing (SPEC.md 5, 8.1): SVGA for modes 0-4, XGA when mode 5
 /// is on at the field's start. The CPU clock stays; a line has
@@ -167,19 +181,20 @@ const SVGA: Timing = Timing {
     line_slots: LINE_SLOTS,
     fixed_start: FIXED_START,
     x_num: 5,
-    x_den: 4,
+    x_den: 4 * CLK,
 };
 
-/// 249 cycles = 664 slots a line, a slot two pixels (1 328 a line), 806
-/// lines of which 768 show: about 59.8 fields a second.
+/// 249 cycles = 664 slots a line at 12 MHz (times the clock factor), a
+/// line of 1 328 pixels, 806 lines of which 768 show: about 59.8 fields a
+/// second.
 const XGA: Timing = Timing {
-    line_cycles: 249,
+    line_cycles: 249 * CLK,
     lines: lumiere::XGA_LINES,
     visible: lumiere::XGA_HEIGHT as u16,
-    line_slots: 664,
-    fixed_start: 512,
+    line_slots: 664 * CLK,
+    fixed_start: 512 * CLK,
     x_num: 2,
-    x_den: 1,
+    x_den: CLK,
 };
 const ROM_FIRST: u32 = 0xfffb;
 const ROM_SIZE: usize = 0x4_0000;
@@ -222,6 +237,7 @@ pub struct Board {
     pub lumiere: Lumiere,
     pub babbage: Babbage,
     pub calliope: Calliope,
+    pub phonograph: Phonograph,
     pub ints: Interrupts,
     pub timers: Timers,
     pub input: Input,
@@ -233,9 +249,15 @@ pub struct Board {
     /// Last value written to DBGEXIT.
     pub exit: Option<u16>,
     beam: Beam,
+    /// The CPU wrote an I/O register (or read one of Babbage's) since the
+    /// machine last cleared this: its look-ahead may no longer hold.
+    io_touched: bool,
+    /// Cycles Calliope and the timers have yet to count (in a quiet
+    /// stretch, [`Logophor::run_quiet`]): counted before any I/O access.
+    owed: u32,
 }
 
-/// Chip RAM for the Blitter, which marks the segments it writes.
+/// Chip RAM for the Lithograph, which marks the segments it writes.
 struct ChipMut<'a> {
     ram: &'a mut [u8],
     touched: &'a mut [bool; RAM_SEGMENTS as usize],
@@ -344,6 +366,10 @@ impl ChipRam for ChipView<'_> {
             0
         }
     }
+
+    fn chip_bytes(&self, addr: u32, len: usize) -> Option<&[u8]> {
+        self.0.get(addr as usize..(addr as usize).checked_add(len)?)
+    }
 }
 
 impl Board {
@@ -357,6 +383,7 @@ impl Board {
             lumiere: Lumiere::new(),
             babbage: Babbage::new(),
             calliope: Calliope::new(),
+            phonograph: Phonograph::new(),
             ints: Interrupts::new(),
             timers: Timers::new(RTC_DEFAULT),
             input: Input::new([PortDev::Mouse, PortDev::Joystick]),
@@ -366,6 +393,8 @@ impl Board {
             console: Vec::new(),
             exit: None,
             beam: Beam::default(),
+            io_touched: false,
+            owed: 0,
         }
     }
 
@@ -385,6 +414,7 @@ impl Board {
             0x0000..=0x07ff => self.babbage.peek(off),
             0x0800..=0x11ff | 0x2000..=0x27ff => self.lumiere.peek(off, self.beam),
             0x3000..=0x31ff => self.calliope.peek(off),
+            0x3200..=0x32ff => self.phonograph.peek(off),
             0x4000..=0x401f => self.net.peek(off),
             0x4200..=0x422f => self.timers.peek(off),
             0x4240..=0x425f => self.input.peek(off),
@@ -400,6 +430,7 @@ impl Board {
             0x0000..=0x07ff => self.babbage.read(off),
             0x0800..=0x11ff | 0x2000..=0x27ff => self.lumiere.read(off, self.beam),
             0x3000..=0x31ff => self.calliope.read(off),
+            0x3200..=0x32ff => self.phonograph.read(off),
             0x4200..=0x422f => self.timers.read(off),
             0x4240..=0x425f => self.input.read(off),
             0x4260..=0x427f => self.sd.read(off),
@@ -415,6 +446,8 @@ impl Board {
                     .set_dma(self.babbage.dma(babbage::DMA_FRAMEBUFFER));
                 self.lumiere
                     .set_sprite_dma(self.babbage.dma(babbage::DMA_SPRITES));
+                self.phonograph
+                    .set_dma(self.babbage.dma(babbage::DMA_PHONOGRAPH));
                 if self.babbage.take_error() {
                     self.ints.raise(telegraph::INT_DMAERR);
                 }
@@ -441,6 +474,7 @@ impl Board {
                 lumiere.write(off, v);
             }
             0x3000..=0x31ff => self.calliope.write(off, v),
+            0x3200..=0x32ff => self.phonograph.write(off, v),
             0x4000..=0x401f => {
                 let Board {
                     ram, touched, net, ..
@@ -468,6 +502,17 @@ impl Board {
         }
     }
 
+    /// Count the cycles Calliope and the timers owe (as many calls of
+    /// their `cycle` that do nothing else, see [`Logophor::run_quiet`]).
+    #[inline]
+    fn settle(&mut self) {
+        if self.owed > 0 {
+            self.calliope.skip(self.owed);
+            self.timers.skip(self.owed);
+            self.owed = 0;
+        }
+    }
+
     fn write_byte(&mut self, a: u32, v: u8) -> bool {
         if a >> 16 < RAM_SEGMENTS {
             self.ram[a as usize] = v;
@@ -482,6 +527,10 @@ impl Board {
 impl Bus for Board {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
         if addr >> 16 == 0xffff {
+            // Reads change nothing the look-ahead depends on, except
+            // perhaps Babbage's units' state.
+            self.io_touched |= addr & 0xffff < 0x0800;
+            self.settle();
             let v = self.io_read(addr as u16);
             return match size {
                 Size::Byte => u32::from(v >> (8 * (addr & 1)) & 0xff),
@@ -499,6 +548,22 @@ impl Bus for Board {
                 _ => u32::from(v),
             };
         }
+        // RAM and ROM words straight (the CPU's fetches and loads), the
+        // rest byte by byte
+        let seg = addr >> 16;
+        if size != Size::Byte {
+            let a = (addr & !1) as usize;
+            let mem = if seg < RAM_SEGMENTS {
+                Some((&self.ram, a))
+            } else if (ROM_FIRST..ROM_FIRST + 4).contains(&seg) {
+                Some((&self.rom, a - ((ROM_FIRST as usize) << 16)))
+            } else {
+                None
+            };
+            if let Some((mem, a)) = mem {
+                return u32::from(mem[a]) | u32::from(mem[a + 1]) << 8;
+            }
+        }
         let b = |a: u32| u32::from(self.byte(a).unwrap_or(0xff));
         match size {
             Size::Byte => b(addr),
@@ -508,6 +573,8 @@ impl Bus for Board {
 
     fn write(&mut self, addr: u32, size: Size, v: u32) {
         if addr >> 16 == 0xffff {
+            self.io_touched = true;
+            self.settle();
             // A byte write gives the register its low byte, high byte 0.
             let v = if size == Size::Byte {
                 v & 0xff
@@ -584,18 +651,37 @@ pub struct Logophor {
     /// start the last line's ran into.
     fixed: u16,
     carry: u16,
+    /// The first cycle of this line, from `cycle` on, that must run
+    /// through [`Logophor::cycle`] (see [`Logophor::run_quiet`]).
+    horizon: u16,
+    taker: Taker,
+    /// Use `run_quiet` (off: every cycle through `cycle`, for tests that
+    /// check the two agree).
+    quiet_runs: bool,
     input: InputQueue,
     program: ProgramSlot,
     tunnel: Tunnel,
 }
 
+/// Who takes the chip-bus slots the fixed DMA leaves in a quiet stretch
+/// (besides the CPU): see [`Logophor::run_quiet`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Taker {
+    None,
+    Lithograph,
+    Stereoscope,
+}
+
 /// The network tunnel: a connected UDP socket to a hub (`ada-asm hub`)
-/// through the host's network services (SPEC.md 10.1). Not machine state:
+/// through the host's network services (SPEC.md 10.1), or with `net=host`
+/// the hub's gateway inside the machine ([`hostnet`]). Not machine state:
 /// after a savestate load it reconnects.
 #[derive(Default)]
 struct Tunnel {
     /// `net=HOST:PORT`.
     peer: Option<(String, u16)>,
+    /// `net=host`.
+    gate: Option<Box<hostnet::HostNet>>,
     host: HostServices,
     socket: Option<NetHandle>,
     /// Field of the last hello and of the last connect try.
@@ -613,6 +699,7 @@ impl Logophor {
         let mut board = Board::new();
         let mut ports = [PortDev::Mouse, PortDev::Joystick];
         let mut peer = None;
+        let mut gate = None;
         let mut system_card = false;
         for (k, v) in &config.options {
             match k.as_str() {
@@ -634,8 +721,13 @@ impl Logophor {
                     })?;
                     board.timers = Timers::new(s);
                 }
+                "net" if v == "host" => gate = Some(Box::new(hostnet::HostNet::new())),
                 "net" => {
-                    let bad = || ConfigError::Invalid(format!("net={v}: HOST:PORT of a hub"));
+                    let bad = || {
+                        ConfigError::Invalid(format!(
+                            "net={v}: host (the gateway in the machine) or HOST:PORT of a hub"
+                        ))
+                    };
                     let (h, p) = v.rsplit_once(':').ok_or_else(bad)?;
                     let p = p.parse::<u16>().map_err(|_| bad())?;
                     if h.is_empty() {
@@ -689,10 +781,14 @@ impl Logophor {
             field_done: false,
             fixed: 0,
             carry: 0,
+            horizon: 0,
+            taker: Taker::None,
+            quiet_runs: true,
             input: InputQueue::new(),
             program: ProgramSlot::default(),
             tunnel: Tunnel {
                 peer,
+                gate,
                 ..Tunnel::default()
             },
         })
@@ -708,7 +804,7 @@ impl Logophor {
             frame: self.fields,
             line: self.line,
             cycle: self.cycle,
-            hpos: self.cycle * 10 / 3,
+            hpos: self.cycle * 8 * self.timing().x_num / (3 * self.timing().x_den),
         }
     }
 
@@ -753,7 +849,9 @@ impl Logophor {
         }
         self.carry = (t.fixed_start + self.fixed).saturating_sub(t.line_slots);
         self.board.calliope.end_line();
-        if self.line.is_multiple_of(TUNNEL_LINES) && self.tunnel.peer.is_some() {
+        if self.line.is_multiple_of(TUNNEL_LINES)
+            && (self.tunnel.peer.is_some() || self.tunnel.gate.is_some())
+        {
             self.service_tunnel();
         }
         self.line += 1;
@@ -768,11 +866,11 @@ impl Logophor {
             self.field_done = true;
             self.board.babbage.field_start();
         }
-        // The next line's fetch is set up at slot 640 (`prepare_fetch`).
+        // The next line's fetch is set up at FIXED_START (`prepare_fetch`).
         self.fixed = 0;
     }
 
-    /// Slot 640: the fixed DMA for the next line, its framebuffer row and
+    /// FIXED_START: the fixed DMA for the next line, its framebuffer row and
     /// the sprites Lumière chooses for it now.
     fn prepare_fetch(&mut self) {
         let next = if self.line + 1 == self.timing().lines {
@@ -791,6 +889,23 @@ impl Logophor {
         let sprites = lumiere.select_sprites(next, &chip);
         let audio = calliope.fetch_line(dma, &chip);
         self.fixed = lumiere.fetch_slots(next) + sprites + audio;
+        // The Phonograph after Calliope (SPEC.md 9.1).
+        let Board {
+            ram,
+            phonograph,
+            babbage,
+            ints,
+            ..
+        } = &mut self.board;
+        let phono = phonograph.line(&ChipView(&ram[..CHIP_END as usize]));
+        self.fixed += phono.slots;
+        if phono.irq {
+            ints.raise(telegraph::INT_PHONO);
+        }
+        if phono.error {
+            babbage.phonograph_error();
+            ints.raise(telegraph::INT_DMAERR);
+        }
         let dma = self.board.babbage.dma(babbage::DMA_TELEGRAPH);
         let Board {
             ram,
@@ -816,22 +931,22 @@ impl Logophor {
         s < self.carry || (start..start + self.fixed).contains(&s)
     }
 
-    /// Carry out what a Copper instruction did at (`y`, `x`).
-    fn copper_action(&mut self, action: CopperAction, y: u16, x: u16) {
+    /// Carry out what a Jacquard instruction did at (`y`, `x`).
+    fn jacquard_action(&mut self, action: JacquardAction, y: u16, x: u16) {
         match action {
-            CopperAction::Move { offset, value } => {
+            JacquardAction::Move { offset, value } => {
                 let cpu_beam = self.board.beam;
                 self.board.beam = Beam { x, y };
                 self.board.io_write(offset, value);
                 self.board.beam = cpu_beam;
             }
-            CopperAction::Irq => self.board.ints.raise(telegraph::INT_COPPER),
-            CopperAction::Error => self.board.ints.raise(telegraph::INT_DMAERR),
-            CopperAction::Blit | CopperAction::None => {}
+            JacquardAction::Irq => self.board.ints.raise(telegraph::INT_JACQUARD),
+            JacquardAction::Error => self.board.ints.raise(telegraph::INT_DMAERR),
+            JacquardAction::Lith | JacquardAction::None => {}
         }
     }
 
-    /// The chip-bus slots of this CPU cycle: fixed DMA, then the Copper;
+    /// The chip-bus slots of this CPU cycle: fixed DMA, then the Jacquard;
     /// returns the slots left free.
     fn slots(&mut self) -> u32 {
         let c = u32::from(self.cycle);
@@ -847,19 +962,19 @@ impl Logophor {
             }
             let (y, x) = (self.line, s * t.x_num / t.x_den);
             let b = &mut self.board.babbage;
-            if b.copper_active() && (!b.copper_waiting() || b.copper_compare(y, x)) {
+            if b.jacquard_active() && (!b.jacquard_waiting() || b.jacquard_compare(y, x)) {
                 let action = {
                     let Board { ram, babbage, .. } = &mut self.board;
-                    babbage.copper_slot(y, x, &ChipView(&ram[..CHIP_END as usize]))
+                    babbage.jacquard_slot(y, x, &ChipView(&ram[..CHIP_END as usize]))
                 };
-                self.copper_action(action, y, x);
+                self.jacquard_action(action, y, x);
                 continue;
             }
-            let (blit, stereo) = (
-                self.board.babbage.blitter_wants(),
+            let (lith, stereo) = (
+                self.board.babbage.lithograph_wants(),
                 self.board.babbage.stereo_wants(),
             );
-            if blit || stereo {
+            if lith || stereo {
                 // BUSCON bit 0: a waiting CPU comes first (one slot).
                 if self.board.babbage.cpu_first()
                     && !cpu_served
@@ -870,7 +985,7 @@ impl Logophor {
                     free += 1;
                     continue;
                 }
-                if stereo && (!blit || self.board.babbage.stereo_turn()) {
+                if stereo && (!lith || self.board.babbage.stereo_turn()) {
                     if self.board.babbage.stereo.slot() {
                         self.board.ints.raise(telegraph::INT_STEREOSCOPE);
                     }
@@ -883,10 +998,10 @@ impl Logophor {
                         babbage,
                         ..
                     } = &mut self.board;
-                    babbage.blitter_slot(&mut ChipMut { ram, touched })
+                    babbage.lithograph_slot(&mut ChipMut { ram, touched })
                 };
                 if done {
-                    self.board.ints.raise(telegraph::INT_BLITTER);
+                    self.board.ints.raise(telegraph::INT_LITHOGRAPH);
                 }
                 continue;
             }
@@ -905,8 +1020,14 @@ impl Logophor {
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
         let beam = self.beam_pos();
         let free = self.slots();
-        if self.board.calliope.cycle() {
-            self.board.ints.raise(telegraph::INT_CALLIOPE);
+        let Board {
+            calliope,
+            phonograph,
+            ints,
+            ..
+        } = &mut self.board;
+        if calliope.cycle_with(|| phonograph.output()) {
+            ints.raise(telegraph::INT_CALLIOPE);
         }
         let t = self.board.timers.cycle();
         if t.timer {
@@ -960,6 +1081,235 @@ impl Logophor {
         dbg.take_stop()
     }
 
+    // ---- the quiet stretches of a line ------------------------------------
+    //
+    // Most cycles do little: no Jacquard slot, no Calliope sample, no timer
+    // running out, no input due, the CPU in the middle of an instruction or
+    // halted, and the Lithograph or the Stereoscope (one of them) only
+    // counting its slots towards the next piece of work. Between two cycles
+    // that do more (the horizon), `run_quiet` runs the CPU's instructions
+    // and does the counting between them in one step each; every cycle that
+    // may do more goes through `cycle`, so the machine behaves exactly as
+    // with `cycle` alone (`tests_bench` compares the two). The horizon is
+    // found again after every `cycle` and after an instruction that touched
+    // an I/O register: nothing else an instruction does can move it.
+
+    /// The cycle (of any line) that holds chip-bus slot `s`: the one with
+    /// `c * 8 / 3 <= s < (c + 1) * 8 / 3`, as [`Logophor::slots`] counts.
+    fn cycle_of_slot(s: u16) -> u16 {
+        let s = u32::from(s);
+        let mut c = s * 3 / 8;
+        while (c + 1) * 8 / 3 <= s {
+            c += 1;
+        }
+        c as u16
+    }
+
+    /// Find the horizon and who takes the open slots until then.
+    fn look_ahead(&mut self) {
+        self.board.settle();
+        (self.horizon, self.taker) = self.horizon();
+    }
+
+    /// The first cycle from `self.cycle` on that must run through
+    /// [`Logophor::cycle`] (`self.cycle` itself when the current one must),
+    /// and the unit that takes the open slots before it.
+    fn horizon(&self) -> (u16, Taker) {
+        let t = self.timing();
+        let c = self.cycle;
+        let b = &self.board.babbage;
+        let taker = match (b.lithograph_wants(), b.stereo_wants()) {
+            // they take turns, slot by slot
+            (true, true) => return (c, Taker::None),
+            (true, false) => Taker::Lithograph,
+            (false, true) => Taker::Stereoscope,
+            (false, false) => Taker::None,
+        };
+        // end_line, and the fixed DMA's set-up at FIXED_START
+        let mut h = u32::from(t.line_cycles - 1);
+        let prep = Self::cycle_of_slot(t.fixed_start);
+        if c <= prep {
+            h = h.min(u32::from(prep));
+        }
+        if b.jacquard_active() {
+            match b.jacquard_wait() {
+                // running: it wants every open slot
+                None => return (c, taker),
+                // waiting for the Lithograph too, which only finishes in a
+                // slot that does work (a horizon): no compare succeeds
+                Some((_, _, true)) if b.lithograph.busy() => {}
+                Some((wy, wx, _)) => {
+                    if self.line > wy {
+                        return (c, taker);
+                    }
+                    if self.line == wy {
+                        // the first slot whose x reaches wx (a compare in an
+                        // earlier slot of that cycle fails, so it is enough
+                        // to stop at its cycle)
+                        let s = (u32::from(wx) * u32::from(t.x_den)).div_ceil(u32::from(t.x_num));
+                        if s < u32::from(t.line_slots) {
+                            h = h.min(u32::from(Self::cycle_of_slot(s as u16).max(c)));
+                        }
+                    }
+                }
+            }
+        }
+        let c32 = u32::from(c);
+        h = h.min(c32 + self.board.calliope.cycles_to_sample());
+        h = h.min(c32.saturating_add(self.board.timers.cycles_to_event()));
+        if let Some(at) = self.input.next_at() {
+            let now = self.now().0;
+            if at.0 <= now {
+                return (c, taker);
+            }
+            let j = (at.0 - now).div_ceil(TICKS_PER_CYCLE);
+            h = h.min(c32.saturating_add(j.min(u64::from(u32::MAX)) as u32));
+        }
+        let mut h = h.max(c32) as u16;
+        // The cycle in which the unit could get the slot that does work:
+        // it gets at most every open slot (the CPU may take one a cycle).
+        let need = match taker {
+            Taker::None => return (h, taker),
+            Taker::Lithograph => u64::from(b.lithograph.slots_to_work()),
+            Taker::Stereoscope => b.stereo.slots_to_finish(),
+        };
+        if u64::from(self.open_slots(c, h)) >= need {
+            let (mut lo, mut hi) = (c, h - 1);
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if u64::from(self.open_slots(c, mid + 1)) >= need {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            h = lo;
+        }
+        (h, taker)
+    }
+
+    /// Chip-bus slots of cycles `c0..c1` that are not the fixed DMA's (in
+    /// a stretch of this line without FIXED_START's set-up), as
+    /// [`Logophor::slots`] sees them.
+    #[inline]
+    fn open_slots(&self, c0: u16, c1: u16) -> u32 {
+        let (s0, s1) = (u32::from(c0) * 8 / 3, u32::from(c1) * 8 / 3);
+        let start = u32::from(self.timing().fixed_start);
+        let carry = (0, u32::from(self.carry));
+        let fixed = (start, start + u32::from(self.fixed));
+        let both = (carry.0.max(fixed.0), carry.1.min(fixed.1));
+        let ov = |(x, y): (u32, u32)| y.min(s1).saturating_sub(x.max(s0));
+        (s1 - s0) + ov(both) - ov(carry) - ov(fixed)
+    }
+
+    /// The beam for cycle `c` of this line, as register reads see it.
+    #[inline]
+    fn beam_at(&self, c: u16) -> Beam {
+        // c * 8 * x_num / (3 * x_den), as for the slots
+        let t = if self.board.lumiere.xga() { XGA } else { SVGA };
+        let x = (u32::from(c) * 8 * u32::from(t.x_num) / (3 * u32::from(t.x_den))) as u16;
+        Beam { x, y: self.line }
+    }
+
+    /// The counting of cycles `c0..c1` (in a quiet stretch): Calliope's
+    /// and the timers' (owed until something could see them,
+    /// [`Board::settle`]) and the open slots for the unit that takes them,
+    /// less `served` the CPU got (BUSCON bit 0).
+    #[inline]
+    fn count_quiet(&mut self, c0: u16, c1: u16, served: u32) {
+        self.board.owed += u32::from(c1 - c0);
+        match self.taker {
+            Taker::None => {}
+            Taker::Lithograph => {
+                let slots = self.open_slots(c0, c1) - served;
+                self.board.babbage.lithograph.skip_slots(slots);
+            }
+            Taker::Stereoscope => {
+                let slots = self.open_slots(c0, c1) - served;
+                self.board.babbage.stereo.skip_slots(u64::from(slots));
+            }
+        }
+    }
+
+    /// Run the cycles before the horizon (none when the current one is
+    /// it); stops early after a BRK that stops.
+    fn run_quiet(&mut self) {
+        // As `cycle` does every cycle; the level only changes with events
+        // and I/O, and setting the same level again does nothing.
+        self.cpu.set_irq_level(self.board.ints.level());
+        // Cycles from here on are counted (`count_quiet`) only when
+        // something could see the counts: before an instruction (which may
+        // read or write them), at the look-ahead and at the end.
+        let mut counted = self.cycle;
+        while self.cycle < self.horizon {
+            let c = self.cycle;
+            let busy = self.cpu.busy_cycles();
+            if busy > 0 {
+                // the rest of an instruction: the CPU only counts
+                let n = u16::from(busy).min(self.horizon - c);
+                self.cpu.skip_busy(n as u8);
+                self.cycle += n;
+                continue;
+            }
+            let cpu_first = self.board.babbage.cpu_first();
+            if self.cpu.waiting() {
+                // HALT up to the horizon: a tick in every cycle the CPU is
+                // not held for a chip-RAM slot (with a unit taking the
+                // slots, it gets one only with BUSCON bit 0)
+                let h = self.horizon;
+                let (ticks, served) = if self.needs_chip() {
+                    let open = (c..h).filter(|&k| self.open_slots(k, k + 1) > 0).count() as u16;
+                    match self.taker {
+                        Taker::None => (open, 0),
+                        _ if cpu_first => (open, open),
+                        _ => (0, 0),
+                    }
+                } else {
+                    (h - c, 0)
+                };
+                self.cpu.skip_waiting(u64::from(ticks));
+                self.count_quiet(counted, h, u32::from(served));
+                counted = h;
+                self.cycle = h;
+                continue;
+            }
+            // An instruction (or interrupt entry) starts: first the slots
+            // and counting up to and with this cycle, as `cycle` does them
+            // before the CPU.
+            let open = self.open_slots(c, c + 1);
+            let shared = self.taker != Taker::None;
+            let needs = (open == 0 || shared) && self.needs_chip();
+            let served = shared && cpu_first && needs && open > 0;
+            self.count_quiet(counted, c + 1, u32::from(served));
+            counted = c + 1;
+            let free = if shared { u32::from(served) } else { open };
+            if free == 0 && needs {
+                self.cycle += 1;
+                continue;
+            }
+            self.board.beam = self.beam_at(c);
+            self.board.io_touched = false;
+            // Nothing is armed in the debugger (`run_frame`), so the bus
+            // needs no hooks.
+            self.cpu.tick(&mut self.board);
+            self.cycle += 1;
+            if self.board.io_touched {
+                self.look_ahead();
+                self.cpu.set_irq_level(self.board.ints.level());
+            }
+            if self.cpu.brk_hit {
+                break;
+            }
+            // the rest of the instruction: the CPU only counts
+            let n = u16::from(self.cpu.busy_cycles()).min(self.horizon.saturating_sub(self.cycle));
+            self.cpu.skip_busy(n as u8);
+            self.cycle += n;
+        }
+        self.count_quiet(counted, self.cycle, 0);
+        self.board.settle();
+        self.board.beam = self.beam_at(self.cycle);
+    }
+
     /// The tunnel: connect, keep the hub informed, send what the network
     /// unit sent, hand it what came in.
     fn service_tunnel(&mut self) {
@@ -967,6 +1317,10 @@ impl Logophor {
             self.set_link(false);
             return;
         };
+        if self.tunnel.gate.is_some() {
+            self.service_gate(&net);
+            return;
+        }
         let mut backend = host::lock(&net);
         let field = self.fields;
         if self.tunnel.socket.is_none() {
@@ -1024,6 +1378,30 @@ impl Logophor {
         }
         drop(backend);
         self.set_link(up);
+        if self.board.net.irq() {
+            self.board.ints.raise(telegraph::INT_NETWORK);
+        }
+    }
+
+    /// `net=host`: the network unit's frames to the gateway in the
+    /// machine, its answers back in.
+    fn service_gate(&mut self, net: &host::SharedNet) {
+        self.set_link(true);
+        let now_ms = self.now().0 / TICKS_PER_MS;
+        let outbox = std::mem::take(&mut self.board.net.outbox);
+        let answers = {
+            let mut backend = host::lock(net);
+            let Some(gate) = self.tunnel.gate.as_mut() else {
+                return;
+            };
+            gate.service(&mut *backend, outbox, now_ms)
+        };
+        let Board {
+            ram, touched, net, ..
+        } = &mut self.board;
+        for f in answers {
+            net.receive(&f, &mut ChipMut { ram, touched });
+        }
         if self.board.net.irq() {
             self.board.ints.raise(telegraph::INT_NETWORK);
         }
@@ -1098,8 +1476,28 @@ impl Logophor {
 impl Machine for Logophor {
     fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason {
         self.service();
+        // With nothing armed in the debugger, quiet stretches run in
+        // `run_quiet` (nothing can arm it while the frame runs).
+        let quiet = self.quiet_runs
+            && !(dbg.exec_armed(CPU_SPACE)
+                || dbg.read_armed(CPU_SPACE)
+                || dbg.write_armed(CPU_SPACE)
+                || dbg.trace_instr_armed()
+                || dbg.instr_step_armed()
+                || dbg.stop_pending());
+        if quiet {
+            self.look_ahead();
+        }
         loop {
-            if let Some(stop) = self.cycle(Some(dbg)) {
+            if quiet {
+                self.run_quiet();
+                if self.cpu.brk_hit {
+                    self.cpu.brk_hit = false;
+                    return StopReason::StepDone;
+                }
+                self.cycle(None);
+                self.look_ahead();
+            } else if let Some(stop) = self.cycle(Some(dbg)) {
                 return stop;
             }
             if self.cpu.brk_hit {
@@ -1130,6 +1528,7 @@ impl Machine for Logophor {
         self.board.lumiere.reset();
         self.board.babbage.reset();
         self.board.calliope.reset();
+        self.board.phonograph.reset();
         self.board.ints = Interrupts::new();
         let ports = self.board.input.ports;
         self.board.input = Input::new(ports);
@@ -1174,7 +1573,12 @@ impl Machine for Logophor {
                 total_pixels: u32::from(t.line_slots * t.x_num / t.x_den),
                 lines_per_field: u32::from(t.lines),
                 standard: VideoStandard::Ntsc,
-                output: OutputType::Rgb,
+                // VMODE bit 13: the monitor's green phosphor tube
+                output: if l.green_tube() {
+                    OutputType::Monochrome
+                } else {
+                    OutputType::Rgb
+                },
                 field: FieldParity::Progressive,
             },
         }
@@ -1210,7 +1614,7 @@ impl Machine for Logophor {
             bits: 16,
         };
         let b = &self.board.babbage;
-        let pc = b.copper_pc();
+        let pc = b.jacquard_pc();
         vec![
             ChipInfo {
                 name: "lumiere",
@@ -1222,17 +1626,17 @@ impl Machine for Logophor {
                     ("DMACON", babbage::DMACON),
                     ("DMAERR", babbage::DMAERR),
                     ("BUSCON", babbage::BUSCON),
-                    ("COP1SEG", babbage::COP1SEG),
-                    ("COP1OFS", babbage::COP1OFS),
-                    ("COP2SEG", babbage::COP2SEG),
-                    ("COP2OFS", babbage::COP2OFS),
-                    ("COPCON", babbage::COPCON),
-                    ("COPIRQ", babbage::COPIRQ),
+                    ("JAQ1SEG", babbage::JAQ1SEG),
+                    ("JAQ1OFS", babbage::JAQ1OFS),
+                    ("JAQ2SEG", babbage::JAQ2SEG),
+                    ("JAQ2OFS", babbage::JAQ2OFS),
+                    ("JAQCON", babbage::JAQCON),
+                    ("JAQIRQ", babbage::JAQIRQ),
                 ]
                 .into_iter()
                 .map(|(n, off)| reg(n, off, b.peek(off)))
                 .chain([ChipReg {
-                    name: "COPPC",
+                    name: "JAQPC",
                     addr: None,
                     value: pc,
                     bits: 32,
@@ -1259,6 +1663,29 @@ impl Machine for Logophor {
                     ]
                 }))
                 .map(|(n, off)| reg(n, off, self.board.calliope.peek(off)))
+                .collect(),
+            },
+            ChipInfo {
+                name: "phonograph",
+                regs: [
+                    ("PHCON", phonograph::PHCON),
+                    ("PHSEG", phonograph::PHSEG),
+                    ("PHOFS", phonograph::PHOFS),
+                    ("PHSIZE", phonograph::PHSIZE),
+                    ("PHWR", phonograph::PHWR),
+                    ("PHRD", phonograph::PHRD),
+                    ("PHSTAT", phonograph::PHSTAT),
+                    ("PHRATE", phonograph::PHRATE),
+                    ("PHCHAN", phonograph::PHCHAN),
+                    ("PHKBPS", phonograph::PHKBPS),
+                    ("PHVOL", phonograph::PHVOL),
+                    ("PHLEVL", phonograph::PHLEVL),
+                    ("PHLEVR", phonograph::PHLEVR),
+                    ("PHFRMH", phonograph::PHFRMH),
+                    ("PHFRML", phonograph::PHFRML),
+                ]
+                .into_iter()
+                .map(|(n, off)| reg(n, off, self.board.phonograph.peek(off)))
                 .collect(),
             },
             ChipInfo {
@@ -1303,6 +1730,12 @@ impl Machine for Logophor {
     fn attach_host(&mut self, host: HostServices) {
         if let (Some(s), Some(net)) = (self.tunnel.socket.take(), &self.tunnel.host.net) {
             host::lock(net).close(s);
+        }
+        if let Some(gate) = &mut self.tunnel.gate {
+            if let Some(net) = &self.tunnel.host.net {
+                gate.close_all(&mut *host::lock(net));
+            }
+            **gate = hostnet::HostNet::new();
         }
         self.tunnel.host = host;
         self.tunnel.tried = None;
@@ -1354,11 +1787,14 @@ impl Machine for Logophor {
     }
 
     fn save_state(&self) -> Vec<u8> {
-        let mut w = StateWriter::new();
+        // room for the touched segments and the rest (written every frame
+        // for rewinding)
+        let segments = self.board.touched.iter().filter(|t| **t).count();
+        let mut w = StateWriter::with_capacity((segments + 2) << 16);
         w.chunk(*b"C16M", 3, |w| {
             // RAM by segment, all-zero segments as one byte.
             for (seg, touched) in self.board.ram.chunks(1 << 16).zip(self.board.touched) {
-                if !touched || seg.iter().all(|b| *b == 0) {
+                if !touched || seg.as_chunks::<64>().0.iter().all(|c| *c == [0u8; 64]) {
                     w.u8(0);
                 } else {
                     w.u8(1);
@@ -1386,6 +1822,7 @@ impl Machine for Logophor {
             self.board.net.save(w);
         });
         self.input.save(&mut w);
+        w.chunk(*b"PHON", 1, |w| self.board.phonograph.save(w));
         w.into_bytes()
     }
 
@@ -1444,6 +1881,14 @@ impl Machine for Logophor {
         }
         let mut input = self.input.clone();
         input.load(&mut r)?;
+        // A state from before the Phonograph has no chunk: chip off.
+        let mut phono = Phonograph::new();
+        match r.chunk(*b"PHON", 1) {
+            Ok((_, mut c)) => phono.load(&mut c)?,
+            Err(StateError::Missing(_)) => {}
+            Err(e) => return Err(e),
+        }
+        phono.set_dma(babbage.dma(babbage::DMA_PHONOGRAPH));
         self.board.ram = ram;
         self.board.touched = touched;
         self.board.exit = has_exit.then_some(exit);
@@ -1451,6 +1896,7 @@ impl Machine for Logophor {
         self.board.babbage = babbage;
         self.board.ints = ints;
         self.board.calliope = calliope;
+        self.board.phonograph = phono;
         self.board.timers = timers;
         self.board.input = tinput;
         self.board.sd = sd;

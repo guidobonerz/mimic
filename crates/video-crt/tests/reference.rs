@@ -11,6 +11,7 @@
 mod common;
 
 use common::{diff, frame, pattern, read_png, reference_dir, write_png};
+use emu_core::frame::OutputType;
 use video_crt::{Crt, Profile};
 
 fn check(name: &str, img: &video_crt::Image, exact: bool, failures: &mut Vec<String>) {
@@ -52,6 +53,16 @@ fn presets_match_reference_images() {
     let mut failures = Vec::new();
     for preset in Profile::PRESETS {
         let profile = Profile::preset(preset).unwrap();
+        // A tube that a machine switches to (the Logophor 16's green one)
+        // is shown frames of its own type, else it would switch back.
+        let switching = profile.for_output(OutputType::Rgb).is_some();
+        let frame = |px| {
+            let mut f = frame(px);
+            if switching {
+                f.signal.output = OutputType::Monochrome;
+            }
+            f
+        };
         let img = video_crt::render(&frame(&px), &profile, 2);
         check(
             &format!("pattern-{preset}"),

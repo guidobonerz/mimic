@@ -45,7 +45,7 @@ fn pixels(png_bytes: &[u8]) -> Vec<[u8; 3]> {
 
 /// Median cut: split the box with the widest channel range at its
 /// median until there are `n` boxes; each box's mean is a colour.
-fn median_cut(px: &[[u8; 3]], n: usize) -> Vec<[u8; 3]> {
+pub fn median_cut(px: &[[u8; 3]], n: usize) -> Vec<[u8; 3]> {
     let mut boxes: Vec<Vec<[u8; 3]>> = vec![px.to_vec()];
     let range = |b: &[[u8; 3]], c: usize| {
         let (lo, hi) = b
@@ -92,7 +92,7 @@ fn median_cut(px: &[[u8; 3]], n: usize) -> Vec<[u8; 3]> {
         .collect()
 }
 
-fn rgb565(p: [u8; 3]) -> u16 {
+pub fn rgb565(p: [u8; 3]) -> u16 {
     // Rounded to the nearest level of each channel.
     let q = |v: u8, bits: u32| ((u32::from(v) * ((1 << bits) - 1) + 127) / 255) as u16;
     q(p[0], 5) << 11 | q(p[1], 6) << 5 | q(p[2], 5)

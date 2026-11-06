@@ -13,11 +13,9 @@ import (
 )
 
 const (
-	shown  = 3   // columns in the window
 	colW   = 168 // a column's width
 	rowH   = 18
 	top    = 24 // below the path
-	rowsIn = 12 // rows a column shows
 	maxCol = 8  // directory depth followed
 )
 
@@ -55,15 +53,19 @@ type browser struct {
 	n     int // columns open
 	first int // the leftmost column shown
 	info  string
+	// columns in the window, rows a column shows (3 x 12; more when
+	// maximised)
+	shown, rowsIn int
 }
 
 func run() {
 	boiler.SetName("Archive")
-	w := panorama.NewWindow(&app, "Archive", shown*colW+8, top+rowsIn*rowH+28)
+	w := panorama.NewWindow(&app, "Archive", 3*colW+8, top+12*rowH+28)
 	if w == nil {
 		return
 	}
-	b := &browser{w: w}
+	w.Resizable = true
+	b := &browser{w: w, shown: 3, rowsIn: 12}
 	b.open(0, "/")
 	b.paint()
 	for {
@@ -79,6 +81,14 @@ func run() {
 			return
 		case panorama.Theme:
 			b.paint()
+		case panorama.Resize:
+			sh := min(maxCol, max(1, (e.X-8)/colW))
+			ri := max(4, (e.Y-top-28)/rowH)
+			if w.SetSize(sh*colW+8, top+ri*rowH+28) {
+				b.shown, b.rowsIn = sh, ri
+				b.first = max(0, b.n-b.shown)
+			}
+			b.paint()
 		case panorama.Click:
 			b.click(e.X, e.Y)
 		}
@@ -92,7 +102,7 @@ func (b *browser) open(i int, path string) {
 	}
 	b.cols[i] = column{path: path, entries: files.ReadDir(path), sel: -1}
 	b.n = i + 1
-	b.first = max(0, b.n-shown)
+	b.first = max(0, b.n-b.shown)
 }
 
 func (b *browser) drop(i int) {
@@ -110,7 +120,7 @@ func (b *browser) drop(i int) {
 func (b *browser) click(x, y int) {
 	ci := b.first + (x-4)/colW
 	row := (y - top) / rowH
-	if x < 4 || y < top || ci >= b.n || row >= rowsIn {
+	if x < 4 || y < top || ci >= b.n || row >= b.rowsIn {
 		return
 	}
 	c := &b.cols[ci]
@@ -136,7 +146,7 @@ func (b *browser) click(x, y int) {
 			b.drop(k)
 		}
 		b.n = ci + 1
-		b.first = max(0, b.n-shown)
+		b.first = max(0, b.n-b.shown)
 		sb.WriteString(path)
 		sb.WriteString("  ")
 		sb.WriteInt(int32(e.Size))
@@ -151,13 +161,15 @@ func (b *browser) click(x, y int) {
 func (b *browser) paint() {
 	w := b.w
 	s := w.Surf
+	w.BeginPaint()
 	w.Clear()
 	ink, accent := panorama.Ink(), panorama.Accent()
 	// the path of the last column
 	last := &b.cols[b.n-1]
 	s.Text(6, 4, last.path, accent)
 	s.Fill(0, top-3, w.W, 1, gfx.Grey3)
-	for k := range shown {
+	rowsIn := b.rowsIn
+	for k := range b.shown {
 		ci := b.first + k
 		x := 4 + k*colW
 		if k > 0 {
@@ -189,4 +201,5 @@ func (b *browser) paint() {
 	s.Fill(0, top+rowsIn*rowH+2, w.W, 1, gfx.Grey3)
 	s.Text(6, top+rowsIn*rowH+6, b.info, ink)
 	w.Invalidate()
+	w.EndPaint()
 }

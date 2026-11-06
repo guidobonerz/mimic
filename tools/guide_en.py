@@ -666,6 +666,7 @@ table(["Profile", "Use"], [
     ["`ctm644`", "Amstrad colour monitor (CPC)"],
     ["`gt65`", "Amstrad green monitor"],
     ["`mac`", "the compact Macintosh's built-in black-and-white monitor"],
+    ["`logophor`, `logophor-scope`", "the Logophor 16's monitor: an RGB tube with clear raster lines, and its green phosphor tube with glow and afterglow; the program switches between them (Panorama's oscilloscope theme), the monitor follows"],
     ["`lite`", "aspect correction and light scanlines only, for slow computers and the web version"],
 ], [0.30, 0.70])
 p("""Besides the signal (composite, S-Video, RGB, monochrome) a profile sets
@@ -1000,8 +1001,8 @@ table(["Flag", "Meaning"], [
     ["`--scale N`", "Initial window size in rows per emulated line (default 2, less if "
      "the window would not fit the screen)."],
     ["`--crt PROFILE`", "The monitor: `raw`, `lite`, `1702`, `1084s`, `1084s-rgb`, "
-     "`tv`, `pal-tv`, `ntsc-tv`, `pet-white`, `pet-green`, `ctm644`, `gt65`, `mac` or "
-     "a `.toml` file, which is re-read when it changes. Default: the machine's own "
+     "`tv`, `pal-tv`, `ntsc-tv`, `pet-white`, `pet-green`, `ctm644`, `gt65`, `mac`, "
+     "`logophor`, `logophor-scope` or a `.toml` file, which is re-read when it changes. Default: the machine's own "
      "monitor."],
     ["`--deinterlace MODE`", "Interlaced pictures (Amiga LACE): `weave` (default, "
      "both fields interleaved) or `bob` (the current field's lines doubled); Ctrl+I "
@@ -1210,7 +1211,7 @@ table(["Key", "Machine", "Values"], [
      "built-in system card (Boiler and the desktop Panorama; the profile `logophor16` sets it, "
      "writes are lost at the end; `--disk` takes its place), `none` (default); `rtc`: seconds since 2000-01-01 "
      "(the clock's start; default 2026-01-01); `mouse|joystick|none` (defaults: mouse in "
-     "port 0, joystick in port 1); `net=HOST:PORT` joins the network of an `ada-asm hub` (also the net's gateway 10.16.0.1: DHCP, DNS and the Internet through the host's sockets; `--no-gateway` relays only) "
+     "port 0, joystick in port 1); `net=host` puts the hub's gateway into the machine (10.16.0.1: DHCP, DNS and the Internet through the host's network, no hub needed; the profile `logophor16` sets it), `net=HOST:PORT` joins the network of an `ada-asm hub` (also the net's gateway; `--no-gateway` relays only) "
      "(default port 6516); `mac=02:4c:31:36:00:01`. The SD card is a FAT32 image given with `--disk` "
      "(`ada-asm sd card.img --boot prog.bin`); Foundry starts `BOOT/BOILER.BIN` "
      "from it, a key held while the start picture shows opens its monitor"],

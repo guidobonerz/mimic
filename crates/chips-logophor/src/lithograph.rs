@@ -1,8 +1,8 @@
-//! The Blitter in Babbage (SPEC.md 6.3): registers at FFFF:0100.
+//! The Lithograph in Babbage (SPEC.md 6.3): registers at FFFF:0100.
 //!
 //! A job works a row at a time (a pixel at a time for a line): every
 //! 32-bit chip-RAM access costs one free chip-bus slot, and a row is done
-//! when its slots are spent ([`Blitter::slot`]). Operations: copy with a
+//! when its slots are spent ([`Lithograph::slot`]). Operations: copy with a
 //! 4-bit raster operation of sources A and B into D, fill, Bresenham line,
 //! shade (D = TABLE[B] where A is not the colour key). Pixels of 4, 8 or
 //! 16 bits; flip X/Y mirror the walk over A; the colour key on A skips
@@ -14,28 +14,28 @@
 
 use emu_core::{StateError, StateReader, StateWriter};
 
-pub const BLTCON0: u16 = 0x0100;
-pub const BLTCON1: u16 = 0x0102;
-pub const BLTASEG: u16 = 0x0104;
-pub const BLTAOFS: u16 = 0x0106;
-pub const BLTBSEG: u16 = 0x0108;
-pub const BLTBOFS: u16 = 0x010a;
-pub const BLTDSEG: u16 = 0x010c;
-pub const BLTDOFS: u16 = 0x010e;
-pub const BLTAPITCH: u16 = 0x0110;
-pub const BLTBPITCH: u16 = 0x0112;
-pub const BLTDPITCH: u16 = 0x0114;
-pub const BLTW: u16 = 0x0116;
-pub const BLTH: u16 = 0x0118;
-pub const BLTKEY: u16 = 0x011a;
-pub const BLTCOLOR: u16 = 0x011c;
-pub const BLTTSEG: u16 = 0x011e;
-pub const BLTTOFS: u16 = 0x0120;
-pub const BLTLINE: u16 = 0x0122;
-pub const BLTSTART: u16 = 0x0124;
-pub const BLTSTAT: u16 = 0x0126;
+pub const LTHCON0: u16 = 0x0100;
+pub const LTHCON1: u16 = 0x0102;
+pub const LTHASEG: u16 = 0x0104;
+pub const LTHAOFS: u16 = 0x0106;
+pub const LTHBSEG: u16 = 0x0108;
+pub const LTHBOFS: u16 = 0x010a;
+pub const LTHDSEG: u16 = 0x010c;
+pub const LTHDOFS: u16 = 0x010e;
+pub const LTHAPITCH: u16 = 0x0110;
+pub const LTHBPITCH: u16 = 0x0112;
+pub const LTHDPITCH: u16 = 0x0114;
+pub const LTHW: u16 = 0x0116;
+pub const LTHH: u16 = 0x0118;
+pub const LTHKEY: u16 = 0x011a;
+pub const LTHCOLOR: u16 = 0x011c;
+pub const LTHTSEG: u16 = 0x011e;
+pub const LTHTOFS: u16 = 0x0120;
+pub const LTHLINE: u16 = 0x0122;
+pub const LTHSTART: u16 = 0x0124;
+pub const LTHSTAT: u16 = 0x0126;
 
-/// BLTCON0: bits 3–0 ROP, 4/5/6 use A/B/D, 9–8 operation.
+/// LTHCON0: bits 3–0 ROP, 4/5/6 use A/B/D, 9–8 operation.
 pub const USE_A: u16 = 1 << 4;
 pub const USE_B: u16 = 1 << 5;
 pub const USE_D: u16 = 1 << 6;
@@ -43,7 +43,7 @@ pub const OP_COPY: u16 = 0 << 8;
 pub const OP_FILL: u16 = 1 << 8;
 pub const OP_LINE: u16 = 2 << 8;
 pub const OP_SHADE: u16 = 3 << 8;
-/// BLTCON1 bits.
+/// LTHCON1 bits.
 pub const SIZE_4: u16 = 0;
 pub const SIZE_8: u16 = 1;
 pub const SIZE_16: u16 = 2;
@@ -53,14 +53,14 @@ pub const KEY_A: u16 = 1 << 4;
 
 const CHIP_END: u32 = 0x0040_0000;
 
-/// Chip RAM the Blitter reads and writes.
+/// Chip RAM the Lithograph reads and writes.
 pub trait ChipRamMut {
     fn get(&self, addr: u32) -> u8;
     fn set(&mut self, addr: u32, v: u8);
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Blitter {
+pub struct Lithograph {
     con0: u16,
     con1: u16,
     a: (u16, u16),
@@ -88,67 +88,67 @@ fn lin(p: (u16, u16)) -> u32 {
     u32::from(p.0) << 16 | u32::from(p.1)
 }
 
-impl Blitter {
+impl Lithograph {
     pub fn busy(&self) -> bool {
         self.busy
     }
 
     pub fn peek(&self, off: u16) -> u16 {
         match off & !1 {
-            BLTCON0 => self.con0,
-            BLTCON1 => self.con1,
-            BLTASEG => self.a.0,
-            BLTAOFS => self.a.1,
-            BLTBSEG => self.b.0,
-            BLTBOFS => self.b.1,
-            BLTDSEG => self.d.0,
-            BLTDOFS => self.d.1,
-            BLTAPITCH => self.pitch[0],
-            BLTBPITCH => self.pitch[1],
-            BLTDPITCH => self.pitch[2],
-            BLTW => self.w,
-            BLTH => self.h,
-            BLTKEY => self.key,
-            BLTCOLOR => self.color,
-            BLTTSEG => self.t.0,
-            BLTTOFS => self.t.1,
-            BLTLINE => self.line,
-            BLTSTAT => u16::from(self.busy) | u16::from(self.done) << 1,
+            LTHCON0 => self.con0,
+            LTHCON1 => self.con1,
+            LTHASEG => self.a.0,
+            LTHAOFS => self.a.1,
+            LTHBSEG => self.b.0,
+            LTHBOFS => self.b.1,
+            LTHDSEG => self.d.0,
+            LTHDOFS => self.d.1,
+            LTHAPITCH => self.pitch[0],
+            LTHBPITCH => self.pitch[1],
+            LTHDPITCH => self.pitch[2],
+            LTHW => self.w,
+            LTHH => self.h,
+            LTHKEY => self.key,
+            LTHCOLOR => self.color,
+            LTHTSEG => self.t.0,
+            LTHTOFS => self.t.1,
+            LTHLINE => self.line,
+            LTHSTAT => u16::from(self.busy) | u16::from(self.done) << 1,
             _ => 0,
         }
     }
 
-    /// Register read: BLTSTAT's done bit clears.
+    /// Register read: LTHSTAT's done bit clears.
     pub fn read(&mut self, off: u16) -> u16 {
         let v = self.peek(off);
-        if off & !1 == BLTSTAT {
+        if off & !1 == LTHSTAT {
             self.done = false;
         }
         v
     }
 
-    /// Register write; `true` for BLTSTART (the caller starts the job).
+    /// Register write; `true` for LTHSTART (the caller starts the job).
     pub fn write(&mut self, off: u16, v: u16) -> bool {
         match off & !1 {
-            BLTCON0 => self.con0 = v & 0x037f,
-            BLTCON1 => self.con1 = v & 0x00ff,
-            BLTASEG => self.a.0 = v,
-            BLTAOFS => self.a.1 = v,
-            BLTBSEG => self.b.0 = v,
-            BLTBOFS => self.b.1 = v,
-            BLTDSEG => self.d.0 = v,
-            BLTDOFS => self.d.1 = v,
-            BLTAPITCH => self.pitch[0] = v,
-            BLTBPITCH => self.pitch[1] = v,
-            BLTDPITCH => self.pitch[2] = v,
-            BLTW => self.w = v,
-            BLTH => self.h = v,
-            BLTKEY => self.key = v,
-            BLTCOLOR => self.color = v,
-            BLTTSEG => self.t.0 = v,
-            BLTTOFS => self.t.1 = v,
-            BLTLINE => self.line = v & 7,
-            BLTSTART => return true,
+            LTHCON0 => self.con0 = v & 0x037f,
+            LTHCON1 => self.con1 = v & 0x00ff,
+            LTHASEG => self.a.0 = v,
+            LTHAOFS => self.a.1 = v,
+            LTHBSEG => self.b.0 = v,
+            LTHBOFS => self.b.1 = v,
+            LTHDSEG => self.d.0 = v,
+            LTHDOFS => self.d.1 = v,
+            LTHAPITCH => self.pitch[0] = v,
+            LTHBPITCH => self.pitch[1] = v,
+            LTHDPITCH => self.pitch[2] = v,
+            LTHW => self.w = v,
+            LTHH => self.h = v,
+            LTHKEY => self.key = v,
+            LTHCOLOR => self.color = v,
+            LTHTSEG => self.t.0 = v,
+            LTHTOFS => self.t.1 = v,
+            LTHLINE => self.line = v & 7,
+            LTHSTART => return true,
             _ => {}
         }
         false
@@ -217,7 +217,22 @@ impl Blitter {
         }
     }
 
-    /// One free slot for a busy Blitter; `true` when the job finished in it.
+    /// Calls of [`Lithograph::slot`] up to and including the next one that
+    /// does work (a row or a line pixel); the ones before only count.
+    pub fn slots_to_work(&self) -> u32 {
+        self.row_cost().saturating_sub(self.credit).max(1)
+    }
+
+    /// `n` slots (fewer than [`Lithograph::slots_to_work`]): the same as
+    /// `n` calls of [`Lithograph::slot`], which only count then.
+    pub fn skip_slots(&mut self, n: u32) {
+        debug_assert!(!self.busy || n < self.slots_to_work());
+        if self.busy {
+            self.credit += n;
+        }
+    }
+
+    /// One free slot for a busy Lithograph; `true` when the job finished in it.
     pub fn slot(&mut self, mem: &mut dyn ChipRamMut) -> bool {
         if !self.busy {
             return false;
@@ -426,7 +441,7 @@ impl Blitter {
     }
 
     pub fn load(&mut self, c: &mut StateReader<'_>) -> Result<(), StateError> {
-        let mut b = Blitter::default();
+        let mut b = Lithograph::default();
         let mut f = || c.u16();
         b.con0 = f()? & 0x037f;
         b.con1 = f()? & 0xff;
@@ -471,8 +486,8 @@ mod tests {
     }
 
     /// Set registers, start, run to the end; the slots it took.
-    fn blit(ram: &mut Ram, regs: &[(u16, u16)]) -> u32 {
-        let mut b = Blitter::default();
+    fn lith(ram: &mut Ram, regs: &[(u16, u16)]) -> u32 {
+        let mut b = Lithograph::default();
         for &(r, v) in regs {
             b.write(r, v);
         }
@@ -483,8 +498,8 @@ mod tests {
             b.slot(ram);
             assert!(slots < 1_000_000);
         }
-        assert_eq!(b.read(BLTSTAT), 2, "done");
-        assert_eq!(b.read(BLTSTAT), 0, "done clears on read");
+        assert_eq!(b.read(LTHSTAT), 2, "done");
+        assert_eq!(b.read(LTHSTAT), 0, "done clears on read");
         slots
     }
 
@@ -496,34 +511,34 @@ mod tests {
             m.0[0x2000 + usize::from(i)] = 0xf0; // B
         }
         let base = [
-            (BLTCON1, SIZE_8),
-            (BLTASEG, 0),
-            (BLTAOFS, 0x1000),
-            (BLTBSEG, 0),
-            (BLTBOFS, 0x2000),
-            (BLTDSEG, 0),
-            (BLTDOFS, 0x3000),
-            (BLTAPITCH, 4),
-            (BLTBPITCH, 4),
-            (BLTDPITCH, 8),
-            (BLTW, 4),
-            (BLTH, 4),
+            (LTHCON1, SIZE_8),
+            (LTHASEG, 0),
+            (LTHAOFS, 0x1000),
+            (LTHBSEG, 0),
+            (LTHBOFS, 0x2000),
+            (LTHDSEG, 0),
+            (LTHDOFS, 0x3000),
+            (LTHAPITCH, 4),
+            (LTHBPITCH, 4),
+            (LTHDPITCH, 8),
+            (LTHW, 4),
+            (LTHH, 4),
         ];
         // Plain copy A -> D: 1 A word + 1 D word a row.
         let mut regs = base.to_vec();
-        regs.push((BLTCON0, 0xc | USE_A | USE_D));
-        assert_eq!(blit(&mut m, &regs), 4 * 2);
+        regs.push((LTHCON0, 0xc | USE_A | USE_D));
+        assert_eq!(lith(&mut m, &regs), 4 * 2);
         assert_eq!(&m.0[0x3000..0x3004], &[0, 1, 2, 3]);
         assert_eq!(&m.0[0x3008..0x300c], &[4, 5, 6, 7], "D pitch 8");
         // A OR B, colour key 0 on A, flipped in X and Y.
         let mut regs = base.to_vec();
         regs.extend([
-            (BLTCON0, 0xe | USE_A | USE_B | USE_D),
-            (BLTCON1, SIZE_8 | FLIP_X | FLIP_Y | KEY_A),
-            (BLTKEY, 0),
-            (BLTDOFS, 0x4000),
+            (LTHCON0, 0xe | USE_A | USE_B | USE_D),
+            (LTHCON1, SIZE_8 | FLIP_X | FLIP_Y | KEY_A),
+            (LTHKEY, 0),
+            (LTHDOFS, 0x4000),
         ]);
-        blit(&mut m, &regs);
+        lith(&mut m, &regs);
         assert_eq!(
             &m.0[0x4000..0x4004],
             &[0xff, 0xfe, 0xfd, 0xfc],
@@ -544,15 +559,15 @@ mod tests {
         m.0[0x2000] = 0xaa;
         m.0[0x2001] = 0xaa;
         // 3 nibbles of A from phase 1 (2, 3, 4) to D from phase 1.
-        blit(
+        lith(
             &mut m,
             &[
-                (BLTCON0, 0xc | USE_A | USE_D),
-                (BLTCON1, SIZE_4 | 0x20 | 0x80),
-                (BLTAOFS, 0x1000),
-                (BLTDOFS, 0x2000),
-                (BLTW, 3),
-                (BLTH, 1),
+                (LTHCON0, 0xc | USE_A | USE_D),
+                (LTHCON1, SIZE_4 | 0x20 | 0x80),
+                (LTHAOFS, 0x1000),
+                (LTHDOFS, 0x2000),
+                (LTHW, 3),
+                (LTHH, 1),
             ],
         );
         assert_eq!(
@@ -561,16 +576,16 @@ mod tests {
             "nibble masking keeps the rest"
         );
         // 16-bit fill, negative pitch (rows upwards).
-        blit(
+        lith(
             &mut m,
             &[
-                (BLTCON0, OP_FILL),
-                (BLTCON1, SIZE_16),
-                (BLTDOFS, 0x3010),
-                (BLTDPITCH, (-16i16) as u16),
-                (BLTW, 2),
-                (BLTH, 2),
-                (BLTCOLOR, 0xf81f),
+                (LTHCON0, OP_FILL),
+                (LTHCON1, SIZE_16),
+                (LTHDOFS, 0x3010),
+                (LTHDPITCH, (-16i16) as u16),
+                (LTHW, 2),
+                (LTHH, 2),
+                (LTHCOLOR, 0xf81f),
             ],
         );
         assert_eq!(&m.0[0x3010..0x3014], &[0x1f, 0xf8, 0x1f, 0xf8]);
@@ -585,16 +600,16 @@ mod tests {
     fn lines_follow_bresenham() {
         let mut m = ram();
         // From (0, 0) 6 right, 2 down: 7 pixels, 2 slots each.
-        let slots = blit(
+        let slots = lith(
             &mut m,
             &[
-                (BLTCON0, OP_LINE),
-                (BLTCON1, SIZE_8),
-                (BLTDOFS, 0x1000),
-                (BLTDPITCH, 16),
-                (BLTW, 6),
-                (BLTH, 2),
-                (BLTCOLOR, 9),
+                (LTHCON0, OP_LINE),
+                (LTHCON1, SIZE_8),
+                (LTHDOFS, 0x1000),
+                (LTHDPITCH, 16),
+                (LTHW, 6),
+                (LTHH, 2),
+                (LTHCOLOR, 9),
             ],
         );
         assert_eq!(slots, 14);
@@ -607,17 +622,17 @@ mod tests {
             [(0, 0), (1, 0), (2, 1), (3, 1), (4, 1), (5, 2), (6, 2)]
         );
         // Steep, up and left: y major, 3 up, 1 left.
-        blit(
+        lith(
             &mut m,
             &[
-                (BLTCON0, OP_LINE),
-                (BLTCON1, SIZE_8),
-                (BLTDOFS, 0x2034),
-                (BLTDPITCH, 16),
-                (BLTW, 1),
-                (BLTH, 3),
-                (BLTLINE, 1 | 2 | 4),
-                (BLTCOLOR, 7),
+                (LTHCON0, OP_LINE),
+                (LTHCON1, SIZE_8),
+                (LTHDOFS, 0x2034),
+                (LTHDPITCH, 16),
+                (LTHW, 1),
+                (LTHH, 3),
+                (LTHLINE, 1 | 2 | 4),
+                (LTHCOLOR, 7),
             ],
         );
         let lit: Vec<u32> = (0..64u32)
@@ -634,17 +649,17 @@ mod tests {
         }
         m.0[0x1000..0x1004].copy_from_slice(&[1, 0, 1, 1]); // A: mask
         m.0[0x2000..0x2004].copy_from_slice(&[100, 100, 100, 100]); // B
-        blit(
+        lith(
             &mut m,
             &[
-                (BLTCON0, OP_SHADE | USE_A | USE_B | USE_D),
-                (BLTCON1, SIZE_8 | KEY_A),
-                (BLTAOFS, 0x1000),
-                (BLTBOFS, 0x2000),
-                (BLTDOFS, 0x2000),
-                (BLTTOFS, 0x5000),
-                (BLTW, 4),
-                (BLTH, 1),
+                (LTHCON0, OP_SHADE | USE_A | USE_B | USE_D),
+                (LTHCON1, SIZE_8 | KEY_A),
+                (LTHAOFS, 0x1000),
+                (LTHBOFS, 0x2000),
+                (LTHDOFS, 0x2000),
+                (LTHTOFS, 0x5000),
+                (LTHW, 4),
+                (LTHH, 1),
             ],
         );
         assert_eq!(&m.0[0x2000..0x2004], &[50, 100, 50, 50]);
@@ -652,14 +667,14 @@ mod tests {
 
     #[test]
     fn a_pointer_outside_chip_ram_refuses_to_start() {
-        let mut b = Blitter::default();
-        b.write(BLTCON0, 0xc | USE_A | USE_D);
-        b.write(BLTASEG, 0x40);
-        b.write(BLTW, 1);
-        b.write(BLTH, 1);
+        let mut b = Lithograph::default();
+        b.write(LTHCON0, 0xc | USE_A | USE_D);
+        b.write(LTHASEG, 0x40);
+        b.write(LTHW, 1);
+        b.write(LTHH, 1);
         assert!(!b.start());
         assert!(!b.busy());
-        b.write(BLTASEG, 0);
+        b.write(LTHASEG, 0);
         assert!(b.start());
         assert!(b.busy());
     }
@@ -667,13 +682,13 @@ mod tests {
     #[test]
     fn savestate_mid_job() {
         let mut m = ram();
-        let mut b = Blitter::default();
+        let mut b = Lithograph::default();
         for (r, v) in [
-            (BLTCON0, OP_FILL),
-            (BLTCON1, SIZE_8),
-            (BLTW, 64),
-            (BLTH, 8),
-            (BLTDPITCH, 64),
+            (LTHCON0, OP_FILL),
+            (LTHCON1, SIZE_8),
+            (LTHW, 64),
+            (LTHH, 8),
+            (LTHDPITCH, 64),
         ] {
             b.write(r, v);
         }
@@ -684,7 +699,7 @@ mod tests {
         let mut w = StateWriter::new();
         b.save(&mut w);
         let bytes = w.into_bytes();
-        let mut c = Blitter::default();
+        let mut c = Lithograph::default();
         c.load(&mut StateReader::new(&bytes)).unwrap();
         assert_eq!(c, b);
     }

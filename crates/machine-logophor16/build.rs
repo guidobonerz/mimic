@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 mod logo;
 #[path = "music.rs"]
 mod music;
+mod tile;
 #[path = "zeppelin.rs"]
 mod zeppelin;
 
@@ -92,6 +93,27 @@ fn system_card(out: &Path) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("system");
     // (a directory: cargo looks at everything below it)
     println!("cargo:rerun-if-changed={}", root.display());
+    let png = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("system/panorama/tile.png"))
+        .expect("system/panorama/tile.png");
+    // the dock's application tiles (system/panorama/icons/), by name
+    let icons: Vec<(String, Vec<u8>)> = [
+        ("Info", "info"),
+        ("Archive", "archive"),
+        ("Engine Room", "engine"),
+        ("Radio", "radio"),
+        ("Pathfinder", "pathfinder"),
+        ("Steamworks", "steamworks"),
+    ]
+    .iter()
+    .map(|(name, file)| {
+        let p = root.join(format!("panorama/icons/{file}.png"));
+        (name.to_string(), std::fs::read(&p).expect("icon"))
+    })
+    .collect();
+    let wallpaper = std::fs::read(root.join("panorama/wallpaper.png")).expect("wallpaper.png");
+    let buttons = std::fs::read(root.join("panorama/buttons.png")).expect("buttons.png");
+    let skin = tile::tile_raw(&png, &wallpaper, &buttons, &icons);
+    std::fs::write(out.join("tile.raw"), &skin).expect("write tile.raw");
     let prog = brass::build(&brass::DirSources { root })
         .unwrap_or_else(|e| panic!("system/:\n{}", e.join("\n")));
     let readme = b"The Logophor 16's system card: Boiler, Panorama and its applications.\n\
@@ -101,6 +123,7 @@ fn system_card(out: &Path) {
         &[
             ("BOOT/BOILER.BIN".into(), prog.binary),
             ("README.TXT".into(), readme.to_vec()),
+            ("PANORAMA/TILE.RAW".into(), skin),
         ],
     )
     .expect("system card");

@@ -692,6 +692,7 @@ table(["Profil", "Verwendung"], [
     ["`ctm644`", "Amstrad-Farbmonitor (CPC)"],
     ["`gt65`", "Amstrad-Grünmonitor"],
     ["`mac`", "der eingebaute Schwarzweißmonitor des kompakten Macintosh"],
+    ["`logophor`, `logophor-scope`", "der Monitor des Logophor 16: eine RGB-Röhre mit deutlichen Rasterlinien und seine grüne Leuchtröhre mit Glühen und Nachleuchten; das Programm schaltet um (Panoramas Oszilloskop-Theme), der Monitor folgt"],
     ["`lite`", "nur Seitenverhältnis und leichte Zeilen, für langsame Rechner und die Web-Fassung"],
 ], [0.30, 0.70])
 p("""Neben dem Signal (Composite, S-Video, RGB, monochrom) legt ein Profil
@@ -1031,8 +1032,8 @@ table(["Option", "Bedeutung"], [
     ["`--scale N`", "Anfängliche Fenstergröße in Zeilen je emulierter Zeile (Standard 2, "
      "weniger, wenn das Fenster nicht auf den Bildschirm passt)."],
     ["`--crt PROFIL`", "Der Monitor: `raw`, `lite`, `1702`, `1084s`, `1084s-rgb`, "
-     "`tv`, `pal-tv`, `ntsc-tv`, `pet-white`, `pet-green`, `ctm644`, `gt65`, `mac` oder "
-     "eine `.toml`-Datei, die bei Änderung neu gelesen wird. Standard: der eigene "
+     "`tv`, `pal-tv`, `ntsc-tv`, `pet-white`, `pet-green`, `ctm644`, `gt65`, `mac`, "
+     "`logophor`, `logophor-scope` oder eine `.toml`-Datei, die bei Änderung neu gelesen wird. Standard: der eigene "
      "Monitor der Maschine."],
     ["`--deinterlace MODUS`", "Zeilensprungbilder (Amiga LACE): `weave` (Standard, beide "
      "Halbbilder verschränkt) oder `bob` (die Zeilen des aktuellen Halbbilds verdoppelt); "
@@ -1242,8 +1243,8 @@ table(["Schlüssel", "Maschine", "Werte"], [
      "eingebaute Systemkarte ein (Boiler und der Desktop Panorama; das Profil `logophor16` setzt das, "
      "Schreibzugriffe gehen am Ende verloren; `--disk` tritt an ihre Stelle), `none` (Vorgabe); `rtc`: Sekunden seit 2000-01-01 "
      "(Start der Uhr; Vorgabe 2026-01-01); `mouse|joystick|none` (Vorgabe: Maus an "
-     "Port 0, Joystick an Port 1); `net=HOST:PORT` verbindet mit dem Netz eines "
-     "`ada-asm hub` (zugleich Gateway 10.16.0.1 des Netzes: DHCP, DNS und das Internet über die Sockets des Host-Rechners; `--no-gateway` nur Verteiler) (Vorgabe Port 6516); `mac=02:4c:31:36:00:01`. Die SD-Karte ist ein FAT32-Image per `--disk` "
+     "Port 0, Joystick an Port 1); `net=host` baut das Gateway des Hubs in die Maschine ein (10.16.0.1: DHCP, DNS und das Internet über das Netz des Host-Rechners, ohne Hub; das Profil `logophor16` setzt das), `net=HOST:PORT` verbindet mit dem Netz eines "
+     "`ada-asm hub` (zugleich Gateway des Netzes; `--no-gateway` nur Verteiler) (Vorgabe Port 6516); `mac=02:4c:31:36:00:01`. Die SD-Karte ist ein FAT32-Image per `--disk` "
      "(`ada-asm sd card.img --boot prog.bin`); Foundry startet davon "
      "`BOOT/BOILER.BIN`, eine Taste während des Startbilds öffnet den Monitor"],
 ], [0.26, 0.18, 0.56])

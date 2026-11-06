@@ -605,13 +605,15 @@ func (f *File) Read(b []byte) int {
 		if !load(lba) {
 			break
 		}
+		// the rest of the sector, of b and of the file, in one copy
 		off := int(in % 512)
-		for off < 512 && n < len(b) && f.pos < f.size {
-			b[n] = b8(secSeg, off)
-			n++
-			off++
-			f.pos++
+		k := min(512-off, len(b)-n)
+		if left := f.size - f.pos; left < uint32(k) {
+			k = int(left)
 		}
+		copy(b[n:n+k], (*[512]byte)(uintptr(secSeg)<<16)[off:off+k])
+		n += k
+		f.pos += uint32(k)
 	}
 	mu.Unlock()
 	return n

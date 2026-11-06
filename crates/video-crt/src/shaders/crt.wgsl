@@ -27,7 +27,7 @@ struct Params {
     bloom: f32,
     curvature: f32,
     vignette: f32,
-    _pad0: f32,
+    glow: f32,
     _pad1: f32,
 };
 
@@ -134,9 +134,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let falloff = min(offset / max(beam, 0.01), 1.0);
         lit = col * (1.0 - params.scanlines * falloff * falloff);
         let bloom = clamp(params.bloom, 0.0, 1.0);
-        if (bloom > 0.0) {
+        let shine = clamp(params.glow, 0.0, 1.0);
+        if (bloom > 0.0 || shine > 0.0) {
             let g = mix(glow(x0, sy), glow(x0 + 1, sy), t);
-            lit = lit + bloom * g * g;
+            lit = lit + bloom * g * g + 2.0 * shine * g;
         }
         lit = lit * params.tint * mask(screen);
         let vignette = clamp(params.vignette, 0.0, 1.0);

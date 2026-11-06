@@ -1,0 +1,273 @@
+// Package pathfinder: the owner's tip-over puzzle Pathfinder (first
+// written for GUI64 on the C64, gui64_apps/Pathfinder), ported to Brass
+// for Panorama (step 11e) with its rules and levels.
+//
+// The playfield has 6 x 6 cells. Some cells hold towers of stacked
+// boxes: red (height 1, the target), yellow (2), green (3) and blue (4).
+// The player starts on a tower and has to find a path to the red box: a
+// tower the player can reach is tipped over to the north, south, west or
+// east. It then lies on the cells next to it (as many cells as it was
+// high, they must be free and inside the playfield), and the player
+// stands on its far end. The player can walk over all boxes that touch
+// each other (standing or lying). The level is solved when the red box
+// can be reached.
+package pathfinder
+
+// The board: N x N cells; a cell is 0 (empty), 1-4 (a standing tower of
+// that height) or Lying + height (a part of a tipped tower).
+const (
+	N     = 6
+	Size  = N * N
+	Lying = 0x10
+)
+
+// Directions.
+const (
+	DirN = 0
+	DirS = 1
+	DirW = 2
+	DirE = 3
+)
+
+// Game states.
+const (
+	Select = 0 // the cursor chooses a tower
+	Stuck  = 1 // no tower can be tipped any more (undo or restart)
+	Dir    = 2 // a tower is chosen: the direction to tip it
+	Solved = 3 // the path to the red box is found
+)
+
+const maxUndo = 16 // a level has at most 16 towers to tip
+
+var dRow = [4]int{-1, 1, 0, 0}
+var dCol = [4]int{0, 0, -1, 1}
+
+// Game is Pathfinder's state.
+type Game struct {
+	Level  int
+	State  int
+	Board  [Size]int
+	Reach  [Size]bool
+	Player int
+	Cursor int
+	Sel    int
+	Status string
+	undo   [maxUndo][Size + 1]int
+	undos  int
+	tip    [4]int // the cells a tower would lie on
+}
+
+// Levels: 6 rows of 6 cells (x empty, 1 the red box, 2-4 towers), then
+// the start tower's column and row. Each has exactly one solution (the
+// original's notes).
+var levels = [10]string{
+	"xxx3xx3xxxxxxxxx2xxxxxxxx1xxxxxxxxxx42",
+	"4xxx3xxx2xx2xxxxxxxxx1xxxxxxxx4xxxx300",
+	"x3xxx3xxxx4xxxxxxxxxxxxxx1xxxxxxxxx441",
+	"33xx3xxxxxxxxxxxxxxxxxx12xxxxx4xxxx455",
+	"x2xxx4xxx2xxx3xxxxxxx2xxxxxx4xxx3xx110",
+	"xxxxxxxxx2xxx3xxxxxxxxxx4xxxxxxx24x131",
+	"xxx1xxx2xxxxxxxxxxxx2xxx3x22xxxxx2xx35",
+	"3xxxxxx33xxxxx3xx2xxxxx24xxxxxxxxxx100",
+	"xxxxxxxxxxxxxx2xxxx324xx3x4x1x2xxxxx22",
+	"xxxxxxxxxx1xx323xxxxx2xxxxx2xx4xxxxx05",
+}
+
+// Levels is how many there are.
+const Levels = 10
+
+// Load starts level n (0-based).
+func (g *Game) Load(n int) {
+	g.Level = n
+	l := levels[n]
+	for i := range Size {
+		c := l[i]
+		g.Board[i] = 0
+		if c >= '1' && c <= '4' {
+			g.Board[i] = int(c - '0')
+		}
+	}
+	g.Player = int(l[Size+1]-'0')*N + int(l[Size]-'0')
+	g.Cursor = g.Player
+	g.undos = 0
+	g.idle()
+}
+
+// Next and Prev go to the following or the preceding level (round).
+func (g *Game) Next() { g.Load((g.Level + 1) % Levels) }
+
+func (g *Game) Prev() { g.Load((g.Level + Levels - 1) % Levels) }
+
+// Move moves the cursor (Select, Stuck) or tips the chosen tower (Dir).
+func (g *Game) Move(d int) {
+	if g.State == Dir {
+		g.Tip(d)
+		return
+	}
+	r, c := g.Cursor/N+dRow[d], g.Cursor%N+dCol[d]
+	if r >= 0 && r < N && c >= 0 && c < N {
+		g.Cursor = r*N + c
+	}
+}
+
+// Choose takes the tower under the cursor if the player can reach it.
+func (g *Game) Choose() {
+	v := g.Board[g.Cursor]
+	switch {
+	case v == 0 || v >= 5:
+		g.Status = "No tower here"
+	case v == 1:
+		g.Status = "It's the goal"
+	default:
+		g.reach()
+		if !g.Reach[g.Cursor] {
+			g.Status = "Not reachable"
+			return
+		}
+		g.Sel = g.Cursor
+		g.Player = g.Cursor
+		g.State = Dir
+		g.Status = "Tip direction?"
+	}
+}
+
+// Cancel gives a chosen tower up.
+func (g *Game) Cancel() {
+	g.Cursor = g.Sel
+	g.idle()
+}
+
+// canTip: may the standing tower at cell i fall in direction d? The
+// cells it would lie on go to g.tip.
+func (g *Game) canTip(i, d int) bool {
+	h := g.Board[i]
+	r, c := i/N, i%N
+	for k := range h {
+		r += dRow[d]
+		c += dCol[d]
+		if r < 0 || r >= N || c < 0 || c >= N || g.Board[r*N+c] != 0 {
+			return false
+		}
+		g.tip[k] = r*N + c
+	}
+	return true
+}
+
+// Tip tips the chosen tower over in direction d.
+func (g *Game) Tip(d int) {
+	if !g.canTip(g.Sel, d) {
+		g.Status = "No room there"
+		return
+	}
+	if g.undos < maxUndo {
+		copy(g.undo[g.undos][:Size], g.Board[:])
+		g.undo[g.undos][Size] = g.Player
+		g.undos++
+	}
+	h := g.Board[g.Sel]
+	g.Board[g.Sel] = 0
+	for k := range h {
+		g.Board[g.tip[k]] = Lying + h
+	}
+	g.Player = g.tip[h-1]
+	g.Cursor = g.Player
+	g.reach()
+	for i := range Size {
+		if g.Reach[i] && g.Board[i] == 1 {
+			g.Player = i
+			g.Cursor = i
+			g.State = Solved
+			g.Status = "Path found!"
+			return
+		}
+	}
+	g.idle()
+}
+
+// Undo takes the last tip back.
+func (g *Game) Undo() {
+	if g.State == Solved || g.undos == 0 {
+		return
+	}
+	g.undos--
+	copy(g.Board[:], g.undo[g.undos][:Size])
+	g.Player = g.undo[g.undos][Size]
+	g.Cursor = g.Player
+	g.idle()
+}
+
+// idle: Select when a tower can be tipped, Stuck otherwise.
+func (g *Game) idle() {
+	if g.hasMoves() {
+		g.State = Select
+		g.Status = "Select tower"
+	} else {
+		g.State = Stuck
+		g.Status = "Stuck! U or R"
+	}
+}
+
+func (g *Game) hasMoves() bool {
+	g.reach()
+	for i := range Size {
+		if g.Reach[i] && g.Board[i] >= 2 && g.Board[i] <= 4 {
+			for d := range 4 {
+				if g.canTip(i, d) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// reach marks the cells the player can walk to: every box connected to
+// the player's.
+func (g *Game) reach() {
+	g.Reach = [Size]bool{}
+	g.Reach[g.Player] = true
+	for changed := true; changed; {
+		changed = false
+		for i := range Size {
+			if g.Reach[i] || g.Board[i] == 0 {
+				continue
+			}
+			c := i % N
+			if i >= N && g.Reach[i-N] || i < Size-N && g.Reach[i+N] ||
+				c > 0 && g.Reach[i-1] || c < N-1 && g.Reach[i+1] {
+				g.Reach[i] = true
+				changed = true
+			}
+		}
+	}
+}
+
+// ClickCell: a click on cell i. With a tower chosen, a cell in its row or
+// column tips it that way (the tower itself: cancel); otherwise the cell
+// is chosen.
+func (g *Game) ClickCell(i int) {
+	if g.State == Dir {
+		if i == g.Sel {
+			g.Cancel()
+			return
+		}
+		r, c, sr, sc := i/N, i%N, g.Sel/N, g.Sel%N
+		switch {
+		case r == sr && c > sc:
+			g.Tip(DirE)
+			return
+		case r == sr:
+			g.Tip(DirW)
+			return
+		case c == sc && r > sr:
+			g.Tip(DirS)
+			return
+		case c == sc:
+			g.Tip(DirN)
+			return
+		}
+		g.idle()
+	}
+	g.Cursor = i
+	g.Choose()
+}

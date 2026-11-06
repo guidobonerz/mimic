@@ -20,7 +20,7 @@
 
 use emu_core::{StateError, StateReader, StateWriter};
 
-use crate::blitter::ChipRamMut;
+use crate::lithograph::ChipRamMut;
 
 pub const NETCON: u16 = 0x4000;
 pub const NETMAC0: u16 = 0x4002;

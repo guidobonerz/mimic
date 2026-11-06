@@ -10,9 +10,9 @@ pub const INTENA: u16 = 0x4282;
 
 /// Interrupt sources (INTREQ/INTENA bits, SPEC.md 10.4).
 pub const INT_VBLANK: u16 = 1 << 0;
-pub const INT_COPPER: u16 = 1 << 1;
+pub const INT_JACQUARD: u16 = 1 << 1;
 pub const INT_DMAERR: u16 = 1 << 2;
-pub const INT_BLITTER: u16 = 1 << 3;
+pub const INT_LITHOGRAPH: u16 = 1 << 3;
 pub const INT_STEREOSCOPE: u16 = 1 << 4;
 pub const INT_CALLIOPE: u16 = 1 << 5;
 pub const INT_TIMER: u16 = 1 << 6;
@@ -21,10 +21,11 @@ pub const INT_KEYBOARD: u16 = 1 << 8;
 pub const INT_PORTS: u16 = 1 << 9;
 pub const INT_SD: u16 = 1 << 10;
 pub const INT_RTC: u16 = 1 << 11;
+pub const INT_PHONO: u16 = 1 << 12;
 pub const INT_NMI: u16 = 1 << 14;
 
 /// The level of each source bit (0 = no source).
-const LEVELS: [u8; 15] = [4, 4, 4, 3, 3, 6, 5, 2, 1, 1, 1, 1, 0, 0, 7];
+const LEVELS: [u8; 15] = [4, 4, 4, 3, 3, 6, 5, 2, 1, 1, 1, 1, 6, 0, 7];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Interrupts {
@@ -51,13 +52,15 @@ impl Interrupts {
     }
 
     /// The highest pending level (0 = none).
+    #[inline]
     pub fn level(&self) -> u8 {
-        let pending = self.req & self.ena;
-        (0..15)
-            .filter(|b| pending >> b & 1 != 0)
-            .map(|b| LEVELS[b])
-            .max()
-            .unwrap_or(0)
+        let mut pending = self.req & self.ena & 0x7fff;
+        let mut level = 0;
+        while pending != 0 {
+            level = level.max(LEVELS[pending.trailing_zeros() as usize]);
+            pending &= pending - 1;
+        }
+        level
     }
 
     pub fn peek(&self, off: u16) -> u16 {
@@ -110,12 +113,16 @@ mod tests {
         assert_eq!(i.level(), 6);
         i.write(INTREQ, INT_CALLIOPE | INT_VBLANK);
         assert_eq!(i.level(), 1, "cleared by a write without bit 15");
+        i.raise(INT_PHONO);
+        i.write(INTENA, 0x8000 | INT_PHONO);
+        assert_eq!(i.level(), 6, "Phonograph: level 6");
+        i.write(INTREQ, INT_PHONO);
         i.write(INTREQ, 0x8000 | INT_NMI);
         i.write(INTENA, 0x8000 | INT_NMI);
         assert_eq!(i.level(), 7);
         assert_eq!(
             i.peek(INTENA),
-            INT_KEYBOARD | INT_VBLANK | INT_CALLIOPE | INT_NMI
+            INT_KEYBOARD | INT_VBLANK | INT_CALLIOPE | INT_PHONO | INT_NMI
         );
     }
 }

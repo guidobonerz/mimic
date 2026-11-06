@@ -1,6 +1,7 @@
 // Package term: a text screen of 60 x 16 characters in a Panorama window,
-// for Engine Room and Teleprinter. It draws only the cells that changed
-// (Flush), or everything (Paint, after scrolling or a theme change).
+// for Engine Room and Teleprinter, as many as fit when the window is
+// maximised. It draws only the cells that changed (Flush), or everything
+// (Paint, after scrolling, a theme change or a new size).
 package term
 
 import (
@@ -11,15 +12,17 @@ import (
 const (
 	Cols = 60
 	Rows = 16
-	cols = Cols
-	rows = Rows
+	// the most a maximised window holds
+	maxCols = 120
+	maxRows = 46
 )
 
 // A screen: its window, the characters, the cursor.
 type Screen struct {
-	W     *panorama.Window
-	cells [rows][cols]byte
-	X, Y  int
+	W          *panorama.Window
+	cells      [maxRows][maxCols]byte
+	cols, rows int
+	X, Y       int
 	// cells changed since the last flush (y*cols+x); full: all of them
 	touched [48]int
 	nt      int
@@ -28,13 +31,53 @@ type Screen struct {
 
 // New opens a window of the screen's size for app.
 func New(app *panorama.App, title string) *Screen {
-	w := panorama.NewWindow(app, title, cols*8+8, rows*16+8)
+	w := panorama.NewWindow(app, title, Cols*8+8, Rows*16+8)
 	if w == nil {
 		return nil
 	}
-	t := &Screen{W: w}
+	w.Resizable = true
+	t := &Screen{W: w, cols: Cols, rows: Rows}
 	t.Clear()
 	return t
+}
+
+// Resize fits the screen to a content of w x h pixels (a Resize event):
+// as many cells as fit, the text kept, scrolled up if the cursor's line
+// would fall off.
+func (t *Screen) Resize(w, h int) {
+	c := min(maxCols, (w-8)/8)
+	r := min(maxRows, (h-8)/16)
+	if c < 8 || r < 2 || !t.W.SetSize(c*8+8, r*16+8) {
+		t.Paint()
+		return
+	}
+	for t.Y >= r {
+		t.scroll()
+		t.Y--
+	}
+	if c < t.cols {
+		t.X = min(t.X, c-1)
+	}
+	// cells beyond the old size are empty
+	for y := range maxRows {
+		for x := range maxCols {
+			if y >= t.rows || x >= t.cols {
+				t.cells[y][x] = ' '
+			}
+		}
+	}
+	t.cols, t.rows = c, r
+	t.Paint()
+}
+
+// scroll moves the lines up by one, the last empty.
+func (t *Screen) scroll() {
+	for y := 1; y < t.rows; y++ {
+		t.cells[y-1] = t.cells[y]
+	}
+	for x := range maxCols {
+		t.cells[t.rows-1][x] = ' '
+	}
 }
 
 // Close closes the window.
@@ -55,8 +98,8 @@ func (t *Screen) Back() {
 
 // Clear empties the screen.
 func (t *Screen) Clear() {
-	for y := range rows {
-		for x := range cols {
+	for y := range maxRows {
+		for x := range maxCols {
 			t.cells[y][x] = ' '
 		}
 	}
@@ -68,9 +111,10 @@ func (t *Screen) Clear() {
 func (t *Screen) Paint() {
 	t.full, t.nt = false, 0
 	w := t.W
+	w.BeginPaint()
 	w.Clear()
-	for y := range rows {
-		for x := range cols {
+	for y := range t.rows {
+		for x := range t.cols {
 			if c := t.cells[y][x]; c != ' ' {
 				w.Surf.Char(4+8*x, 4+16*y, c, panorama.Ink())
 			}
@@ -79,6 +123,7 @@ func (t *Screen) Paint() {
 	// the cursor
 	w.Surf.Fill(4+8*t.X, 4+16*t.Y+14, 8, 2, panorama.Accent())
 	w.Invalidate()
+	w.EndPaint()
 }
 
 // touch notes a cell to draw at the next flush.
@@ -87,7 +132,7 @@ func (t *Screen) touch(x, y int) {
 		t.full = true
 		return
 	}
-	t.touched[t.nt] = y*cols + x
+	t.touched[t.nt] = y*maxCols + x
 	t.nt++
 }
 
@@ -98,7 +143,7 @@ func (t *Screen) Flush() {
 		return
 	}
 	for i := range t.nt {
-		t.cell(t.touched[i]%cols, t.touched[i]/cols)
+		t.cell(t.touched[i]%maxCols, t.touched[i]/maxCols)
 	}
 	t.nt = 0
 	t.cell(t.X, t.Y)
@@ -127,20 +172,14 @@ func (t *Screen) Putc(c byte) {
 	} else {
 		t.cells[t.Y][t.X] = c
 		t.X++
-		if t.X == cols {
+		if t.X == t.cols {
 			t.X = 0
 			t.Y++
 		}
 	}
-	if t.Y == rows {
-		// scroll
-		for y := 1; y < rows; y++ {
-			t.cells[y-1] = t.cells[y]
-		}
-		for x := range cols {
-			t.cells[rows-1][x] = ' '
-		}
-		t.Y = rows - 1
+	if t.Y == t.rows {
+		t.scroll()
+		t.Y = t.rows - 1
 		t.full = true
 	}
 }

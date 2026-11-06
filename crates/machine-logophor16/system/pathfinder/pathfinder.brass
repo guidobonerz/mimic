@@ -1,0 +1,225 @@
+package pathfinder
+
+import (
+	"boiler"
+	"gfx"
+	"panorama"
+	"strs"
+)
+
+const (
+	cell = 56
+	bx   = 16 // the board's place in the window
+	by   = 48
+)
+
+// Keys: cursor keys or W/A/S/D move (or tip), Return or Space choose
+// (or cancel), U undo, R restart, N and P the next and the preceding
+// level (GUI64's game menu).
+const help = "WASD/cursor, Return, U undo, R restart, N/P level"
+
+var app panorama.App
+
+// App is the application for Panorama's dock.
+func App() *panorama.App {
+	app = panorama.App{Name: "Pathfinder", Start: run, Icon: icon}
+	return &app
+}
+
+func icon(s *gfx.Surface, x, y int) {
+	// a red box, a lying yellow tower, a standing blue one
+	s.RoundFill(x+8, y+28, 12, 12, colour(1))
+	s.RoundFill(x+20, y+28, 20, 12, colour(2))
+	s.RoundFill(x+28, y+8, 12, 20, colour(4))
+}
+
+// colour of a tower of height h: red, yellow, green, blue (greens of
+// their brightness on the scope).
+func colour(h int) byte {
+	switch h & 7 {
+	case 1:
+		return gfx.Cube + 5*36
+	case 2:
+		return gfx.Cube + 5*36 + 5*6
+	case 3:
+		return gfx.Cube + 3*6
+	}
+	return gfx.Cube + 1*6 + 4
+}
+
+type ui struct {
+	w     *panorama.Window
+	g     Game
+	blink bool
+}
+
+func run() {
+	boiler.SetName("Pathfinder")
+	w := panorama.NewWindow(&app, "Pathfinder", N*cell+2*bx, by+N*cell+32)
+	if w == nil {
+		return
+	}
+	u := &ui{w: w, blink: true}
+	u.g.Load(0)
+	u.paint()
+	var e panorama.Event
+	for {
+		if !w.Next(40, &e) {
+			// the cursor blinks every 0.4 s
+			u.blink = !u.blink
+			u.cell(u.g.Cursor)
+			continue
+		}
+		switch e.Kind {
+		case panorama.Close:
+			w.Done()
+			free(u)
+			return
+		case panorama.Theme:
+			u.paint()
+		case panorama.Key:
+			u.key(e.Key)
+		case panorama.Click:
+			u.click(e.X, e.Y)
+		}
+	}
+}
+
+func (u *ui) key(k byte) {
+	g := &u.g
+	if g.State == Solved {
+		g.Next()
+		u.paint()
+		return
+	}
+	switch k {
+	case boiler.KeyUp, 'w', 'W':
+		g.Move(DirN)
+	case boiler.KeyDown, 's', 'S':
+		g.Move(DirS)
+	case boiler.KeyLeft, 'a', 'A':
+		g.Move(DirW)
+	case boiler.KeyRight, 'd', 'D':
+		g.Move(DirE)
+	case 13, ' ':
+		if g.State == Dir {
+			g.Cancel()
+		} else {
+			g.Choose()
+		}
+	case 'u', 'U':
+		g.Undo()
+	case 'r', 'R':
+		g.Load(g.Level)
+	case 'n', 'N':
+		g.Next()
+	case 'p', 'P':
+		g.Prev()
+	default:
+		return
+	}
+	u.blink = true
+	u.paint()
+}
+
+func (u *ui) click(x, y int) {
+	if u.g.State == Solved {
+		u.g.Next()
+		u.paint()
+		return
+	}
+	c, r := (x-bx)/cell, (y-by)/cell
+	if x < bx || y < by || c >= N || r >= N {
+		return
+	}
+	u.g.ClickCell(r*N + c)
+	u.blink = true
+	u.paint()
+}
+
+func (u *ui) paint() {
+	w := u.w
+	s := w.Surf
+	g := &u.g
+	w.BeginPaint()
+	w.Clear()
+	var t strs.Builder
+	t.WriteString("Level ")
+	t.WriteInt(int32(g.Level + 1))
+	t.WriteString("/10")
+	line := t.String()
+	t.Free()
+	s.Text(bx, 6, line, panorama.Accent())
+	free(line)
+	status := g.Status
+	if g.State == Solved {
+		status = "Path found! Key or click: next level"
+		if g.Level == Levels-1 {
+			status = "All levels solved! Key or click: level 1"
+		}
+	}
+	s.Text(bx, 24, status, panorama.Ink())
+	s.Text(bx, by+N*cell+10, help, gfx.Grey5)
+	for i := range Size {
+		u.cell(i)
+	}
+	w.Invalidate()
+	w.EndPaint()
+}
+
+// cell draws cell i (a box, the player, the cursor).
+func (u *ui) cell(i int) {
+	s := u.w.Surf
+	g := &u.g
+	x, y := bx+i%N*cell, by+i/N*cell
+	scope := panorama.Scope()
+	s.Fill(x, y, cell, cell, panorama.Paper())
+	v := g.Board[i]
+	switch {
+	case v == 0:
+		s.Fill(x+cell/2-1, y+cell/2-1, 2, 2, gfx.Grey4) // the floor's dot
+	case v&Lying != 0:
+		// a lying tower: hatched
+		ink := colour(v)
+		if scope {
+			s.Box(x+2, y+2, cell-4, cell-4, ink)
+		} else {
+			s.Fill(x+2, y+2, cell-4, cell-4, ink)
+		}
+		for k := 6; k < 2*cell-10; k += 8 {
+			x0, y0 := x+2+min(k, cell-5), y+2+max(0, k-cell+5)
+			x1, y1 := x+2+max(0, k-cell+5), y+2+min(k, cell-5)
+			s.Line(x0, y0, x1, y1, gfx.Grey1)
+		}
+	default:
+		// a standing tower: a box with as many pips as it is high
+		ink := colour(v)
+		if scope {
+			s.RoundBox(x+3, y+3, cell-6, cell-6, ink)
+		} else {
+			s.RoundFill(x+3, y+3, cell-6, cell-6, ink)
+		}
+		pips := [5]int{0, 1, 9, 7, 15}[v]
+		for q := range 4 {
+			if pips>>q&1 != 0 {
+				px, py := x+14+q%2*20, y+14+q/2*20
+				s.Fill(px, py, 8, 8, gfx.Grey1)
+			}
+		}
+	}
+	if i == g.Player {
+		// the player: an egg with eyes
+		s.RoundFill(x+18, y+12, 20, 30, gfx.White)
+		s.Fill(x+23, y+20, 3, 4, gfx.Black)
+		s.Fill(x+30, y+20, 3, 4, gfx.Black)
+	}
+	if g.State == Dir && i == g.Sel {
+		s.Box(x+1, y+1, cell-2, cell-2, panorama.Accent())
+	}
+	if (g.State == Select || g.State == Stuck) && u.blink && i == g.Cursor {
+		s.Box(x, y, cell, cell, panorama.Accent())
+		s.Box(x+1, y+1, cell-2, cell-2, panorama.Accent())
+		s.Box(x+2, y+2, cell-4, cell-4, panorama.Accent())
+	}
+	u.w.InvalidateRect(x, y, cell, cell)
+}

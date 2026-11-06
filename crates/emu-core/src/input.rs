@@ -116,6 +116,11 @@ impl InputQueue {
         }
     }
 
+    /// When the next event is due, if any.
+    pub fn next_at(&self) -> Option<Cycle> {
+        self.events.front().map(|e| e.at)
+    }
+
     pub fn len(&self) -> usize {
         self.events.len()
     }

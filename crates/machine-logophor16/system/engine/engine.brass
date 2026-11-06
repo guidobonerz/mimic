@@ -61,6 +61,8 @@ func run() {
 			return
 		case panorama.Theme:
 			sh.t.Paint()
+		case panorama.Resize:
+			sh.t.Resize(e.X, e.Y)
 		case panorama.Key:
 			if !sh.key(e.Key) {
 				sh.quit()

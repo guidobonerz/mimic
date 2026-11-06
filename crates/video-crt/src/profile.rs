@@ -97,6 +97,11 @@ pub struct Profile {
     /// Halation 0.0 – 1.0: bright areas glow into their neighbours and
     /// into the gaps between scanlines.
     pub bloom: f32,
+    /// Glow 0.0 – 1.0: the same blur as `bloom`, added linearly (twice the
+    /// blur at 1.0), so thin
+    /// bright lines glow too (a phosphor screen's glow; `bloom` alone
+    /// lights only bright areas).
+    pub glow: f32,
     /// Barrel distortion of the picture 0.0 – 0.25 (curved glass).
     pub curvature: f32,
     /// Darkening towards the corners 0.0 – 1.0.
@@ -125,6 +130,7 @@ impl Default for Profile {
             mask_strength: 0.0,
             mask_pitch: 3.0,
             bloom: 0.0,
+            glow: 0.0,
             curvature: 0.0,
             vignette: 0.0,
             persistence: 0.0,
@@ -253,6 +259,32 @@ impl Profile {
                 persistence: 0.45,
                 ..base
             },
+            // The Logophor 16's monitor (a fictional machine, SPEC.md 8.1):
+            // an RGB tube with clearly drawn lines and a little glow.
+            "logophor" => Self {
+                scanlines: 0.55,
+                gamma: 1.05,
+                mask: Mask::Aperture,
+                mask_strength: 0.12,
+                bloom: 0.12,
+                curvature: 0.02,
+                vignette: 0.12,
+                ..base
+            },
+            // The same monitor switched to its green phosphor tube (VMODE
+            // bit 13, Panorama's oscilloscope theme): bright lines glow
+            // and fade slowly, the raster barely shows.
+            "logophor-scope" => Self {
+                signal: Signal::Monochrome,
+                scanlines: 0.1,
+                tint: [0.25, 1.0, 0.35],
+                bloom: 0.5,
+                glow: 0.8,
+                curvature: 0.03,
+                vignette: 0.2,
+                persistence: 0.5,
+                ..base
+            },
             // The compact Macintosh's built-in 9" white monitor (square
             // pixels, a sharp picture).
             "mac" => Self {
@@ -268,7 +300,7 @@ impl Profile {
         })
     }
 
-    pub const PRESETS: [&'static str; 13] = [
+    pub const PRESETS: [&'static str; 15] = [
         "raw",
         "lite",
         "1702",
@@ -282,6 +314,8 @@ impl Profile {
         "ctm644",
         "gt65",
         "mac",
+        "logophor",
+        "logophor-scope",
     ];
 
     /// Parse a TOML profile; `base = "<preset>"` starts from a preset.
@@ -329,9 +363,24 @@ impl Profile {
             // fringes on its hard edges: `--crt tv`).
             "amiga" | "snes" | "archimedes" => "1084s-rgb",
             "mac" => "mac",
+            "logophor16" => "logophor",
             _ => "raw",
         };
         Self::preset(name).unwrap_or_default()
+    }
+
+    /// A monitor that follows the machine's switch between its tubes: the
+    /// profile to take for a frame of `output`, when it is not this one.
+    /// Only the Logophor 16's pair does (its RGB tube and its green
+    /// phosphor tube, chosen by the program); every other profile stays.
+    pub fn for_output(&self, output: emu_core::frame::OutputType) -> Option<Self> {
+        use emu_core::frame::OutputType;
+        let want = match (self.name.as_str(), output) {
+            ("logophor", OutputType::Monochrome) => "logophor-scope",
+            ("logophor-scope", o) if o != OutputType::Monochrome => "logophor",
+            _ => return None,
+        };
+        Self::preset(want)
     }
 }
 
@@ -352,6 +401,7 @@ struct Serialized<'a> {
     mask_strength: f32,
     mask_pitch: f32,
     bloom: f32,
+    glow: f32,
     curvature: f32,
     vignette: f32,
     persistence: f32,
@@ -379,6 +429,7 @@ impl<'a> From<&'a Profile> for Serialized<'a> {
             mask_strength: p.mask_strength,
             mask_pitch: p.mask_pitch,
             bloom: p.bloom,
+            glow: p.glow,
             curvature: p.curvature,
             vignette: p.vignette,
             persistence: p.persistence,
@@ -389,6 +440,24 @@ impl<'a> From<&'a Profile> for Serialized<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_logophor_monitor_follows_its_tube_switch() {
+        use emu_core::frame::OutputType;
+        let rgb = Profile::default_for("logophor16");
+        assert_eq!(rgb.name, "logophor");
+        assert!(rgb.for_output(OutputType::Rgb).is_none());
+        let scope = rgb.for_output(OutputType::Monochrome).unwrap();
+        assert_eq!(scope.name, "logophor-scope");
+        assert!(scope.bloom > rgb.bloom && scope.persistence > 0.0);
+        assert!(scope.for_output(OutputType::Monochrome).is_none());
+        assert_eq!(scope.for_output(OutputType::Rgb).unwrap().name, "logophor");
+        // other monitors stay what the user chose
+        assert!(Profile::preset("1084s")
+            .unwrap()
+            .for_output(OutputType::Monochrome)
+            .is_none());
+    }
 
     #[test]
     fn presets_exist_and_differ() {

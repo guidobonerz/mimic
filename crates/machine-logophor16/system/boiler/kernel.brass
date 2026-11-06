@@ -64,20 +64,28 @@ var (
 	mouseX, mouseY   int
 	mouseB           int
 	mouseHit         int // buttons pressed since Mouse was last called
+	pressX, pressY   int // where the left button went down last
+	held             [16]uint16 // the keys down now, by USB HID usage
 	mouseSeen        bool
 	// the pointer's area (Panorama sets the screen's size)
 	mouseW, mouseH = 1024, 768
 )
 
-// Mouse is the pointer's position and buttons (bit 0 left, 1 right,
-// 2 middle). A button pressed since the last call counts as held once,
-// even if it is up again: no click is lost to a busy caller.
-func Mouse() (int, int, int) {
+// Mouse is the pointer's position, the buttons held (bit 0 left, 1
+// right, 2 middle) and the buttons pressed since the last call (even if
+// they are up again): no click is lost to a busy caller.
+func Mouse() (int, int, int, int) {
 	Lock()
-	b := mouseB | mouseHit
+	hit := mouseHit
 	mouseHit = 0
 	Unlock()
-	return mouseX, mouseY, b
+	return mouseX, mouseY, mouseB, hit
+}
+
+// PressAt is where the left button last went down (a busy caller sees
+// the press late, the pointer may have moved on since).
+func PressAt() (int, int) {
+	return pressX, pressY
 }
 
 // SetMouseArea limits the pointer to w x h and puts it in the middle.
@@ -177,6 +185,21 @@ func Key() byte {
 	}
 }
 
+// Held tells whether the key of this USB HID usage is down now (games;
+// the characters typed come through Key and PollKey).
+func Held(usage int) bool {
+	return held[usage>>4&15]>>uint16(usage&15)&1 != 0
+}
+
+// The cursor keys as Key and PollKey give them (C1 control codes of ISO
+// 8859-1, which print nothing).
+const (
+	KeyUp    = 0x81
+	KeyDown  = 0x82
+	KeyLeft  = 0x83
+	KeyRight = 0x84
+)
+
 // PollKey is a character typed, or 0 when none waits.
 func PollKey() byte {
 	Lock()
@@ -197,7 +220,14 @@ func nextChar() byte {
 				shift = !rel
 				continue
 			}
-			if rel || k >= 0x39 {
+			if rel {
+				continue
+			}
+			if k >= 0x4f && k <= 0x52 {
+				// the cursor keys: right, left, down, up
+				return [4]byte{KeyRight, KeyLeft, KeyDown, KeyUp}[k-0x4f]
+			}
+			if k >= 0x39 {
 				continue
 			}
 			c := keymap[k]
@@ -339,6 +369,12 @@ func schedule() {
 		if k == 0 {
 			break
 		}
+		u := int(k & 0xff)
+		if k&0x8000 != 0 {
+			held[u>>4] &^= uint16(1) << uint16(u&15)
+		} else {
+			held[u>>4] |= uint16(1) << uint16(u&15)
+		}
 		if keyCount < len(keys) {
 			i := (keyHead + keyCount) % len(keys)
 			keys[i] = byte(k)
@@ -354,6 +390,9 @@ func schedule() {
 	}
 	mouseLX, mouseLY, mouseSeen = mx, my, true
 	b := int(peek16(port0) >> 4 & 7)
+	if b&^mouseB&1 != 0 {
+		pressX, pressY = mouseX, mouseY
+	}
 	mouseHit |= b &^ mouseB
 	mouseB = b
 	// wake the sleepers whose time has come, and key waiters

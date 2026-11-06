@@ -537,6 +537,7 @@ nachgelagert.
 | `pet-white`, `pet-green` | PET-Monitore |
 | `ctm644` | Amstrad-Farbmonitor (CPC-Standard) |
 | `gt65` | Amstrad-Grünmonitor |
+| `logophor`, `logophor-scope` | Logophor 16: RGB-Röhre mit Rasterlinien, grüne Leuchtröhre mit Glühen (das Programm schaltet um) |
 
 Eigene Profile sind TOML-Dateien mit `base = "<preset>"` und überschriebenen
 Werten (`--crt meinprofil.toml`).

@@ -1,0 +1,169 @@
+// Package steamworks: Panorama's pipe puzzle (step 11e). The board's
+// pipes must carry the steam from the boiler on the left to the engine on
+// the right, every pipe joined and none open: a click turns a piece a
+// quarter to the right. A level is a maze (a spanning tree of the grid,
+// made from the level's number) whose pieces are then turned at random,
+// so it can always be solved.
+package steamworks
+
+// The board: W x H pieces.
+const (
+	W = 8
+	H = 6
+)
+
+// A piece's openings.
+const (
+	North = 1
+	East  = 2
+	South = 4
+	West  = 8
+)
+
+// Board is a level in play.
+type Board struct {
+	Level  int
+	Pipes  [H][W]int // the openings of each piece as it lies now
+	rot    [H][W]int // quarter turns each piece is away from the maze
+	InRow  int       // the boiler's row (it feeds the leftmost piece)
+	OutRow int       // the engine's row (the rightmost piece feeds it)
+	Moves  int
+	seed   uint32
+}
+
+func (b *Board) random(n int) int {
+	b.seed = b.seed*1103515245 + 12345
+	return int(b.seed>>16&0x7fff) % n
+}
+
+// Turn rotates a piece's openings a quarter to the right.
+func Turn(p int) int {
+	return (p<<1 | p>>3) & 15
+}
+
+// step: the cell beside x, y in direction d and the opening facing back.
+func step(x, y, d int) (int, int, int) {
+	switch d {
+	case North:
+		return x, y - 1, South
+	case East:
+		return x + 1, y, West
+	case South:
+		return x, y + 1, North
+	}
+	return x - 1, y, East
+}
+
+// Deal makes level n.
+func (b *Board) Deal(n int) {
+	*b = Board{Level: n, seed: uint32(n)*2654435761 + 7}
+	// a maze: depth first from a random cell, the cells on a stack
+	var seen [H][W]bool
+	var stack [W * H]int
+	start := b.random(W * H)
+	stack[0] = start
+	sp := 1
+	seen[start/W][start%W] = true
+	for sp > 0 {
+		c := stack[sp-1]
+		x, y := c%W, c/W
+		var ways [4]int
+		k := 0
+		for d := 1; d <= 8; d <<= 1 {
+			nx, ny, _ := step(x, y, d)
+			if nx >= 0 && ny >= 0 && nx < W && ny < H && !seen[ny][nx] {
+				ways[k] = d
+				k++
+			}
+		}
+		if k == 0 {
+			sp--
+			continue
+		}
+		d := ways[b.random(k)]
+		nx, ny, back := step(x, y, d)
+		b.Pipes[y][x] |= d
+		b.Pipes[ny][nx] |= back
+		seen[ny][nx] = true
+		stack[sp] = ny*W + nx
+		sp++
+	}
+	b.InRow = b.random(H)
+	b.OutRow = b.random(H)
+	b.Pipes[b.InRow][0] |= West
+	b.Pipes[b.OutRow][W-1] |= East
+	// turn every piece at random
+	for y := range H {
+		for x := range W {
+			t := b.random(4)
+			b.rot[y][x] = t
+			for range t {
+				b.Pipes[y][x] = Turn(b.Pipes[y][x])
+			}
+		}
+	}
+}
+
+// Click turns the piece at x, y.
+func (b *Board) Click(x, y int) {
+	b.Pipes[y][x] = Turn(b.Pipes[y][x])
+	b.rot[y][x] = (b.rot[y][x] + 1) % 4
+	b.Moves++
+}
+
+// Steam marks the pieces the steam reaches from the boiler (through
+// openings that meet) and tells whether every piece is reached and no
+// pipe ends open: the level is solved.
+func (b *Board) Steam(lit *[H][W]bool) bool {
+	*lit = [H][W]bool{}
+	if b.Pipes[b.InRow][0]&West == 0 {
+		return false
+	}
+	var queue [W * H]int
+	head, tail := 0, 0
+	queue[tail] = b.InRow * W
+	tail++
+	lit[b.InRow][0] = true
+	open := false
+	for head < tail {
+		c := queue[head]
+		head++
+		x, y := c%W, c/W
+		p := b.Pipes[y][x]
+		for d := 1; d <= 8; d <<= 1 {
+			if p&d == 0 {
+				continue
+			}
+			nx, ny, back := step(x, y, d)
+			if nx < 0 || ny < 0 || nx >= W || ny >= H {
+				// only the boiler's and the engine's ends may leave the board
+				if !(d == West && x == 0 && y == b.InRow) && !(d == East && x == W-1 && y == b.OutRow) {
+					open = true
+				}
+				continue
+			}
+			if b.Pipes[ny][nx]&back == 0 {
+				open = true
+				continue
+			}
+			if !lit[ny][nx] {
+				lit[ny][nx] = true
+				queue[tail] = ny*W + nx
+				tail++
+			}
+		}
+	}
+	return tail == W*H && !open && b.Pipes[b.OutRow][W-1]&East != 0
+}
+
+// Solve turns every piece until it lies as in the maze (for tests: the
+// level is solved then).
+func (b *Board) Solve() {
+	for y := range H {
+		for x := range W {
+			for b.rot[y][x] != 0 {
+				b.Click(x, y)
+			}
+		}
+	}
+}

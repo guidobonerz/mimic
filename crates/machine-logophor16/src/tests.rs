@@ -87,12 +87,12 @@ fn foundry_shows_its_start_picture_and_six_scenes() {
     frames(&mut m, 200);
     assert_eq!(m.board.lumiere.mode(), 4);
     golden(&m, "foundry-text");
-    // The Copper scene: a gradient line by line, split at line 300.
+    // The Jacquard scene: a gradient line by line, split at line 300.
     frames(&mut m, 160);
-    golden(&m, "foundry-copper");
-    // The Blitter scene: a scrolling background, balls with shadows.
+    golden(&m, "foundry-jacquard");
+    // The Lithograph scene: a scrolling background, balls with shadows.
     frames(&mut m, 180);
-    golden(&m, "foundry-blitter");
+    golden(&m, "foundry-lithograph");
     // The sprite scene: 256 sprites over the hardware-scrolled background.
     frames(&mut m, 180);
     golden(&m, "foundry-sprites");
@@ -225,19 +225,22 @@ fn a_program_draws_in_mode_0_and_the_pointer_waits_for_the_vblank() {
 fn registers_beam_and_debug_port() {
     let mut m = machine();
     // Beam registers follow the line and cycle.
-    for _ in 0..(LINE_CYCLES as usize * 10 + 30) {
+    for _ in 0..(LINE_CYCLES as usize * 10 + 30 * usize::from(CLK)) {
         m.step_cycle();
     }
     let peek = |m: &Logophor, a: u32| DebugTarget::peek(m, CPU_SPACE, a, Size::Word).unwrap();
     assert_eq!(peek(&m, 0xffff_0818), 10, "BEAMY");
-    assert_eq!(peek(&m, 0xffff_081a), 100, "BEAMX: 30 cycles x 10/3");
+    assert_eq!(peek(&m, 0xffff_081a), 100, "BEAMX: 30 x CLOCK cycles");
     assert_eq!(peek(&m, 0xffff_43f4), 0xc016, "DBGID");
     assert_eq!(
         peek(&m, 0xfffb_0000),
         u32::from(u16::from_le_bytes([FOUNDRY[0], FOUNDRY[1]]))
     );
     assert_eq!(peek(&m, 0x0200_0000), 0xffff, "unpopulated");
-    assert_eq!(m.now(), Cycle((10 * u64::from(LINE_CYCLES) + 30) * 40));
+    assert_eq!(
+        m.now(),
+        Cycle((10 * u64::from(LINE_CYCLES) + 30 * u64::from(CLK)) * 40)
+    );
     let regs = m.chips();
     assert_eq!(regs[0].name, "lumiere");
     assert!(DebugTarget::poke(
@@ -283,10 +286,10 @@ fn unknown_options_and_models_are_refused() {
     assert!(Logophor::new(&c).is_err());
 }
 
-/// A program that sets up mode 0 (colour 2 green), framebuffer and Copper
+/// A program that sets up mode 0 (colour 2 green), framebuffer and Jacquard
 /// DMA with the list at 0005:0000, enables interrupts as `intena` says,
 /// and loops.
-fn copper_program(intena: u16) -> String {
+fn jacquard_program(intena: u16) -> String {
     format!(
         "
         li r1, #$ffff
@@ -296,7 +299,7 @@ fn copper_program(intena: u16) -> String {
         swx r1, (r2)          ; palette 2: green
         li r2, #$0020
         li r1, #5
-        swx r1, (r2)          ; COP1SEG
+        swx r1, (r2)          ; JAQ1SEG
         li r2, #$0802
         li r1, #2
         swx r1, (r2)          ; FBSEG
@@ -311,16 +314,16 @@ fn copper_program(intena: u16) -> String {
         swx r1, (r2)          ; INTENA
         li r2, #$0002
         li r1, #$c011
-        swx r1, (r2)          ; DMACON: framebuffer, Copper
+        swx r1, (r2)          ; DMACON: framebuffer, Jacquard
         ei
     stop: bra stop
         "
     )
 }
 
-/// A Copper list (words) at 0005:0000 and colour 2 over the mode-0
+/// A Jacquard list (words) at 0005:0000 and colour 2 over the mode-0
 /// picture at 0002:0000.
-fn copper_setup(m: &mut Logophor, list: &[u16]) {
+fn jacquard_setup(m: &mut Logophor, list: &[u16]) {
     for (i, w) in list.iter().enumerate() {
         let at = 0x0005_0000 + 2 * i as u32;
         assert!(DebugTarget::poke(
@@ -337,7 +340,7 @@ fn copper_setup(m: &mut Logophor, list: &[u16]) {
 }
 
 #[test]
-fn copper_writes_land_on_their_pixel() {
+fn jacquard_writes_land_on_their_pixel() {
     // WAIT (100, 400), MOVE palette 2 = red; WAIT (101, 0), MOVE = blue.
     let list = [
         0x2000 | 100,
@@ -352,8 +355,8 @@ fn copper_writes_land_on_their_pixel() {
         0,
     ];
     let mut m = machine();
-    insert_program(&mut m, assemble(&copper_program(0)));
-    copper_setup(&mut m, &list);
+    insert_program(&mut m, assemble(&jacquard_program(0)));
+    jacquard_setup(&mut m, &list);
     frames(&mut m, 3);
     let px = pixels(&m);
     let (red, blue) = (lumiere::rgb565(0xf800), lumiere::rgb565(0x001f));
@@ -368,7 +371,7 @@ fn copper_writes_land_on_their_pixel() {
 }
 
 #[test]
-fn copper_skip_jump_and_stop() {
+fn jacquard_skip_jump_and_stop() {
     // SKIP (0, 0) skips the MOVE to red; JUMP to list 2 sets blue, stops.
     let list = [
         0x4000,
@@ -382,38 +385,38 @@ fn copper_skip_jump_and_stop() {
     ];
     let list2: [u16; 4] = [0x1004 >> 1, 0x001f, 0xc000, 0];
     let mut m = machine();
-    insert_program(&mut m, assemble(&copper_program(0)));
-    copper_setup(&mut m, &list);
+    insert_program(&mut m, assemble(&jacquard_program(0)));
+    jacquard_setup(&mut m, &list);
     for (i, w) in list2.iter().enumerate() {
         let at = 0x0005_1000 + 2 * i as u32;
         DebugTarget::poke(&mut m, CPU_SPACE, at, Size::Word, u32::from(*w));
     }
-    m.board.babbage.write(babbage::COP2SEG, 5);
-    m.board.babbage.write(babbage::COP2OFS, 0x1000);
+    m.board.babbage.write(babbage::JAQ2SEG, 5);
+    m.board.babbage.write(babbage::JAQ2OFS, 0x1000);
     frames(&mut m, 3);
     assert_eq!(m.board.lumiere.palette()[2], 0x001f);
 }
 
 #[test]
-fn copper_irq_and_the_vblank_reach_the_cpu() {
+fn jacquard_irq_and_the_vblank_reach_the_cpu() {
     let list = [0x2000 | 200, 0, 0xa000, 0x1234, 0xc000, 0];
     let mut m = machine();
     insert_program(
         &mut m,
-        assemble(&copper_program(0x8000 | telegraph::INT_COPPER)),
+        assemble(&jacquard_program(0x8000 | telegraph::INT_JACQUARD)),
     );
-    copper_setup(&mut m, &list);
+    jacquard_setup(&mut m, &list);
     frames(&mut m, 3);
-    assert_eq!(m.board.babbage.peek(babbage::COPIRQ), 0x1234);
+    assert_eq!(m.board.babbage.peek(babbage::JAQIRQ), 0x1234);
     assert_eq!(m.cpu.cause, 12, "level 4: vector 12");
     assert_eq!(m.cpu.s[0], 0xfffb, "in the ROM's handler");
     // The VBlank alone.
     let mut m = machine();
     insert_program(
         &mut m,
-        assemble(&copper_program(0x8000 | telegraph::INT_VBLANK)),
+        assemble(&jacquard_program(0x8000 | telegraph::INT_VBLANK)),
     );
-    copper_setup(&mut m, &[0xc000, 0]);
+    jacquard_setup(&mut m, &[0xc000, 0]);
     frames(&mut m, 2);
     assert_eq!(m.cpu.cause, 12);
     // The ROM's handler (the music player) took and acknowledged it, and
@@ -426,17 +429,17 @@ fn copper_irq_and_the_vblank_reach_the_cpu() {
 }
 
 #[test]
-fn a_copper_move_into_babbage_needs_copcon() {
+fn a_jacquard_move_into_babbage_needs_copcon() {
     let list = [0x0002 >> 1, 0x8020, 0xc000, 0]; // MOVE DMACON
     let mut m = machine();
     insert_program(
         &mut m,
-        assemble(&copper_program(0x8000 | telegraph::INT_DMAERR)),
+        assemble(&jacquard_program(0x8000 | telegraph::INT_DMAERR)),
     );
-    copper_setup(&mut m, &list);
+    jacquard_setup(&mut m, &list);
     frames(&mut m, 3);
     assert_ne!(
-        m.board.babbage.peek(babbage::DMAERR) & babbage::DMA_COPPER,
+        m.board.babbage.peek(babbage::DMAERR) & babbage::DMA_JACQUARD,
         0
     );
     assert_eq!(
@@ -475,8 +478,14 @@ fn the_cpu_waits_for_chip_bus_slots_during_the_fixed_dma() {
         let mut m = machine();
         insert_program(&mut m, assemble(&src));
         frames(&mut m, 1);
+        // 100 visible lines (a whole field would overflow the counter)
+        for _ in 0..LINE_CYCLES as usize * 50 {
+            m.step_cycle();
+        }
         let before = m.cpu.r[3];
-        frames(&mut m, 1);
+        for _ in 0..LINE_CYCLES as usize * 100 {
+            m.step_cycle();
+        }
         m.cpu.r[3].wrapping_sub(before)
     };
     let (chip, fast) = (count(0x0010), count(0x0080));
@@ -485,7 +494,7 @@ fn the_cpu_waits_for_chip_bus_slots_during_the_fixed_dma() {
 }
 
 #[test]
-fn savestate_in_the_copper_scene_resumes_identically() {
+fn savestate_in_the_jacquard_scene_resumes_identically() {
     let mut a = machine();
     frames(&mut a, 555);
     for _ in 0..5000 {
@@ -500,10 +509,10 @@ fn savestate_in_the_copper_scene_resumes_identically() {
     assert_eq!(pixels(&a), pixels(&b));
 }
 
-/// A program that fills 64 x 64 bytes at 0003:0000 with the Blitter (CPU
-/// start), with the Blitter interrupt enabled, then loops counting in R3.
+/// A program that fills 64 x 64 bytes at 0003:0000 with the Lithograph (CPU
+/// start), with the Lithograph interrupt enabled, then loops counting in R3.
 /// `buscon`: BUSCON's value.
-fn blitter_program(buscon: u16) -> String {
+fn lithograph_program(buscon: u16) -> String {
     format!(
         "
         li r1, #$ffff
@@ -513,31 +522,31 @@ fn blitter_program(buscon: u16) -> String {
         swx r1, (r2)          ; BUSCON
         li r2, #$4282
         li r1, #$8008
-        swx r1, (r2)          ; INTENA: Blitter
+        swx r1, (r2)          ; INTENA: Lithograph
         li r2, #$0002
         li r1, #$c020
-        swx r1, (r2)          ; DMACON: Blitter
+        swx r1, (r2)          ; DMACON: Lithograph
         li r2, #$0100
         li r1, #$0100
-        swx r1, (r2)          ; BLTCON0: fill
+        swx r1, (r2)          ; LTHCON0: fill
         li r2, #$0102
         li r1, #1
-        swx r1, (r2)          ; BLTCON1: 8 bit
+        swx r1, (r2)          ; LTHCON1: 8 bit
         li r2, #$010c
         li r1, #3
-        swx r1, (r2)          ; BLTDSEG
+        swx r1, (r2)          ; LTHDSEG
         li r2, #$0114
         li r1, #64
-        swx r1, (r2)          ; BLTDPITCH
+        swx r1, (r2)          ; LTHDPITCH
         li r2, #$0116
-        swx r1, (r2)          ; BLTW
+        swx r1, (r2)          ; LTHW
         li r2, #$0118
-        swx r1, (r2)          ; BLTH
+        swx r1, (r2)          ; LTHH
         li r2, #$011c
         li r1, #$5a
-        swx r1, (r2)          ; BLTCOLOR
+        swx r1, (r2)          ; LTHCOLOR
         li r2, #$0124
-        swx r1, (r2)          ; BLTSTART
+        swx r1, (r2)          ; LTHSTART
         li r1, #$0010
         mts s1, r1
         movi r3, #0
@@ -550,27 +559,27 @@ fn blitter_program(buscon: u16) -> String {
 }
 
 #[test]
-fn the_blitter_fills_in_free_slots_and_interrupts_when_done() {
+fn the_lithograph_fills_in_free_slots_and_interrupts_when_done() {
     let mut m = machine();
-    insert_program(&mut m, assemble(&blitter_program(0)));
+    insert_program(&mut m, assemble(&lithograph_program(0)));
     frames(&mut m, 2);
     let peek = |m: &Logophor, a: u32| DebugTarget::peek(m, CPU_SPACE, a, Size::Byte).unwrap();
     assert_eq!(peek(&m, 0x0003_0000), 0x5a);
     assert_eq!(peek(&m, 0x0003_0000 + 63 * 64 + 63), 0x5a);
     assert_eq!(peek(&m, 0x0003_0000 + 64 * 64), 0, "only 64 rows");
-    assert_eq!(m.cpu.cause, 11, "level 3 (Blitter): vector 11");
+    assert_eq!(m.cpu.cause, 11, "level 3 (Lithograph): vector 11");
     assert_ne!(
-        m.board.ints.peek(telegraph::INTREQ) & telegraph::INT_BLITTER,
+        m.board.ints.peek(telegraph::INTREQ) & telegraph::INT_LITHOGRAPH,
         0
     );
 }
 
 #[test]
-fn buscon_lets_the_cpu_before_the_blitter() {
+fn buscon_lets_the_cpu_before_the_lithograph() {
     // A long fill (256 x 256) while the CPU stores into chip RAM: with
     // BUSCON bit 0 the CPU gets further in the same time.
     let run = |buscon: u16| {
-        let src = blitter_program(buscon)
+        let src = lithograph_program(buscon)
             .replace("li r1, #64\n", "li r1, #256\n")
             .replace("li r2, #$4282", "li r2, #$4280"); // no interrupt
         let mut m = machine();
@@ -578,18 +587,18 @@ fn buscon_lets_the_cpu_before_the_blitter() {
         for _ in 0..3_000 {
             m.step_cycle();
         }
-        (m.cpu.r[3], m.board.babbage.blitter.busy())
+        (m.cpu.r[3], m.board.babbage.lithograph.busy())
     };
     let ((slow, busy0), (fast, busy1)) = (run(0), run(1));
     assert!(busy0 && busy1, "the fill still runs");
-    assert!(fast > slow, "CPU first {fast}, Blitter first {slow}");
+    assert!(fast > slow, "CPU first {fast}, Lithograph first {slow}");
 }
 
 #[test]
-fn the_copper_starts_a_blit_and_waits_for_it() {
-    // The Copper starts the prepared fill (BLIT), then WAIT with the
-    // Blitter bit before setting palette 2: it lands after the fill.
-    // Each field: palette 2 green, BLIT, WAIT for the Blitter, blue.
+fn the_jacquard_starts_a_blit_and_waits_for_it() {
+    // The Jacquard starts the prepared fill (LITH), then WAIT with the
+    // Lithograph bit before setting palette 2: it lands after the fill.
+    // Each field: palette 2 green, LITH, WAIT for the Lithograph, blue.
     let list = [
         0x1004 >> 1,
         0x07e0,
@@ -603,31 +612,32 @@ fn the_copper_starts_a_blit_and_waits_for_it() {
         0,
     ];
     let mut m = machine();
-    insert_program(&mut m, assemble(&copper_program(0)));
-    copper_setup(&mut m, &list);
+    insert_program(&mut m, assemble(&jacquard_program(0)));
+    jacquard_setup(&mut m, &list);
     for (r, v) in [
-        (chips_logophor::blitter::BLTCON0, 0x0100),
-        (chips_logophor::blitter::BLTCON1, 1),
-        (chips_logophor::blitter::BLTDSEG, 7),
-        (chips_logophor::blitter::BLTDPITCH, 256),
-        (chips_logophor::blitter::BLTW, 256),
-        (chips_logophor::blitter::BLTH, 1024),
-        (chips_logophor::blitter::BLTCOLOR, 0x33),
+        (chips_logophor::lithograph::LTHCON0, 0x0100),
+        (chips_logophor::lithograph::LTHCON1, 1),
+        (chips_logophor::lithograph::LTHDSEG, 7),
+        (chips_logophor::lithograph::LTHDPITCH, 1024),
+        (chips_logophor::lithograph::LTHW, 1024),
+        (chips_logophor::lithograph::LTHH, 1024),
+        (chips_logophor::lithograph::LTHCOLOR, 0x33),
     ] {
         m.board.babbage.write(r, v);
     }
     m.board
         .babbage
-        .write(babbage::DMACON, 0x8000 | babbage::DMA_BLITTER);
+        .write(babbage::DMACON, 0x8000 | babbage::DMA_LITHOGRAPH);
     frames(&mut m, 3);
-    let last = 0x0007_0000 + 1023 * 256 + 255;
+    let last = 0x0007_0000 + 1023 * 1024 + 1023;
     assert_eq!(
         DebugTarget::peek(&m, CPU_SPACE, last, Size::Byte),
         Some(0x33)
     );
     assert_eq!(m.board.lumiere.palette()[2], 0x001f);
-    // The palette changes only after the fill's 1024 x 64 slots (about 77
-    // lines): line 61 is still green, line 120 blue.
+    // The palette changes only after the fill's 1024 x 256 slots (about
+    // 103 lines at 2 544 slots a line): line 61 is still green, line 160
+    // blue.
     let px = pixels(&m);
     assert_eq!(
         px[61 * 800 + 400],
@@ -635,14 +645,14 @@ fn the_copper_starts_a_blit_and_waits_for_it() {
         "line 61: the fill runs"
     );
     assert_eq!(
-        px[120 * 800 + 400],
+        px[160 * 800 + 400],
         lumiere::rgb565(0x001f),
-        "line 120: done"
+        "line 160: done"
     );
 }
 
 #[test]
-fn savestate_in_the_blitter_scene_resumes_identically() {
+fn savestate_in_the_lithograph_scene_resumes_identically() {
     let mut a = machine();
     frames(&mut a, 745);
     for _ in 0..3000 {
@@ -1105,7 +1115,7 @@ fn telegraph_options_timers_clock_and_ports() {
 #[derive(Default)]
 struct HubState {
     inbox: Vec<std::collections::VecDeque<Vec<u8>>>,
-    gateway: Option<(asm_ada::hub::Gateway, TestInternet)>,
+    gateway: Option<(asm_ada::hub::Gateway, Box<dyn asm_ada::hub::Outside + Send>)>,
     /// machine 0's polls of the socket: the gateway's clock
     polls: u64,
 }
@@ -1129,13 +1139,81 @@ struct TestInternet {
     names: std::collections::VecDeque<(u32, Option<std::net::Ipv4Addr>)>,
     conns: std::collections::BTreeMap<u32, std::collections::VecDeque<u8>>,
     lines: std::collections::BTreeMap<u32, Vec<u8>>,
+    radio: std::collections::BTreeMap<u32, RadioListener>,
+}
+
+/// `radio.example` (192.0.2.80), port 80: an Icecast-like station. A
+/// request for `/stream` is redirected (302, a long Location like the real
+/// stations' CDN links); the redirected request gets ICY headers and then
+/// the MP3 test tone again and again, a metadata block with a title every
+/// 8 192 bytes.
+#[derive(Default)]
+struct RadioListener {
+    request: Vec<u8>,
+    head_sent: bool,
+    redirected: bool,
+    pos: usize,
+    since_meta: usize,
+    out: std::collections::VecDeque<u8>,
+}
+
+const RADIO: std::net::Ipv4Addr = std::net::Ipv4Addr::new(192, 0, 2, 80);
+const RADIO_METAINT: usize = 8192;
+static TONE_MP3: &[u8] = include_bytes!("../../../tests/data/logophor16/tone.mp3");
+
+impl RadioListener {
+    fn fill(&mut self, want: usize) {
+        if self.redirected {
+            return; // the first connection ends after the redirect
+        }
+        if !self.head_sent {
+            if !self.request.windows(4).any(|w| w == b"\r\n\r\n") {
+                return;
+            }
+            self.head_sent = true;
+            if self.request.starts_with(b"GET /stream ") {
+                let target = format!(
+                    "http://radio.example/live/stream.mp3?cid={}&token={}",
+                    "0".repeat(60),
+                    "x".repeat(120)
+                );
+                self.out.extend(
+                    format!(
+                        "HTTP/1.1 302 Found\r\nContent-Type: audio/mpeg\r\nLocation: {target}\r\nConnection: close\r\n\r\n"
+                    )
+                    .into_bytes(),
+                );
+                self.redirected = true;
+                return;
+            }
+            self.out.extend(
+                b"ICY 200 OK\r\nicy-name: Test Radio\r\ncontent-type: audio/mpeg\r\nicy-metaint: 8192\r\n\r\n",
+            );
+        }
+        while self.out.len() < want {
+            if self.since_meta == RADIO_METAINT {
+                let mut meta = b"StreamTitle='Brass Band - Steam Waltz';".to_vec();
+                meta.resize(meta.len().div_ceil(16) * 16, 0);
+                self.out.push_back((meta.len() / 16) as u8);
+                self.out.extend(meta);
+                self.since_meta = 0;
+            }
+            self.out.push_back(TONE_MP3[self.pos]);
+            self.pos = (self.pos + 1) % TONE_MP3.len();
+            self.since_meta += 1;
+        }
+    }
 }
 
 const BBS: std::net::Ipv4Addr = std::net::Ipv4Addr::new(93, 184, 216, 34);
 
 impl asm_ada::hub::Outside for TestInternet {
     fn resolve(&mut self, id: u32, name: &str) -> bool {
-        let a = (name == "bbs.example").then_some(BBS);
+        let a = match name {
+            "bbs.example" => Some(BBS),
+            "radio.example" => Some(RADIO),
+            _ => None,
+        };
         self.names.push_back((id, a));
         true
     }
@@ -1148,19 +1226,27 @@ impl asm_ada::hub::Outside for TestInternet {
     }
     fn udp_close(&mut self, _: std::net::SocketAddrV4) {}
     fn tcp_connect(&mut self, id: u32, to: std::net::SocketAddrV4) {
+        if to == std::net::SocketAddrV4::new(RADIO, 80) {
+            self.radio.insert(id, RadioListener::default());
+            return;
+        }
         if to == std::net::SocketAddrV4::new(BBS, 23) {
             let hello = b"Welcome to the test BBS\r\n".iter().copied().collect();
             self.conns.insert(id, hello);
         }
     }
     fn tcp_connect_state(&mut self, id: u32) -> asm_ada::hub::outside::Connect {
-        if self.conns.contains_key(&id) {
+        if self.conns.contains_key(&id) || self.radio.contains_key(&id) {
             asm_ada::hub::outside::Connect::Open
         } else {
             asm_ada::hub::outside::Connect::Failed
         }
     }
     fn tcp_send(&mut self, id: u32, data: &[u8]) -> Option<usize> {
+        if let Some(r) = self.radio.get_mut(&id) {
+            r.request.extend_from_slice(data);
+            return Some(data.len());
+        }
         let q = self.conns.get_mut(&id)?;
         let line = self.lines.entry(id).or_default();
         for &b in data {
@@ -1173,6 +1259,22 @@ impl asm_ada::hub::Outside for TestInternet {
     }
     fn tcp_recv(&mut self, id: u32, buf: &mut [u8]) -> asm_ada::hub::outside::TcpRead {
         use asm_ada::hub::outside::TcpRead;
+        if let Some(r) = self.radio.get_mut(&id) {
+            // as fast as the gateway takes it, a little at a time
+            r.fill(buf.len().min(1024));
+            let n = r.out.len().min(buf.len());
+            if n == 0 {
+                return if r.redirected {
+                    TcpRead::Closed
+                } else {
+                    TcpRead::Nothing
+                };
+            }
+            for (b, c) in buf.iter_mut().zip(r.out.drain(..n)) {
+                *b = c;
+            }
+            return TcpRead::Data(n);
+        }
         let Some(q) = self.conns.get_mut(&id) else {
             return TcpRead::Failed;
         };
@@ -1187,6 +1289,7 @@ impl asm_ada::hub::Outside for TestInternet {
     }
     fn tcp_shutdown(&mut self, _: u32) {}
     fn tcp_close(&mut self, id: u32) {
+        self.radio.remove(&id);
         self.conns.remove(&id);
     }
 }
@@ -1219,7 +1322,7 @@ impl emu_core::host::NetBackend for HubNet {
             }
             let now = hub.polls * 2 / 5;
             if let Some((gw, inet)) = &mut hub.gateway {
-                let out = gw.frame(&data[5..data.len() - 4], now, inet);
+                let out = gw.frame(&data[5..data.len() - 4], now, inet.as_mut());
                 hub.broadcast(out);
             }
         }
@@ -1232,7 +1335,7 @@ impl emu_core::host::NetBackend for HubNet {
             hub.polls += 1;
             let now = hub.polls * 2 / 5;
             if let Some((gw, inet)) = &mut hub.gateway {
-                let out = gw.poll(now, inet);
+                let out = gw.poll(now, inet.as_mut());
                 hub.broadcast(out);
             }
         }
@@ -1392,6 +1495,10 @@ fn system_with_main(main: &str) -> Vec<u8> {
         let mut files = Vec::new();
         for f in std::fs::read_dir(&dir).unwrap() {
             let p = f.unwrap().path();
+            // sources only (the artwork lives there too)
+            if !matches!(p.extension().and_then(|e| e.to_str()), Some("brass" | "s")) {
+                continue;
+            }
             files.push((
                 p.display().to_string(),
                 std::fs::read_to_string(&p).unwrap(),
@@ -1512,11 +1619,15 @@ fn point(m: &mut Logophor, from: (i16, i16), to: (i16, i16)) {
     }
 }
 
+/// The skin (tile.rs) as the system card carries it.
+static SYSTEM_TILE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tile.raw"));
+
 fn panorama() -> Logophor {
     let img = asm_ada::sdimage::fat32(
         64,
         &[
             ("BOOT/BOILER.BIN".into(), system_binary()),
+            ("PANORAMA/TILE.RAW".into(), SYSTEM_TILE.to_vec()),
             ("README.TXT".into(), b"Logophor 16 system card".to_vec()),
             ("DOCS/BRASS.TXT".into(), vec![b'b'; 1234]),
             ("DOCS/GEARS/SPROCKET.DAT".into(), vec![7; 4096]),
@@ -1562,13 +1673,13 @@ fn archive_browses_directories_in_columns() {
     click(&mut m);
     frames(&mut m, 40);
     let row = |r: i16| 40 + 22 + 24 + 9 + 18 * r;
-    point(&mut m, (60, 52), (214, row(2)));
+    point(&mut m, (60, 52), (226, row(3)));
     click(&mut m);
     frames(&mut m, 30);
-    point(&mut m, (214, row(2)), (382, row(1)));
+    point(&mut m, (226, row(3)), (394, row(1)));
     click(&mut m);
     frames(&mut m, 30);
-    point(&mut m, (382, row(1)), (550, row(0)));
+    point(&mut m, (394, row(1)), (562, row(0)));
     click(&mut m);
     frames(&mut m, 30);
     golden(&m, "panorama-archive");
@@ -1592,10 +1703,10 @@ fn drag(m: &mut Logophor, from: (i16, i16), to: (i16, i16)) {
 fn windows_move_minimise_and_the_theme_turns_to_the_oscilloscope() {
     let mut m = panorama();
     // Info from the dock, Engine Room from the menu
-    point(&mut m, (512, 384), (994, 80));
+    point(&mut m, (512, 384), (994, 28));
     click(&mut m);
     frames(&mut m, 30);
-    point(&mut m, (994, 80), (60, 72));
+    point(&mut m, (994, 28), (60, 72));
     click(&mut m);
     frames(&mut m, 30);
     // Info's title bar (behind Engine Room) to the lower right
@@ -1641,23 +1752,37 @@ fn the_system_card_boots_into_panorama() {
 /// Machines booting Panorama from the system card, on an in-memory hub
 /// with the gateway; machine k has the MAC 02:4C:31:36:00:0(k+1).
 fn net_machines(n: usize) -> Vec<Logophor> {
+    net_machines_with(n, None)
+}
+
+/// Machines on the hub; with `card`, that card instead of the system card.
+fn net_machines_with(n: usize, card: Option<Vec<u8>>) -> Vec<Logophor> {
     let hub = std::sync::Arc::new(std::sync::Mutex::new(HubState {
         inbox: vec![Default::default(); n],
-        gateway: Some((asm_ada::hub::Gateway::new(), TestInternet::default())),
+        gateway: Some((
+            asm_ada::hub::Gateway::new(),
+            Box::new(TestInternet::default()),
+        )),
         polls: 0,
     }));
     let mut ms: Vec<Logophor> = (0..n)
         .map(|me| {
+            let mut options: std::collections::BTreeMap<String, String> = [
+                ("net".into(), "hub:6516".into()),
+                ("mac".into(), format!("02:4c:31:36:00:{:02x}", me + 1)),
+            ]
+            .into();
+            if card.is_none() {
+                options.insert("card".into(), "system".into());
+            }
             let config = MachineConfig {
-                options: [
-                    ("card".into(), "system".into()),
-                    ("net".into(), "hub:6516".into()),
-                    ("mac".into(), format!("02:4c:31:36:00:{:02x}", me + 1)),
-                ]
-                .into(),
+                options: options.into_iter().collect(),
                 ..MachineConfig::default()
             };
             let mut m = Logophor::new(&config).unwrap();
+            if let Some(img) = &card {
+                insert_card(&mut m, img.clone());
+            }
             m.attach_host(HostServices::new(
                 Some(Box::new(HubNet {
                     hub: hub.clone(),
@@ -1775,7 +1900,7 @@ fn mode_5_runs_the_fields_with_xga_timing() {
     // A field: 806 lines of 249 CPU cycles (40 master ticks a cycle).
     let t0 = m.now().0;
     frames(&mut m, 1);
-    assert_eq!(m.now().0 - t0, 806 * 249 * 40);
+    assert_eq!(m.now().0 - t0, 806 * u64::from(XGA.line_cycles) * 40);
     // A savestate taken in an XGA field resumes the same.
     let state = m.save_state();
     frames(&mut m, 2);
@@ -1785,4 +1910,530 @@ fn mode_5_runs_the_fields_with_xga_timing() {
     frames(&mut n, 2);
     assert_eq!(pixels(&n), after);
     assert_eq!(n.now(), t);
+}
+
+// ---- step 11e: games ----
+
+#[test]
+fn steamworks_deals_levels_that_can_be_solved() {
+    let prog = system_with_main(
+        r#"
+package main
+
+import "steamworks"
+
+func main() {
+    var b steamworks.Board
+    var lit [steamworks.H][steamworks.W]bool
+    solved, before := 0, 0
+    for n := 1; n <= 20; n++ {
+        b.Deal(n)
+        if b.Steam(&lit) {
+            before++
+        }
+        b.Solve()
+        if b.Steam(&lit) {
+            solved++
+        }
+    }
+    println("solved", solved, "before", before)
+    // a quarter turn more on one piece that is not round
+    b.Deal(3)
+    b.Solve()
+    for y := range steamworks.H {
+        for x := range steamworks.W {
+            p := b.Pipes[y][x]
+            if p != 5 && p != 10 && p != 15 {
+                b.Click(x, y)
+                println("one turn off", b.Steam(&lit))
+                return
+            }
+        }
+    }
+}
+"#,
+    );
+    let img = asm_ada::sdimage::fat32(64, &[("BOOT/BOILER.BIN".into(), prog)]).unwrap();
+    let mut m = machine();
+    insert_card(&mut m, img);
+    frames(&mut m, 300);
+    let console = String::from_utf8_lossy(m.console()).into_owned();
+    assert!(
+        console.contains("solved 20 before 0\none turn off false\n"),
+        "{console}"
+    );
+}
+
+#[test]
+fn steamworks_shows_its_board_and_turns_pieces() {
+    let mut m = panorama();
+    // the dock's eighth tile
+    point(&mut m, (512, 384), (994, 340));
+    click(&mut m);
+    frames(&mut m, 60);
+    // turn the top left piece twice and the one below once
+    let at = |x: i16, y: i16| (190 + 12 + 16 + 48 * x + 24, 40 + 22 + 24 + 48 * y + 24);
+    point(&mut m, (994, 340), at(0, 0));
+    click(&mut m);
+    frames(&mut m, 20);
+    click(&mut m);
+    frames(&mut m, 20);
+    point(&mut m, at(0, 0), at(0, 1));
+    click(&mut m);
+    frames(&mut m, 40);
+    golden(&m, "steamworks");
+}
+
+#[test]
+fn pathfinder_levels_can_all_be_solved_by_its_rules() {
+    let prog = system_with_main(
+        r#"
+package main
+
+import "pathfinder"
+
+// Depth first over every tower the player can reach and every direction.
+func solve(g *pathfinder.Game, depth int) bool {
+    if depth > 16 {
+        return false
+    }
+    for i := range pathfinder.Size {
+        v := g.Board[i]
+        if v < 2 || v > 4 {
+            continue
+        }
+        for d := range 4 {
+            g.Cursor = i
+            g.Choose()
+            if g.State != pathfinder.Dir {
+                break
+            }
+            g.Tip(d)
+            if g.State == pathfinder.Solved {
+                return true
+            }
+            if g.Board[i] == v {
+                g.Cancel()
+                continue
+            }
+            if solve(g, depth+1) {
+                return true
+            }
+            g.Undo()
+        }
+    }
+    return false
+}
+
+func main() {
+    var g pathfinder.Game
+    for n := range pathfinder.Levels {
+        g.Load(n)
+        print(solve(&g, 0), " ")
+    }
+    println()
+    g.Load(0)
+    g.Cursor = 0
+    g.Choose()
+    println(g.Status)
+}
+"#,
+    );
+    let img = asm_ada::sdimage::fat32(64, &[("BOOT/BOILER.BIN".into(), prog)]).unwrap();
+    let mut m = machine();
+    insert_card(&mut m, img);
+    frames(&mut m, 1500);
+    let console = String::from_utf8_lossy(m.console()).into_owned();
+    assert!(
+        console.contains(
+            "true true true true true true true true true true 
+No tower here
+"
+        ),
+        "{console}"
+    );
+}
+
+#[test]
+fn pathfinder_shows_level_1_and_takes_the_start_tower() {
+    let mut m = panorama();
+    // the dock's seventh tile
+    point(&mut m, (512, 384), (994, 288));
+    click(&mut m);
+    frames(&mut m, 60);
+    type_text(
+        &mut m, "
+",
+    );
+    frames(&mut m, 30);
+    golden(&m, "pathfinder");
+}
+
+/// Keys (USB HID usages) down or up at once.
+fn keys(m: &mut Logophor, usages: &[u8], down: bool) {
+    for &u in usages {
+        let at = m.now();
+        m.input(TimedInput {
+            at,
+            target: InputTarget::Keyboard,
+            event: InputEvent::Key {
+                machine_key: emu_core::input::MachineKey(u16::from(u)),
+                down,
+            },
+        });
+    }
+}
+
+#[test]
+fn panorama_keeps_a_hidden_game_for_the_oscilloscope() {
+    let mut m = panorama();
+    point(&mut m, (512, 384), (60, 72));
+    click(&mut m);
+    frames(&mut m, 40);
+    let chord = [0xe1, 0xe2, 0x2b, 0x12];
+    // in the brass theme the chord does nothing
+    let before = pixels(&m);
+    keys(&mut m, &chord, true);
+    frames(&mut m, 20);
+    keys(&mut m, &chord, false);
+    frames(&mut m, 40);
+    // (the keys typed a capital O into Engine Room, nothing else)
+    type_text(&mut m, "\n");
+    frames(&mut m, 20);
+    assert_ne!(pixels(&m), before);
+    type_text(&mut m, "theme scope\n");
+    frames(&mut m, 60);
+    keys(&mut m, &chord, true);
+    frames(&mut m, 20);
+    keys(&mut m, &chord, false);
+    frames(&mut m, 60);
+    // a short flight: thrust, a turn, three shots
+    keys(&mut m, &[0x52], true);
+    frames(&mut m, 30);
+    keys(&mut m, &[0x52], false);
+    keys(&mut m, &[0x4f], true);
+    frames(&mut m, 12);
+    keys(&mut m, &[0x4f], false);
+    for _ in 0..3 {
+        keys(&mut m, &[0x2c], true);
+        frames(&mut m, 4);
+        keys(&mut m, &[0x2c], false);
+        frames(&mut m, 8);
+    }
+    frames(&mut m, 10);
+    golden(&m, "hidden-game");
+}
+
+#[test]
+fn the_radio_plays_a_station_through_phonograph() {
+    let card = asm_ada::sdimage::fat32(
+        64,
+        &[
+            ("BOOT/BOILER.BIN".into(), system_binary()),
+            ("PANORAMA/TILE.RAW".into(), SYSTEM_TILE.to_vec()),
+            (
+                "RADIO/STATIONS.TXT".into(),
+                b"Test Radio|http://radio.example/stream\nNowhere|http://nowhere.example/\n"
+                    .to_vec(),
+            ),
+        ],
+    )
+    .unwrap();
+    let mut ms = net_machines_with(1, Some(card));
+    let m = &mut ms[0];
+    // the dock's sixth tile, then the first station
+    point(m, (512, 384), (994, 236));
+    click(m);
+    frames(m, 60);
+    point(m, (994, 236), (230, 40 + 22 + 28 + 10));
+    click(m);
+    frames(m, 600);
+    let reg = |m: &Logophor, off: u32| {
+        DebugTarget::peek(m, CPU_SPACE, 0xffff_0000 + off, Size::Word).unwrap()
+    };
+    assert_eq!(reg(m, 0x3202) & 1, 1, "Phonograph on");
+    assert_eq!(reg(m, 0x3210), 4410, "44.1 kHz");
+    assert!(
+        (reg(m, 0x321c) << 16 | reg(m, 0x321e)) > 50,
+        "frames decoded"
+    );
+    // the tone reaches the machine's sound
+    let mut out = Vec::new();
+    m.audio(&mut out);
+    frames(m, 60);
+    out.clear();
+    m.audio(&mut out);
+    let peak = out.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+    assert!(peak > 1000, "audible: peak {peak}");
+    // real time: 38.3 frames a second at 44.1 kHz, the ring kept full
+    let f0 = reg(m, 0x321e);
+    frames(m, 60);
+    let per_second = reg(m, 0x321e).wrapping_sub(f0);
+    let fill = (reg(m, 0x320a) + 16384 - reg(m, 0x320c)) % 16384;
+    assert!(per_second >= 37, "{per_second} frames a second");
+    assert!(fill > 8192, "ring {fill} bytes");
+    assert_eq!(reg(m, 0x320e) & 2, 0, "not starved");
+    golden(m, "radio");
+}
+
+/// The radio on the real Internet through the hub's gateway and the host's
+/// sockets (needs a network connection; the first built-in station).
+#[test]
+#[ignore]
+fn the_radio_plays_a_real_station() {
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(HubState {
+        inbox: vec![Default::default()],
+        gateway: Some((
+            asm_ada::hub::Gateway::new(),
+            Box::new(asm_ada::hub::HostOutside::new()),
+        )),
+        polls: 0,
+    }));
+    let config = MachineConfig {
+        options: [
+            ("card".into(), "system".into()),
+            ("net".into(), "hub:6516".into()),
+        ]
+        .into(),
+        ..MachineConfig::default()
+    };
+    let mut m = Logophor::new(&config).unwrap();
+    m.attach_host(HostServices::new(
+        Some(Box::new(HubNet {
+            hub: hub.clone(),
+            me: 0,
+        })),
+        None,
+    ));
+    frames(&mut m, 600);
+    point(&mut m, (512, 384), (994, 236));
+    click(&mut m);
+    frames(&mut m, 60);
+    point(&mut m, (994, 236), (230, 40 + 22 + 28 + 10));
+    click(&mut m);
+    let reg = |m: &Logophor, off: u32| {
+        DebugTarget::peek(m, CPU_SPACE, 0xffff_0000 + off, Size::Word).unwrap()
+    };
+    // up to 30 s of the machine's time for DNS, the redirect and the stream
+    let mut frames_decoded = 0;
+    for _ in 0..30 {
+        frames(&mut m, 60);
+        frames_decoded = reg(&m, 0x321c) << 16 | reg(&m, 0x321e);
+        let log = hub.lock().unwrap().gateway.as_mut().unwrap().0.take_log();
+        for l in log {
+            eprintln!("hub: {l}");
+        }
+        eprintln!(
+            "PHCON {:04x} PHSTAT {:04x} rate {} kbps {} frames {}",
+            reg(&m, 0x3202),
+            reg(&m, 0x320e),
+            reg(&m, 0x3210),
+            reg(&m, 0x3214),
+            frames_decoded
+        );
+        if frames_decoded > 200 {
+            break;
+        }
+    }
+    assert!(frames_decoded > 200, "decoded {frames_decoded} frames");
+    assert_eq!(reg(&m, 0x3210), 4800, "48 kHz (the ARD streams)");
+}
+
+// ---- net=host: the gateway in the machine ----
+
+/// The host's network services as `net=host` sees them, in front of the
+/// test Internet: connections by name or number.
+#[derive(Default)]
+struct TestHost {
+    inet: TestInternet,
+    next: NetHandle,
+    /// the names the machine's connections went out by
+    asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl emu_core::host::NetBackend for TestHost {
+    fn connect(
+        &mut self,
+        kind: SocketKind,
+        name: &str,
+        port: u16,
+    ) -> Result<NetHandle, host::NetError> {
+        use asm_ada::hub::Outside;
+        if kind != SocketKind::Tcp {
+            return Err(host::NetError::Unsupported("udp".into()));
+        }
+        self.asked.lock().unwrap().push(format!("{name}:{port}"));
+        let ip = match name {
+            "bbs.example" => BBS,
+            "radio.example" => RADIO,
+            n => n
+                .parse()
+                .map_err(|_| host::NetError::Resolve(n.to_string()))?,
+        };
+        self.next += 1;
+        self.inet
+            .tcp_connect(self.next, std::net::SocketAddrV4::new(ip, port));
+        Ok(self.next)
+    }
+    fn listen(&mut self, _: u16) -> Result<NetHandle, host::NetError> {
+        Err(host::NetError::Unsupported("listen".into()))
+    }
+    fn accept(&mut self, _: NetHandle) -> Result<Option<NetHandle>, host::NetError> {
+        Ok(None)
+    }
+    fn state(&mut self, h: NetHandle) -> Result<ConnState, host::NetError> {
+        use asm_ada::hub::{outside::Connect, Outside};
+        Ok(match self.inet.tcp_connect_state(h) {
+            Connect::Open => ConnState::Connected,
+            Connect::Pending => ConnState::Connecting,
+            Connect::Failed => ConnState::Failed(host::NetError::Connect("refused".into())),
+        })
+    }
+    fn send(&mut self, h: NetHandle, data: &[u8]) -> Result<usize, host::NetError> {
+        use asm_ada::hub::Outside;
+        self.inet.tcp_send(h, data).ok_or(host::NetError::BadHandle)
+    }
+    fn recv(&mut self, h: NetHandle, buf: &mut [u8]) -> Result<Recv, host::NetError> {
+        use asm_ada::hub::{outside::TcpRead, Outside};
+        match self.inet.tcp_recv(h, buf) {
+            TcpRead::Data(n) => Ok(Recv::Data(n)),
+            TcpRead::Nothing => Ok(Recv::Data(0)),
+            TcpRead::Closed => Ok(Recv::Closed),
+            TcpRead::Failed => Err(host::NetError::BadHandle),
+        }
+    }
+    fn close(&mut self, h: NetHandle) {
+        use asm_ada::hub::Outside;
+        self.inet.tcp_close(h);
+    }
+    fn http_get(&mut self, _: &str) -> Result<host::HttpTicket, host::NetError> {
+        Err(host::NetError::Unsupported("http".into()))
+    }
+    fn http_post(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: &[u8],
+    ) -> Result<host::HttpTicket, host::NetError> {
+        Err(host::NetError::Unsupported("http".into()))
+    }
+    fn poll_http(
+        &mut self,
+        _: host::HttpTicket,
+    ) -> Option<Result<host::HttpResponse, host::NetError>> {
+        None
+    }
+    fn info(&mut self) -> Result<host::NetInfo, host::NetError> {
+        Err(host::NetError::Unsupported("info".into()))
+    }
+    fn time(&mut self) -> host::HostTime {
+        host::HostTime::default()
+    }
+}
+
+#[test]
+fn net_host_plays_the_radio_without_a_hub() {
+    let card = asm_ada::sdimage::fat32(
+        64,
+        &[
+            ("BOOT/BOILER.BIN".into(), system_binary()),
+            ("PANORAMA/TILE.RAW".into(), SYSTEM_TILE.to_vec()),
+            (
+                "RADIO/STATIONS.TXT".into(),
+                b"Test Radio|http://radio.example/stream\n".to_vec(),
+            ),
+        ],
+    )
+    .unwrap();
+    let config = MachineConfig {
+        options: [("net".into(), "host".into())].into(),
+        ..MachineConfig::default()
+    };
+    let mut m = Logophor::new(&config).unwrap();
+    insert_card(&mut m, card);
+    let test_host = TestHost::default();
+    let asked = test_host.asked.clone();
+    m.attach_host(HostServices::new(Some(Box::new(test_host)), None));
+    frames(&mut m, 600);
+    // the dock's sixth tile, then the first station
+    point(&mut m, (512, 384), (994, 236));
+    click(&mut m);
+    frames(&mut m, 60);
+    point(&mut m, (994, 236), (230, 40 + 22 + 28 + 10));
+    click(&mut m);
+    frames(&mut m, 600);
+    let reg = |m: &Logophor, off: u32| {
+        DebugTarget::peek(m, CPU_SPACE, 0xffff_0000 + off, Size::Word).unwrap()
+    };
+    assert_eq!(reg(&m, 0x3210), 4410, "44.1 kHz");
+    let f0 = reg(&m, 0x321e);
+    frames(&mut m, 60);
+    let per_second = reg(&m, 0x321e).wrapping_sub(f0);
+    assert!(per_second >= 37, "{per_second} frames a second");
+    assert_eq!(reg(&m, 0x320e) & 2, 0, "not starved");
+    // DHCP and DNS stayed in the machine: the host saw the station by
+    // name, twice (the redirect), and nothing else
+    assert_eq!(
+        *asked.lock().unwrap(),
+        ["radio.example:80", "radio.example:80"]
+    );
+}
+
+#[test]
+fn closing_windows_keeps_panorama_running() {
+    let mut m = panorama();
+    // every app in the dock (Info, Archive, Engine Room, Teleprinter,
+    // Radio, Pathfinder, Steamworks), each opened and closed with its
+    // button three times
+    for tile in 1..8 {
+        let ty = 28 + 52 * (tile - 1);
+        for round in 0..3 {
+            point(&mut m, (512, 384), (994, ty));
+            click(&mut m);
+            frames(&mut m, 60);
+            // its close button (the first window opens at 190, 40; the
+            // right end by the application's width)
+            let (cx, cy) = ([520, 712, 688, 688, 720, 568, 616][tile as usize - 1], 49);
+            point(&mut m, (994, ty), (cx, cy));
+            click(&mut m);
+            frames(&mut m, 60);
+            point(&mut m, (cx, cy), (512, 384));
+            let c = String::from_utf8_lossy(m.console()).to_string();
+            assert!(!c.contains("panic"), "tile {tile} round {round}: {c}");
+            assert_eq!(
+                m.framebuffer().width,
+                1024,
+                "tile {tile} round {round}: Panorama"
+            );
+        }
+    }
+}
+
+#[test]
+fn maximised_windows_grow_or_keep_their_content_in_the_middle() {
+    let mut m = panorama();
+    // Engine Room (opens at 190, 40, 512 wide): its maximise button
+    point(&mut m, (512, 384), (60, 72));
+    click(&mut m);
+    frames(&mut m, 30);
+    point(&mut m, (60, 72), (671, 51));
+    click(&mut m);
+    frames(&mut m, 60);
+    type_text(&mut m, "ls\n");
+    type_text(&mut m, "mem\n");
+    frames(&mut m, 30);
+    golden(&m, "panorama-maximised");
+    // back to its size (the button is at the right end now)
+    point(&mut m, (671, 51), (937, 15));
+    click(&mut m);
+    frames(&mut m, 60);
+    // Pathfinder maximised: the board stays in the middle
+    point(&mut m, (937, 15), (994, 288));
+    click(&mut m);
+    frames(&mut m, 60);
+    golden(&m, "panorama-restored");
+    point(&mut m, (994, 288), (579, 75));
+    click(&mut m);
+    frames(&mut m, 60);
+    golden(&m, "panorama-maximised-game");
 }

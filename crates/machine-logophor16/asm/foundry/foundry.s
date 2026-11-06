@@ -8,11 +8,11 @@
 ; goes (checked in the VBlank interrupt). ROM services by TRAP (traps.s), the console (console.s).
 ;
 ; The demonstration: sets the palette, copies the font to chip RAM, draws a
-; mode-0 test picture and a mode-4 text screen, builds a Copper list and
-; the Blitter scene's graphics, and shows in turn every 3 seconds: the
-; test picture, the text screen, the Copper scene (a colour gradient line
+; mode-0 test picture and a mode-4 text screen, builds a Jacquard list and
+; the Lithograph scene's graphics, and shows in turn every 3 seconds: the
+; test picture, the text screen, the Jacquard scene (a colour gradient line
 ; by line behind the text, the screen split at line 300 into the test
-; picture), the Blitter scene (a scrolling background, moving balls with
+; picture), the Lithograph scene (a scrolling background, moving balls with
 ; shadows), the sprite scene (256 bouncing sprites over the background,
 ; hardware-scrolled) and the 3D scene (a turning, textured brass zeppelin
 ; drawn by the Stereoscope in mode 1, 320 x 240 x 16 bits, double-
@@ -31,35 +31,35 @@
 ; ---- I/O registers (segment $FFFF, SPEC.md 6, 8.2 and 10.5) ----
 IO_SEG   = $ffff
 DMACON   = $0002
-COP1SEG  = $0020
-COP1OFS  = $0022
-BLTCON0  = $0100
-BLTCON1  = $0102
-BLTASEG  = $0104
-BLTAOFS  = $0106
-BLTBSEG  = $0108
-BLTBOFS  = $010a
-BLTDSEG  = $010c
-BLTDOFS  = $010e
-BLTAPITCH = $0110
-BLTBPITCH = $0112
-BLTDPITCH = $0114
-BLTW     = $0116
-BLTH     = $0118
-BLTKEY   = $011a
-BLTCOLOR = $011c
-BLTTSEG  = $011e
-BLTTOFS  = $0120
-BLTLINE  = $0122
-BLTSTART = $0124
-BLTSTAT  = $0126
-USE_A    = $10                  ; BLTCON0
+JAQ1SEG  = $0020
+JAQ1OFS  = $0022
+LTHCON0  = $0100
+LTHCON1  = $0102
+LTHASEG  = $0104
+LTHAOFS  = $0106
+LTHBSEG  = $0108
+LTHBOFS  = $010a
+LTHDSEG  = $010c
+LTHDOFS  = $010e
+LTHAPITCH = $0110
+LTHBPITCH = $0112
+LTHDPITCH = $0114
+LTHW     = $0116
+LTHH     = $0118
+LTHKEY   = $011a
+LTHCOLOR = $011c
+LTHTSEG  = $011e
+LTHTOFS  = $0120
+LTHLINE  = $0122
+LTHSTART = $0124
+LTHSTAT  = $0126
+USE_A    = $10                  ; LTHCON0
 USE_B    = $20
 USE_D    = $40
 OP_FILL  = $100
 OP_LINE  = $200
 OP_SHADE = $300
-SIZE_8   = 1                    ; BLTCON1
+SIZE_8   = 1                    ; LTHCON1
 KEY_A    = $10
 VMODE    = $0800
 FBSEG    = $0802
@@ -99,7 +99,7 @@ TEXT_SEG = $0001
 TEXT_OFS = $1000                ; text screen at 0001:1000, 100 x 37 cells
 TEXT_PITCH = 200
 PIC_SEG  = $0002                ; mode-0 picture at 0002:0000 (76 800 bytes)
-COPPER_SEG = $0004              ; Copper list at 0004:0000
+JACQUARD_SEG = $0004              ; Jacquard list at 0004:0000
 GFX_SEG  = $0005                ; balls 0005:0000 and :0400, shade table,
 SHADE_OFS = $1000               ; the bobs and variables
 BOBS_OFS = $2000
@@ -201,9 +201,9 @@ attract:
         bl      copy_font
         bl      draw_picture
         bl      draw_text
-        bl      build_copper
+        bl      build_jacquard
         seg3    IO_SEG
-        reg     DMACON, $c021   ; DMA on: master, framebuffer, Blitter
+        reg     DMACON, $c021   ; DMA on: master, framebuffer, Lithograph
         bl      make_balls
         bl      make_shade
         bl      init_bobs
@@ -211,8 +211,8 @@ attract:
         bl      init_music
         seg3    IO_SEG
         bl      draw_background
-        reg     COP1SEG, COPPER_SEG
-        reg     COP1OFS, 0
+        reg     JAQ1SEG, JACQUARD_SEG
+        reg     JAQ1OFS, 0
         reg     FONTSEG, FONT_SEG
         reg     FONTOFS, 0
         reg     TXTBANK, 0
@@ -239,12 +239,12 @@ show:
         reg     BORDER, 1
         li      r5, #FIELDS
         bl      wait_fields
-        reg     DMACON, $8010   ; Copper on: it starts with the next field
+        reg     DMACON, $8010   ; Jacquard on: it starts with the next field
         li      r5, #FIELDS
         bl      wait_fields
-        reg     DMACON, $0010   ; Copper off
+        reg     DMACON, $0010   ; Jacquard off
         reg     PALETTE+2, $0015 ; text colour 1 back to blue
-        bl      blitter_scene
+        bl      lithograph_scene
         bl      sprite_scene
         bl      zeppelin_scene
         bra     show
@@ -677,15 +677,15 @@ draw_text:
         pop     lr
         ret
 
-; The Copper list at COPPER_SEG:0000 (SPEC.md 6.2): at the field start
+; The Jacquard list at JACQUARD_SEG:0000 (SPEC.md 6.2): at the field start
 ; the text screen (pointer taken over at once with FBNOW), then on every
 ; line 0-599 a WAIT for its start and a MOVE of palette entry 1 (the text
 ; background and the border) along a gradient; in the horizontal blank of
 ; line 299 the split: mode 0 with the test picture from line 300 on; in
 ; that of line 599 the gradient's first colour for the next field.
 ; Uses R1-R8.
-build_copper:
-        seg3    COPPER_SEG
+build_jacquard:
+        seg3    JACQUARD_SEG
         movi    r2, #0
         li      r1, #cop_head
         movi    r3, #12
@@ -758,9 +758,9 @@ build_copper:
         swx     r4, (r2)+
         ret
 
-; ---- the Blitter scene (step 5) ----
+; ---- the Lithograph scene (step 5) ----
 ; A background twice as wide as the screen scrolls by one pixel a field,
-; copied by the Blitter into the back buffer; 8 balls move over it, each
+; copied by the Lithograph into the back buffer; 8 balls move over it, each
 ; with a shadow darkened through the shade table, then the ball with its
 ; colour key; the buffers swap at the VBlank (double buffering).
 
@@ -770,9 +770,9 @@ build_copper:
         swx     \r, (r9)
 .endm
 
-; Wait for the Blitter (BLTSTAT bit 0). S3 = IO_SEG. Uses R7, R9, R10.
-blit_wait:
-        li      r9, #BLTSTAT
+; Wait for the Lithograph (LTHSTAT bit 0). S3 = IO_SEG. Uses R7, R9, R10.
+lith_wait:
+        li      r9, #LTHSTAT
 .w:
         lwx     r10, (r9)
         movi    r7, #1
@@ -797,44 +797,44 @@ addr:
 ; colour R1. Uses R7, R9, R10.
 fill:
         push    lr
-        bl      blit_wait
+        bl      lith_wait
         li      r7, #OP_FILL
-        wr      BLTCON0, r7
+        wr      LTHCON0, r7
         movi    r7, #SIZE_8
-        wr      BLTCON1, r7
-        wr      BLTDSEG, r3
-        wr      BLTDOFS, r4
+        wr      LTHCON1, r7
+        wr      LTHDSEG, r3
+        wr      LTHDOFS, r4
         li      r7, #640
-        wr      BLTDPITCH, r7
-        wr      BLTW, r6
-        wr      BLTH, r2
-        wr      BLTCOLOR, r1
-        wr      BLTSTART, r7
+        wr      LTHDPITCH, r7
+        wr      LTHW, r6
+        wr      LTHH, r2
+        wr      LTHCOLOR, r1
+        wr      LTHSTART, r7
         pop     lr
         ret
 
-; A line in the background from D = R3:R4, R6 across, R2 down, BLTLINE
+; A line in the background from D = R3:R4, R6 across, R2 down, LTHLINE
 ; bits R8, colour R1. Uses R7, R9, R10.
 line:
         push    lr
-        bl      blit_wait
+        bl      lith_wait
         li      r7, #OP_LINE
-        wr      BLTCON0, r7
+        wr      LTHCON0, r7
         movi    r7, #SIZE_8
-        wr      BLTCON1, r7
-        wr      BLTDSEG, r3
-        wr      BLTDOFS, r4
+        wr      LTHCON1, r7
+        wr      LTHDSEG, r3
+        wr      LTHDOFS, r4
         li      r7, #640
-        wr      BLTDPITCH, r7
-        wr      BLTW, r6
-        wr      BLTH, r2
-        wr      BLTLINE, r8
-        wr      BLTCOLOR, r1
-        wr      BLTSTART, r7
+        wr      LTHDPITCH, r7
+        wr      LTHW, r6
+        wr      LTHH, r2
+        wr      LTHLINE, r8
+        wr      LTHCOLOR, r1
+        wr      LTHSTART, r7
         pop     lr
         ret
 
-; The background (640 x 240 at BG_SEG), all by the Blitter: 40 bands of
+; The background (640 x 240 at BG_SEG), all by the Lithograph: 40 bands of
 ; sky, 20 hills, the ground, 6 rays, then the left half copied to the
 ; right. S1 = ROM, S3 = IO_SEG. Uses R1-R10.
 draw_background:
@@ -914,26 +914,26 @@ draw_background:
         addi    r5, #1
         cmpi    r5, #6
         bne     .ray
-        bl      blit_wait       ; the left half to the right
+        bl      lith_wait       ; the left half to the right
         li      r7, #$c|USE_A|USE_D
-        wr      BLTCON0, r7
+        wr      LTHCON0, r7
         movi    r7, #SIZE_8
-        wr      BLTCON1, r7
+        wr      LTHCON1, r7
         li      r7, #BG_SEG
-        wr      BLTASEG, r7
-        wr      BLTDSEG, r7
+        wr      LTHASEG, r7
+        wr      LTHDSEG, r7
         movi    r7, #0
-        wr      BLTAOFS, r7
+        wr      LTHAOFS, r7
         li      r7, #320
-        wr      BLTDOFS, r7
-        wr      BLTW, r7
+        wr      LTHDOFS, r7
+        wr      LTHW, r7
         li      r7, #640
-        wr      BLTAPITCH, r7
-        wr      BLTDPITCH, r7
+        wr      LTHAPITCH, r7
+        wr      LTHDPITCH, r7
         li      r7, #240
-        wr      BLTH, r7
-        wr      BLTSTART, r7
-        bl      blit_wait
+        wr      LTHH, r7
+        wr      LTHSTART, r7
+        bl      lith_wait
         pop     lr
         ret
 
@@ -1109,48 +1109,48 @@ draw_bob:
         lw      r8, 4(r6)       ; back buffer segment
         li      r6, #320
         bl      addr
-        bl      blit_wait
+        bl      lith_wait
         li      r7, #OP_SHADE|USE_A|USE_B|USE_D
-        wr      BLTCON0, r7
+        wr      LTHCON0, r7
         movi    r7, #SIZE_8|KEY_A
-        wr      BLTCON1, r7
+        wr      LTHCON1, r7
         movi    r7, #0
-        wr      BLTKEY, r7
+        wr      LTHKEY, r7
         lw      r8, 4(r12)      ; the bob's number
         movi    r7, #1
         and     r8, r7
         movi    r7, #10
         shl     r8, r7          ; its ball: x 1024
         li      r7, #GFX_SEG
-        wr      BLTASEG, r7
-        wr      BLTTSEG, r7
-        wr      BLTAOFS, r8
+        wr      LTHASEG, r7
+        wr      LTHTSEG, r7
+        wr      LTHAOFS, r8
         li      r7, #SHADE_OFS
-        wr      BLTTOFS, r7
+        wr      LTHTOFS, r7
         movi    r7, #32
-        wr      BLTAPITCH, r7
-        wr      BLTW, r7
-        wr      BLTH, r7
-        wr      BLTBSEG, r3
-        wr      BLTBOFS, r4
-        wr      BLTDSEG, r3
-        wr      BLTDOFS, r4
+        wr      LTHAPITCH, r7
+        wr      LTHW, r7
+        wr      LTHH, r7
+        wr      LTHBSEG, r3
+        wr      LTHBOFS, r4
+        wr      LTHDSEG, r3
+        wr      LTHDOFS, r4
         li      r7, #320
-        wr      BLTBPITCH, r7
-        wr      BLTDPITCH, r7
-        wr      BLTSTART, r7
+        wr      LTHBPITCH, r7
+        wr      LTHDPITCH, r7
+        wr      LTHSTART, r7
         pop     r2
         pop     r1
         li      r6, #VARS_OFS
         lw      r8, 4(r6)
         li      r6, #320
         bl      addr
-        bl      blit_wait
+        bl      lith_wait
         li      r7, #$c|USE_A|USE_D
-        wr      BLTCON0, r7
-        wr      BLTDSEG, r3
-        wr      BLTDOFS, r4
-        wr      BLTSTART, r7
+        wr      LTHCON0, r7
+        wr      LTHDSEG, r3
+        wr      LTHDOFS, r4
+        wr      LTHSTART, r7
         pop     r5
         pop     lr
         ret
@@ -1171,25 +1171,25 @@ draw_frame:
 .b:
         sw      r6, 4(r1)       ; back buffer
         lw      r4, 0(r1)       ; scroll
-        bl      blit_wait
+        bl      lith_wait
         li      r7, #$c|USE_A|USE_D
-        wr      BLTCON0, r7
+        wr      LTHCON0, r7
         movi    r7, #SIZE_8
-        wr      BLTCON1, r7
+        wr      LTHCON1, r7
         li      r7, #BG_SEG
-        wr      BLTASEG, r7
-        wr      BLTAOFS, r4
-        wr      BLTDSEG, r6
+        wr      LTHASEG, r7
+        wr      LTHAOFS, r4
+        wr      LTHDSEG, r6
         movi    r7, #0
-        wr      BLTDOFS, r7
+        wr      LTHDOFS, r7
         li      r7, #640
-        wr      BLTAPITCH, r7
+        wr      LTHAPITCH, r7
         li      r7, #320
-        wr      BLTDPITCH, r7
-        wr      BLTW, r7
+        wr      LTHDPITCH, r7
+        wr      LTHW, r7
         li      r7, #240
-        wr      BLTH, r7
-        wr      BLTSTART, r7
+        wr      LTHH, r7
+        wr      LTHSTART, r7
         li      r1, #VARS_OFS
         addi    r4, #1          ; scroll on, modulo 320
         li      r7, #320
@@ -1205,7 +1205,7 @@ draw_frame:
         addi    r5, #1
         cmpi    r5, #NBOBS
         bne     .bob
-        bl      blit_wait
+        bl      lith_wait
         li      r1, #VARS_OFS
         lw      r6, 4(r1)
         wr      FBSEG, r6
@@ -1217,7 +1217,7 @@ draw_frame:
         ret
 
 ; The scene for FIELDS fields. Uses R1-R10.
-blitter_scene:
+lithograph_scene:
         push    lr
         li      r1, #GFX_SEG
         mts     s1, r1          ; variables
@@ -1240,7 +1240,7 @@ blitter_scene:
 
 ; ---- the sprite scene (step 6) ----
 ; 256 sprites, 8 x 8 balls in four colours, bounce over the background of
-; the Blitter scene, which scrolls by its framebuffer pointer (hardware
+; the Lithograph scene, which scrolls by its framebuffer pointer (hardware
 ; scrolling, SPEC.md 8.1). The CPU moves them right after each VBlank.
 
 ; A 16-bit random number in R1 (R9: the generator's state).
@@ -1591,7 +1591,7 @@ vblank_irq:
         lwx     r1, (r2)
         movi    r3, #1
         tst     r1, r3
-        beq     .other          ; Copper or DMA error: unexpected here
+        beq     .other          ; Jacquard or DMA error: unexpected here
         movi    r1, #1          ; clear the VBlank request
         swx     r1, (r2)
         li      r2, #SDSTAT     ; a card came or went: start over
@@ -1705,7 +1705,7 @@ hills:                          ; hill heights
         .byte   40, 52, 66, 74, 70, 58, 46, 40, 48, 62
         .byte   78, 86, 80, 64, 50, 44, 54, 68, 60, 46
         .align  2
-rays:                           ; across, down, BLTLINE bits
+rays:                           ; across, down, LTHLINE bits
         .word   150, 20, 0, 150, 60, 0, 120, 100, 0
         .word   60, 120, 4, 20, 130, 4, 90, 40, 0
 bob_init:                       ; x, y, dx, dy
@@ -1722,8 +1722,8 @@ cop_tail:                       ; line 0's colour, set in line 599's blank
 hex:    .ascii  "0123456789ABCDEF"
 hello:  .asciz  "Foundry (step 10): boot\n"
 title:  .asciz  "LOGOPHOR 16"
-line2:  .asciz  "Foundry ROM - step 10: framebuffer, text, Copper, Blitter, sprites, 3D, sound, boot, network"
-line3:  .asciz  "Ada 16-bit RISC at 12 MHz - 4 MiB chip RAM - 28 MiB fast RAM - Lumiere 800 x 600"
+line2:  .asciz  "Foundry ROM - step 10: framebuffer, text, Jacquard, Lithograph, sprites, 3D, sound, boot, network"
+line3:  .asciz  "Ada 16-bit RISC at 36 MHz - 4 MiB chip RAM - 28 MiB fast RAM - Lumiere 800 x 600"
 charset_label: .asciz "Character set:"
 colour_label:  .asciz "Text colours (foreground on background):"
 blink_text:    .asciz "This line blinks."

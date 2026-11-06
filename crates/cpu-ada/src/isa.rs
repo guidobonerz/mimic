@@ -228,6 +228,7 @@ fn reg_ok(r: u8) -> bool {
 
 /// Decode a word (SPEC.md 3.3–3.10). Fields an instruction does not use
 /// must be 0, register fields must name R0–R12, else [`Op::Illegal`].
+#[inline]
 pub fn decode(w: u16) -> Op {
     let op = (w >> 12) as u8;
     let a = ((w >> 8) & 15) as u8;

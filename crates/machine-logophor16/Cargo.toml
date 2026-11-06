@@ -12,6 +12,8 @@ workspace = true
 emu-core.workspace = true
 cpu-ada.workspace = true
 chips-logophor.workspace = true
+# the hub's gateway for net=host (src/hostnet.rs)
+asm-ada.workspace = true
 
 [build-dependencies]
 asm-ada.workspace = true

@@ -184,7 +184,7 @@ reports unused imports and variables as Go does.
 | `hw` | register names of Babbage, Lumière, Calliope, Telegraph; peek/poke |
 | `strs` | string building and conversion (`Itoa`, `Builder`) |
 | `lumiere` | modes, palette, pixels, sprites |
-| `blitter` | fills, copies, lines through Babbage's Blitter |
+| `lithograph` | fills, copies, lines through Babbage's Lithograph |
 | `calliope` | channels, samples, notes |
 | `sd` | blocks through TRAPs #5/#6 |
 
@@ -252,6 +252,6 @@ receiver", "impossible type assertion". An interface takes 4 result
 words, so a function returns at most one interface (no `(I, bool)`).
 
 Not yet (they come with the steps that need them): the packages `hw`,
-`lumiere`, `blitter`, `calliope`, `sd` (with the programs that use them),
+`lumiere`, `lithograph`, `calliope`, `sd` (with the programs that use them),
 comparison of structs and arrays, method values (`x.M` without a call),
 printing an interface with `print`.

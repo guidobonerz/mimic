@@ -61,6 +61,7 @@ pub const BUILTIN: &str = "profiles:
     machine: logophor16
     options:
       card: system
+      net: host
 ";
 
 /// Which frontend a command line is for (they take different flags).

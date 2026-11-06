@@ -1,6 +1,6 @@
 //! Ada: the 16-bit load/store RISC CPU of the Logophor 16, a fictional
 //! home computer of this project (13 registers, four segment registers,
-//! 16-bit instructions, 12 MHz).
+//! 16-bit instructions, 36 MHz).
 //!
 //! Specification: `docs/logophor16/SPEC.md` section 3, the single source
 //! of truth; the instruction table is [`isa`], shared with the assembler.
@@ -188,11 +188,11 @@ impl Ada {
         r
     }
 
-    fn read_word(bus: &mut dyn Bus, seg: u16, off: u16) -> u16 {
+    fn read_word<B: Bus + ?Sized>(bus: &mut B, seg: u16, off: u16) -> u16 {
         bus.read(Self::linear(seg, off & !1), Size::Word) as u16
     }
 
-    fn write_word(bus: &mut dyn Bus, seg: u16, off: u16, v: u16) {
+    fn write_word<B: Bus + ?Sized>(bus: &mut B, seg: u16, off: u16, v: u16) {
         bus.write(Self::linear(seg, off & !1), Size::Word, u32::from(v));
     }
 
@@ -206,7 +206,14 @@ impl Ada {
     }
 
     /// Enter exception or interrupt `vector`, returning to `ret`.
-    fn enter(&mut self, bus: &mut dyn Bus, vector: u8, ret: u16, cause: u16, level: Option<u8>) {
+    fn enter<B: Bus + ?Sized>(
+        &mut self,
+        bus: &mut B,
+        vector: u8,
+        ret: u16,
+        cause: u16,
+        level: Option<u8>,
+    ) {
         self.spc = ret;
         self.ss0 = self.s[0];
         self.ssr = self.sr;
@@ -224,7 +231,8 @@ impl Ada {
     }
 
     /// Take a pending interrupt before the next instruction, if any.
-    fn interrupt(&mut self, bus: &mut dyn Bus) -> bool {
+    #[inline(always)]
+    fn interrupt<B: Bus + ?Sized>(&mut self, bus: &mut B) -> bool {
         let level = if self.nmi_pending {
             self.nmi_pending = false;
             7
@@ -241,7 +249,8 @@ impl Ada {
 
     /// Run one whole instruction (or take an interrupt); returns its
     /// cycles.
-    pub fn step(&mut self, bus: &mut dyn Bus) -> u8 {
+    #[inline(always)]
+    pub fn step<B: Bus + ?Sized>(&mut self, bus: &mut B) -> u8 {
         if self.interrupt(bus) {
             return ENTRY_CYCLES;
         }
@@ -255,12 +264,13 @@ impl Ada {
         self.execute(bus, isa::decode(w), at)
     }
 
-    fn exception(&mut self, bus: &mut dyn Bus, vector: u8, ret: u16) -> u8 {
+    fn exception<B: Bus + ?Sized>(&mut self, bus: &mut B, vector: u8, ret: u16) -> u8 {
         self.enter(bus, vector, ret, u16::from(vector), None);
         ENTRY_CYCLES
     }
 
-    fn execute(&mut self, bus: &mut dyn Bus, op: Op, at: u16) -> u8 {
+    #[inline(always)]
+    fn execute<B: Bus + ?Sized>(&mut self, bus: &mut B, op: Op, at: u16) -> u8 {
         let next = self.pc;
         match op {
             Op::Alu { f, rd, rs } => {
@@ -600,8 +610,42 @@ impl Ada {
         (fetch, data)
     }
 
+    /// Cycles of the running instruction still to come (0 at a boundary).
+    #[inline]
+    pub fn busy_cycles(&self) -> u8 {
+        self.busy
+    }
+
+    /// `n` (at most [`Ada::busy_cycles`]) cycles of the running
+    /// instruction: the same as `n` calls of [`Ada::tick`], which only
+    /// count them.
+    #[inline]
+    pub fn skip_busy(&mut self, n: u8) {
+        debug_assert!(n <= self.busy);
+        self.cycles += u64::from(n);
+        self.busy -= n;
+    }
+
+    /// Halted at a boundary with no interrupt to take: [`Ada::tick`] only
+    /// counts the cycle as long as the interrupt input stays the same.
+    #[inline]
+    pub fn waiting(&self) -> bool {
+        self.busy == 0
+            && self.halted
+            && !self.nmi_pending
+            && !(self.irq_level > self.ipl() && self.irq_level < 7)
+    }
+
+    /// `n` ticks while [`Ada::waiting`].
+    #[inline]
+    pub fn skip_waiting(&mut self, n: u64) {
+        debug_assert!(self.waiting());
+        self.cycles += n;
+    }
+
     /// One cycle: the first cycle of an instruction runs it whole.
-    pub fn tick(&mut self, bus: &mut dyn Bus) -> CycleResult {
+    #[inline]
+    pub fn tick<B: Bus + ?Sized>(&mut self, bus: &mut B) -> CycleResult {
         self.cycles += 1;
         if self.busy == 0 {
             self.busy = self.step(bus);

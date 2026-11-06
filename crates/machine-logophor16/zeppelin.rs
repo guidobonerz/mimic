@@ -178,7 +178,7 @@ fn mesh() -> Mesh {
     m
 }
 
-/// 64 × 64 brass plates: seams, rivets, a copper band, plates of
+/// 64 × 64 brass plates: seams, rivets, a jacquard band, plates of
 /// slightly different shades.
 fn texture() -> Vec<u16> {
     let hash = |a: u32, b: u32| {

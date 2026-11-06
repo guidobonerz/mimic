@@ -13,6 +13,7 @@ package panorama
 
 import (
 	"boiler"
+	"files"
 	"gfx"
 )
 
@@ -23,6 +24,9 @@ const (
 	Close   = 3 // the close button: the application ends the window
 	Release = 4
 	Theme   = 5 // the theme changed: draw the content again
+	// the maximise button (a Resizable window only): X, Y the content's
+	// new size; the application calls SetSize and draws again
+	Resize = 6
 )
 
 // Paper is the colour of a window's content, Ink of its text, Accent of
@@ -56,15 +60,29 @@ type Event struct {
 	Key    byte
 }
 
-// A window: its content is W x H pixels in Surf.
+// A window: its content is W x H pixels in Surf, shown in a frame
+// around CW x CH (larger while maximised: the content in its middle).
 type Window struct {
 	X, Y, W, H int
+	CW, CH     int
+	// the application follows Resize events (else a maximised window
+	// shows its content in the middle)
+	Resizable bool
+	maxed     bool
+	// position and frame size before maximising
+	normX, normY, normCW, normCH int
 	Title      string
 	Surf       *gfx.Surface
 	Events     chan Event
 	app        *App
 	min        bool
 	gone       bool
+	paint      boiler.Mutex
+	// the skin's frame around this window, drawn once into four strips
+	// (top with the title bar, bottom, left, right) for its size
+	strips [4]*gfx.Surface
+	stripW int
+	stripH int
 }
 
 // An application in the dock.
@@ -86,10 +104,22 @@ const (
 	gaugeW  = 14
 	shadowA = 9 // shadow of the active window
 	shadowB = 5
+	// the skin (the owner's leather panel in a brass frame, made by
+	// tile.rs at build time): the frame's width on a window, the skin
+	// picture's size, a rail piece's length, the leather patch
+	fr      = 12
+	skinN   = 160
+	edgeLen = 24
+	patch   = 96
 )
 
 var (
-	windows []*Window // bottom to top
+	// bottom to top; only Panorama's task changes it (settle), so its
+	// drawing and hit tests never see a window come or go mid-way
+	windows []*Window
+	// windows applications opened or closed since the last settle
+	opening []*Window
+	closing []*Window
 	apps    []*App
 	// what each screen buffer lacks (double buffering: a change goes
 	// into both): x, y, w, h; w = 0 none
@@ -98,6 +128,13 @@ var (
 	scope   bool // the oscilloscope theme
 	// the pointer and its buttons, last tick
 	px, py, pb int
+	hidden     *App
+	chord      bool
+	// the skin: the dock tile, the window frame's picture; inset is the
+	// frame's width around a window's content (0 without the skin)
+	skinTile  *gfx.Surface
+	skinFrame *gfx.Surface
+	inset     int
 	drag       *Window
 	dragDX     int
 	dragDY     int
@@ -115,6 +152,11 @@ func Register(a *App) {
 	apps = append(apps, a)
 }
 
+// RegisterHidden adds an application that has no tile.
+func RegisterHidden(a *App) {
+	hidden = a
+}
+
 // NewWindow opens a window of w x h for the running application's app
 // (nil when chip RAM is full).
 func NewWindow(a *App, title string, w, h int) *Window {
@@ -122,14 +164,13 @@ func NewWindow(a *App, title string, w, h int) *Window {
 	if s == nil {
 		return nil
 	}
-	win := &Window{W: w, H: h, Title: title, Surf: s, Events: make(chan Event, 16), app: a}
-	n := len(windows)
+	win := &Window{W: w, H: h, CW: w, CH: h, Title: title, Surf: s, Events: make(chan Event, 16), app: a}
+	boiler.Lock()
+	n := len(windows) + len(opening)
 	win.X = 190 + (n%8)*28
 	win.Y = 40 + (n%8)*24
-	boiler.Lock()
-	windows = append(windows, win)
+	opening = append(opening, win)
 	a.count++
-	damageAll()
 	boiler.Unlock()
 	return win
 }
@@ -157,14 +198,71 @@ func (w *Window) Clear() {
 	w.Surf.Fill(0, 0, w.W, w.H, Paper())
 }
 
+// BeginPaint and EndPaint frame a picture drawn in steps (an animation):
+// Panorama does not show the content in between.
+func (w *Window) BeginPaint() { w.paint.Lock() }
+
+func (w *Window) EndPaint() { w.paint.Unlock() }
+
 // Invalidate asks for the window's content to be shown again.
 func (w *Window) Invalidate() {
-	damage(w.X, w.Y+titleH, w.W, w.H)
+	ox, oy := w.origin()
+	damage(ox, oy, w.W, w.H)
 }
 
 // InvalidateRect: only a part of the content changed.
 func (w *Window) InvalidateRect(x, y, wd, h int) {
-	damage(w.X+x, w.Y+titleH+y, wd, h)
+	ox, oy := w.origin()
+	damage(ox+x, oy+y, wd, h)
+}
+
+// origin is where the content's top left corner is on the screen (in
+// the middle of a larger frame).
+func (w *Window) origin() (int, int) {
+	return w.X + inset + max(0, (w.CW-w.W)/2), w.Y + titleH + max(0, (w.CH-w.H)/2)
+}
+
+// SetSize gives the window's content a new size (after a Resize): a new
+// surface in Paper's colour, the old one freed; false when chip RAM is
+// short (the content keeps its size). Draw the content again after it.
+func (w *Window) SetSize(wd, ht int) bool {
+	s := gfx.NewSurface(wd, ht)
+	if s == nil {
+		return false
+	}
+	s.Fill(0, 0, wd, ht, Paper())
+	w.paint.Lock()
+	old := w.Surf
+	w.Surf, w.W, w.H = s, wd, ht
+	w.paint.Unlock()
+	old.Free()
+	damageFrame(w)
+	return true
+}
+
+// toggleMax maximises a window (up to the dock) or puts it back.
+func toggleMax(w *Window) {
+	damageFrame(w)
+	if w.maxed {
+		w.X, w.Y, w.CW, w.CH = w.normX, w.normY, w.normCW, w.normCH
+		w.maxed = false
+	} else {
+		w.normX, w.normY, w.normCW, w.normCH = w.X, w.Y, w.CW, w.CH
+		w.X, w.Y = 4, 4
+		w.CW = dockX - 8 - 2*inset
+		w.CH = gfx.ScreenH - 8 - titleH - inset
+		w.maxed = true
+	}
+	if w.Resizable {
+		post(w, Event{Kind: Resize, X: w.CW, Y: w.CH})
+	}
+	raise(w)
+}
+
+// outer is a window's rectangle on the screen: the frame around the
+// content (width, height).
+func outer(w *Window) (int, int) {
+	return w.CW + 2*inset, w.CH + titleH + inset
 }
 
 // damage adds a rectangle of the screen to what both buffers lack.
@@ -192,26 +290,89 @@ func damageAll() {
 
 // A window's frame with its shadow.
 func damageFrame(w *Window) {
-	damage(w.X, w.Y, w.W+shadowA+2, w.H+titleH+shadowA+2)
+	ow, oh := outer(w)
+	damage(w.X, w.Y, ow+shadowA+2, oh+shadowA+2)
 }
 
-// Done closes the window and frees its surface.
+// Done closes the window; Panorama frees its surface when it next
+// settles (it may be drawing it right now).
 func (w *Window) Done() {
 	boiler.Lock()
-	for i := 0; i < len(windows); i++ {
-		if windows[i] == w {
-			for k := i; k < len(windows)-1; k++ {
-				windows[k] = windows[k+1]
-			}
-			windows = windows[:len(windows)-1]
-			break
+	if !w.gone {
+		w.app.count--
+		w.gone = true
+		closing = append(closing, w)
+	}
+	boiler.Unlock()
+}
+
+// settle takes the windows opened and closed since the last call into
+// the list and frees the closed ones (Panorama's task only).
+func settle() {
+	boiler.Lock()
+	if len(opening) == 0 && len(closing) == 0 {
+		boiler.Unlock()
+		return
+	}
+	for _, w := range opening {
+		windows = append(windows, w)
+	}
+	opening = opening[:0]
+	gone := closing
+	closing = nil
+	n := 0
+	for _, w := range windows {
+		if !w.gone {
+			windows[n] = w
+			n++
 		}
 	}
-	w.app.count--
-	w.gone = true
+	windows = windows[:n]
 	boiler.Unlock()
+	for _, w := range gone {
+		if drag == w {
+			drag = nil
+		}
+		w.Surf.Free()
+		w.freeStrips()
+	}
+	if len(gone) > 0 {
+		free(gone)
+	}
 	damageAll()
-	w.Surf.Free()
+}
+
+func (w *Window) freeStrips() {
+	for i := range 4 {
+		if w.strips[i] != nil {
+			w.strips[i].Free()
+			w.strips[i] = nil
+		}
+	}
+}
+
+// ensureStrips draws the skin's frame for the window's size into its
+// strips (once; again when the size changed). False when chip RAM is
+// short: the plain frame is drawn then.
+func (w *Window) ensureStrips() bool {
+	ow, oh := outer(w)
+	if w.strips[0] != nil && w.stripW == ow && w.stripH == oh {
+		return true
+	}
+	w.freeStrips()
+	sizes := [4][2]int{{ow, titleH}, {ow, fr}, {fr, oh - titleH - fr}, {fr, oh - titleH - fr}}
+	at := [4][2]int{{0, 0}, {0, oh - fr}, {0, titleH}, {ow - fr, titleH}}
+	for i := range 4 {
+		s := gfx.NewSurface(sizes[i][0], sizes[i][1])
+		if s == nil {
+			w.freeStrips()
+			return false
+		}
+		w.strips[i] = s
+		skinInto(s, -at[i][0], -at[i][1], ow, oh)
+	}
+	w.stripW, w.stripH = ow, oh
+	return true
 }
 
 // Scope tells whether the oscilloscope theme is on.
@@ -230,9 +391,11 @@ func SetTheme(oscilloscope bool) {
 // Run is Panorama: the desktop until the machine stops.
 func Run() {
 	gfx.Init()
+	loadSkin()
 	boiler.SetMouseArea(gfx.ScreenW, gfx.ScreenH)
 	damageAll()
 	for {
+		settle()
 		input()
 		if dmg[cur][2] > 0 {
 			compose()
@@ -244,7 +407,7 @@ func Run() {
 // ---- input ----
 
 func input() {
-	x, y, b := boiler.Mouse()
+	x, y, b, clicks := boiler.Mouse()
 	gfx.Pointer(x, y)
 	h := hit(x, y)
 	if h != hover {
@@ -252,8 +415,9 @@ func input() {
 		hover = h
 		hoverDamage(hover)
 	}
-	pressed := b&1 != 0 && pb&1 == 0
-	released := b&1 == 0 && pb&1 != 0
+	// a press since the last look, even when the button is up again
+	pressed := clicks&1 != 0
+	released := b&1 == 0 && (pb&1 != 0 || pressed)
 	// a drag follows the pointer, up to where the button was let go
 	if drag != nil {
 		if x-dragDX != drag.X || y-dragDY != drag.Y {
@@ -276,7 +440,9 @@ func input() {
 		}
 	}
 	if pressed {
-		press(x, y, h)
+		// where the button went down, not where the pointer is now
+		qx, qy := boiler.PressAt()
+		press(qx, qy, hit(qx, qy))
 	}
 	if released {
 		if top := topWindow(); top != nil {
@@ -284,6 +450,11 @@ func input() {
 		}
 	}
 	px, py, pb = x, y, b
+	k := boiler.Held(0xe1) && (boiler.Held(0xe2) || boiler.Held(0xe6)) && boiler.Held(0x2b) && boiler.Held(0x12)
+	if k && !chord && scope && hidden != nil {
+		start(hidden)
+	}
+	chord = k
 	// keys to the front window
 	for {
 		c := boiler.PollKey()
@@ -334,9 +505,9 @@ func hit(x, y int) int {
 			return 1000 + i
 		}
 	}
-	for i := range len(apps) + 1 {
+	for i := range len(apps) {
 		if in(x, y, dockX, 4+(tile+4)*i, tile, tile) {
-			return 2000 + i
+			return 2001 + i
 		}
 	}
 	k := 0
@@ -353,16 +524,20 @@ func hit(x, y int) int {
 		if w.min {
 			continue
 		}
-		if in(x, y, w.X+w.W-18, w.Y+4, 14, 14) {
+		ow, _ := outer(w)
+		if in(x, y, w.X+ow-btnW-2, w.Y+2, btnW, btnW) {
 			return 4000 + i
 		}
-		if in(x, y, w.X+4, w.Y+4, 14, 14) {
+		if in(x, y, w.X+2, w.Y+2, btnW, btnW) {
 			return 5000 + i
 		}
-		if in(x, y, w.X, w.Y, w.W, titleH) {
+		if in(x, y, w.X+ow-2*btnW-4, w.Y+2, btnW, btnW) {
+			return 8000 + i
+		}
+		if in(x, y, w.X, w.Y, ow, titleH) {
 			return 6000 + i
 		}
-		if in(x, y, w.X, w.Y+titleH, w.W, w.H) {
+		if in(x, y, w.X+inset, w.Y+titleH, w.CW, w.CH) {
 			return 7000 + i
 		}
 	}
@@ -381,7 +556,7 @@ func hoverDamage(h int) {
 	case h >= 1000 && h < 1100:
 		damage(4, 4+itemH*(h-1000), menuW, itemH)
 	case h >= 2000 && h < 3000:
-		damage(dockX, 4+(tile+4)*(h-2000), tile, tile)
+		damage(dockX, 4+(tile+4)*(h-2001), tile, tile)
 	case h >= 3000 && h < 4000:
 		k := 0
 		for i := 0; i < h-3000 && i < len(windows); i++ {
@@ -392,10 +567,15 @@ func hoverDamage(h int) {
 		damage(8+k*(tile+6), miniY, tile, tile)
 	case h >= 4000 && h < 5000 && h-4000 < len(windows):
 		w := windows[h-4000]
-		damage(w.X+w.W-18, w.Y+4, 14, 14)
+		ow, _ := outer(w)
+		damage(w.X+ow-btnW-2, w.Y+2, btnW, btnW)
 	case h >= 5000 && h < 6000 && h-5000 < len(windows):
 		w := windows[h-5000]
-		damage(w.X+4, w.Y+4, 14, 14)
+		damage(w.X+2, w.Y+2, btnW, btnW)
+	case h >= 8000 && h < 9000 && h-8000 < len(windows):
+		w := windows[h-8000]
+		ow, _ := outer(w)
+		damage(w.X+ow-2*btnW-4, w.Y+2, btnW, btnW)
 	}
 }
 
@@ -461,8 +641,6 @@ func press(x, y, h int) {
 				w.min = true
 			}
 		}
-	case h == 2000:
-		launch("Info")
 	case h > 2000 && h < 3000:
 		start(apps[h-2001])
 	case h >= 3000 && h < 4000:
@@ -481,7 +659,12 @@ func press(x, y, h int) {
 	case h >= 7000 && h < 8000:
 		w := windows[h-7000]
 		raise(w)
-		post(w, Event{Kind: Click, X: x - w.X, Y: y - w.Y - titleH, Button: 1})
+		ox, oy := w.origin()
+		if x >= ox && y >= oy && x < ox+w.W && y < oy+w.H {
+			post(w, Event{Kind: Click, X: x - ox, Y: y - oy, Button: 1})
+		}
+	case h >= 8000 && h < 9000:
+		toggleMax(windows[h-8000])
 	}
 }
 
@@ -540,7 +723,7 @@ func compose() {
 	boiler.Unlock()
 	b := gfx.Back()
 	b.SetClip(r[0], r[1], r[2], r[3])
-	b.Fill(0, 0, gfx.ScreenW, gfx.ScreenH, desk())
+	drawDesk(b)
 	if scope {
 		// the graticule of an oscilloscope
 		for x := 0; x < dockX; x += 50 {
@@ -586,28 +769,266 @@ func frame(b *gfx.Surface, w *Window, i int, active bool) {
 	if active {
 		d = shadowA
 	}
-	panel(b, w.X, w.Y, w.W, w.H+titleH, gfx.Grey1, d)
-	// title
+	ow, oh := outer(w)
+	if skinFrame != nil && !scope && w.ensureStrips() {
+		b.Shadow(w.X, w.Y, ow, oh, d)
+		b.Draw(w.strips[0], 0, 0, ow, titleH, w.X, w.Y)
+		b.Draw(w.strips[1], 0, 0, ow, fr, w.X, w.Y+oh-fr)
+		b.Draw(w.strips[2], 0, 0, fr, oh-titleH-fr, w.X, w.Y+titleH)
+		b.Draw(w.strips[3], 0, 0, fr, oh-titleH-fr, w.X+ow-fr, w.Y+titleH)
+	} else {
+		panel(b, w.X, w.Y, ow, oh, gfx.Grey1, d)
+	}
+	// title: on British racing green between the corners' screws
 	ink := byte(gfx.Grey6)
 	if active {
 		ink = gfx.Brass5
 	}
+	skinned := buttons != nil && !scope
+	if skinned {
+		bar := byte(gfx.RacingGreenDark)
+		if active {
+			bar = gfx.RacingGreen
+		}
+		b.Fill(w.X+fr, w.Y+3, ow-2*fr, titleH-4, bar)
+	}
 	if scope {
-		b.Fill(w.X+1, w.Y+titleH-1, w.W-2, 1, gfx.Grey6)
+		b.Fill(w.X+1, w.Y+titleH-1, ow-2, 1, gfx.Grey6)
 		ink = gfx.Grey6
 		if active {
 			ink = gfx.White
 		}
 	}
-	tx := w.X + (w.W-8*len(w.Title))/2
-	b.Text(tx, w.Y+3, w.Title, ink)
-	// minimise (left), close (right)
-	button(b, w.X+4, w.Y+4, '_', hover == 5000+i)
-	button(b, w.X+w.W-18, w.Y+4, 'x', hover == 4000+i)
-	b.Draw(w.Surf, 0, 0, w.W, w.H, w.X, w.Y+titleH)
-	if scope {
-		b.RoundBox(w.X, w.Y, w.W, w.H+titleH, ink)
+	tx := w.X + (ow-8*len(w.Title))/2
+	b.Text(tx, w.Y+4, w.Title, ink)
+	// minimise (left), maximise and close (right)
+	mx := w.X + ow - 2*btnW - 4
+	if skinned {
+		b.DrawKey(buttons, 0, 0, btnW, btnW, w.X+2, w.Y+2)
+		b.DrawKey(buttons, btnW, 0, btnW, btnW, mx, w.Y+2)
+		b.DrawKey(buttons, 2*btnW, 0, btnW, btnW, w.X+ow-btnW-2, w.Y+2)
+		if hover == 5000+i {
+			b.Shade(w.X+2, w.Y+2, btnW, btnW, true)
+		}
+		if hover == 8000+i {
+			b.Shade(mx, w.Y+2, btnW, btnW, true)
+		}
+		if hover == 4000+i {
+			b.Shade(w.X+ow-btnW-2, w.Y+2, btnW, btnW, true)
+		}
+	} else {
+		button(b, w.X+4, w.Y+4, '_', hover == 5000+i)
+		button(b, mx+2, w.Y+4, '+', hover == 8000+i)
+		button(b, w.X+ow-18, w.Y+4, 'x', hover == 4000+i)
 	}
+	w.paint.Lock()
+	ox, oy := w.origin()
+	if w.CW > w.W || w.CH > w.H {
+		b.Fill(w.X+inset, w.Y+titleH, w.CW, w.CH, Paper())
+	}
+	b.Draw(w.Surf, 0, 0, min(w.W, w.CW), min(w.H, w.CH), ox, oy)
+	w.paint.Unlock()
+	if scope {
+		b.RoundBox(w.X, w.Y, ow, oh, ink)
+	}
+}
+
+// skinInto draws a w x h window's skin into b with the window's top left
+// corner at x, y (negative: the part outside b is clipped away): the
+// leather, the brass rails along the sides (a piece from each side's
+// middle, repeated) and the corners with their screws.
+func skinInto(b *gfx.Surface, x, y, w, h int) {
+	s := skinFrame
+	// the leather: the panel's middle, repeated mirrored in turn so the
+	// seams meet (a mirrored piece cut short takes the patch's far side)
+	o := (skinN - patch) / 2
+	for py, fy := 0, false; py < h; py, fy = py+patch, !fy {
+		ph := min(patch, h-py)
+		sy := o
+		if fy {
+			sy = o + patch - ph
+		}
+		for px, fx := 0, false; px < w; px, fx = px+patch, !fx {
+			pw := min(patch, w-px)
+			sx := o
+			if fx {
+				sx = o + patch - pw
+			}
+			b.DrawFlip(s, sx, sy, pw, ph, x+px, y+py, fx, fy)
+		}
+	}
+	mid := (skinN - edgeLen) / 2
+	for px := fr; px < w-fr; px += edgeLen {
+		n := min(edgeLen, w-fr-px)
+		b.Draw(s, mid, 0, n, fr, x+px, y)
+		b.Draw(s, mid, skinN-fr, n, fr, x+px, y+h-fr)
+	}
+	for py := fr; py < h-fr; py += edgeLen {
+		n := min(edgeLen, h-fr-py)
+		b.Draw(s, 0, mid, fr, n, x, y+py)
+		b.Draw(s, skinN-fr, mid, fr, n, x+w-fr, y+py)
+	}
+	b.Draw(s, 0, 0, fr, fr, x, y)
+	b.Draw(s, skinN-fr, 0, fr, fr, x+w-fr, y)
+	b.Draw(s, 0, skinN-fr, fr, fr, x, y+h-fr)
+	b.Draw(s, skinN-fr, skinN-fr, fr, fr, x+w-fr, y+h-fr)
+}
+
+// tilePanel draws a 48 x 48 tile: the skin's panel, or a plain one.
+func tilePanel(b *gfx.Surface, x, y int, body byte) {
+	if skinTile != nil && !scope {
+		b.Shadow(x, y, tile, tile, shadowB)
+		b.Draw(skinTile, 0, 0, tile, tile, x, y)
+		return
+	}
+	panel(b, x, y, tile, tile, body, shadowB)
+}
+
+// The wallpaper's quarter (brass theme; nil: the plain grey desk).
+const (
+	wallW = 512
+	wallH = 384
+)
+
+var wall *gfx.Surface
+
+// The window buttons from the skin file (minimise, maximise, close; 0 is
+// the colour key), brass theme only.
+const btnW = 18
+
+var buttons *gfx.Surface
+
+// loadPicture reads a w x h picture from the skin file, a row at a time
+// into chip RAM.
+func loadPicture(f *files.File, w, h int) *gfx.Surface {
+	s := gfx.NewSurface(w, h)
+	if s == nil {
+		return nil
+	}
+	row := make([]byte, w)
+	for y := 0; y < h; y++ {
+		got := 0
+		for got < w {
+			k := f.Read(row[got:])
+			if k == 0 {
+				break
+			}
+			got += k
+		}
+		if got < w {
+			free(row)
+			s.Free()
+			return nil
+		}
+		gfx.Put(s.Base+uintptr(y)*uintptr(w), row)
+	}
+	free(row)
+	return s
+}
+
+// The desk: the wallpaper, its quarter mirrored into the other three, or
+// the plain colour.
+func drawDesk(b *gfx.Surface) {
+	if wall == nil || scope {
+		b.Fill(0, 0, gfx.ScreenW, gfx.ScreenH, desk())
+		return
+	}
+	b.DrawFlip(wall, 0, 0, wallW, wallH, 0, 0, false, false)
+	b.DrawFlip(wall, 0, 0, wallW, wallH, wallW, 0, true, false)
+	b.DrawFlip(wall, 0, 0, wallW, wallH, 0, wallH, false, true)
+	b.DrawFlip(wall, 0, 0, wallW, wallH, wallW, wallH, true, true)
+}
+
+// An application's tile from the skin file (brass theme only).
+type iconPic struct {
+	name string
+	pic  *gfx.Surface
+}
+
+var icons []iconPic
+
+// iconFor is the skin's tile for an application, nil without one.
+func iconFor(name string) *gfx.Surface {
+	for _, ic := range icons {
+		if ic.name == name {
+			return ic.pic
+		}
+	}
+	return nil
+}
+
+// loadIcons reads the applications' tiles after the skin: a name of 16
+// bytes (zero-padded) and the 48 x 48 picture each, to the file's end.
+func loadIcons(f *files.File) {
+	const rec = 16 + tile*tile
+	buf := make([]byte, rec)
+	for {
+		got := 0
+		for got < rec {
+			k := f.Read(buf[got:])
+			if k == 0 {
+				break
+			}
+			got += k
+		}
+		if got < rec {
+			break
+		}
+		s := gfx.NewSurface(tile, tile)
+		if s == nil {
+			break
+		}
+		n := 0
+		for n < 16 && buf[n] != 0 {
+			n++
+		}
+		copy((*[tile * tile]byte)(s.Base)[:], buf[16:rec])
+		icons = append(icons, iconPic{name: string(buf[:n]), pic: s})
+	}
+	free(buf)
+}
+
+// loadSkin takes the skin from the card (PANORAMA/TILE.RAW, see tile.rs):
+// 24 palette entries with their shade neighbours, the tile, the frame
+// picture, the applications' tiles. Without it the desktop stays plain.
+func loadSkin() {
+	f := files.Open("/PANORAMA/TILE.RAW")
+	if f == nil {
+		return
+	}
+	const head = 38 + 19 + 19
+	const n = head + tile*tile + skinN*skinN
+	buf := make([]byte, n)
+	got := 0
+	for got < n {
+		k := f.Read(buf[got:])
+		if k == 0 {
+			break
+		}
+		got += k
+	}
+	if got == n {
+		wall = loadPicture(f, wallW, wallH)
+		if wall != nil {
+			buttons = loadPicture(f, 3*btnW, btnW)
+		}
+		if buttons != nil {
+			loadIcons(f)
+		}
+	}
+	f.Close()
+	t := gfx.NewSurface(tile, tile)
+	s := gfx.NewSurface(skinN, skinN)
+	if got < n || t == nil || s == nil {
+		free(buf)
+		return
+	}
+	gfx.SetEntries(232, buf[:38], buf[38:57], buf[57:76])
+	copy((*[tile * tile]byte)(t.Base)[:], buf[head:head+tile*tile])
+	copy((*[skinN * skinN]byte)(s.Base)[:], buf[head+tile*tile:n])
+	free(buf)
+	skinTile, skinFrame = t, s
+	inset = fr
 }
 
 func button(b *gfx.Surface, x, y int, mark byte, lit bool) {
@@ -623,7 +1044,7 @@ func button(b *gfx.Surface, x, y int, mark byte, lit bool) {
 }
 
 func miniTile(b *gfx.Surface, w *Window, x, y int, lit bool) {
-	panel(b, x, y, tile, tile, gfx.Grey1, shadowB)
+	tilePanel(b, x, y, gfx.Grey1)
 	name := w.Title
 	if len(name) > 5 {
 		name = name[:5]
@@ -636,16 +1057,16 @@ func miniTile(b *gfx.Surface, w *Window, x, y int, lit bool) {
 
 func dock(b *gfx.Surface) {
 	// the machine's own tile first, then the applications
-	panel(b, dockX, 4, tile, tile, gfx.Grey1, shadowB)
-	emblem(b, dockX, 4)
-	if hover == 2000 {
-		b.Shade(dockX, 4, tile, tile, true)
-	}
 	for i, a := range apps {
-		y := 4 + (tile+4)*(i+1)
-		panel(b, dockX, y, tile, tile, gfx.Grey2, shadowB)
-		if a.Icon != nil {
-			a.Icon(b, dockX, y)
+		y := 4 + (tile+4)*i
+		if pic := iconFor(a.Name); pic != nil && !scope {
+			b.Shadow(dockX, y, tile, tile, shadowB)
+			b.Draw(pic, 0, 0, tile, tile, dockX, y)
+		} else {
+			tilePanel(b, dockX, y, gfx.Grey2)
+			if a.Icon != nil {
+				a.Icon(b, dockX, y)
+			}
 		}
 		if a.count > 0 {
 			gauge(b, dockX+tile-gaugeW-2, y+tile-gaugeW-2, a.count)
@@ -654,22 +1075,6 @@ func dock(b *gfx.Surface) {
 			b.Shade(dockX, y, tile, tile, true)
 		}
 	}
-}
-
-// The machine's emblem: a gear around a little screen.
-func emblem(b *gfx.Surface, x, y int) {
-	c := byte(gfx.Brass3)
-	for i := range 8 {
-		// eight teeth around
-		tx := []int{20, 33, 38, 33, 20, 7, 2, 7}
-		ty := []int{2, 7, 20, 33, 38, 33, 20, 7}
-		b.Fill(x+tx[i]+2, y+ty[i]+2, 4, 4, c)
-		free(tx)
-		free(ty)
-	}
-	b.RoundBox(x+8, y+8, 32, 32, c)
-	b.Fill(x+14, y+18, 20, 12, gfx.Cube+0*36+3*6+1)
-	b.Fill(x+16, y+23, 16, 1, gfx.Cube+1*36+5*6+2)
 }
 
 // A steam gauge: a little dial whose needle rises with the windows open.

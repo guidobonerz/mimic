@@ -181,8 +181,15 @@ func put32(b []byte, i int, v uint32) {
 // The Internet checksum (RFC 1071): add 16-bit words to sum.
 func csum(b []byte, sum uint32) uint32 {
 	n := len(b)
-	for i := 0; i+1 < n; i += 2 {
-		sum += uint32(b[i])<<8 | uint32(b[i+1])
+	// high and low bytes summed apart in 16 bits, 128 words at a time
+	for i := 0; i+1 < n; {
+		end := min(n&^1, i+256)
+		var hi, lo uint16
+		for ; i < end; i += 2 {
+			hi += uint16(b[i])
+			lo += uint16(b[i+1])
+		}
+		sum += uint32(hi)<<8 + uint32(lo)
 	}
 	if n&1 != 0 {
 		sum += uint32(b[n-1]) << 8
