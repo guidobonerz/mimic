@@ -43,6 +43,9 @@ pub enum PortKind {
     /// Kempston mouse interface on the ZX Spectrum: the mouse's X and Y
     /// counters and buttons, read through ports $FBDF, $FFDF, $FADF.
     KempstonMouse,
+    /// Logophor 16 (Telegraph): a mouse or a joystick, chosen by the
+    /// machine's options and read through PORTCFG, MOUSEnX/Y and PORTn.
+    LogophorPort,
     /// C64/C128/VIC-20 user port: CIA port B (PB0–PB7), PA2, the PC2
     /// handshake out and FLAG2 in, the serial lines (see
     /// [`user_port`] for the pin numbering in [`PortLines`]).

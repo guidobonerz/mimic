@@ -11,7 +11,10 @@ const USAGE: &str = "usage:
   ada-asm build FILE.s [FILE.s …] -o OUT.bin [--base SEG:OFF] [--listing OUT.lst]
   ada-asm compile FILE.s -o OUT.ao
   ada-asm link FILE.ao [FILE.ao …] -o OUT.bin [--base SEG:OFF] [--listing OUT.lst]
-  ada-asm run PROGRAM.bin [--load SEG:OFF] [--entry SEG:OFF] [--cycles N]";
+  ada-asm run PROGRAM.bin [--load SEG:OFF] [--entry SEG:OFF] [--cycles N]
+  ada-asm sd CARD.img [--size MIB] [--boot PROGRAM.bin] [--add CARD/PATH=HOSTFILE …]
+      (a FAT32 SD card for the Logophor 16; --boot puts the program at
+       BOOT/BOILER.BIN, which Foundry loads at 0040:0000 and starts)";
 
 struct Args {
     inputs: Vec<String>,
@@ -21,6 +24,8 @@ struct Args {
     load: u32,
     entry: Option<u32>,
     cycles: u64,
+    size: u32,
+    add: Vec<(String, String)>,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -32,6 +37,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         load: 0x0040_0000,
         entry: None,
         cycles: 120_000_000,
+        size: 64,
+        add: Vec::new(),
     };
     let mut it = args.iter();
     while let Some(x) = it.next() {
@@ -47,6 +54,13 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--load" => a.load = parse_seg_off(&value()?)?,
             "--entry" => a.entry = Some(parse_seg_off(&value()?)?),
             "--cycles" => a.cycles = value()?.parse().map_err(|_| "--cycles N".to_string())?,
+            "--size" => a.size = value()?.parse().map_err(|_| "--size MIB".to_string())?,
+            "--boot" => a.add.push(("BOOT/BOILER.BIN".into(), value()?)),
+            "--add" => {
+                let v = value()?;
+                let (card, host) = v.split_once('=').ok_or("--add CARD/PATH=HOSTFILE")?;
+                a.add.push((card.into(), host.into()));
+            }
             _ if x.starts_with('-') => return Err(format!("unknown option {x}")),
             _ => a.inputs.push(x.clone()),
         }
@@ -152,6 +166,25 @@ fn main() -> ExitCode {
                     )]),
                 }
             })
+        }
+        "sd" => {
+            let mut files = Vec::new();
+            let mut errors = Vec::new();
+            for (card, host) in &a.add {
+                match std::fs::read(host) {
+                    Ok(b) => files.push((card.clone(), b)),
+                    Err(e) => errors.push(format!("{host}: {e}")),
+                }
+            }
+            if !errors.is_empty() {
+                Err(errors)
+            } else {
+                let out = &a.inputs[0];
+                asm_ada::sdimage::fat32(a.size, &files)
+                    .and_then(|img| std::fs::write(out, img).map_err(|e| format!("{out}: {e}")))
+                    .map(|()| println!("{out}: FAT32, {} MiB, {} file(s)", a.size, files.len()))
+                    .map_err(|e| vec![e])
+            }
         }
         _ => Err(vec![format!("unknown command {cmd}\n{USAGE}")]),
     };

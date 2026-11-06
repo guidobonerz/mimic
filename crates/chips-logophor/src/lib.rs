@@ -15,3 +15,4 @@ pub mod calliope;
 pub mod lumiere;
 pub mod stereoscope;
 pub mod telegraph;
+pub mod telegraph_io;

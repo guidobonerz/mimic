@@ -6,6 +6,7 @@
 //! in the commit.
 
 use super::*;
+use chips_logophor::telegraph_io;
 use emu_core::frame::Rgb8;
 use std::path::PathBuf;
 
@@ -69,9 +70,12 @@ fn golden(m: &Logophor, name: &str) {
 }
 
 #[test]
-fn foundry_shows_its_six_scenes() {
+fn foundry_shows_its_start_picture_and_six_scenes() {
     let mut m = machine();
-    frames(&mut m, 120);
+    // The start picture (2 s), then no card: the demonstration.
+    frames(&mut m, 60);
+    golden(&m, "foundry-logo");
+    frames(&mut m, 145);
     assert_eq!(m.board.lumiere.mode(), 0);
     golden(&m, "foundry-testpicture");
     frames(&mut m, 200);
@@ -92,14 +96,14 @@ fn foundry_shows_its_six_scenes() {
     golden(&m, "foundry-zeppelin");
     assert_eq!(
         String::from_utf8_lossy(m.console()),
-        "Foundry (step 8): test picture, text mode, Copper, Blitter, sprites, 3D, music\n"
+        "Foundry (step 9): boot\n"
     );
 }
 
 #[test]
 fn text_blinks_and_the_cursor_flashes() {
     let mut m = machine();
-    frames(&mut m, 280);
+    frames(&mut m, 405);
     let a = pixels(&m);
     frames(&mut m, 32);
     let b = pixels(&m);
@@ -475,7 +479,7 @@ fn the_cpu_waits_for_chip_bus_slots_during_the_fixed_dma() {
 #[test]
 fn savestate_in_the_copper_scene_resumes_identically() {
     let mut a = machine();
-    frames(&mut a, 430);
+    frames(&mut a, 555);
     for _ in 0..5000 {
         a.step_cycle();
     }
@@ -632,7 +636,7 @@ fn the_copper_starts_a_blit_and_waits_for_it() {
 #[test]
 fn savestate_in_the_blitter_scene_resumes_identically() {
     let mut a = machine();
-    frames(&mut a, 620);
+    frames(&mut a, 745);
     for _ in 0..3000 {
         a.step_cycle();
     }
@@ -648,7 +652,7 @@ fn savestate_in_the_blitter_scene_resumes_identically() {
 #[test]
 fn savestate_in_the_sprite_scene_resumes_identically() {
     let mut a = machine();
-    frames(&mut a, 800);
+    frames(&mut a, 925);
     for _ in 0..3000 {
         a.step_cycle();
     }
@@ -733,7 +737,7 @@ fn the_stereoscope_runs_a_list_in_free_slots_and_interrupts() {
 #[test]
 fn savestate_in_the_3d_scene_resumes_identically() {
     let mut a = machine();
-    frames(&mut a, 1000);
+    frames(&mut a, 1125);
     for _ in 0..3000 {
         a.step_cycle();
     }
@@ -824,7 +828,7 @@ fn calliope_plays_from_chip_ram_and_interrupts_at_the_end() {
 #[test]
 fn foundry_plays_music_and_resumes_it_from_a_savestate() {
     let mut a = machine();
-    frames(&mut a, 700);
+    frames(&mut a, 825);
     let mut out = Vec::new();
     a.audio(&mut out);
     let rms = (out.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / out.len() as f64).sqrt();
@@ -845,4 +849,225 @@ fn foundry_plays_music_and_resumes_it_from_a_savestate() {
     assert!((47_800..=48_000).contains(&sa.len()), "{}", sa.len());
     assert_eq!(sa, sb);
     assert_eq!(a.save_state(), b.save_state());
+}
+
+// ---- step 9: Telegraph, the boot loader, the monitor ----
+
+fn insert_card(m: &mut Logophor, img: Vec<u8>) {
+    let media = Media {
+        name: "card.img".into(),
+        kind: MediaKind::Disk,
+        backend: Box::new(Mem(img)),
+    };
+    m.media_slot(SLOT_SD).unwrap().insert(media).unwrap();
+}
+
+/// The text screen's row `r` (100 cells at 0001:1000) as a string.
+fn text_row(m: &Logophor, r: u32) -> String {
+    (0..100)
+        .map(|c| {
+            let a = 0x1_1000 + 2 * (r * 100 + c);
+            DebugTarget::peek(m, CPU_SPACE, a, Size::Byte).unwrap() as u8 as char
+        })
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+fn sysvar(m: &Logophor, off: u32) -> u16 {
+    DebugTarget::peek(m, CPU_SPACE, 0x003e_0000 + off, Size::Word).unwrap() as u16
+}
+
+/// Type `text` (US layout) a key a field.
+fn type_text(m: &mut Logophor, text: &str) {
+    for ch in text.chars() {
+        let (usage, shift) = match ch {
+            'a'..='z' => (4 + (ch as u8 - b'a'), false),
+            'A'..='Z' => (4 + (ch as u8 - b'A'), true),
+            '1'..='9' => (0x1e + (ch as u8 - b'1'), false),
+            '0' => (0x27, false),
+            '\n' => (0x28, false),
+            ' ' => (0x2c, false),
+            ':' => (0x33, true),
+            '?' => (0x38, true),
+            _ => panic!("type {ch:?}"),
+        };
+        let mut key = |u: u8, down: bool| {
+            let at = m.now();
+            m.input(TimedInput {
+                at,
+                target: InputTarget::Keyboard,
+                event: InputEvent::Key {
+                    machine_key: emu_core::input::MachineKey(u16::from(u)),
+                    down,
+                },
+            });
+        };
+        if shift {
+            key(0xe1, true);
+        }
+        key(usage, true);
+        key(usage, false);
+        if shift {
+            key(0xe1, false);
+        }
+        frames(m, 1);
+    }
+}
+
+/// A boot program: TRAP #4 prints a line on the console, then the word at
+/// the end of the 70 000-byte file (0041:116E, past the first segment
+/// and many clusters) goes to DBGEXIT.
+fn boot_file() -> Vec<u8> {
+    let mut b = assemble(
+        "
+        li r1, #msg
+        trap #4
+        li r1, #$0041
+        mts s3, r1
+        li r2, #$116e
+        lwx r1, (r2)
+        li r2, #$ffff
+        mts s3, r2
+        li r2, #$43f2
+        swx r1, (r2)
+    idle: bra idle
+    msg: .asciz \"Hello from the SD card\\n\"
+        ",
+    );
+    b.resize(70_000, 0);
+    b[69_998..].copy_from_slice(&0x5aa5u16.to_le_bytes());
+    b
+}
+
+#[test]
+fn foundry_boots_boiler_from_a_fat32_card() {
+    let img = asm_ada::sdimage::fat32(64, &[("BOOT/BOILER.BIN".into(), boot_file())]).unwrap();
+    let mut m = machine();
+    insert_card(&mut m, img);
+    frames(&mut m, 200);
+    assert_eq!(m.board.exit, Some(0x5aa5), "the whole file loaded");
+    assert_eq!(m.cpu.s[0], 0x0040);
+    assert_eq!(text_row(&m, 0), "Hello from the SD card");
+    assert_eq!(m.board.lumiere.mode(), 4, "TRAP #4 set the console up");
+    // DMA slots: the SD controller used Telegraph's share of the fixed DMA.
+    assert_eq!(m.board.sd.peek(telegraph_io::SDSTAT) & 2, 0, "idle");
+}
+
+#[test]
+fn without_a_bootable_card_foundry_says_why_and_starts_over_on_a_change() {
+    // A card without the file, then one that is no FAT32 volume.
+    let img = asm_ada::sdimage::fat32(64, &[("README.TXT".into(), b"hi".to_vec())]).unwrap();
+    let mut m = machine();
+    insert_card(&mut m, img);
+    frames(&mut m, 405);
+    assert_eq!(sysvar(&m, 4), 3, "no BOOT/BOILER.BIN");
+    assert_eq!(m.board.lumiere.mode(), 4);
+    assert_eq!(
+        text_row(&m, 33).trim(),
+        "No BOOT/BOILER.BIN on the SD card."
+    );
+    let mut m = machine();
+    insert_card(&mut m, vec![0x5a; 1 << 20]);
+    frames(&mut m, 200);
+    assert_eq!(sysvar(&m, 4), 2, "no FAT32 volume");
+    // No card: the demonstration; a card inserted makes Foundry start over
+    // and boot it.
+    let mut m = machine();
+    frames(&mut m, 300);
+    assert_eq!(sysvar(&m, 4), 1);
+    let img = asm_ada::sdimage::fat32(64, &[("BOOT/BOILER.BIN".into(), boot_file())]).unwrap();
+    insert_card(&mut m, img);
+    frames(&mut m, 700);
+    assert_eq!(m.board.exit, Some(0x5aa5));
+}
+
+#[test]
+fn a_key_at_the_start_picture_enters_the_monitor() {
+    let mut m = machine();
+    frames(&mut m, 30);
+    type_text(&mut m, " ");
+    frames(&mut m, 20);
+    assert_eq!(m.board.lumiere.mode(), 4);
+    assert!(text_row(&m, 0).starts_with("Logophor 16 - Foundry emergency monitor"));
+    assert_eq!(text_row(&m, 1), ">", "the key was forgotten");
+    type_text(&mut m, "e 2:10 41 42 43\n");
+    type_text(&mut m, "m 2:10 1\n");
+    assert_eq!(
+        text_row(&m, 3),
+        "0002:0010  41 42 43 00 00 00 00 00 00 00 00 00 00 00 00 00  ABC............."
+    );
+    type_text(&mut m, "d fffb:0 1\n");
+    assert!(
+        text_row(&m, 5).starts_with("FFFB:0000"),
+        "{}",
+        text_row(&m, 5)
+    );
+    assert!(text_row(&m, 5).contains("bra"), "{}", text_row(&m, 5));
+    type_text(&mut m, "Q\n");
+    assert_eq!(text_row(&m, 7), "?");
+    golden(&m, "foundry-monitor");
+}
+
+#[test]
+fn an_illegal_instruction_shows_the_registers_in_the_monitor() {
+    let mut m = machine();
+    insert_program(&mut m, assemble("li r7, #$1234\n .word $ffff\n"));
+    frames(&mut m, 5);
+    assert_eq!(text_row(&m, 1), "Exception $01 at 0040:0004");
+    assert!(
+        text_row(&m, 3).contains("R7   =1234"),
+        "{}",
+        text_row(&m, 3)
+    );
+    assert!(
+        text_row(&m, 4).contains("PC   =0004"),
+        "{}",
+        text_row(&m, 4)
+    );
+}
+
+#[test]
+fn telegraph_options_timers_clock_and_ports() {
+    let config = MachineConfig {
+        options: [
+            ("rtc".into(), "1000".into()),
+            ("port1".into(), "mouse".into()),
+        ]
+        .into(),
+        ..MachineConfig::default()
+    };
+    let mut m = Logophor::new(&config).unwrap();
+    assert_eq!(m.board.timers.seconds(), 1000);
+    assert_eq!(m.board.input.peek(telegraph_io::PORTCFG), 1 | 1 << 2);
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(PortId(1)),
+        event: InputEvent::MouseRel {
+            dx: 5,
+            dy: -2,
+            buttons: 1,
+        },
+    });
+    frames(&mut m, 61);
+    assert_eq!(m.board.timers.seconds(), 1001, "a second of 60.09 fields");
+    assert_eq!(
+        (
+            m.board.input.peek(telegraph_io::MOUSE1X),
+            m.board.input.peek(telegraph_io::MOUSE1Y)
+        ),
+        (5, 0xfffe)
+    );
+    assert_ne!(
+        m.board.ints.peek(telegraph::INTREQ) & telegraph::INT_PORTS,
+        0
+    );
+    let bad = MachineConfig {
+        options: [("port0".into(), "lightgun".into())].into(),
+        ..MachineConfig::default()
+    };
+    assert!(Logophor::new(&bad).is_err());
+    assert_eq!(m.ports().len(), 2);
+    assert_eq!(m.media_slots()[1].name, "SD card");
 }

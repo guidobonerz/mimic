@@ -1206,6 +1206,11 @@ table(["Key", "Machine", "Values"], [
      "`1k` … `64k`; `9600`; `card|console`; `off`; `a|b` (monitor ROM); `HEX`"],
     ["`port1`, `port2`", "Vectrex", "`controller`, `lightpen`, `imager`; `eye`, "
      "`lines=fine|soft`"],
+    ["`rtc`, `port0`, `port1`", "Logophor 16", "seconds since 2000-01-01 (the clock's "
+     "start; default 2026-01-01); `mouse|joystick|none` (defaults: mouse in port 0, "
+     "joystick in port 1). The SD card is a FAT32 image given with `--disk` "
+     "(`ada-asm sd card.img --boot prog.bin`); Foundry starts `BOOT/BOILER.BIN` "
+     "from it, a key held while the start picture shows opens its monitor"],
 ], [0.26, 0.18, 0.56])
 h2("Keypads and proportional mice on the Commodore ports")
 p("""Besides the joystick, paddles and the 1351 mouse, the Commodore control

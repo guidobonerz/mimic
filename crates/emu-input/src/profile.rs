@@ -139,7 +139,7 @@ impl JoyKeys {
     pub fn default_for(machine: &str) -> Self {
         match machine {
             "atari2600" | "coleco" | "nes" | "snes" | "vectrex" => JoyKeys::Cursor,
-            "cpc" => JoyKeys::Off,
+            "cpc" | "logophor16" => JoyKeys::Off,
             _ => JoyKeys::Numpad,
         }
     }
@@ -348,8 +348,9 @@ impl Profile {
             "c64" | "c128" => Some(1),
             "vic20" | "c16" | "plus4" | "atari8" | "atari2600" | "cpc" | "coleco" | "nes"
             | "snes" | "vectrex" | "apple2" => Some(0),
-            // The Amiga's joystick port is game port 1 (port 0 is the mouse's).
-            "amiga" => Some(1),
+            // The Amiga's joystick port is game port 1 (port 0 is the mouse's),
+            // as is the Logophor 16's.
+            "amiga" | "logophor16" => Some(1),
             _ => None,
         };
         let mut joystick = Vec::new();
@@ -374,7 +375,7 @@ impl Profile {
             joystick,
             // The Amiga's mouse sits in game port 0, the Mac's in its
             // mouse port.
-            mouse: if matches!(machine, "amiga" | "mac" | "archimedes") {
+            mouse: if matches!(machine, "amiga" | "mac" | "archimedes" | "logophor16") {
                 vec![MouseMap { port: 0 }]
             } else {
                 Vec::new()

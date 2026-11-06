@@ -10,6 +10,7 @@
 //! ada-asm compile prog.s -o prog.ao        (object file)
 //! ada-asm link a.ao b.ao -o prog.bin [--base …] [--listing …]
 //! ada-asm run prog.bin [--load 0040:0000] [--entry seg:off] [--cycles N]
+//! ada-asm sd card.img [--size MIB] [--boot prog.bin] [--add CARD/PATH=host-file …]
 //! ```
 #![forbid(unsafe_code)]
 
@@ -18,6 +19,7 @@ pub mod expr;
 pub mod link;
 pub mod object;
 pub mod run;
+pub mod sdimage;
 
 #[cfg(test)]
 mod tests;

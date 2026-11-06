@@ -495,6 +495,7 @@ fn brk_stops_for_a_debugger_or_raises_exception_5() {
     let (mut cpu, mut ram) = setup(&[Op::Brk]);
     run(&mut cpu, &mut ram, 1);
     assert_eq!((cpu.pc, cpu.spc), (0x1000 + 16 * 5, 2));
+    assert_eq!(cpu.sr & (S | IPL), S | IPL, "supervisor, IPL 7");
     let (mut cpu, mut ram) = setup(&[Op::Brk]);
     cpu.brk_stops = true;
     run(&mut cpu, &mut ram, 1);
@@ -512,7 +513,8 @@ fn interrupts_by_level_and_nmi_edge() {
     cpu.set_irq_level(4);
     assert_eq!(run(&mut cpu, &mut ram, 1), 2);
     assert_eq!((cpu.pc, cpu.spc, cpu.cause), (0x1000 + 16 * 12, 2, 12));
-    assert_eq!(cpu.sr & IPL, 4 << IPL_SHIFT);
+    assert_eq!(cpu.sr & IPL, IPL, "entry blocks further interrupts");
+    assert_eq!(cpu.ssr & IPL, 3 << IPL_SHIFT, "RTI restores IPL 3");
     // NMI: taken with IPL 7 on its rising edge only.
     let (mut cpu, mut ram) = setup(&[Op::Nop, Op::Nop]);
     cpu.set_irq_level(7);

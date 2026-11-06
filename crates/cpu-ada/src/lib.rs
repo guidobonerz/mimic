@@ -202,10 +202,11 @@ impl Ada {
         self.spc = ret;
         self.ss0 = self.s[0];
         self.ssr = self.sr;
-        self.sr |= S;
-        if let Some(l) = level {
-            self.sr = (self.sr & !IPL) | u16::from(l) << IPL_SHIFT;
-        }
+        // Supervisor, all interrupts but the NMI blocked (SPEC.md 3.11):
+        // the one set of shadow registers is safe until the handler has
+        // saved it and lowers IPL itself.
+        let _ = level;
+        self.sr |= S | IPL;
         self.cause = cause;
         let at = VECTORS + 4 * u32::from(vector);
         let seg = bus.read(at, Size::Word) as u16;

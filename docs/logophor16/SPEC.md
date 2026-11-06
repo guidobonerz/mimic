@@ -292,9 +292,14 @@ Privileged instructions in user mode (S = 0) raise exception 2.
 Taking exception or interrupt *v*: SPC = address of the next instruction
 (for exceptions caused by an instruction: that instruction's address for
 illegal/privilege/divide, the next one for TRAP and BRK), SS0 = S0,
-SSR = SR; S = 1; for interrupts IPL = level; CAUSE = v (TRAP: n << 8 | 4);
-S0:PC = vector v. Entry takes 2 cycles. There is one set of shadow
-registers: a handler that lowers IPL must first save SPC, SS0, SSR (MFSC).
+SSR = SR; S = 1; IPL = 7 (changed in step 9, see decision 44: before,
+an interrupt set IPL to its level and an exception kept it, so a second
+interrupt could overwrite the one set of shadow registers before the
+handler had saved them); CAUSE = v (TRAP: n << 8 | 4); S0:PC = vector v.
+Entry takes 2 cycles. There is one set of shadow registers: a handler that
+lowers IPL (to let higher levels in) must first save SPC, SS0, SSR (MFSC);
+RTI restores the IPL from SSR. An NMI can still interrupt a handler that
+has not saved them.
 
 **Vector table** **[S]**: 32 entries of 4 bytes (segment, offset) at
 `FFFB:0040` in the ROM.
@@ -737,9 +742,38 @@ through a UDP tunnel between emulator instances (later a TAP device).
 | 426A/426C | SDSEG/SDOFS | chip-RAM buffer |
 | 426E/4270 | SDSIZEH/SDSIZEL | card size in blocks (read) |
 
-The SD card is a block device with DMA (no SPI); a block takes 20 µs
-(through Telegraph's DMA slots). In the emulator the card is an image
-file in a media slot.
+The SD card is a block device with DMA (no SPI). In the emulator the
+card is an image file (whole 512-byte blocks) in a media slot.
+
+Behaviour **[S]** (step 9):
+
+- Timers count at 1 MHz (every 12th CPU cycle). A running timer at 0
+  underflows on its next count: TSTAT bit n, the timer interrupt with
+  TnCTL bit 3, then TnLATCH again (bit 1) or it stops (bit 0 clears);
+  so it underflows every TnLATCH + 1 counts. With bit 2 timer n counts
+  timer n − 1's underflows (timer 0 ignores the bit). TnCNT is readable
+  and writable.
+- The clock's second turns every 12 000 000 CPU cycles. A write to RTCHI
+  waits for the write to RTCLO, which sets the clock and starts the
+  second anew; reading RTCHI latches RTCLO for the next read. The alarm
+  interrupt comes when the low 16 bits of the new second equal RTCALARM.
+  The clock starts from the machine's `rtc` option (default 2026-01-01
+  00:00); the emulator never reads the host's time inside the machine.
+- Keyboard: every key and release enters the 16-entry FIFO (a full FIFO
+  drops the event and sets KBDSTAT bit 1, cleared on read) and raises
+  the keyboard interrupt; reading KBDDATA takes the oldest. The usages
+  are USB HID's Keyboard/Keypad page, including the modifiers ($E0–$E7).
+- Ports: PORTCFG shows what the machine's options plugged in (`port0`,
+  `port1`: mouse, joystick, none); it cannot be written. Mouse motion
+  adds to MOUSEnX/Y, PORTn bits 4–6 hold its buttons; a joystick sets
+  PORTn bits 0–6. A change raises the ports interrupt.
+- SD: the transfer runs through Telegraph's fixed-DMA slots, 8 a line
+  (32 bytes), so a block takes 16 lines (about 0.42 ms, 1.2 MB/s; this
+  replaces the 20 µs first written here). SDCMD while busy is ignored. A
+  command ends with done (SDSTAT bit 3, cleared on read) and the SD
+  interrupt; with error (bit 2) when there is no card, a block lies
+  beyond the card, the buffer beyond chip RAM, or a write meets a
+  write-protected card. Needs DMACON bit 3.
 
 ### 10.4 Interrupt controller
 
@@ -790,9 +824,51 @@ System font **[S]** (step 7, owner's choice): Martin Sedlák's Sweet16mono
 its first 256 characters, so the character set is ISO 8859-1; $00–$20
 and $80–$A0 are blank. Foundry copies it to chip RAM for text mode.
 
-Boot: self-test and chip set-up, start picture with the brass logo,
-boot loader loads Boiler and Panorama from the SD card; holding a key at
-power-on enters the emergency monitor. No text screen in the normal boot.
+Boot **[S]** (step 9; owner's choices: a FAT32 card, the demonstration
+without one, a monitor with the basic functions):
+
+1. A quick chip-RAM test (two patterns at four places in every segment;
+   an error goes to the debug console), the system variables at
+   003E:0000 cleared, the font copied.
+2. The start picture: the owner's emblem (`asm/foundry/logo.png`, made a
+   320 × 180 mode-0 picture with 256 colours at build time) for 2
+   seconds. A key pressed then enters the emergency monitor.
+3. The boot loader: an SD card with a FAT32 volume (MBR partition 1 of
+   type $0B or $0C, or a volume without a partition table; 512-byte
+   sectors, 8.3 names) and the file `BOOT/BOILER.BIN`: it is loaded at
+   0040:0000 and started there with S0 = S1 = 0040, S2:R12 = 003F:FFFE,
+   IPL 7, as the program slot does. Boiler (step 11) loads Panorama.
+   The host tool `ada-asm sd` makes such cards.
+4. Without one: the demonstration of steps 3–8 with its music; the text
+   screen says why nothing started. A card inserted or removed makes
+   Foundry start over (checked in the VBlank interrupt).
+
+Emergency monitor **[S]** (text mode, light green on black): M addr
+[lines] memory dump, E addr bytes… enter, F addr count byte fill, D addr
+[count] disassemble, G addr call (the program returns with RETF), R the
+registers saved at entry, S R|W block count seg SD blocks to/from chip
+RAM seg:0000, B boot, X restart, ? help; numbers hex, an address
+SSSS:OOOO or OOOO in the last segment. An unexpected exception or
+interrupt (every vector but 4 and 12) enters it with the registers it
+found and the line "Exception $vv at ssss:pppp".
+
+ROM services **[S]**: TRAP #n with arguments in R1–R4 and the result in
+R1; R5–R12 and S0–S3 are kept. A TRAP runs with IPL 7.
+
+| n | Service |
+| --- | --- |
+| 0 | enter the monitor (does not return) |
+| 1 | put character R1 on the console (text mode, set up at first use; 10 new line, 8 back) |
+| 2 | wait for a key: R1 = its character (ISO 8859-1, US layout) |
+| 3 | R1 = a waiting key's character, or 0 |
+| 4 | put the zero-terminated string at S1:R1 on the console |
+| 5 | read R3 SD blocks from block R1:R2 (high, low) into chip RAM R4:0000; R1 = 0 or an error |
+| 6 | write R3 SD blocks likewise |
+
+Others return R1 = $FFFF. Open for step 11 (Boiler): the vector table is
+fixed in the ROM, so a loaded program cannot yet install its own
+interrupt handlers (it polls); file services through TRAP come with
+Boiler too.
 
 Panorama themes **[D]** (owner's request 2026-11-06, built in step 11):
 besides the brass default, an **oscilloscope theme**, switchable at run
@@ -804,8 +880,10 @@ the brightest for focus and highlights.
 Calling convention **[S]**: arguments in R1–R4, results in R1 (R2 for
 32-bit), R1–R4 and R10/R11 caller-saved, R5–R9 callee-saved, R12 stack
 pointer in S2 (stack grows down, word-aligned), far pointers as
-(segment, offset) pairs. ROM services through `TRAP #n` (numbers in the
-ROM's own documentation, Phase 9).
+(segment, offset) pairs. ROM services through `TRAP #n` (above).
+
+ROM layout **[S]** (step 9): FFFB code, tables, texts and the font; FFFC
+the 3D scene's and the music's data; FFFD the start picture.
 
 ## 12. Host tool chain
 
@@ -896,3 +974,9 @@ Decisions of this document:
 41. Calliope envelope rates in 1/256 level a line, 0 = at once; the gate's rising edge restarts the attack from 0 (step 8).
 42. Calliope noise: 17-bit LFSR at the channel rate; pan as balance (centre = both sides full); mix summed and clipped (step 8).
 43. Foundry's VBlank interrupt (vector 12) runs the music player and acknowledges the VBlank; other level-4 sources stop there as before (step 8).
+44. Taking any exception or interrupt sets IPL to 7; RTI restores it (step 9; fixes the shadow-register race of step 2's rule).
+45. Timers, clock, keyboard, ports and SD as in section 10.3's behaviour list; the SD card moves 32 bytes a line, a block in 16 lines (step 9).
+46. The clock starts from the machine option `rtc`, never from the host's time (determinism) (step 9).
+47. Boot from a FAT32 SD card: `BOOT/BOILER.BIN` to 0040:0000; without one the demonstration; the start picture is the owner's emblem; a key during it enters the monitor (owner's choices, step 9).
+48. ROM services TRAP #0–6 as in section 11; the vector table stays in the ROM until step 11 (step 9).
+49. ROM data in segments FFFC (3D, music) and FFFD (start picture) (step 9).

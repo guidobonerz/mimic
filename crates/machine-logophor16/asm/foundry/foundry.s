@@ -1,6 +1,13 @@
 ; Foundry, the Logophor 16's ROM (256 KiB at FFFB:0000-FFFE:FFFF).
 ;
-; Step 8 build: sets the palette, copies the font to chip RAM, draws a
+; Step 9 build: at power-on a quick memory test, the start picture (the
+; owner's emblem) for 2 seconds - a key pressed then enters the emergency
+; monitor (monitor.s) - and the boot loader (boot.s), which starts
+; BOOT/BOILER.BIN from a FAT32 SD card. Without one Foundry shows its
+; demonstration (the steps before) and starts over when a card comes or
+; goes (checked in the VBlank interrupt). ROM services by TRAP (traps.s), the console (console.s).
+;
+; The demonstration: sets the palette, copies the font to chip RAM, draws a
 ; mode-0 test picture and a mode-4 text screen, builds a Copper list and
 ; the Blitter scene's graphics, and shows in turn every 3 seconds: the
 ; test picture, the text screen, the Copper scene (a colour gradient line
@@ -113,6 +120,7 @@ STACK_SEG = $003f
 
         .include "zeppelin.inc"  ; ZEP_SEG ($000E), ZEP_WORDS, ZEP_MAT
         .include "music.inc"     ; MUS_SEG ($0019), MUS_* offsets
+        .include "sys.s"         ; system variables, Telegraph, macros
 
 ATTR     = $1e                  ; yellow on blue
 FIELDS   = 180                  ; 3 seconds
@@ -136,9 +144,11 @@ reset:
         bra     init
 
         .org    $fffb0040
-vectors:                        ; 32 vectors (SPEC.md 3.11): `fault`, but
-                                ; 12 (level 4, VBlank): the music player
-        .far    fault, fault, fault, fault, fault, fault, fault, fault
+vectors:                        ; 32 vectors (SPEC.md 3.11): `fault` (to
+                                ; the monitor), but 4 (TRAP): the ROM's
+                                ; services, 12 (level 4, VBlank): the
+                                ; music player
+        .far    fault, fault, fault, fault, trap_entry, fault, fault, fault
         .far    fault, fault, fault, fault, vblank_irq, fault, fault, fault
         .far    fault, fault, fault, fault, fault, fault, fault, fault
         .far    fault, fault, fault, fault, fault, fault, fault, fault
@@ -152,6 +162,41 @@ init:
         seg3    IO_SEG
         li      r1, #hello
         bl      debug_print
+        bl      clear_sys
+        bl      mem_test
+        bl      copy_font
+        bl      show_logo
+        li      r5, #LOGO_FIELDS
+.logo:
+        push    r5
+        seg3    IO_SEG
+        movi    r5, #1
+        bl      wait_fields
+        pop     r5
+        iord    r1, KBDSTAT     ; a key: the monitor
+        movi    r2, #1
+        tst     r1, r2
+        bne     .mon
+        addi    r5, #-1
+        bne     .logo
+        iord    r1, SDSTAT      ; the card as it is now
+        movi    r2, #1
+        and     r1, r2
+        stv     r1, SV_CARD
+        call    boot_sd         ; returns when it cannot boot
+        stv     r1, SV_ERR
+        bra     attract
+.mon:
+        iord    r1, KBDDATA     ; forget the key
+        cmpi    r1, #0
+        bne     .mon
+        li      r1, #ROM_SEG
+        li      r2, #monitor_start
+        jf      r1:r2
+
+; No card to boot from: the demonstration, while the card stays as it was.
+attract:
+        seg3    IO_SEG
         bl      set_palette
         bl      copy_font
         bl      draw_picture
@@ -175,6 +220,7 @@ init:
         reg     INTENA, $8001   ; VBlank interrupt: the music player
         ei
 show:
+        seg3    IO_SEG
         reg     FBSEG, PIC_SEG
         reg     FBOFS, 0
         reg     PITCH, 320
@@ -203,9 +249,137 @@ show:
         bl      zeppelin_scene
         bra     show
 
-; An unexpected exception: stop here.
-fault:
-        bra     fault
+; Start over as at power-on: interrupts, DMA and sound off first.
+reboot:
+        di
+        seg3    IO_SEG
+        reg     INTENA, $7fff
+        reg     INTREQ, $7fff
+        reg     AUDMASTER, 0
+        li      r3, #$3016      ; every channel's AUDCTL
+        movi    r4, #8
+        movi    r1, #0
+.ch:
+        swx     r1, (r3)
+        addi    r3, #$20
+        addi    r4, #-1
+        bne     .ch
+        reg     DMACON, $7fff
+        li      r1, #ROM_SEG
+        li      r2, #init
+        jf      r1:r2
+
+; System variables to 0. Uses R1-R3, R9.
+clear_sys:
+        li      r9, #SYS_SEG
+        mts     s3, r9
+        movi    r2, #0
+        li      r3, #$200
+        movi    r1, #0
+.c:
+        swx     r1, (r2)+
+        addi    r3, #-1
+        bne     .c
+        ret
+
+; A quick test of chip RAM: two patterns at four places in each segment
+; (but the system's and the stack's), zero again after; an error goes to
+; the debug console. Uses R1-R6, R9.
+mem_test:
+        push    lr
+        movi    r5, #0          ; segment
+.seg:
+        mts     s3, r5
+        li      r6, #$55aa
+.pat:
+        movi    r2, #0
+        movi    r4, #4
+.put:
+        swx     r6, (r2)
+        li      r3, #$4000
+        add     r2, r3
+        addi    r4, #-1
+        bne     .put
+        movi    r2, #0
+        movi    r4, #4
+.get:
+        lwx     r1, (r2)
+        cmp     r1, r6
+        bne     .bad
+        movi    r1, #0
+        swx     r1, (r2)
+        li      r3, #$4000
+        add     r2, r3
+        addi    r4, #-1
+        bne     .get
+        li      r3, #$55aa      ; second pattern: inverted
+        cmp     r6, r3
+        bne     .next
+        not     r6, r6
+        bra     .pat
+.bad:
+        push    r5
+        seg3    IO_SEG
+        li      r1, #ram_error
+        bl      debug_print
+        pop     r5
+.next:
+        addi    r5, #1
+        cmpi    r5, #SYS_SEG
+        bne     .seg
+        seg3    IO_SEG
+        pop     lr
+        ret
+
+; The start picture: the emblem (320 x 180) in mode 0, centred, its own
+; palette. Uses R1-R5, R9.
+show_logo:
+        push    lr
+        seg1    LOGO_ROM
+        seg3    IO_SEG
+        li      r2, #PALETTE
+        li      r1, #logo_pal
+        li      r3, #256
+.pal:
+        lw      r4, 0(r1)
+        swx     r4, (r2)+
+        addi    r1, #2
+        addi    r3, #-1
+        bne     .pal
+        seg3    LOGO_SEG
+        movi    r2, #0
+        movi    r4, #0
+        li      r3, #30*160     ; 30 black lines (words)
+.top:
+        swx     r4, (r2)+
+        addi    r3, #-1
+        bne     .top
+        li      r1, #logo_pix
+        li      r3, #180*160
+.pix:
+        lw      r4, 0(r1)
+        swx     r4, (r2)+
+        addi    r1, #2
+        addi    r3, #-1
+        bne     .pix
+        movi    r4, #0
+        li      r3, #30*160
+.bottom:
+        swx     r4, (r2)+
+        addi    r3, #-1
+        bne     .bottom
+        seg1    ROM_SEG
+        seg3    IO_SEG
+        reg     DMACON, $c009   ; master, framebuffer, Telegraph (SD)
+        reg     FBSEG, LOGO_SEG
+        reg     FBOFS, 0
+        reg     PITCH, 320
+        reg     BORDER, 0
+        movi    r5, #1
+        bl      wait_fields
+        reg     VMODE, $8000
+        pop     lr
+        ret
 
 ; Wait for R5 VBlanks (VSTAT bit 2, cleared by reading). S3 = IO_SEG.
 ; Uses R1-R3.
@@ -483,6 +657,20 @@ draw_text:
         li      r2, #35*100+2
         movi    r3, #$17
         bl      print
+        ldv     r5, SV_ERR      ; why no system started
+        seg3    TEXT_SEG
+        mov     r1, r5
+        cmpi    r1, #0
+        beq     .noboot
+        addi    r1, #-1
+        add     r1, r1
+        li      r2, #boot_texts
+        add     r1, r2
+        lw      r1, 0(r1)
+        li      r2, #33*100+2
+        movi    r3, #$1e
+        bl      print
+.noboot:
         seg3    IO_SEG
         reg     CURSOR, 28*100+2+cursor_len
         reg     CURSHAPE, $fe   ; lines 14-15
@@ -1281,6 +1469,7 @@ sprite_scene:
 zeppelin_scene:
         push    lr
         seg3    ZEP_SEG
+        seg1    DATA_SEG
         li      r1, #zep_blob
         movi    r2, #0
         li      r3, #ZEP_WORDS
@@ -1290,6 +1479,7 @@ zeppelin_scene:
         addi    r1, #2
         addi    r3, #-1
         bne     .copy
+        seg1    ROM_SEG
         seg3    IO_SEG
         reg     S3DLSEG, ZEP_SEG
         reg     S3DLOFS, 0
@@ -1314,12 +1504,14 @@ zeppelin_scene:
         add     r1, r2
         li      r2, #ZEP_MAT
         movi    r3, #32
+        seg1    DATA_SEG
 .m:
         lw      r4, 0(r1)
         swx     r4, (r2)+
         addi    r1, #2
         addi    r3, #-1
         bne     .m
+        seg1    ROM_SEG
         seg3    IO_SEG
         wr      S3DTSEG, r8
         reg     S3DSTART, 1
@@ -1352,6 +1544,7 @@ zeppelin_scene:
 ; `mus_setup`; Calliope's DMA on. Uses R1-R5.
 init_music:
         seg3    MUS_SEG
+        seg1    DATA_SEG
         li      r1, #mus_blob
         movi    r2, #0
         li      r3, #MUS_WORDS
@@ -1371,6 +1564,7 @@ init_music:
         addi    r1, #4
         addi    r3, #-1
         bne     .set
+        seg1    ROM_SEG
         reg     DMACON, $8004   ; Calliope's DMA on
         ret
 
@@ -1400,6 +1594,19 @@ vblank_irq:
         beq     .other          ; Copper or DMA error: unexpected here
         movi    r1, #1          ; clear the VBlank request
         swx     r1, (r2)
+        li      r2, #SDSTAT     ; a card came or went: start over
+        lwx     r1, (r2)
+        movi    r3, #1
+        and     r1, r3
+        ldv     r3, SV_CARD
+        cmp     r1, r3
+        beq     .card
+        li      r1, #ROM_SEG
+        li      r2, #reboot
+        jf      r1:r2
+.card:
+        li      r9, #IO_SEG
+        mts     s3, r9
         movi    r6, #0
         lw      r1, MUS_TICK(r6)
         addi    r1, #-1
@@ -1513,18 +1720,39 @@ cop_split:                      ; WAIT 299, 820 (its blank), 5 MOVEs
 cop_tail:                       ; line 0's colour, set in line 599's blank
         .word   $2000|599, 820, (PALETTE+2)>>1, $0018
 hex:    .ascii  "0123456789ABCDEF"
-hello:  .asciz  "Foundry (step 8): test picture, text mode, Copper, Blitter, sprites, 3D, music\n"
+hello:  .asciz  "Foundry (step 9): boot\n"
 title:  .asciz  "LOGOPHOR 16"
-line2:  .asciz  "Foundry ROM - step 8: framebuffer, text, Copper, Blitter, sprites, 3D, sound"
+line2:  .asciz  "Foundry ROM - step 9: framebuffer, text, Copper, Blitter, sprites, 3D, sound, boot"
 line3:  .asciz  "Ada 16-bit RISC at 12 MHz - 4 MiB chip RAM - 28 MiB fast RAM - Lumiere 800 x 600"
 charset_label: .asciz "Character set:"
 colour_label:  .asciz "Text colours (foreground on background):"
 blink_text:    .asciz "This line blinks."
 cursor_text:   .asciz "The cursor: "
 cursor_len = 12
-footer: .asciz  "mimic - Phase 31, step 8"
+footer: .asciz  "mimic - Phase 31, step 9"
+        .align  2
+boot_texts:
+        .word   boot_text1, boot_text2, boot_text3, boot_text4
+boot_text1: .asciz "No SD card: insert one with BOOT/BOILER.BIN (ada-asm sd) to start a system."
+boot_text2: .asciz "The SD card has no FAT32 volume."
+boot_text3: .asciz "No BOOT/BOILER.BIN on the SD card."
+boot_text4: .asciz "The SD card could not be read."
+ram_error:  .asciz "Foundry: chip RAM error\n"
+        .align  2
+        .include "console.s"
+        .include "boot.s"
+        .include "monitor.s"
+        .include "traps.s"
+        .include "keys.inc"
         .align  2
 font:
         .include "font.inc"
+
+        .section data
+        .org    $fffc0000       ; DATA_SEG: the zeppelin and the music
         .include "zeppelin_data.inc"
         .include "music_data.inc"
+
+        .section logo
+        .org    $fffd0000       ; LOGO_ROM: the start picture
+        .include "logo.inc"

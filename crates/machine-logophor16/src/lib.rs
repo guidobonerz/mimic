@@ -32,13 +32,14 @@ use chips_logophor::blitter::ChipRamMut;
 use chips_logophor::calliope::{self, Calliope};
 use chips_logophor::lumiere::{self, Beam, ChipRam, Lumiere};
 use chips_logophor::telegraph::{self, Interrupts};
+use chips_logophor::telegraph_io::{Input, PortDev, Sd, SdCard, Timers};
 use cpu_ada::Ada;
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
 use emu_core::hooked::HookedBus;
-use emu_core::input::{InputQueue, TimedInput};
+use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
 use emu_core::machine::{ChipReg, DebugTarget};
 use emu_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
+use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
 use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
 use emu_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, CycleResult, DebugHooks, DeviceId, Instr, Machine,
@@ -52,6 +53,10 @@ pub static FOUNDRY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/foundry.ro
 pub const CPU: DeviceId = DeviceId("cpu");
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 const SLOT_PROGRAM: SlotId = SlotId(0);
+const SLOT_SD: SlotId = SlotId(1);
+/// The clock's start without an `rtc` option: 2026-01-01 00:00 UTC in
+/// seconds since 2000-01-01.
+pub const RTC_DEFAULT: u32 = 820_454_400;
 
 /// CPU cycles a line, lines a field, visible lines (SPEC.md 2).
 pub const LINE_CYCLES: u16 = 318;
@@ -110,6 +115,10 @@ pub struct Board {
     pub babbage: Babbage,
     pub calliope: Calliope,
     pub ints: Interrupts,
+    pub timers: Timers,
+    pub input: Input,
+    pub sd: Sd,
+    card: SdSlot,
     /// Debug console output (the last [`CONSOLE_KEEP`] bytes).
     pub console: Vec<u8>,
     /// Last value written to DBGEXIT.
@@ -136,6 +145,79 @@ impl ChipRamMut for ChipMut<'_> {
         if addr < CHIP_END {
             self.ram[addr as usize] = v;
             self.touched[(addr >> 16) as usize] = true;
+        }
+    }
+}
+
+/// The SD card slot: an image of whole 512-byte blocks.
+#[derive(Default)]
+struct SdSlot {
+    media: Option<Media>,
+    protected: bool,
+}
+
+impl Clone for SdSlot {
+    /// A board copy (savestate loading) keeps no card: the card stays in
+    /// the machine's slot, not in the state.
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl SdCard for SdSlot {
+    fn blocks(&self) -> u32 {
+        self.media.as_ref().map_or(0, |m| {
+            (m.backend.len() / 512).min(u64::from(u32::MAX)) as u32
+        })
+    }
+
+    fn protected(&self) -> bool {
+        self.protected
+    }
+
+    fn read_block(&mut self, block: u32, buf: &mut [u8; 512]) -> bool {
+        self.media
+            .as_mut()
+            .is_some_and(|m| m.backend.read(u64::from(block) * 512, buf).is_ok())
+    }
+
+    fn write_block(&mut self, block: u32, buf: &[u8; 512]) -> bool {
+        self.media
+            .as_mut()
+            .is_some_and(|m| m.backend.write(u64::from(block) * 512, buf).is_ok())
+    }
+}
+
+impl MediaSlot for Board {
+    fn insert(&mut self, media: Media) -> Result<(), MediaError> {
+        if media.kind != MediaKind::Disk {
+            return Err(MediaError::Unsupported(media.kind));
+        }
+        if media.backend.len() < 512 || !media.backend.len().is_multiple_of(512) {
+            return Err(MediaError::Format(
+                "an SD image is whole 512-byte blocks".into(),
+            ));
+        }
+        self.card.media = Some(media);
+        self.sd.card(&self.card);
+        Ok(())
+    }
+
+    fn eject(&mut self) -> Option<Media> {
+        let m = self.card.media.take();
+        self.sd.card(&self.card);
+        m
+    }
+
+    fn write_protect(&mut self, on: bool) {
+        self.card.protected = on;
+        self.sd.card(&self.card);
+    }
+
+    fn flush(&mut self) -> Result<(), MediaError> {
+        match &mut self.card.media {
+            Some(m) => m.backend.commit(),
+            None => Ok(()),
         }
     }
 }
@@ -167,6 +249,10 @@ impl Board {
             babbage: Babbage::new(),
             calliope: Calliope::new(),
             ints: Interrupts::new(),
+            timers: Timers::new(RTC_DEFAULT),
+            input: Input::new([PortDev::Mouse, PortDev::Joystick]),
+            sd: Sd::default(),
+            card: SdSlot::default(),
             console: Vec::new(),
             exit: None,
             beam: Beam::default(),
@@ -189,6 +275,9 @@ impl Board {
             0x0000..=0x07ff => self.babbage.peek(off),
             0x0800..=0x11ff | 0x2000..=0x27ff => self.lumiere.peek(off, self.beam),
             0x3000..=0x31ff => self.calliope.peek(off),
+            0x4200..=0x422f => self.timers.peek(off),
+            0x4240..=0x425f => self.input.peek(off),
+            0x4260..=0x427f => self.sd.peek(off),
             telegraph::INTREQ | telegraph::INTENA => self.ints.peek(off),
             DBGID => 0xc016,
             _ => 0,
@@ -200,6 +289,9 @@ impl Board {
             0x0000..=0x07ff => self.babbage.read(off),
             0x0800..=0x11ff | 0x2000..=0x27ff => self.lumiere.read(off, self.beam),
             0x3000..=0x31ff => self.calliope.read(off),
+            0x4200..=0x422f => self.timers.read(off),
+            0x4240..=0x425f => self.input.read(off),
+            0x4260..=0x427f => self.sd.read(off),
             _ => self.io_peek(off),
         }
     }
@@ -238,6 +330,12 @@ impl Board {
                 lumiere.write(off, v);
             }
             0x3000..=0x31ff => self.calliope.write(off, v),
+            0x4200..=0x422f => self.timers.write(off, v),
+            0x4260..=0x427f => {
+                if self.sd.write(off, v) {
+                    self.ints.raise(telegraph::INT_SD);
+                }
+            }
             telegraph::INTREQ | telegraph::INTENA => self.ints.write(off, v),
             DBGOUT => {
                 self.console.push(v as u8);
@@ -375,12 +473,36 @@ impl Logophor {
         }
         // `roms` (e.g. "stub" from the test runners) means nothing here:
         // the ROM is built in.
-        if let Some((k, _)) = config.options.iter().find(|(k, _)| *k != "roms") {
-            return Err(ConfigError::Invalid(format!("unknown option '{k}'")));
+        let mut board = Board::new();
+        let mut ports = [PortDev::Mouse, PortDev::Joystick];
+        for (k, v) in &config.options {
+            match k.as_str() {
+                "roms" => {}
+                "rtc" => {
+                    let s = v.parse::<u32>().map_err(|_| {
+                        ConfigError::Invalid(format!("rtc={v}: seconds since 2000-01-01"))
+                    })?;
+                    board.timers = Timers::new(s);
+                }
+                "port0" | "port1" => {
+                    ports[usize::from(k == "port1")] = match v.as_str() {
+                        "mouse" => PortDev::Mouse,
+                        "joystick" => PortDev::Joystick,
+                        "none" => PortDev::None,
+                        _ => {
+                            return Err(ConfigError::Invalid(format!(
+                                "{k}={v}: mouse, joystick or none"
+                            )))
+                        }
+                    }
+                }
+                _ => return Err(ConfigError::Invalid(format!("unknown option '{k}'"))),
+            }
         }
+        board.input = Input::new(ports);
         Ok(Self {
             cpu: Ada::new(),
-            board: Board::new(),
+            board,
             line: 0,
             cycle: 0,
             fields: 0,
@@ -471,6 +593,20 @@ impl Logophor {
         let sprites = lumiere.select_sprites(next, &chip);
         let audio = calliope.fetch_line(dma, &chip);
         self.fixed = lumiere.fetch_slots(next) + sprites + audio;
+        let dma = self.board.babbage.dma(babbage::DMA_TELEGRAPH);
+        let Board {
+            ram,
+            touched,
+            sd,
+            card,
+            ints,
+            ..
+        } = &mut self.board;
+        let (slots, done) = sd.line(dma, card, &mut ChipMut { ram, touched });
+        self.fixed += slots;
+        if done {
+            ints.raise(telegraph::INT_SD);
+        }
     }
 
     /// Slot `s` of this line belongs to the fixed DMA.
@@ -569,6 +705,19 @@ impl Logophor {
         if self.board.calliope.cycle() {
             self.board.ints.raise(telegraph::INT_CALLIOPE);
         }
+        let t = self.board.timers.cycle();
+        if t.timer {
+            self.board.ints.raise(telegraph::INT_TIMER);
+        }
+        if t.rtc {
+            self.board.ints.raise(telegraph::INT_RTC);
+        }
+        if !self.input.is_empty() {
+            let now = self.now();
+            while let Some(ev) = self.input.pop_due(now) {
+                self.apply_input(ev);
+            }
+        }
         self.cpu.set_irq_level(self.board.ints.level());
         let stall = free == 0 && self.cpu.at_boundary() && self.needs_chip();
         let r = if stall {
@@ -605,6 +754,29 @@ impl Logophor {
             }
         }
         dbg.take_stop()
+    }
+
+    /// A host event reaches Telegraph: keys as USB HID usages, the mouse
+    /// and the joystick by port.
+    fn apply_input(&mut self, ev: TimedInput) {
+        let i = &mut self.board.input;
+        let raise = match (ev.target, ev.event) {
+            (InputTarget::Keyboard, InputEvent::Key { machine_key, down }) => i
+                .key(machine_key.0 as u8, down)
+                .then_some(telegraph::INT_KEYBOARD),
+            (InputTarget::Port(p), InputEvent::MouseRel { dx, dy, buttons }) => i
+                .mouse(usize::from(p.0), dx, dy, buttons)
+                .then_some(telegraph::INT_PORTS),
+            (InputTarget::Port(p), InputEvent::Digital { dirs, buttons }) => {
+                let bits = u16::from(dirs.0 & 15) | u16::from(buttons & 7) << 4;
+                i.joystick(usize::from(p.0), bits)
+                    .then_some(telegraph::INT_PORTS)
+            }
+            _ => None,
+        };
+        if let Some(bit) = raise {
+            self.board.ints.raise(bit);
+        }
     }
 
     fn lumiere_regs(&self) -> Vec<ChipReg> {
@@ -674,6 +846,14 @@ impl Machine for Logophor {
         self.board.babbage.reset();
         self.board.calliope.reset();
         self.board.ints = Interrupts::new();
+        let ports = self.board.input.ports;
+        self.board.input = Input::new(ports);
+        self.board.sd = Sd::default();
+        self.board.sd.card(&self.board.card);
+        if kind == ResetKind::Hard {
+            let seconds = self.board.timers.seconds();
+            self.board.timers = Timers::new(seconds);
+        }
         self.fixed = 0;
         self.carry = 0;
         let brk_stops = self.cpu.brk_stops;
@@ -819,7 +999,15 @@ impl Machine for Logophor {
     }
 
     fn ports(&self) -> Vec<PortInfo> {
-        Vec::new()
+        [(0u8, "port 0"), (1, "port 1")]
+            .into_iter()
+            .map(|(id, name)| PortInfo {
+                id: PortId(id),
+                kind: PortKind::LogophorPort,
+                name,
+                connected: self.board.input.ports[usize::from(id)] != PortDev::None,
+            })
+            .collect()
     }
 
     fn connect(&mut self, port: PortId, _dev: Box<dyn PortDevice>) -> Result<(), PortError> {
@@ -831,16 +1019,28 @@ impl Machine for Logophor {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        vec![MediaSlotInfo {
-            id: SLOT_PROGRAM,
-            name: "program",
-            kind: MediaKind::Program,
-            inserted: self.program.media.is_some(),
-        }]
+        vec![
+            MediaSlotInfo {
+                id: SLOT_PROGRAM,
+                name: "program",
+                kind: MediaKind::Program,
+                inserted: self.program.media.is_some(),
+            },
+            MediaSlotInfo {
+                id: SLOT_SD,
+                name: "SD card",
+                kind: MediaKind::Disk,
+                inserted: self.board.card.media.is_some(),
+            },
+        ]
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
-        (slot == SLOT_PROGRAM).then_some(&mut self.program as &mut dyn MediaSlot)
+        match slot {
+            SLOT_PROGRAM => Some(&mut self.program as &mut dyn MediaSlot),
+            SLOT_SD => Some(&mut self.board as &mut dyn MediaSlot),
+            _ => None,
+        }
     }
 
     fn save_state(&self) -> Vec<u8> {
@@ -868,6 +1068,11 @@ impl Machine for Logophor {
         self.board.babbage.save(&mut w);
         self.board.ints.save(&mut w);
         w.chunk(*b"CALL", 1, |w| self.board.calliope.save(w));
+        w.chunk(*b"TGIO", 1, |w| {
+            self.board.timers.save(w);
+            self.board.input.save(w);
+            self.board.sd.save(w);
+        });
         self.input.save(&mut w);
         w.into_bytes()
     }
@@ -911,6 +1116,17 @@ impl Machine for Logophor {
             let (_, mut c) = r.chunk(*b"CALL", 1)?;
             calliope.load(&mut c)?;
         }
+        let (mut timers, mut tinput, mut sd) = (
+            self.board.timers.clone(),
+            self.board.input.clone(),
+            self.board.sd.clone(),
+        );
+        {
+            let (_, mut c) = r.chunk(*b"TGIO", 1)?;
+            timers.load(&mut c)?;
+            tinput.load(&mut c)?;
+            sd.load(&mut c)?;
+        }
         let mut input = self.input.clone();
         input.load(&mut r)?;
         self.board.ram = ram;
@@ -920,6 +1136,9 @@ impl Machine for Logophor {
         self.board.babbage = babbage;
         self.board.ints = ints;
         self.board.calliope = calliope;
+        self.board.timers = timers;
+        self.board.input = tinput;
+        self.board.sd = sd;
         self.fixed = fixed;
         self.carry = carry;
         self.cpu = cpu;

@@ -1238,6 +1238,11 @@ table(["Schlüssel", "Maschine", "Werte"], [
      "`1k` … `64k`; `9600`; `card|console`; `off`; `a|b` (Monitor-ROM); `HEX`"],
     ["`port1`, `port2`", "Vectrex", "`controller`, `lightpen`, `imager`; `eye`, "
      "`lines=fine|soft`"],
+    ["`rtc`, `port0`, `port1`", "Logophor 16", "Sekunden seit 2000-01-01 (Start der "
+     "Uhr; Vorgabe 2026-01-01); `mouse|joystick|none` (Vorgabe: Maus an Port 0, "
+     "Joystick an Port 1). Die SD-Karte ist ein FAT32-Image per `--disk` "
+     "(`ada-asm sd card.img --boot prog.bin`); Foundry startet davon "
+     "`BOOT/BOILER.BIN`, eine Taste während des Startbilds öffnet den Monitor"],
 ], [0.26, 0.18, 0.56])
 h2("Tastenfelder und Proportionalmäuse an den Commodore-Ports")
 p("""Neben Joystick, Paddles und der Maus 1351 nehmen die
