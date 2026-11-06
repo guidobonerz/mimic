@@ -11,11 +11,13 @@
 //! ada-asm link a.ao b.ao -o prog.bin [--base …] [--listing …]
 //! ada-asm run prog.bin [--load 0040:0000] [--entry seg:off] [--cycles N]
 //! ada-asm sd card.img [--size MIB] [--boot prog.bin] [--add CARD/PATH=host-file …]
+//! ada-asm hub [--port 6516]
 //! ```
 #![forbid(unsafe_code)]
 
 pub mod asm;
 pub mod expr;
+pub mod hub;
 pub mod link;
 pub mod object;
 pub mod run;

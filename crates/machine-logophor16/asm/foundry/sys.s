@@ -13,12 +13,23 @@ SDCOUNT  = $4268
 SDSEG    = $426a
 SDOFS    = $426c
 AUDMASTER = $3100
+NETCON   = $4000                ; network (SPEC.md 10.1)
+TXRSEG   = $4008
+TXROFS   = $400a
+RXRSEG   = $400c
+RXROFS   = $400e
+TXTAIL   = $4010
+TXHEAD   = $4012
+RXHEAD   = $4014
+RXTAIL   = $4016
+NETSTAT  = $4018
 
 ; ---- memory ----
 SYS_SEG  = $003e                ; system variables (below the stack)
 SDBUF_SEG = $001a               ; SD buffer: a cluster (up to 64 KiB)
 LOGO_SEG = $001b                ; start picture, 320 x 240 (76 800 bytes)
 FATBUF_SEG = $001d              ; one FAT sector
+NETBUF_SEG = $001e              ; network rings and buffers (net.s)
 PROG_SEG = $0040                ; programs load and start at 0040:0000
 ROM_SEG  = $fffb
 DATA_SEG = $fffc                ; ROM data: zeppelin and music
@@ -49,6 +60,8 @@ SV_SIZE  = $54
 SV_DSEG  = $58                  ; where the next loaded word goes
 SV_DOFS  = $5a
 SV_NAME  = $5c                  ; the 11-byte name sought (ROM offset)
+SV_TXI   = $60                  ; network: next transmit descriptor
+SV_RXI   = $62                  ; next receive descriptor
 SV_LINE  = $100                 ; the monitor's input line (100 bytes)
 
 ; R = system variable (S3 = SYS_SEG afterwards). Uses R9.

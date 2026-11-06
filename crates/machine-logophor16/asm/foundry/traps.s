@@ -9,6 +9,10 @@
 ;   5  read R3 SD blocks from block R1:R2 (high, low) into chip RAM
 ;      R4:0000; R1 = 0 or an error
 ;   6  write R3 SD blocks likewise
+;   7  network on (net.s): R1 = NETSTAT, bit 0 link up
+;   8  send the frame at S1:R1, R2 bytes: R1 = 0 or 1 (error)
+;   9  a received frame to S1:R1 (1536 bytes room): R1 = its length or 0,
+;      R2 = its flags
 ; Other numbers return R1 = $FFFF.
 
 trap_entry:
@@ -67,8 +71,23 @@ trap_entry:
         bra     .out
 .write:
         cmpi    r10, #6
+        bne     .open
+        call    sd_write
+        bra     .out
+.open:
+        cmpi    r10, #7
+        bne     .send
+        call    net_open
+        bra     .out
+.send:
+        cmpi    r10, #8
+        bne     .recv
+        call    net_send
+        bra     .out
+.recv:
+        cmpi    r10, #9
         bne     .unknown
-        call      sd_write
+        call    net_recv
         bra     .out
 .unknown:
         li      r1, #$ffff

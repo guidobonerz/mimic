@@ -1204,6 +1204,7 @@ dependencies = [
 name = "emu-tests"
 version = "0.1.0"
 dependencies = [
+ "asm-ada",
  "chips-cbm",
  "cpu-m68k",
  "devices-cartridge",
@@ -1222,6 +1223,7 @@ dependencies = [
  "machine-c64",
  "machine-cpc",
  "machine-imsai",
+ "machine-logophor16",
  "machine-mac",
  "machine-pet",
  "machine-spectrum",

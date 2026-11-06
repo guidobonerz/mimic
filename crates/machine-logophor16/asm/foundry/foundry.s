@@ -1720,16 +1720,16 @@ cop_split:                      ; WAIT 299, 820 (its blank), 5 MOVEs
 cop_tail:                       ; line 0's colour, set in line 599's blank
         .word   $2000|599, 820, (PALETTE+2)>>1, $0018
 hex:    .ascii  "0123456789ABCDEF"
-hello:  .asciz  "Foundry (step 9): boot\n"
+hello:  .asciz  "Foundry (step 10): boot\n"
 title:  .asciz  "LOGOPHOR 16"
-line2:  .asciz  "Foundry ROM - step 9: framebuffer, text, Copper, Blitter, sprites, 3D, sound, boot"
+line2:  .asciz  "Foundry ROM - step 10: framebuffer, text, Copper, Blitter, sprites, 3D, sound, boot, network"
 line3:  .asciz  "Ada 16-bit RISC at 12 MHz - 4 MiB chip RAM - 28 MiB fast RAM - Lumiere 800 x 600"
 charset_label: .asciz "Character set:"
 colour_label:  .asciz "Text colours (foreground on background):"
 blink_text:    .asciz "This line blinks."
 cursor_text:   .asciz "The cursor: "
 cursor_len = 12
-footer: .asciz  "mimic - Phase 31, step 9"
+footer: .asciz  "mimic - Phase 31, step 10"
         .align  2
 boot_texts:
         .word   boot_text1, boot_text2, boot_text3, boot_text4
@@ -1743,6 +1743,7 @@ ram_error:  .asciz "Foundry: chip RAM error\n"
         .include "boot.s"
         .include "monitor.s"
         .include "traps.s"
+        .include "net.s"
         .include "keys.inc"
         .align  2
 font:

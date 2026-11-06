@@ -1,7 +1,7 @@
 //! Telegraph's I/O units (SPEC.md 10.2 and 10.3): four timers, the
 //! real-time clock, the keyboard FIFO, the two mouse/joystick ports and
 //! the SD card controller. The interrupt controller is in
-//! [`crate::telegraph`]; the network follows in step 10.
+//! [`crate::telegraph`], the network in [`crate::telegraph_net`].
 //!
 //! **[S]** (decided here, recorded in SPEC.md 10): the timers count at
 //! 1 MHz (every 12th CPU cycle); a running timer at 0 underflows on its

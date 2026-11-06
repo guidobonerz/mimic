@@ -28,6 +28,8 @@ machine-imsai.workspace = true
 machine-archimedes.workspace = true
 
 [dev-dependencies]
+machine-logophor16.workspace = true
+asm-ada.workspace = true
 emu-debug.workspace = true
 devices-net.workspace = true
 emu-preview.workspace = true

@@ -14,7 +14,10 @@ const USAGE: &str = "usage:
   ada-asm run PROGRAM.bin [--load SEG:OFF] [--entry SEG:OFF] [--cycles N]
   ada-asm sd CARD.img [--size MIB] [--boot PROGRAM.bin] [--add CARD/PATH=HOSTFILE …]
       (a FAT32 SD card for the Logophor 16; --boot puts the program at
-       BOOT/BOILER.BIN, which Foundry loads at 0040:0000 and starts)";
+       BOOT/BOILER.BIN, which Foundry loads at 0040:0000 and starts)
+  ada-asm hub [--port PORT]
+      (the Logophor 16s' network: machines started with
+       --option net=HOST:PORT meet here; default port 6516)";
 
 struct Args {
     inputs: Vec<String>,
@@ -26,9 +29,10 @@ struct Args {
     cycles: u64,
     size: u32,
     add: Vec<(String, String)>,
+    port: u16,
 }
 
-fn parse(args: &[String]) -> Result<Args, String> {
+fn parse(args: &[String], hub: bool) -> Result<Args, String> {
     let mut a = Args {
         inputs: Vec::new(),
         out: None,
@@ -39,6 +43,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         cycles: 120_000_000,
         size: 64,
         add: Vec::new(),
+        port: asm_ada::hub::DEFAULT_PORT,
     };
     let mut it = args.iter();
     while let Some(x) = it.next() {
@@ -54,6 +59,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--load" => a.load = parse_seg_off(&value()?)?,
             "--entry" => a.entry = Some(parse_seg_off(&value()?)?),
             "--cycles" => a.cycles = value()?.parse().map_err(|_| "--cycles N".to_string())?,
+            "--port" => a.port = value()?.parse().map_err(|_| "--port PORT".to_string())?,
             "--size" => a.size = value()?.parse().map_err(|_| "--size MIB".to_string())?,
             "--boot" => a.add.push(("BOOT/BOILER.BIN".into(), value()?)),
             "--add" => {
@@ -65,7 +71,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             _ => a.inputs.push(x.clone()),
         }
     }
-    if a.inputs.is_empty() {
+    if a.inputs.is_empty() && !hub {
         return Err("no input file".into());
     }
     Ok(a)
@@ -124,7 +130,7 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    let a = match parse(rest) {
+    let a = match parse(rest, cmd == "hub") {
         Ok(a) => a,
         Err(e) => {
             eprintln!("{e}\n{USAGE}");
@@ -166,6 +172,21 @@ fn main() -> ExitCode {
                     )]),
                 }
             })
+        }
+        "hub" => {
+            let addr = format!("0.0.0.0:{}", a.port);
+            match std::net::UdpSocket::bind(&addr) {
+                Ok(socket) => {
+                    println!(
+                        "Logophor 16 network hub on UDP port {} (Ctrl+C ends it)",
+                        a.port
+                    );
+                    let stop = std::sync::atomic::AtomicBool::new(false);
+                    asm_ada::hub::run(&socket, &stop, &mut |line| println!("{line}"))
+                        .map_err(|e| vec![format!("hub: {e}")])
+                }
+                Err(e) => Err(vec![format!("{addr}: {e}")]),
+            }
         }
         "sd" => {
             let mut files = Vec::new();

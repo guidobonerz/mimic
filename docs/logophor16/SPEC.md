@@ -713,6 +713,40 @@ error. Frames are Ethernet-like (destination MAC, source MAC, type,
 payload); the hardware appends and checks the CRC-32. Emulator: frames go
 through a UDP tunnel between emulator instances (later a TAP device).
 
+Behaviour **[S]** (step 10; owner's choices: a hub program, the chat as a
+program on the card):
+
+- The hardware works by the descriptors' OWN bits. Writing TXTAIL sends
+  the descriptors from TXHEAD up to TXTAIL that the hardware owns
+  (stopping at one the CPU owns): a frame of 14–1536 bytes gets its FCS
+  (IEEE 802.3 CRC-32, low byte first) and goes on the wire; the
+  descriptor's flags become 0 (sent) or bit 0 (a bad length or buffer),
+  TXHEAD moves on, NETIRQ bit 1. Needs NETCON bit 1.
+- A received frame (NETCON bit 0) passes the filter when it is for this
+  MAC, a broadcast or multicast (bit 0 of its first byte), or with NETCON
+  bit 2 always. It goes into the descriptor at RXHEAD if the hardware
+  owns it (the CPU gives it a buffer and its size in the length field):
+  length = the frame's bytes without the FCS, flags 0, bit 0 when cut to
+  the buffer, bit 1 for a wrong FCS (the frame is still delivered);
+  RXHEAD moves on, NETIRQ bit 0. No descriptor to take it: the frame is
+  dropped, NETIRQ bit 2. RXTAIL is the CPU's bookkeeping only.
+- A frame moves at once; its DMA slots (a slot for 4 bytes) are charged
+  to the following lines' fixed DMA, 8 a line together with the SD card
+  (the card first). DMACON bit 3.
+- NETIRQ bits stay until written with 1; the network interrupt
+  (Telegraph source 7) is raised when a bit NETIRQEN enables is set.
+  NETSTAT bit 0 is the tunnel's state; a change sets NETIRQ bit 3.
+- The MAC after power-on comes from the machine option `mac` (default
+  02:4C:31:36:00:01, locally administered); software may change it.
+- Tunnel: `--option net=HOST:PORT` names a hub (`ada-asm hub`, default
+  port 6516). Each frame is one UDP datagram `LGN1`, 0, frame, FCS; a
+  hello (`LGN1`, 1) goes out every 2 seconds so the hub knows the
+  machine. The hub sends each frame on to every other machine it heard
+  from in the last 30 seconds (an Ethernet hub; no echo to the sender).
+  The machine looks at the socket every 16 lines through mimic's host
+  network services, which a recording journals (deterministic replay);
+  without them (the web frontend, `--net off`) the link stays down.
+
 ### 10.2 Timers and real-time clock (FFFF:4200)
 
 | Offset | Name | Meaning |
@@ -864,6 +898,9 @@ R1; R5–R12 and S0–S3 are kept. A TRAP runs with IPL 7.
 | 4 | put the zero-terminated string at S1:R1 on the console |
 | 5 | read R3 SD blocks from block R1:R2 (high, low) into chip RAM R4:0000; R1 = 0 or an error |
 | 6 | write R3 SD blocks likewise |
+| 7 | network on: the rings and buffers at 001E:0000, transmit and receive on; R1 = NETSTAT |
+| 8 | send the frame at S1:R1, R2 bytes (14–1536), and wait until it is out; R1 = 0 or 1 (error) |
+| 9 | a received frame to S1:R1 (room for 1536 bytes): R1 = its length or 0, R2 = its descriptor flags |
 
 Others return R1 = $FFFF. Open for step 11 (Boiler): the vector table is
 fixed in the ROM, so a loaded program cannot yet install its own
@@ -980,3 +1017,7 @@ Decisions of this document:
 47. Boot from a FAT32 SD card: `BOOT/BOILER.BIN` to 0040:0000; without one the demonstration; the start picture is the owner's emblem; a key during it enters the monitor (owner's choices, step 9).
 48. ROM services TRAP #0–6 as in section 11; the vector table stays in the ROM until step 11 (step 9).
 49. ROM data in segments FFFC (3D, music) and FFFD (start picture) (step 9).
+50. The network's emulator side is a hub program (`ada-asm hub`, UDP, default port 6516) that relays frames between machines; `--option net=HOST:PORT` (owner's choice, step 10).
+51. Network behaviour as in section 10.1: OWN bits drive the rings, frames move at once, their DMA slots are charged after the SD card's, a wrong FCS is delivered with flag bit 1 (step 10).
+52. Default MAC 02:4C:31:36:00:01, option `mac` (step 10).
+53. ROM services TRAP #7–9 for the network; the chat is a program on the card (`asm/examples/chat.s`) (owner's choice, step 10).

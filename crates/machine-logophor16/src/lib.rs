@@ -33,9 +33,11 @@ use chips_logophor::calliope::{self, Calliope};
 use chips_logophor::lumiere::{self, Beam, ChipRam, Lumiere};
 use chips_logophor::telegraph::{self, Interrupts};
 use chips_logophor::telegraph_io::{Input, PortDev, Sd, SdCard, Timers};
+use chips_logophor::telegraph_net::{self, Net};
 use cpu_ada::Ada;
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
 use emu_core::hooked::HookedBus;
+use emu_core::host::{self as host, ConnState, HostServices, NetHandle, Recv, SocketKind};
 use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
 use emu_core::machine::{ChipReg, DebugTarget};
 use emu_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
@@ -57,6 +59,14 @@ const SLOT_SD: SlotId = SlotId(1);
 /// The clock's start without an `rtc` option: 2026-01-01 00:00 UTC in
 /// seconds since 2000-01-01.
 pub const RTC_DEFAULT: u32 = 820_454_400;
+/// The network's MAC without a `mac` option (locally administered).
+pub const MAC_DEFAULT: [u8; 6] = [0x02, 0x4c, 0x31, 0x36, 0x00, 0x01];
+/// Lines between two looks at the tunnel, fields between two hellos.
+const TUNNEL_LINES: u16 = 16;
+const HELLO_FIELDS: u64 = 120;
+/// A tunnel datagram: this tag, then 0 and a frame with its FCS, or 1
+/// (hello: the hub learns where this machine is).
+pub const TUNNEL_MAGIC: &[u8; 4] = b"LGN1";
 
 /// CPU cycles a line, lines a field, visible lines (SPEC.md 2).
 pub const LINE_CYCLES: u16 = 318;
@@ -119,6 +129,7 @@ pub struct Board {
     pub input: Input,
     pub sd: Sd,
     card: SdSlot,
+    pub net: Net,
     /// Debug console output (the last [`CONSOLE_KEEP`] bytes).
     pub console: Vec<u8>,
     /// Last value written to DBGEXIT.
@@ -253,6 +264,7 @@ impl Board {
             input: Input::new([PortDev::Mouse, PortDev::Joystick]),
             sd: Sd::default(),
             card: SdSlot::default(),
+            net: Net::new(MAC_DEFAULT),
             console: Vec::new(),
             exit: None,
             beam: Beam::default(),
@@ -275,6 +287,7 @@ impl Board {
             0x0000..=0x07ff => self.babbage.peek(off),
             0x0800..=0x11ff | 0x2000..=0x27ff => self.lumiere.peek(off, self.beam),
             0x3000..=0x31ff => self.calliope.peek(off),
+            0x4000..=0x401f => self.net.peek(off),
             0x4200..=0x422f => self.timers.peek(off),
             0x4240..=0x425f => self.input.peek(off),
             0x4260..=0x427f => self.sd.peek(off),
@@ -330,6 +343,15 @@ impl Board {
                 lumiere.write(off, v);
             }
             0x3000..=0x31ff => self.calliope.write(off, v),
+            0x4000..=0x401f => {
+                let Board {
+                    ram, touched, net, ..
+                } = self;
+                net.write(off, v, &mut ChipMut { ram, touched });
+                if net.irq() {
+                    self.ints.raise(telegraph::INT_NETWORK);
+                }
+            }
             0x4200..=0x422f => self.timers.write(off, v),
             0x4260..=0x427f => {
                 if self.sd.write(off, v) {
@@ -464,6 +486,21 @@ pub struct Logophor {
     carry: u16,
     input: InputQueue,
     program: ProgramSlot,
+    tunnel: Tunnel,
+}
+
+/// The network tunnel: a connected UDP socket to a hub (`ada-asm hub`)
+/// through the host's network services (SPEC.md 10.1). Not machine state:
+/// after a savestate load it reconnects.
+#[derive(Default)]
+struct Tunnel {
+    /// `net=HOST:PORT`.
+    peer: Option<(String, u16)>,
+    host: HostServices,
+    socket: Option<NetHandle>,
+    /// Field of the last hello and of the last connect try.
+    hello: Option<u64>,
+    tried: Option<u64>,
 }
 
 impl Logophor {
@@ -475,6 +512,7 @@ impl Logophor {
         // the ROM is built in.
         let mut board = Board::new();
         let mut ports = [PortDev::Mouse, PortDev::Joystick];
+        let mut peer = None;
         for (k, v) in &config.options {
             match k.as_str() {
                 "roms" => {}
@@ -483,6 +521,25 @@ impl Logophor {
                         ConfigError::Invalid(format!("rtc={v}: seconds since 2000-01-01"))
                     })?;
                     board.timers = Timers::new(s);
+                }
+                "net" => {
+                    let bad = || ConfigError::Invalid(format!("net={v}: HOST:PORT of a hub"));
+                    let (h, p) = v.rsplit_once(':').ok_or_else(bad)?;
+                    let p = p.parse::<u16>().map_err(|_| bad())?;
+                    if h.is_empty() {
+                        return Err(bad());
+                    }
+                    peer = Some((h.to_string(), p));
+                }
+                "mac" => {
+                    let bytes: Vec<u8> = v
+                        .split([':', '-'])
+                        .filter_map(|b| u8::from_str_radix(b, 16).ok())
+                        .collect();
+                    let mac: [u8; 6] = bytes.try_into().map_err(|_| {
+                        ConfigError::Invalid(format!("mac={v}: six hex bytes, 02:4c:31:36:00:01"))
+                    })?;
+                    board.net = Net::new(mac);
                 }
                 "port0" | "port1" => {
                     ports[usize::from(k == "port1")] = match v.as_str() {
@@ -511,6 +568,10 @@ impl Logophor {
             carry: 0,
             input: InputQueue::new(),
             program: ProgramSlot::default(),
+            tunnel: Tunnel {
+                peer,
+                ..Tunnel::default()
+            },
         })
     }
 
@@ -559,6 +620,9 @@ impl Logophor {
         }
         self.carry = (FIXED_START + self.fixed).saturating_sub(LINE_SLOTS);
         self.board.calliope.end_line();
+        if self.line.is_multiple_of(TUNNEL_LINES) && self.tunnel.peer.is_some() {
+            self.service_tunnel();
+        }
         self.line += 1;
         if self.line == VISIBLE_LINES {
             self.board.lumiere.vblank();
@@ -606,6 +670,9 @@ impl Logophor {
         self.fixed += slots;
         if done {
             ints.raise(telegraph::INT_SD);
+        }
+        if dma {
+            self.fixed += self.board.net.slots(slots);
         }
     }
 
@@ -756,6 +823,87 @@ impl Logophor {
         dbg.take_stop()
     }
 
+    /// The tunnel: connect, keep the hub informed, send what the network
+    /// unit sent, hand it what came in.
+    fn service_tunnel(&mut self) {
+        let Some(net) = self.tunnel.host.net.clone() else {
+            self.set_link(false);
+            return;
+        };
+        let mut backend = host::lock(&net);
+        let field = self.fields;
+        if self.tunnel.socket.is_none() {
+            // A new try every 2 s.
+            if self.tunnel.tried.is_some_and(|t| field < t + HELLO_FIELDS) {
+                return;
+            }
+            self.tunnel.tried = Some(field);
+            let (h, p) = self.tunnel.peer.clone().unwrap_or_default();
+            self.tunnel.socket = backend.connect(SocketKind::Udp, &h, p).ok();
+            self.tunnel.hello = None;
+        }
+        let Some(s) = self.tunnel.socket else {
+            drop(backend);
+            self.set_link(false);
+            return;
+        };
+        let up = match backend.state(s) {
+            Ok(ConnState::Connected) => true,
+            Ok(ConnState::Connecting) => return,
+            _ => {
+                backend.close(s);
+                self.tunnel.socket = None;
+                false
+            }
+        };
+        if up {
+            if self.tunnel.hello.is_none_or(|h| field >= h + HELLO_FIELDS) {
+                self.tunnel.hello = Some(field);
+                let mut hello = TUNNEL_MAGIC.to_vec();
+                hello.push(1);
+                let _ = backend.send(s, &hello);
+            }
+            for frame in std::mem::take(&mut self.board.net.outbox) {
+                let mut d = TUNNEL_MAGIC.to_vec();
+                d.push(0);
+                d.extend_from_slice(&frame);
+                let _ = backend.send(s, &d);
+            }
+            let mut buf = vec![0u8; telegraph_net::MAX_FRAME + 16];
+            for _ in 0..16 {
+                match backend.recv(s, &mut buf) {
+                    Ok(Recv::Data(n)) if n > 0 => {
+                        let d = &buf[..n];
+                        if d.len() > 5 && &d[..4] == TUNNEL_MAGIC && d[4] == 0 {
+                            let Board {
+                                ram, touched, net, ..
+                            } = &mut self.board;
+                            net.receive(&d[5..], &mut ChipMut { ram, touched });
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }
+        drop(backend);
+        self.set_link(up);
+        if self.board.net.irq() {
+            self.board.ints.raise(telegraph::INT_NETWORK);
+        }
+    }
+
+    fn set_link(&mut self, up: bool) {
+        if up != self.board.net.link() {
+            self.board.net.set_link(up);
+            if self.board.net.irq() {
+                self.board.ints.raise(telegraph::INT_NETWORK);
+            }
+        }
+        if !up {
+            self.board.net.outbox.clear();
+        }
+    }
+
     /// A host event reaches Telegraph: keys as USB HID usages, the mouse
     /// and the joystick by port.
     fn apply_input(&mut self, ev: TimedInput) {
@@ -850,6 +998,17 @@ impl Machine for Logophor {
         self.board.input = Input::new(ports);
         self.board.sd = Sd::default();
         self.board.sd.card(&self.board.card);
+        let (mac, link) = (self.board.net.mac(), self.board.net.link());
+        self.board.net = Net::new(mac);
+        self.board.net.set_link(link);
+        self.board.net.write(
+            telegraph_net::NETIRQ,
+            15,
+            &mut ChipMut {
+                ram: &mut self.board.ram,
+                touched: &mut self.board.touched,
+            },
+        );
         if kind == ResetKind::Hard {
             let seconds = self.board.timers.seconds();
             self.board.timers = Timers::new(seconds);
@@ -998,6 +1157,14 @@ impl Machine for Logophor {
         )
     }
 
+    fn attach_host(&mut self, host: HostServices) {
+        if let (Some(s), Some(net)) = (self.tunnel.socket.take(), &self.tunnel.host.net) {
+            host::lock(net).close(s);
+        }
+        self.tunnel.host = host;
+        self.tunnel.tried = None;
+    }
+
     fn ports(&self) -> Vec<PortInfo> {
         [(0u8, "port 0"), (1, "port 1")]
             .into_iter()
@@ -1068,10 +1235,11 @@ impl Machine for Logophor {
         self.board.babbage.save(&mut w);
         self.board.ints.save(&mut w);
         w.chunk(*b"CALL", 1, |w| self.board.calliope.save(w));
-        w.chunk(*b"TGIO", 1, |w| {
+        w.chunk(*b"TGIO", 2, |w| {
             self.board.timers.save(w);
             self.board.input.save(w);
             self.board.sd.save(w);
+            self.board.net.save(w);
         });
         self.input.save(&mut w);
         w.into_bytes()
@@ -1116,16 +1284,18 @@ impl Machine for Logophor {
             let (_, mut c) = r.chunk(*b"CALL", 1)?;
             calliope.load(&mut c)?;
         }
-        let (mut timers, mut tinput, mut sd) = (
+        let (mut timers, mut tinput, mut sd, mut net) = (
             self.board.timers.clone(),
             self.board.input.clone(),
             self.board.sd.clone(),
+            self.board.net.clone(),
         );
         {
-            let (_, mut c) = r.chunk(*b"TGIO", 1)?;
+            let (_, mut c) = r.chunk(*b"TGIO", 2)?;
             timers.load(&mut c)?;
             tinput.load(&mut c)?;
             sd.load(&mut c)?;
+            net.load(&mut c)?;
         }
         let mut input = self.input.clone();
         input.load(&mut r)?;
@@ -1139,6 +1309,7 @@ impl Machine for Logophor {
         self.board.timers = timers;
         self.board.input = tinput;
         self.board.sd = sd;
+        self.board.net = net;
         self.fixed = fixed;
         self.carry = carry;
         self.cpu = cpu;

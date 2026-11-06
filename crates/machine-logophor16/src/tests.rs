@@ -96,7 +96,7 @@ fn foundry_shows_its_start_picture_and_six_scenes() {
     golden(&m, "foundry-zeppelin");
     assert_eq!(
         String::from_utf8_lossy(m.console()),
-        "Foundry (step 9): boot\n"
+        "Foundry (step 10): boot\n"
     );
 }
 
@@ -1070,4 +1070,161 @@ fn telegraph_options_timers_clock_and_ports() {
     assert!(Logophor::new(&bad).is_err());
     assert_eq!(m.ports().len(), 2);
     assert_eq!(m.media_slots()[1].name, "SD card");
+}
+
+// ---- step 10: the network ----
+
+/// A hub in memory: what one machine sends reaches the others' inboxes.
+#[derive(Default)]
+struct HubState {
+    inbox: Vec<std::collections::VecDeque<Vec<u8>>>,
+}
+
+struct HubNet {
+    hub: std::sync::Arc<std::sync::Mutex<HubState>>,
+    me: usize,
+}
+
+impl emu_core::host::NetBackend for HubNet {
+    fn connect(&mut self, _: SocketKind, _: &str, _: u16) -> Result<NetHandle, host::NetError> {
+        Ok(1)
+    }
+    fn listen(&mut self, _: u16) -> Result<NetHandle, host::NetError> {
+        Err(host::NetError::Unsupported("listen".into()))
+    }
+    fn accept(&mut self, _: NetHandle) -> Result<Option<NetHandle>, host::NetError> {
+        Ok(None)
+    }
+    fn state(&mut self, _: NetHandle) -> Result<ConnState, host::NetError> {
+        Ok(ConnState::Connected)
+    }
+    fn send(&mut self, _: NetHandle, data: &[u8]) -> Result<usize, host::NetError> {
+        if data.get(4) == Some(&0) {
+            let mut hub = self.hub.lock().unwrap();
+            for (k, q) in hub.inbox.iter_mut().enumerate() {
+                if k != self.me {
+                    q.push_back(data.to_vec());
+                }
+            }
+        }
+        Ok(data.len())
+    }
+    fn recv(&mut self, _: NetHandle, buf: &mut [u8]) -> Result<Recv, host::NetError> {
+        let mut hub = self.hub.lock().unwrap();
+        Ok(Recv::Data(match hub.inbox[self.me].pop_front() {
+            Some(d) => {
+                buf[..d.len()].copy_from_slice(&d);
+                d.len()
+            }
+            None => 0,
+        }))
+    }
+    fn close(&mut self, _: NetHandle) {}
+    fn http_get(&mut self, _: &str) -> Result<host::HttpTicket, host::NetError> {
+        Err(host::NetError::Unsupported("http".into()))
+    }
+    fn http_post(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: &[u8],
+    ) -> Result<host::HttpTicket, host::NetError> {
+        Err(host::NetError::Unsupported("http".into()))
+    }
+    fn poll_http(
+        &mut self,
+        _: host::HttpTicket,
+    ) -> Option<Result<host::HttpResponse, host::NetError>> {
+        None
+    }
+    fn info(&mut self) -> Result<host::NetInfo, host::NetError> {
+        Err(host::NetError::Unsupported("info".into()))
+    }
+    fn time(&mut self) -> host::HostTime {
+        host::HostTime::default()
+    }
+}
+
+fn chat_machines() -> (Logophor, Logophor) {
+    let src = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("asm/examples/chat.s"),
+    )
+    .unwrap();
+    let img = asm_ada::sdimage::fat32(64, &[("BOOT/BOILER.BIN".into(), assemble(&src))]).unwrap();
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(HubState {
+        inbox: vec![Default::default(), Default::default()],
+    }));
+    let config = MachineConfig {
+        options: [("net".into(), "hub:6516".into())].into(),
+        ..MachineConfig::default()
+    };
+    let mut ms = (0..2).map(|me| {
+        let mut m = Logophor::new(&config).unwrap();
+        m.attach_host(HostServices::new(
+            Some(Box::new(HubNet {
+                hub: hub.clone(),
+                me,
+            })),
+            None,
+        ));
+        insert_card(&mut m, img.clone());
+        frames(&mut m, 200);
+        m
+    });
+    (ms.next().unwrap(), ms.next().unwrap())
+}
+
+fn screen(m: &Logophor) -> String {
+    (0..37).map(|r| text_row(m, r) + "\n").collect()
+}
+
+#[test]
+fn two_machines_chat_over_the_hub() {
+    let (mut a, mut b) = chat_machines();
+    assert!(a.board.net.link() && b.board.net.link(), "link up");
+    assert_eq!(text_row(&a, 0), "Logophor 16 chat over Telegraph's network");
+    type_text(&mut a, "ada\n");
+    type_text(&mut b, "bab\n");
+    type_text(&mut a, "hello from a\n");
+    frames(&mut b, 5);
+    assert!(screen(&b).contains("ada: hello from a"), "{}", screen(&b));
+    type_text(&mut b, "hi\n");
+    frames(&mut a, 5);
+    assert!(screen(&a).contains("bab: hi"), "{}", screen(&a));
+    assert!(
+        !screen(&a).contains("ada: hello"),
+        "no echo of its own frames"
+    );
+    // The chat polls: NETIRQ shows the frames, no interrupt is enabled.
+    let irq = a.board.net.peek(telegraph_net::NETIRQ);
+    assert_eq!(irq & (telegraph_net::IRQ_RX | telegraph_net::IRQ_TX), 3);
+    assert_eq!(
+        a.board.ints.peek(telegraph::INTREQ) & telegraph::INT_NETWORK,
+        0
+    );
+    golden(&b, "chat");
+}
+
+#[test]
+fn without_a_hub_the_link_stays_down() {
+    let config = MachineConfig {
+        options: [
+            ("net".into(), "localhost:6516".into()),
+            ("mac".into(), "02:00:00:00:00:2a".into()),
+        ]
+        .into(),
+        ..MachineConfig::default()
+    };
+    let mut m = Logophor::new(&config).unwrap();
+    frames(&mut m, 20);
+    assert!(!m.board.net.link(), "no host services: no network");
+    assert_eq!(m.board.net.mac(), [2, 0, 0, 0, 0, 0x2a]);
+    for bad in ["net=nohost", "net=:5", "mac=1:2:3"] {
+        let (k, v) = bad.split_once('=').unwrap();
+        let c = MachineConfig {
+            options: [(k.into(), v.into())].into(),
+            ..MachineConfig::default()
+        };
+        assert!(Logophor::new(&c).is_err(), "{bad}");
+    }
 }

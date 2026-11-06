@@ -1206,9 +1206,10 @@ table(["Key", "Machine", "Values"], [
      "`1k` … `64k`; `9600`; `card|console`; `off`; `a|b` (monitor ROM); `HEX`"],
     ["`port1`, `port2`", "Vectrex", "`controller`, `lightpen`, `imager`; `eye`, "
      "`lines=fine|soft`"],
-    ["`rtc`, `port0`, `port1`", "Logophor 16", "seconds since 2000-01-01 (the clock's "
-     "start; default 2026-01-01); `mouse|joystick|none` (defaults: mouse in port 0, "
-     "joystick in port 1). The SD card is a FAT32 image given with `--disk` "
+    ["`rtc`, `port0`, `port1`, `net`, `mac`", "Logophor 16", "seconds since 2000-01-01 "
+     "(the clock's start; default 2026-01-01); `mouse|joystick|none` (defaults: mouse in "
+     "port 0, joystick in port 1); `net=HOST:PORT` joins the network of an `ada-asm hub` "
+     "(default port 6516); `mac=02:4c:31:36:00:01`. The SD card is a FAT32 image given with `--disk` "
      "(`ada-asm sd card.img --boot prog.bin`); Foundry starts `BOOT/BOILER.BIN` "
      "from it, a key held while the start picture shows opens its monitor"],
 ], [0.26, 0.18, 0.56])
