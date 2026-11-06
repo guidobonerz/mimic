@@ -653,6 +653,37 @@ Modulation: channel n's output replaces channel n + 1's volume (bits 15–9
 of the sample) or period (the sample as period); a modulating channel is
 not heard.
 
+Behaviour **[S]** (step 8):
+
+- Writing AUDCTL bit 0 from 0 to 1 starts the channel from AUDSEG/AUDOFS
+  with AUDLEN (latched then); writing it 0 stops it. Period, volume, pan,
+  the loop and envelope registers act at once. After AUDLEN samples the
+  channel plays AUDLLEN samples from AUDLOOP, again and again; with
+  AUDLLEN = 0 it stops (AUDCTL bit 0 and AUDSTAT bit 0 clear). With bit 6
+  each such end raises the channel's interrupt (AUDIRQ bit n, AUDSTAT bit
+  1; Telegraph source 5). The last sample sounds for its full period.
+- DMA: at slot 640 every channel that plays samples, has 4 bytes free in
+  its FIFO and data left takes one slot of the fixed DMA (after Lumière)
+  and reads the aligned 32-bit word with its next bytes (only those from
+  the pointer on). Without DMACON bit 2 no channel fetches. A channel
+  whose FIFO is empty keeps its last sample and goes on when data comes
+  (it plays slower than AUDPER asks).
+- Timing: a channel takes a new sample every AUDPER ticks of 4 MHz (3 CPU
+  cycles each); the channels are advanced and mixed once per output
+  sample, every 250 CPU cycles (48 kHz).
+- Envelope (AUDCTL bit 4): a level 0–255 stepped at the end of every
+  line; attack rises by its rate to 255, decay falls to the sustain
+  level, release (gate closed) to 0. A rate counts in 1/256 of a level a
+  line (rate 1: 1.7 s for the whole range, 255: 6.8 ms); rate 0 is at
+  once. The gate's rising edge starts the attack from 0. Without bit 4 the
+  level is 255.
+- Noise (bit 5): a 17-bit LFSR (taps 17 and 14) stepped at the channel's
+  rate; its low byte is the sample. No DMA.
+- Pan 0–16 keeps the left side at full and raises the right from 0; 16–31
+  keeps the right at full and lowers the left to 0. Mix: Σ sample ×
+  AUDVOL/127 × level/255 × pan gain, × AUDMASTER/127, clipped to 16 bits.
+- A channel modulates with its new samples; channel 7 cannot modulate.
+
 ## 10. Telegraph (FFFF:4000)
 
 ### 10.1 Network (FFFF:4000)
@@ -860,3 +891,8 @@ Decisions of this document:
 36. The machine is called Logophor 16 (owner's decision 2026-11-06; formerly Cogitatron 16).
 37. System font Sweet16mono, ISO 8859-1 (owner's choice, step 7).
 38. Panorama gets a second theme, "oscilloscope": green shades and lines only (owner's request 2026-11-06, for step 11).
+39. Calliope: AUDCTL bit 0 starts (0 → 1) and stops; AUDLEN latched at the start, the other registers act at once (step 8).
+40. Calliope DMA: one aligned 32-bit word per line and channel at slot 640 when 4 FIFO bytes are free; an empty FIFO holds the last sample (step 8).
+41. Calliope envelope rates in 1/256 level a line, 0 = at once; the gate's rising edge restarts the attack from 0 (step 8).
+42. Calliope noise: 17-bit LFSR at the channel rate; pan as balance (centre = both sides full); mix summed and clipped (step 8).
+43. Foundry's VBlank interrupt (vector 12) runs the music player and acknowledges the VBlank; other level-4 sources stop there as before (step 8).

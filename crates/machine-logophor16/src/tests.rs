@@ -92,7 +92,7 @@ fn foundry_shows_its_six_scenes() {
     golden(&m, "foundry-zeppelin");
     assert_eq!(
         String::from_utf8_lossy(m.console()),
-        "Foundry (step 7): test picture, text mode, Copper, Blitter, sprites, 3D\n"
+        "Foundry (step 8): test picture, text mode, Copper, Blitter, sprites, 3D, music\n"
     );
 }
 
@@ -404,10 +404,13 @@ fn copper_irq_and_the_vblank_reach_the_cpu() {
     copper_setup(&mut m, &[0xc000, 0]);
     frames(&mut m, 2);
     assert_eq!(m.cpu.cause, 12);
-    assert_ne!(
+    // The ROM's handler (the music player) took and acknowledged it, and
+    // the program runs on.
+    assert_eq!(
         m.board.ints.peek(telegraph::INTREQ) & telegraph::INT_VBLANK,
         0
     );
+    assert_eq!(m.cpu.s[0], 0x0040);
 }
 
 #[test]
@@ -741,4 +744,105 @@ fn savestate_in_the_3d_scene_resumes_identically() {
     frames(&mut b, 20);
     assert_eq!(a.save_state(), b.save_state());
     assert_eq!(pixels(&a), pixels(&b));
+}
+
+fn calliope_program(dmacon: u16) -> String {
+    format!(
+        "
+        li r1, #$ffff
+        mts s3, r1
+        li r2, #$4282
+        li r1, #$8020
+        swx r1, (r2)          ; INTENA: Calliope
+        li r2, #$0002
+        li r1, #{dmacon}
+        swx r1, (r2)          ; DMACON
+        li r2, #$3100
+        movi r1, #127
+        swx r1, (r2)          ; AUDMASTER
+        li r2, #$3000
+        movi r1, #2
+        swx r1, (r2)          ; AUDSEG: 0002:0000
+        li r2, #$3006
+        movi r1, #4
+        swx r1, (r2)          ; AUDLENL
+        li r2, #$3008
+        li r1, #250
+        swx r1, (r2)          ; AUDPER: 16 kHz
+        li r2, #$300a
+        movi r1, #127
+        swx r1, (r2)          ; AUDVOL
+        li r2, #$300c
+        movi r1, #16
+        swx r1, (r2)          ; AUDPAN
+        li r2, #$3016
+        movi r1, #$41
+        swx r1, (r2)          ; AUDCTL: play once, interrupt
+        ei
+    idle: bra idle
+        "
+    )
+}
+
+#[test]
+fn calliope_plays_from_chip_ram_and_interrupts_at_the_end() {
+    let run = |dmacon: u16| {
+        let mut m = machine();
+        for (i, b) in [0x40u8, 0xc0, 0x20, 0x10].iter().enumerate() {
+            DebugTarget::poke(
+                &mut m,
+                CPU_SPACE,
+                0x2_0000 + i as u32,
+                Size::Byte,
+                u32::from(*b),
+            );
+        }
+        insert_program(&mut m, assemble(&calliope_program(dmacon)));
+        frames(&mut m, 2);
+        let mut out = Vec::new();
+        let format = m.audio(&mut out);
+        assert_eq!((format.sample_rate, format.channels), (48_000, 2));
+        (m, out)
+    };
+    let (m, out) = run(0xc004);
+    let left: Vec<i16> = out.iter().step_by(2).copied().collect();
+    for s in [0x4000, -0x4000, 0x2000, 0x1000] {
+        assert_eq!(
+            left.iter().filter(|x| **x == s).count(),
+            3,
+            "{s:x}: three output samples"
+        );
+    }
+    assert_eq!(m.cpu.cause, 14, "level 6 (Calliope): vector 14");
+    assert_eq!(m.board.calliope.peek(0x3102), 1, "AUDIRQ: channel 0");
+    // Without its DMA the channel gets no data.
+    let (m, out) = run(0xc000);
+    assert!(out.iter().all(|s| *s == 0));
+    assert_eq!(m.cpu.s[0], 0x0040, "no interrupt");
+}
+
+#[test]
+fn foundry_plays_music_and_resumes_it_from_a_savestate() {
+    let mut a = machine();
+    frames(&mut a, 700);
+    let mut out = Vec::new();
+    a.audio(&mut out);
+    let rms = (out.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / out.len() as f64).sqrt();
+    assert!(rms > 1000.0, "music: rms {rms}");
+    for _ in 0..3000 {
+        a.step_cycle();
+    }
+    a.audio(&mut Vec::new());
+    let state = a.save_state();
+    let mut b = machine();
+    b.load_state(&state).unwrap();
+    frames(&mut a, 30);
+    frames(&mut b, 30);
+    let (mut sa, mut sb) = (Vec::new(), Vec::new());
+    a.audio(&mut sa);
+    b.audio(&mut sb);
+    // 30 fields of 1/60.09 s: about 23 960 stereo samples.
+    assert!((47_800..=48_000).contains(&sa.len()), "{}", sa.len());
+    assert_eq!(sa, sb);
+    assert_eq!(a.save_state(), b.save_state());
 }

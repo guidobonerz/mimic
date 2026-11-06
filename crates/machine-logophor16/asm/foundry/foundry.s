@@ -1,6 +1,6 @@
 ; Foundry, the Logophor 16's ROM (256 KiB at FFFB:0000-FFFE:FFFF).
 ;
-; Step 7 build: sets the palette, copies the font to chip RAM, draws a
+; Step 8 build: sets the palette, copies the font to chip RAM, draws a
 ; mode-0 test picture and a mode-4 text screen, builds a Copper list and
 ; the Blitter scene's graphics, and shows in turn every 3 seconds: the
 ; test picture, the text screen, the Copper scene (a colour gradient line
@@ -9,13 +9,17 @@
 ; shadows), the sprite scene (256 bouncing sprites over the background,
 ; hardware-scrolled) and the 3D scene (a turning, textured brass zeppelin
 ; drawn by the Stereoscope in mode 1, 320 x 240 x 16 bits, double-
-; buffered with a Z buffer). Later steps turn this into the real Foundry (self
+; buffered with a Z buffer). Music plays all the while from the VBlank
+; interrupt (a waltz on Calliope's channels 0-3), and in the sprite scene
+; sprite 0's bounces ring a bell (channel 7) or thud (channel 6). Later
+; steps turn this into the real Foundry (self
 ; test, boot loader, monitor; SPEC.md 11).
 ;
 ; Built by the machine crate's build script with asm-ada; `font.inc` is
 ; generated there from Sweet16mono (8 x 16 font), `zeppelin.inc` and
 ; `zeppelin_data.inc` (the 3D scene's display list, mesh, texture and
-; matrices) by its `zeppelin.rs`.
+; matrices) by its `zeppelin.rs`, `music.inc` and `music_data.inc` (song,
+; waves, channel set-up) by its `music.rs`.
 
 ; ---- I/O registers (segment $FFFF, SPEC.md 6, 8.2 and 10.5) ----
 IO_SEG   = $ffff
@@ -77,6 +81,10 @@ S3DZOFS  = $020e
 S3DSTART = $0210
 S3DSTAT  = $0212
 DBGOUT   = $43f0
+INTREQ   = $4280
+INTENA   = $4282
+AUD6GATE = $30dc                ; Calliope channel 6's AUDGATE
+AUD7CTL  = $30f6                ; channel 7's AUDCTL
 
 ; ---- chip RAM layout ----
 FONT_SEG = $0001                ; font at 0001:0000 (4 KiB)
@@ -104,6 +112,7 @@ SKY      = $1146                ; RGB 5:6:5, as in zeppelin.rs
 STACK_SEG = $003f
 
         .include "zeppelin.inc"  ; ZEP_SEG ($000E), ZEP_WORDS, ZEP_MAT
+        .include "music.inc"     ; MUS_SEG ($0019), MUS_* offsets
 
 ATTR     = $1e                  ; yellow on blue
 FIELDS   = 180                  ; 3 seconds
@@ -127,9 +136,10 @@ reset:
         bra     init
 
         .org    $fffb0040
-vectors:                        ; 32 vectors (SPEC.md 3.11): all to `fault`
+vectors:                        ; 32 vectors (SPEC.md 3.11): `fault`, but
+                                ; 12 (level 4, VBlank): the music player
         .far    fault, fault, fault, fault, fault, fault, fault, fault
-        .far    fault, fault, fault, fault, fault, fault, fault, fault
+        .far    fault, fault, fault, fault, vblank_irq, fault, fault, fault
         .far    fault, fault, fault, fault, fault, fault, fault, fault
         .far    fault, fault, fault, fault, fault, fault, fault, fault
 
@@ -153,6 +163,7 @@ init:
         bl      make_shade
         bl      init_bobs
         bl      init_sprites
+        bl      init_music
         seg3    IO_SEG
         bl      draw_background
         reg     COP1SEG, COPPER_SEG
@@ -161,6 +172,8 @@ init:
         reg     FONTOFS, 0
         reg     TXTBANK, 0
         reg     BORDER, 0
+        reg     INTENA, $8001   ; VBlank interrupt: the music player
+        ei
 show:
         reg     FBSEG, PIC_SEG
         reg     FBOFS, 0
@@ -1149,6 +1162,7 @@ init_sprites:
 ; Move the 256 sprites, bouncing, and write their X and Y into the sprite
 ; table. S1 = SPR_SEG, S3 = IO_SEG. Uses R1-R8.
 move_sprites:
+        movi    r9, #0          ; sprite 0 bounced: bit 0 x, bit 1 y
         li      r6, #STATE_OFS
         li      r8, #SPRITES
         movi    r5, #0
@@ -1163,6 +1177,11 @@ move_sprites:
         cmp     r1, r7
         ble     .xok
 .xflip:
+        cmpi    r5, #0
+        bne     .xf
+        movi    r7, #1
+        or      r9, r7
+.xf:
         neg     r3, r3
         add     r1, r3
         add     r1, r3
@@ -1173,6 +1192,11 @@ move_sprites:
         cmp     r2, r7
         ble     .yok
 .yflip:
+        cmpi    r5, #0
+        bne     .yf
+        movi    r7, #2
+        or      r9, r7
+.yf:
         neg     r4, r4
         add     r2, r4
         add     r2, r4
@@ -1232,6 +1256,7 @@ sprite_scene:
         reg     VMODE, $8000
         reg     BORDER, 0
         bl      move_sprites
+        bl      bounce_sounds
         addi    r10, #1
         li      r1, #320
         cmp     r10, r1
@@ -1322,6 +1347,132 @@ zeppelin_scene:
         pop     lr
         ret
 
+; ---- music and sound effects (step 8) ----
+; Copy the music block to MUS_SEG and set Calliope's channels up from
+; `mus_setup`; Calliope's DMA on. Uses R1-R5.
+init_music:
+        seg3    MUS_SEG
+        li      r1, #mus_blob
+        movi    r2, #0
+        li      r3, #MUS_WORDS
+.copy:
+        lw      r4, 0(r1)
+        swx     r4, (r2)+
+        addi    r1, #2
+        addi    r3, #-1
+        bne     .copy
+        seg3    IO_SEG
+        li      r1, #mus_setup
+        li      r3, #MUS_SETUP_N
+.set:
+        lw      r2, 0(r1)       ; register
+        lw      r4, 2(r1)       ; value
+        swx     r4, (r2)
+        addi    r1, #4
+        addi    r3, #-1
+        bne     .set
+        reg     DMACON, $8004   ; Calliope's DMA on
+        ret
+
+; The VBlank interrupt (level 4): acknowledge it and run the player, a
+; row of the song every MUS_SPEED fields. A note sets a channel's period
+; and opens its gate anew (the envelope starts over), $FF closes it.
+; Keeps every register.
+vblank_irq:
+        push    r1
+        push    r2
+        push    r3
+        push    r4
+        push    r5
+        push    r6
+        push    r9
+        mfs     r1, s1
+        push    r1
+        mfs     r1, s3
+        push    r1
+        li      r1, #MUS_SEG
+        mts     s1, r1
+        seg3    IO_SEG
+        li      r2, #INTREQ
+        lwx     r1, (r2)
+        movi    r3, #1
+        tst     r1, r3
+        beq     .other          ; Copper or DMA error: unexpected here
+        movi    r1, #1          ; clear the VBlank request
+        swx     r1, (r2)
+        movi    r6, #0
+        lw      r1, MUS_TICK(r6)
+        addi    r1, #-1
+        bne     .wait
+        lw      r5, MUS_ROW(r6)
+        li      r9, #$3000      ; channel 0's registers
+        movi    r4, #4
+.ch:
+        lb      r1, 0(r5)
+        cmpi    r1, #0
+        beq     .next
+        mov     r2, r9
+        addi    r2, #$1c        ; AUDGATE
+        movi    r3, #0
+        swx     r3, (r2)        ; closed
+        cmpi    r1, #255
+        beq     .next           ; release
+        add     r1, r1
+        li      r3, #MUS_PER
+        add     r1, r3
+        lw      r1, 0(r1)
+        mov     r3, r9
+        addi    r3, #8          ; AUDPER
+        swx     r1, (r3)
+        movi    r3, #1
+        swx     r3, (r2)        ; open again
+.next:
+        addi    r5, #1
+        addi    r9, #$20
+        addi    r4, #-1
+        bne     .ch
+        li      r1, #MUS_SONG_END
+        cmp     r5, r1
+        bne     .keep
+        li      r5, #MUS_SONG
+.keep:
+        sw      r5, MUS_ROW(r6)
+        li      r1, #MUS_SPEED
+.wait:
+        sw      r1, MUS_TICK(r6)
+        pop     r1
+        mts     s3, r1
+        pop     r1
+        mts     s1, r1
+        pop     r9
+        pop     r6
+        pop     r5
+        pop     r4
+        pop     r3
+        pop     r2
+        pop     r1
+        rti
+.other:                         ; as `fault`: stop here
+        bra     .other
+
+; Sprite 0 bounced (R9 from move_sprites): off a side wall the bell on
+; channel 7 starts over, off the top or bottom channel 6 thuds.
+; S3 = IO_SEG. Uses R1, R2.
+bounce_sounds:
+        movi    r1, #1
+        tst     r9, r1
+        beq     .y
+        reg     AUD7CTL, 0
+        reg     AUD7CTL, 1
+.y:
+        movi    r1, #2
+        tst     r9, r1
+        beq     .done
+        reg     AUD6GATE, 0
+        reg     AUD6GATE, 1
+.done:
+        ret
+
 ; Write the zero-terminated string at R1 (ROM) to text cell R2 in
 ; attribute R3. S3 = TEXT_SEG. Uses R1, R2, R4.
 print:
@@ -1362,17 +1513,18 @@ cop_split:                      ; WAIT 299, 820 (its blank), 5 MOVEs
 cop_tail:                       ; line 0's colour, set in line 599's blank
         .word   $2000|599, 820, (PALETTE+2)>>1, $0018
 hex:    .ascii  "0123456789ABCDEF"
-hello:  .asciz  "Foundry (step 7): test picture, text mode, Copper, Blitter, sprites, 3D\n"
+hello:  .asciz  "Foundry (step 8): test picture, text mode, Copper, Blitter, sprites, 3D, music\n"
 title:  .asciz  "LOGOPHOR 16"
-line2:  .asciz  "Foundry ROM - step 7: framebuffer, text, Copper, Blitter, sprites, 3D"
+line2:  .asciz  "Foundry ROM - step 8: framebuffer, text, Copper, Blitter, sprites, 3D, sound"
 line3:  .asciz  "Ada 16-bit RISC at 12 MHz - 4 MiB chip RAM - 28 MiB fast RAM - Lumiere 800 x 600"
 charset_label: .asciz "Character set:"
 colour_label:  .asciz "Text colours (foreground on background):"
 blink_text:    .asciz "This line blinks."
 cursor_text:   .asciz "The cursor: "
 cursor_len = 12
-footer: .asciz  "mimic - Phase 31, step 7"
+footer: .asciz  "mimic - Phase 31, step 8"
         .align  2
 font:
         .include "font.inc"
         .include "zeppelin_data.inc"
+        .include "music_data.inc"

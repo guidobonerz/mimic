@@ -4,9 +4,10 @@
 //! crate's `asm/foundry` sources by the build script and built in, so the
 //! machine needs no user files), shipped as a standard profile.
 //!
-//! Specification: `docs/logophor16/SPEC.md`. Built so far (steps 3 and
-//! 4 of Phase 31): the CPU, the memory map, Lumière's modes 0 and 4,
-//! Babbage's DMA control and Copper, Telegraph's interrupt controller, the
+//! Specification: `docs/logophor16/SPEC.md`. Built so far (steps 3–8
+//! of Phase 31): the CPU, the memory map, Lumière (modes 0, 1 and 4,
+//! sprites), Babbage (DMA control, Copper, Blitter, Stereoscope), Calliope
+//! (8 sample channels, stereo at 48 kHz), Telegraph's interrupt controller, the
 //! debug port (FFFF:43F0: console output kept in the machine, exit code),
 //! a program slot that loads a raw binary at 0040:0000 and starts it.
 //!
@@ -28,6 +29,7 @@ mod tests;
 
 use chips_logophor::babbage::{self, Babbage, CopperAction};
 use chips_logophor::blitter::ChipRamMut;
+use chips_logophor::calliope::{self, Calliope};
 use chips_logophor::lumiere::{self, Beam, ChipRam, Lumiere};
 use chips_logophor::telegraph::{self, Interrupts};
 use cpu_ada::Ada;
@@ -71,6 +73,14 @@ const ROM_SIZE: usize = 0x4_0000;
 /// Where the program slot loads and starts a binary.
 pub const PROGRAM_LOAD: u32 = 0x0040_0000;
 
+/// Names of Calliope's channel registers in `chips()`.
+const CALLIOPE_CTL: [&str; 8] = [
+    "AUD0CTL", "AUD1CTL", "AUD2CTL", "AUD3CTL", "AUD4CTL", "AUD5CTL", "AUD6CTL", "AUD7CTL",
+];
+const CALLIOPE_PER: [&str; 8] = [
+    "AUD0PER", "AUD1PER", "AUD2PER", "AUD3PER", "AUD4PER", "AUD5PER", "AUD6PER", "AUD7PER",
+];
+
 /// Debug port (SPEC.md 10.5).
 const DBGOUT: u16 = 0x43f0;
 const DBGEXIT: u16 = 0x43f2;
@@ -98,6 +108,7 @@ pub struct Board {
     rom: Vec<u8>,
     pub lumiere: Lumiere,
     pub babbage: Babbage,
+    pub calliope: Calliope,
     pub ints: Interrupts,
     /// Debug console output (the last [`CONSOLE_KEEP`] bytes).
     pub console: Vec<u8>,
@@ -154,6 +165,7 @@ impl Board {
             rom,
             lumiere: Lumiere::new(),
             babbage: Babbage::new(),
+            calliope: Calliope::new(),
             ints: Interrupts::new(),
             console: Vec::new(),
             exit: None,
@@ -176,6 +188,7 @@ impl Board {
         match off & !1 {
             0x0000..=0x07ff => self.babbage.peek(off),
             0x0800..=0x11ff | 0x2000..=0x27ff => self.lumiere.peek(off, self.beam),
+            0x3000..=0x31ff => self.calliope.peek(off),
             telegraph::INTREQ | telegraph::INTENA => self.ints.peek(off),
             DBGID => 0xc016,
             _ => 0,
@@ -186,6 +199,7 @@ impl Board {
         match off & !1 {
             0x0000..=0x07ff => self.babbage.read(off),
             0x0800..=0x11ff | 0x2000..=0x27ff => self.lumiere.read(off, self.beam),
+            0x3000..=0x31ff => self.calliope.read(off),
             _ => self.io_peek(off),
         }
     }
@@ -223,6 +237,7 @@ impl Board {
                 lumiere.draw_to(beam.y, beam.x, &ChipView(&ram[..CHIP_END as usize]));
                 lumiere.write(off, v);
             }
+            0x3000..=0x31ff => self.calliope.write(off, v),
             telegraph::INTREQ | telegraph::INTENA => self.ints.write(off, v),
             DBGOUT => {
                 self.console.push(v as u8);
@@ -421,6 +436,7 @@ impl Logophor {
             lumiere.end_line(self.line, &ChipView(&ram[..CHIP_END as usize]));
         }
         self.carry = (FIXED_START + self.fixed).saturating_sub(LINE_SLOTS);
+        self.board.calliope.end_line();
         self.line += 1;
         if self.line == VISIBLE_LINES {
             self.board.lumiere.vblank();
@@ -444,9 +460,17 @@ impl Logophor {
         } else {
             self.line + 1
         };
-        let Board { ram, lumiere, .. } = &mut self.board;
-        let sprites = lumiere.select_sprites(next, &ChipView(&ram[..CHIP_END as usize]));
-        self.fixed = lumiere.fetch_slots(next) + sprites;
+        let dma = self.board.babbage.dma(babbage::DMA_CALLIOPE);
+        let Board {
+            ram,
+            lumiere,
+            calliope,
+            ..
+        } = &mut self.board;
+        let chip = ChipView(&ram[..CHIP_END as usize]);
+        let sprites = lumiere.select_sprites(next, &chip);
+        let audio = calliope.fetch_line(dma, &chip);
+        self.fixed = lumiere.fetch_slots(next) + sprites + audio;
     }
 
     /// Slot `s` of this line belongs to the fixed DMA.
@@ -542,6 +566,9 @@ impl Logophor {
     fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
         let beam = self.beam_pos();
         let free = self.slots();
+        if self.board.calliope.cycle() {
+            self.board.ints.raise(telegraph::INT_CALLIOPE);
+        }
         self.cpu.set_irq_level(self.board.ints.level());
         let stall = free == 0 && self.cpu.at_boundary() && self.needs_chip();
         let r = if stall {
@@ -645,6 +672,7 @@ impl Machine for Logophor {
         self.board.exit = None;
         self.board.lumiere.reset();
         self.board.babbage.reset();
+        self.board.calliope.reset();
         self.board.ints = Interrupts::new();
         self.fixed = 0;
         self.carry = 0;
@@ -672,7 +700,8 @@ impl Machine for Logophor {
         }
     }
 
-    fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+        self.board.calliope.take_output(out);
         emu_core::AudioFormat {
             sample_rate: emu_core::SAMPLE_RATE,
             channels: 2,
@@ -728,6 +757,28 @@ impl Machine for Logophor {
                     value: pc,
                     bits: 32,
                 }])
+                .collect(),
+            },
+            ChipInfo {
+                name: "calliope",
+                regs: [
+                    ("AUDMASTER", calliope::AUDMASTER),
+                    ("AUDIRQ", calliope::AUDIRQ),
+                ]
+                .into_iter()
+                .chain((0..8u16).flat_map(|n| {
+                    [
+                        (
+                            CALLIOPE_CTL[usize::from(n)],
+                            calliope::AUD0 + 0x20 * n + calliope::AUDCTL,
+                        ),
+                        (
+                            CALLIOPE_PER[usize::from(n)],
+                            calliope::AUD0 + 0x20 * n + calliope::AUDPER,
+                        ),
+                    ]
+                }))
+                .map(|(n, off)| reg(n, off, self.board.calliope.peek(off)))
                 .collect(),
             },
             ChipInfo {
@@ -816,6 +867,7 @@ impl Machine for Logophor {
         self.board.lumiere.save(&mut w);
         self.board.babbage.save(&mut w);
         self.board.ints.save(&mut w);
+        w.chunk(*b"CALL", 1, |w| self.board.calliope.save(w));
         self.input.save(&mut w);
         w.into_bytes()
     }
@@ -854,6 +906,11 @@ impl Machine for Logophor {
         babbage.load(&mut r)?;
         let mut ints = self.board.ints.clone();
         ints.load(&mut r)?;
+        let mut calliope = self.board.calliope.clone();
+        {
+            let (_, mut c) = r.chunk(*b"CALL", 1)?;
+            calliope.load(&mut c)?;
+        }
         let mut input = self.input.clone();
         input.load(&mut r)?;
         self.board.ram = ram;
@@ -862,6 +919,7 @@ impl Machine for Logophor {
         self.board.lumiere = lumiere;
         self.board.babbage = babbage;
         self.board.ints = ints;
+        self.board.calliope = calliope;
         self.fixed = fixed;
         self.carry = carry;
         self.cpu = cpu;

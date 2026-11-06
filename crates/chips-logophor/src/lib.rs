@@ -3,13 +3,15 @@
 //! Stereoscope), Lumière (video, sprites), Calliope (sound) and Telegraph
 //! (network, timers, interrupts, input, SD card).
 //!
-//! Specification: `docs/logophor16/SPEC.md` sections 5–10. Built so far: Lumière's modes 0 and
-//! 4, Babbage's DMA control, Copper and Blitter, Telegraph's interrupt controller;
-//! the rest follows in Phase 31's later steps.
+//! Specification: `docs/logophor16/SPEC.md` sections 5–10. Built so far:
+//! Lumière (modes 0, 1 and 4, sprites), Babbage (DMA control, Copper,
+//! Blitter, Stereoscope), Calliope, Telegraph's interrupt controller; the
+//! rest of Telegraph follows in Phase 31's later steps.
 #![forbid(unsafe_code)]
 
 pub mod babbage;
 pub mod blitter;
+pub mod calliope;
 pub mod lumiere;
 pub mod stereoscope;
 pub mod telegraph;

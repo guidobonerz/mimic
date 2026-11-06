@@ -8,12 +8,15 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "music.rs"]
+mod music;
 #[path = "zeppelin.rs"]
 mod zeppelin;
 
 struct Sources {
     font: String,
     zeppelin: (String, String),
+    music: (String, String),
 }
 
 impl asm_ada::Files for Sources {
@@ -22,6 +25,8 @@ impl asm_ada::Files for Sources {
             Some("font.inc") => return Ok(self.font.clone()),
             Some("zeppelin.inc") => return Ok(self.zeppelin.0.clone()),
             Some("zeppelin_data.inc") => return Ok(self.zeppelin.1.clone()),
+            Some("music.inc") => return Ok(self.music.0.clone()),
+            Some("music_data.inc") => return Ok(self.music.1.clone()),
             _ => {}
         }
         asm_ada::HostFiles.read(path)
@@ -52,9 +57,11 @@ fn main() {
     let f8 = std::fs::read(dir.join("sweet16mono.f8")).expect("asm/foundry/sweet16mono.f8");
     assert!(f8.len() >= 256 * 16, "sweet16mono.f8: 256 characters");
     println!("cargo:rerun-if-changed=zeppelin.rs");
+    println!("cargo:rerun-if-changed=music.rs");
     let files = Sources {
         font: font(&f8),
         zeppelin: zeppelin::includes(),
+        music: music::includes(),
     };
     let obj = asm_ada::assemble(&main.display().to_string(), &src, &files)
         .unwrap_or_else(|e| panic!("Foundry ROM:\n{}", e.join("\n")));
