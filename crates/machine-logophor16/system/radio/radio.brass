@@ -39,7 +39,16 @@ const (
 	rowH     = 20
 	listY    = 28
 	maxSt    = 12
-	winW     = 520
+	winW     = 280 // the list's part of the window
+	// the round screen on the right (system/radio/scope.png, RADIO/SCOPE.RAW
+	// on the card): its place, the screen's middle and the figure's radius
+	scopeX  = winW + 4
+	scopeY  = listY + (maxSt*rowH-188)/2
+	scopeCX = 120
+	scopeCY = 89
+	scopeR  = 64          // half the trace's width
+	scopeA  = 40          // its largest swing
+	phscope = io + 0x3240 // the Phonograph's scope window: 64 pairs
 )
 
 func poke16(a uintptr, v uint16) { *(*uint16)(a) = v }
@@ -98,11 +107,14 @@ type radio struct {
 	status  string
 	vol     int
 	last    uint32 // when the meters were drawn
+	// the screen's picture (nil: none on the card)
+	scope   *gfx.Surface
+	lastFig uint32
 }
 
 func run() {
 	boiler.SetName("Radio")
-	w := panorama.NewWindow(&app, "Radio", winW, listY+maxSt*rowH+110)
+	w := panorama.NewWindow(&app, "Radio", winW+240+8, listY+maxSt*rowH+90)
 	if w == nil {
 		return
 	}
@@ -112,6 +124,7 @@ func run() {
 		return
 	}
 	r := &radio{w: w, ring: ring, playing: -1, vol: 100, status: "click a station"}
+	r.scope = loadScope()
 	r.load()
 	r.paint()
 	var e panorama.Event
@@ -127,6 +140,9 @@ func run() {
 			case panorama.Close:
 				r.stop()
 				ring.Free()
+				if r.scope != nil {
+					r.scope.Free()
+				}
 				free(buf)
 				free(r.line)
 				free(r.meta)
@@ -145,6 +161,10 @@ func run() {
 		if t := boiler.Ticks(); r.playing >= 0 && t-r.last >= 10 {
 			r.last = t
 			r.meters()
+		}
+		if t := boiler.Ticks(); r.playing >= 0 && t-r.lastFig >= 4 {
+			r.lastFig = t
+			r.figure()
 		}
 	}
 }
@@ -588,7 +608,10 @@ func (r *radio) paint() {
 		s.Text(8, y+18, r.title, panorama.Ink())
 		r.info(y + 36)
 	}
-	s.Text(8, y+82, "click a station (again: stop), + - volume, S stop", gfx.Grey5)
+	s.Text(8, y+62, "+ - volume, S stop", gfx.Grey5)
+	if r.scope != nil {
+		s.DrawKey(r.scope, 0, 0, r.scope.W, r.scope.H, scopeX, scopeY)
+	}
 	w.Invalidate()
 	w.EndPaint()
 }
@@ -623,17 +646,108 @@ func (r *radio) info(y int) {
 	free(t)
 }
 
-// meters: the left and right level as bars.
+// meters: the stream's rate, channels and bit rate again.
 func (r *radio) meters() {
-	s := r.w.Surf
-	y := listY + maxSt*rowH + 8 + 58
-	full := winW - 16
-	for k := range 2 {
-		lev := int32(peek16(phlevl + uintptr(2*k)))
-		n := int(lev * int32(full) / 32768)
-		s.Fill(8, y+k*10, full, 6, gfx.Grey2)
-		s.Fill(8, y+k*10, n, 6, panorama.Accent())
-	}
 	r.info(listY + maxSt*rowH + 8 + 36)
-	r.w.InvalidateRect(8, y-22, full, 40)
+	r.w.InvalidateRect(8, listY+maxSt*rowH+8+36, winW-16, 16)
+}
+
+// loadScope reads the round screen's picture from the card: width and
+// height (16 bits each, little-endian), then a byte a pixel (0: the
+// window shows through).
+func loadScope() *gfx.Surface {
+	f := files.Open("/RADIO/SCOPE.RAW")
+	if f == nil {
+		return nil
+	}
+	var head [4]byte
+	if f.Read(head[:]) < 4 {
+		f.Close()
+		return nil
+	}
+	w, h := int(head[0])|int(head[1])<<8, int(head[2])|int(head[3])<<8
+	s := gfx.NewSurface(w, h)
+	if s == nil {
+		f.Close()
+		return nil
+	}
+	row := make([]byte, w)
+	for y := 0; y < h; y++ {
+		got := 0
+		for got < w {
+			k := f.Read(row[got:])
+			if k == 0 {
+				break
+			}
+			got += k
+		}
+		gfx.Put(s.Base+uintptr(y)*uintptr(w), row[:got])
+	}
+	free(row)
+	f.Close()
+	return s
+}
+
+// figure draws the sound as a horizontal line through the round screen
+// that swings with the music: the Phonograph's scope window (PHSCOPE,
+// the last 5.3 ms), both sides mixed, 64 points 2 pixels apart, joined.
+// The swing grows with the loudness up to scopeA pixels (quiet music: a
+// gentle wave, silence: a straight line).
+func (r *radio) figure() {
+	if r.scope == nil {
+		return
+	}
+	s := r.w.Surf
+	cx, cy := scopeX+scopeCX, scopeY+scopeCY
+	h := scopeA + 1
+	s.Draw(r.scope, scopeCX-scopeR, scopeCY-h, 2*scopeR+1, 2*h+1, cx-scopeR, cy-h)
+	var v [64]int
+	peak := 64 // a quarter of full scale fills the swing; less stays smaller
+	for k := 0; k < 64; k++ {
+		w := peek16(phscope + uintptr(2*k))
+		v[k] = (int(int8(w>>8)) + int(int8(w))) / 2
+		peak = max(peak, abs(v[k]))
+	}
+	ink := byte(gfx.Cube + 1*36 + 5*6 + 2)
+	x0, y0 := cx-scopeR, cy-v[0]*scopeA/peak
+	for k := 1; k < 64; k++ {
+		x, y := cx-scopeR+2*k+1, cy-v[k]*scopeA/peak
+		plotLine(s, x0, y0, x, y, ink)
+		x0, y0 = x, y
+	}
+	r.w.InvalidateRect(cx-scopeR, cy-h, 2*scopeR+1, 2*h+1)
+}
+
+// plotLine draws a line pixel by pixel through the CPU (Bresenham),
+// walking the address (the figure's square lies inside the window, so no
+// clipping): far cheaper than a Lithograph job or a Plot call a pixel.
+func plotLine(s *gfx.Surface, x0, y0, x1, y1 int, c byte) {
+	dx, dy := abs(x1-x0), -abs(y1-y0)
+	ax, ay := uintptr(1), uintptr(s.Pitch)
+	if x0 > x1 {
+		ax = -ax
+	}
+	if y0 > y1 {
+		ay = -ay
+	}
+	a := s.Base + uintptr(y0)*uintptr(s.Pitch) + uintptr(x0)
+	e := dx + dy
+	for n := dx - dy; n >= 0; n-- {
+		*(*byte)(a) = c
+		if 2*e >= dy {
+			e += dy
+			a += ax
+		}
+		if 2*e <= dx {
+			e += dx
+			a += ay
+		}
+	}
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

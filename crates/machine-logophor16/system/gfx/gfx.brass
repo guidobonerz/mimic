@@ -61,6 +61,8 @@ const (
 	soft    = uintptr(0x0038_8B00)
 	edge    = uintptr(0x0038_8C00)
 	pointer = uintptr(0x0038_8a00)
+	// a 32 x 32 pointer from the skin (SetPointerImage)
+	bigPointer = uintptr(0x0038_9000)
 	font    = uintptr(0x0001_0000)
 
 	heapStart = uintptr(0x0002_0000)
@@ -340,10 +342,25 @@ func buildPointer() {
 	Pointer(ScreenW/2, ScreenH/2)
 }
 
-// Pointer moves the mouse pointer (sprite 0, 16 x 16).
+// The pointer's size code (sprite table: 1 = 16, 2 = 32 pixels).
+var pointerSize = uint16(1)
+
+// Pointer moves the mouse pointer (sprite 0; its tip at x, y).
 func Pointer(x, y int) {
-	poke16(sprites, 0x8000|1<<11|uint16(x+64))
-	poke16(sprites+2, 1<<10|uint16(y+64))
+	poke16(sprites, 0x8000|pointerSize<<11|uint16(x+64))
+	poke16(sprites+2, pointerSize<<10|uint16(y+64))
+}
+
+// SetPointerImage takes a 32 x 32 pointer (8-bit palette indices, 0
+// transparent, the tip at the top left) in place of the drawn arrow.
+func SetPointerImage(img []byte) {
+	if len(img) < 32*32 {
+		return
+	}
+	copy((*[32 * 32]byte)(bigPointer)[:], img[:32*32])
+	poke16(sprseg, seg(bigPointer))
+	poke16(sprofs, ofs(bigPointer))
+	pointerSize = 2
 }
 
 // ---- chip RAM for surfaces ----
@@ -432,6 +449,21 @@ func Flip() {
 
 func (s *Surface) addr(x, y int) uintptr {
 	return s.Base + uintptr(uint32(y)*uint32(s.Pitch)+uint32(x))
+}
+
+// Plot sets one pixel by the CPU (outside the surface: nothing).
+func (s *Surface) Plot(x, y int, c byte) {
+	if x >= 0 && y >= 0 && x < s.W && y < s.H {
+		poke8(s.addr(x, y), c)
+	}
+}
+
+// Pixel is one pixel's colour (outside the surface: 0).
+func (s *Surface) Pixel(x, y int) byte {
+	if x >= 0 && y >= 0 && x < s.W && y < s.H {
+		return peek8(s.addr(x, y))
+	}
+	return 0
 }
 
 // SetClip keeps all drawing on s inside the rectangle (NoClip: the

@@ -221,14 +221,15 @@ FONT = {  # 8x8, one byte per row
 }
 
 
-def build_main():
+def build_main(harness=False):
     a = Asm(CODE)
     # Take the machine over.
     a.move("w", IMM(0x7FFF, "w"), ABSL(CUSTOM + 0x9A))  # INTENA
     a.move("w", IMM(0x7FFF, "w"), ABSL(CUSTOM + 0x96))  # DMACON
     a.move("w", IMM(0x7FFF, "w"), ABSL(CUSTOM + 0x9C))  # INTREQ
-    a.move("b", IMM(0x7F, "b"), ABSL(CIAB_ICR))
-    a.move("b", IMM(0x7F, "b"), ABSL(CIAA_ICR))
+    if not harness:  # (tools/amiga_hwdisk.py: the OS keeps its CIA masks)
+        a.move("b", IMM(0x7F, "b"), ABSL(CIAB_ICR))
+        a.move("b", IMM(0x7F, "b"), ABSL(CIAA_ICR))
     a.lea(ABSL(CUSTOM), 6)
     # Clear the planes and the loop memory.
     a.lea(ABSL(LOOPMEM), 0)
@@ -290,7 +291,10 @@ def build_main():
     a.move("l", IMM(COP_FULL, "l"), D16(0x80, 6))
     a.move("w", IMM(0x8380, "w"), D16(0x96, 6))
     a.label("halt")
-    a.bra("halt")
+    if harness:  # back to tools/amiga_hwdisk.py's harness
+        a.rts()
+    else:
+        a.bra("halt")
 
     # measure: wait for the start of a frame, run the loop, D0 = ticks.
     a.label("measure")

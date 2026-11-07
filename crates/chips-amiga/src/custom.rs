@@ -25,7 +25,7 @@
 //! The 2 MB Agnus reports the same id as the 1 MB one (community
 //! measurements, `docs/sources.md`).
 //!
-//! **AGA Alice** (`Chipset::aga`): id $22 PAL / $32 NTSC; BPL7PT/BPL8PT
+//! **AGA Alice** (`Chipset::aga`): id $23 PAL / $33 NTSC (8374 rev 4, read from the owner's A1200 on 2026-11-07; $22/$32 are the prototype revisions); BPL7PT/BPL8PT
 //! ($F8–$FE) and BPL7DAT/BPL8DAT; FMODE ($1FC) bits 1–0 make a bitplane
 //! fetch 32 or 64 bits wide (two or four words from consecutive
 //! addresses) and bits 3–2 the sprite fetches. The fetch unit grows with
@@ -1537,8 +1537,8 @@ impl Custom {
                     (false, _, _) => 0,
                     (true, false, Standard::Pal) => 0x20,
                     (true, false, Standard::Ntsc) => 0x30,
-                    (_, true, Standard::Pal) => 0x22,
-                    (_, true, Standard::Ntsc) => 0x32,
+                    (_, true, Standard::Pal) => 0x23,
+                    (_, true, Standard::Ntsc) => 0x33,
                 };
                 let lol = u16::from(self.chipset.ecs_agnus && self.lol) << 7;
                 let (v, _, lof) = self

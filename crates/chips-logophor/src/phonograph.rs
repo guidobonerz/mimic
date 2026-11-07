@@ -51,6 +51,12 @@
 //!   free space from below half of PHSIZE to half or more.
 //! - Resampling: linear, the source position advancing by sample rate /
 //!   48 000 a sample (an exact fraction, no rounding drift).
+//! - PHSCOPE (3240-32BF): the last 64 output sample pairs before PHVOL,
+//!   left in a word's high byte, right in its low byte (each the high
+//!   byte of the 16-bit value), one every 4th output sample (12 kHz:
+//!   5.3 ms), oldest first; for an oscilloscope picture (the Radio's
+//!   Lissajous figure: left across, right up). Like the sound, not saved:
+//!   it fills again after a load.
 //! - Savestate: the registers, indices, counters and the number of
 //!   decoded samples still waiting with the resampler's phase; after
 //!   loading those samples play as silence and the decoder starts afresh,
@@ -85,6 +91,12 @@ pub const PHLEVL: u16 = 0x3218;
 pub const PHLEVR: u16 = 0x321a;
 pub const PHFRMH: u16 = 0x321c;
 pub const PHFRML: u16 = 0x321e;
+/// The scope window: 64 pairs of signed 8-bit samples of the output
+/// (left in the high byte, right in the low byte, before PHVOL), one
+/// every 4th output sample (12 kHz, 5.3 ms), the oldest first: 3240-32BF.
+pub const PHSCOPE: u16 = 0x3240;
+pub const SCOPE_SAMPLES: usize = 64;
+const SCOPE_EVERY: u8 = 4;
 
 /// PHCON bits.
 pub const CON_ON: u16 = 1 << 0;
@@ -330,6 +342,11 @@ pub struct Phonograph {
     pos: usize,
     frac: u32,
     codec: Codec,
+    /// The scope window's ring, its next slot and the output samples
+    /// until the next is kept (like the sound, not machine state).
+    scope: [[i8; 2]; SCOPE_SAMPLES],
+    scope_at: usize,
+    scope_wait: u8,
 }
 
 impl Default for Phonograph {
@@ -363,7 +380,20 @@ impl Phonograph {
             pos: 0,
             frac: 0,
             codec: Codec::default(),
+            scope: [[0; 2]; SCOPE_SAMPLES],
+            scope_at: 0,
+            scope_wait: 0,
         }
+    }
+
+    /// Keeps every 4th output sample (both sides) for the scope.
+    fn keep(&mut self, s: [i32; 2]) {
+        if self.scope_wait == 0 {
+            self.scope_wait = SCOPE_EVERY;
+            self.scope[self.scope_at] = s.map(|v| (v >> 8).clamp(-128, 127) as i8);
+            self.scope_at = (self.scope_at + 1) % SCOPE_SAMPLES;
+        }
+        self.scope_wait -= 1;
     }
 
     pub fn reset(&mut self) {
@@ -421,6 +451,11 @@ impl Phonograph {
             PHLEVR => self.level[1],
             PHFRMH => (self.frames >> 16) as u16,
             PHFRML => self.frames as u16,
+            o if (PHSCOPE..PHSCOPE + 2 * SCOPE_SAMPLES as u16).contains(&o) => {
+                let [l, r] =
+                    self.scope[(self.scope_at + usize::from(o - PHSCOPE) / 2) % SCOPE_SAMPLES];
+                u16::from(l as u8) << 8 | u16::from(r as u8)
+            }
             _ => 0,
         }
     }
@@ -585,6 +620,7 @@ impl Phonograph {
         }
         if self.pos + 1 >= self.pcm.len() || self.rate == 0 {
             self.starved = true;
+            self.keep([0, 0]);
             return [0, 0];
         }
         let (a, b) = (self.pcm[self.pos], self.pcm[self.pos + 1]);
@@ -596,6 +632,7 @@ impl Phonograph {
         for (lev, v) in self.level.iter_mut().zip(s) {
             *lev = (*lev).max(v.unsigned_abs().min(32_767) as u16);
         }
+        self.keep(s);
         self.frac += self.rate;
         while self.frac >= OUT_RATE {
             self.frac -= OUT_RATE;
@@ -772,6 +809,25 @@ mod tests {
         assert!((r - 660.0).abs() < 1.0, "right {r} Hz");
         let peak = tail.iter().map(|s| s[0].abs()).max().unwrap();
         assert!(peak > 3000, "audible: {peak}");
+        // The scope window: every 4th of the last 256 output samples, left
+        // and right, before PHVOL (the test's PHVOL is 127, which `run`
+        // divides out), the high byte.
+        let scope: Vec<[i8; 2]> = (0..SCOPE_SAMPLES as u16)
+            .map(|k| p.peek(PHSCOPE + 2 * k).to_be_bytes().map(|b| b as i8))
+            .collect();
+        let last = &out[out.len() - 4 * SCOPE_SAMPLES..];
+        let kept = |phase: usize| -> Vec<[i8; 2]> {
+            (0..SCOPE_SAMPLES)
+                .map(|k| last[4 * k + phase].map(|v| (v >> 8).clamp(-128, 127) as i8))
+                .collect()
+        };
+        assert!(
+            (0..4).any(|ph| kept(ph) == scope),
+            "the scope shows the output"
+        );
+        assert!(scope
+            .iter()
+            .any(|v| v[0].unsigned_abs() > 10 && v[1] != v[0]));
         assert_eq!(p.peek(PHSTAT) & (STAT_STARVED | STAT_BAD), 0);
         assert!(p.read(PHLEVL) > 3000);
         assert_eq!(p.read(PHLEVL), 0, "cleared on read");

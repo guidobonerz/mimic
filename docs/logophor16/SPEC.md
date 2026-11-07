@@ -733,6 +733,7 @@ chip, so the CPU only moves the stream's bytes **[S]**.
 | 3216 | PHVOL | volume 0–127 |
 | 3218/321A | PHLEVL/PHLEVR | read: peak level (0–32 767) of each side since the last read |
 | 321C/321E | PHFRMH/PHFRML | read: frames decoded since PHCON bit 0 was set (32 bits) |
+| 3240–32BF | PHSCOPE | read: the last 64 output sample pairs before PHVOL, one every 4th output sample (12 kHz, 5.3 ms), oldest first: left in the high byte, right in the low byte (each the high byte of the 16-bit value, signed); not saved in a savestate, like the sound |
 
 Behaviour **[S]**:
 
@@ -1152,7 +1153,9 @@ registers them and runs Panorama as task 1). Decisions **[S]**:
   its surfaces freed) between two passes of Panorama's loop, so drawing
   and hit tests never meet a window half gone (an application closing
   its window while Panorama drew it ended in the monitor).
-- The pointer is sprite 0 (16 x 16, 8-bit), moved every 20 ms from
+- The pointer is sprite 0 (16 x 16, 8-bit; with the skin the owner's
+  copper arrow, `system/panorama/cursor.png`, 32 x 32 at 0038:9000 after
+  the buttons in `TILE.RAW`, its tip at the top left), moved every 20 ms from
   Boiler's mouse (port 0, counters read each tick, kept inside the
   screen). Boiler keeps a button pressed since the last look as pressed
   once, so a busy desktop loses no click.
@@ -1403,3 +1406,5 @@ Decisions of this document:
 84. Application tiles from the owner's artwork in the dock (brass theme; Steamworks' too), no emblem tile, shadows as two thin lines over three fine desk greys (palette 253-255, the skin down to 21 tones); the window list changes only in Panorama's task (owner's report 2026-11-06: closing a window crashed the system).
 85. Wallpaper (a mirrored quarter of the owner's leather picture), title bars in British racing green, window buttons from the owner's artwork (owner's requests 2026-11-06); palette 251-252 for the greens, the skin down to 19 tones.
 86. Maximise: the frame grows to the screen, Resizable applications get a Resize event and SetSize their content, the others keep it in the middle (owner's choice 2026-11-06).
+87. The mouse pointer from the owner's artwork: a copper arrow, sprite 0 at 32 x 32 (owner's request 2026-11-06).
+88. The Phonograph's scope window PHSCOPE (3240-32BF: 64 stereo pairs at 12 kHz); the Radio shows them as a horizontal line swinging with the music (both sides mixed, 64 points over 128 pixels, up to 40 pixels of swing) in the owner's round screen (`system/radio/scope.png`, RADIO/SCOPE.RAW) on its right; the level bars are gone and the window is narrower (528 pixels) (owner's requests 2026-11-06).

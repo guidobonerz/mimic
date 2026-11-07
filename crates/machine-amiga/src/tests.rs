@@ -625,7 +625,7 @@ fn the_1200_has_a_68020_the_aga_chips_and_gayle() {
     assert_eq!(m.board.custom.chipset, Chipset::AGA);
     assert_eq!(m.board.mem.chip.len_bytes(), 0x20_0000);
     assert!(m.board.mem.slow.is_empty());
-    assert_eq!(m.board.custom.peek(0x004) & 0x7f00, 0x2200, "Alice");
+    assert_eq!(m.board.custom.peek(0x004) & 0x7f00, 0x2300, "Alice");
     assert_eq!(m.board.custom.peek(0x07c), 0xfff8, "Lisa");
     assert_eq!(m.board.clk, 4);
     frames(&mut m, 3);

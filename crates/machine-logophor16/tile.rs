@@ -15,6 +15,9 @@
 //! - the window buttons (owner's artwork 2026-11-06,
 //!   `system/panorama/buttons.png`: minimise, maximise, close at
 //!   18 × 18 with alpha; transparent pixels become 0, the colour key);
+//! - the mouse pointer (owner's artwork 2026-11-06,
+//!   `system/panorama/cursor.png`: a copper arrow, 32 × 32 with alpha;
+//!   transparent pixels become 0, sprite 0's transparent colour);
 //! - the dock's application tiles from the owner's artwork in
 //!   `system/panorama/icons/` (2026-11-06; kept at 192 × 192), each at
 //!   48 × 48 under its application's name;
@@ -24,7 +27,8 @@
 //! system card: 19 RGB 5:6:5 words (little-endian), the 19 entries'
 //! darker and lighter neighbours (a palette index each, for `gfx`'s
 //! shade tables), 2 304 tile bytes, 25 600 skin bytes, 196 608
-//! wallpaper bytes, 972 button bytes (54 × 18), then per
+//! wallpaper bytes, 972 button bytes (54 × 18), 1 024 pointer bytes,
+//! then per
 //! application tile its name (16 bytes, zero-padded) and 2 304 bytes.
 
 use crate::logo::{median_cut, rgb565};
@@ -44,7 +48,25 @@ pub const RACING_GREEN: [u8; 3] = [0, 66, 37];
 pub const RACING_GREEN_DARK: [u8; 3] = [0, 44, 26];
 /// The window buttons (minimise, maximise, close), side by side.
 pub const BUTTON: usize = 18;
+/// The mouse pointer (sprite 0, 32 x 32, the tip at the top left).
+pub const CURSOR: usize = 32;
 const FIRST_NEW: usize = 232;
+
+/// A w x h RGBA picture's pixels, `None` where it is transparent.
+fn rgba(png_bytes: &[u8], what: &str, w: usize, h: usize) -> Vec<Option<[u8; 3]>> {
+    let dec = png::Decoder::new(std::io::Cursor::new(png_bytes));
+    let mut r = dec.read_info().expect(what);
+    let mut buf = vec![0; r.output_buffer_size()];
+    let info = r.next_frame(&mut buf).expect(what);
+    assert_eq!(
+        (info.width as usize, info.height as usize, info.color_type),
+        (w, h, png::ColorType::Rgba),
+        "{what}: {w} x {h} RGBA"
+    );
+    buf.chunks(4)
+        .map(|p| (p[3] >= 128).then_some([p[0], p[1], p[2]]))
+        .collect()
+}
 
 /// A square picture's pixels and its side.
 fn decode(png_bytes: &[u8], what: &str) -> (Vec<[u8; 3]>, usize) {
@@ -154,14 +176,45 @@ fn nearest(p: [u8; 3], pal: &[[u8; 3]]) -> u8 {
         .unwrap_or(0)
 }
 
-/// The skin file's bytes: `png_bytes` is the panel, `icons` the
-/// applications' tiles by name.
+/// A picture for an application (RGB or RGBA, any size) in Panorama's
+/// palette `pal` (from [`tile_raw`]): width and height (16 bits each,
+/// little-endian), then a palette index a pixel (transparent ones 0, the
+/// colour key).
+pub fn picture(png_bytes: &[u8], pal: &[[u8; 3]]) -> Vec<u8> {
+    let dec = png::Decoder::new(std::io::Cursor::new(png_bytes));
+    let mut r = dec.read_info().expect("picture");
+    let mut buf = vec![0; r.output_buffer_size()];
+    let info = r.next_frame(&mut buf).expect("picture");
+    let ch = match info.color_type {
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        t => panic!("picture: colour type {t:?}"),
+    };
+    let (w, h) = (info.width as usize, info.height as usize);
+    let mut out = Vec::with_capacity(4 + w * h);
+    out.extend_from_slice(&(w as u16).to_le_bytes());
+    out.extend_from_slice(&(h as u16).to_le_bytes());
+    for p in buf[..w * h * ch].chunks(ch) {
+        // opaque pixels never 0, the colour key
+        out.push(if ch == 4 && p[3] < 128 {
+            0
+        } else {
+            1 + nearest([p[0], p[1], p[2]], &pal[1..])
+        });
+    }
+    out
+}
+
+/// The skin file's bytes and the palette it uses: `png_bytes` is the
+/// panel, `icons` the applications' tiles by name.
 pub fn tile_raw(
     png_bytes: &[u8],
     wallpaper: &[u8],
     buttons: &[u8],
+    cursor: &[u8],
     icons: &[(String, Vec<u8>)],
-) -> Vec<u8> {
+) -> (Vec<u8>, Vec<[u8; 3]>) {
+    let cursor = rgba(cursor, "cursor.png", CURSOR, CURSOR);
     let buttons = {
         let dec = png::Decoder::new(std::io::Cursor::new(buttons));
         let mut r = dec.read_info().expect("buttons.png");
@@ -236,11 +289,16 @@ pub fn tile_raw(
             .iter()
             .map(|p| p.map_or(0, |p| 1 + nearest(p, &pal[1..]))),
     );
+    out.extend(
+        cursor
+            .iter()
+            .map(|p| p.map_or(0, |p| 1 + nearest(p, &pal[1..]))),
+    );
     for (name, px) in icons {
         let mut n = [0u8; NAME];
         n[..name.len()].copy_from_slice(name.as_bytes());
         out.extend_from_slice(&n);
         out.extend(px.iter().map(|p| nearest(*p, &pal)));
     }
-    out
+    (out, pal)
 }

@@ -634,7 +634,7 @@ fn setup_aga() -> (Custom, ChipRam) {
 #[test]
 fn aga_ids_and_eight_planes_with_wide_fetches() {
     let (mut c, mut chip) = setup_aga();
-    assert_eq!(c.peek(reg::VPOSR) & 0x7f00, 0x2200, "Alice");
+    assert_eq!(c.peek(reg::VPOSR) & 0x7f00, 0x2300, "Alice");
     assert_eq!(c.peek(reg::DENISEID), 0xfff8, "Lisa");
     // Eight planes, 64-bit fetches: plane n at $10000 + n·$1000, the first
     // row's first 64 pixels set in planes 1 and 8 only; the colour of

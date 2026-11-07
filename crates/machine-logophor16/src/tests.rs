@@ -1621,6 +1621,8 @@ fn point(m: &mut Logophor, from: (i16, i16), to: (i16, i16)) {
 
 /// The skin (tile.rs) as the system card carries it.
 static SYSTEM_TILE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tile.raw"));
+/// The Radio's round screen as the system card carries it.
+static SYSTEM_SCOPE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/scope.raw"));
 
 fn panorama() -> Logophor {
     let img = asm_ada::sdimage::fat32(
@@ -2131,6 +2133,7 @@ fn the_radio_plays_a_station_through_phonograph() {
         &[
             ("BOOT/BOILER.BIN".into(), system_binary()),
             ("PANORAMA/TILE.RAW".into(), SYSTEM_TILE.to_vec()),
+            ("RADIO/SCOPE.RAW".into(), SYSTEM_SCOPE.to_vec()),
             (
                 "RADIO/STATIONS.TXT".into(),
                 b"Test Radio|http://radio.example/stream\nNowhere|http://nowhere.example/\n"
@@ -2174,6 +2177,18 @@ fn the_radio_plays_a_station_through_phonograph() {
     assert!(fill > 8192, "ring {fill} bytes");
     assert_eq!(reg(m, 0x320e) & 2, 0, "not starved");
     golden(m, "radio");
+    // EMU_RADIO_FRAMES=dir: four moments of the screen, half a second apart
+    if let Ok(dir) = std::env::var("EMU_RADIO_FRAMES") {
+        for k in 0..4 {
+            frames(m, 30);
+            let px = pixels(m);
+            let mut img = b"P6 1024 768 255 ".to_vec();
+            for p in &px {
+                img.extend([p.r, p.g, p.b]);
+            }
+            std::fs::write(format!("{dir}/radio{k}.ppm"), img).unwrap();
+        }
+    }
 }
 
 /// The radio on the real Internet through the hub's gateway and the host's
@@ -2338,6 +2353,7 @@ fn net_host_plays_the_radio_without_a_hub() {
         &[
             ("BOOT/BOILER.BIN".into(), system_binary()),
             ("PANORAMA/TILE.RAW".into(), SYSTEM_TILE.to_vec()),
+            ("RADIO/SCOPE.RAW".into(), SYSTEM_SCOPE.to_vec()),
             (
                 "RADIO/STATIONS.TXT".into(),
                 b"Test Radio|http://radio.example/stream\n".to_vec(),

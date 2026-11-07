@@ -130,13 +130,14 @@ def divs_block(a):
     a.move("w", D(1), POSTINC(3))
 
 
-def build_main():
+def build_main(harness=False):
     a = Asm(CODE)
     a.move("w", IMM(0x7FFF, "w"), ABSL(CUSTOM + 0x9A))
     a.move("w", IMM(0x7FFF, "w"), ABSL(CUSTOM + 0x96))
     a.move("w", IMM(0x7FFF, "w"), ABSL(CUSTOM + 0x9C))
-    a.move("b", IMM(0x7F, "b"), ABSL(CIAB_ICR))
-    a.move("b", IMM(0x7F, "b"), ABSL(CIAA_ICR))
+    if not harness:  # (tools/amiga_hwdisk.py: the OS keeps its CIA masks)
+        a.move("b", IMM(0x7F, "b"), ABSL(CIAB_ICR))
+        a.move("b", IMM(0x7F, "b"), ABSL(CIAA_ICR))
     a.lea(ABSL(CUSTOM), 6)
     a.lea(ABSL(LOOPMEM), 0)
     a.move("w", IMM((PLANES + 5 * PLANE_SIZE - LOOPMEM) // 4 - 1, "w"), D(0))
@@ -242,7 +243,10 @@ def build_main():
     a.move("w", D(0), D16(0x88, 6))
     a.move("w", IMM(0x8380, "w"), D16(0x96, 6))
     a.label("halt")
-    a.bra("halt")
+    if harness:  # back to tools/amiga_hwdisk.py's harness
+        a.rts()
+    else:
+        a.bra("halt")
 
     # measure: D0 = loop number; returns the ticks in D0.
     a.label("measure")

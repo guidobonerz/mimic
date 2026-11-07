@@ -51,13 +51,14 @@ TESTS = [  # BPLCON0, DMACON, COP1LC
 ]
 
 
-def build_main():
+def build_main(harness=False):
     a = Asm(CODE)
     a.move("w", IMM(0x7FFF, "w"), ABSL(CUSTOM + 0x9A))
     a.move("w", IMM(0x7FFF, "w"), ABSL(CUSTOM + 0x96))
     a.move("w", IMM(0x7FFF, "w"), ABSL(CUSTOM + 0x9C))
-    a.move("b", IMM(0x7F, "b"), ABSL(CIAB_ICR))
-    a.move("b", IMM(0x7F, "b"), ABSL(CIAA_ICR))
+    if not harness:  # (tools/amiga_hwdisk.py: the OS keeps its CIA masks)
+        a.move("b", IMM(0x7F, "b"), ABSL(CIAB_ICR))
+        a.move("b", IMM(0x7F, "b"), ABSL(CIAA_ICR))
     a.lea(ABSL(CUSTOM), 6)
     a.lea(ABSL(LOOPMEM), 0)
     a.move("w", IMM((PLANES + 5 * PLANE_SIZE - LOOPMEM) // 4 - 1, "w"), D(0))
@@ -123,7 +124,10 @@ def build_main():
     a.bne("tests")
     # The last row's display (planes on) stays.
     a.label("halt")
-    a.bra("halt")
+    if harness:  # back to tools/amiga_hwdisk.py's harness
+        a.rts()
+    else:
+        a.bra("halt")
 
     a.label("measure")
     a.label("w0")

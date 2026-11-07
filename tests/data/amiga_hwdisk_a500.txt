@@ -1,0 +1,12 @@
+# The owner's A500 (68000, Kickstart 1.3 = 34.5, ROM word $00220005, 512 KB chip RAM, no other RAM,
+# ECS Agnus 8372A (VPOSR $A000, id $20), OCS Denise (no id), PAL) running the hardware disk of
+# tools/amiga_hwdisk.py on 2026-11-07, read back with the Greaseweazle; every block of the pattern
+# intact. Values as `python tools/amiga_hwdisk.py results` prints them (see amiga_hwdisk_a1200.txt).
+# Bus test 3 rows 2 and 3 (Copper jumps on every line with 5 planes) take 48-69 % longer than in
+# mimic and in WinUAE's cycle-exact A500 (71DF, 71D5), while the real A1200 agreed with mimic there:
+# open, see CLAUDE.md "Chip-bus residual".
+amiga_bustest: 5537 6DD3 7197 5E1C
+amiga_bustest2: 2084 00AA 1A43 0001 4119 00FE 1A54 0128
+amiga_bustest3: 58FB 5A2C C221 A9A4
+amiga_bustest4: 3FD6 42A8 572E 7186 5A58 65D1 7AA7 A833
+amiga_bustest5: E076 E278 E47D E67E E880 EA82 EC82 EE87 F088 F28A F48C F68C F891 FA92 FC94 FE96 E07B E27D E47F E681 E881 EA87 EC87 EE89 F08B F28D F48D F693 F893 FA95 FC97 FE99 E076 E278 E47A E67C E880 EA83 EC85 EE87 F089 F28B F48D F68F F891 FA93 FC95 FE97 E079 E27F E47D E681 E881 EA87 EC85 EE89 F089 F28F F48D F691 F891 FA97 FC95 FE99

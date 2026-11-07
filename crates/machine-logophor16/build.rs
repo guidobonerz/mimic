@@ -112,8 +112,15 @@ fn system_card(out: &Path) {
     .collect();
     let wallpaper = std::fs::read(root.join("panorama/wallpaper.png")).expect("wallpaper.png");
     let buttons = std::fs::read(root.join("panorama/buttons.png")).expect("buttons.png");
-    let skin = tile::tile_raw(&png, &wallpaper, &buttons, &icons);
+    let cursor = std::fs::read(root.join("panorama/cursor.png")).expect("cursor.png");
+    let (skin, pal) = tile::tile_raw(&png, &wallpaper, &buttons, &cursor, &icons);
     std::fs::write(out.join("tile.raw"), &skin).expect("write tile.raw");
+    // the Radio's round screen (owner's artwork 2026-11-06)
+    let scope = tile::picture(
+        &std::fs::read(root.join("radio/scope.png")).expect("radio/scope.png"),
+        &pal,
+    );
+    std::fs::write(out.join("scope.raw"), &scope).expect("write scope.raw");
     let prog = brass::build(&brass::DirSources { root })
         .unwrap_or_else(|e| panic!("system/:\n{}", e.join("\n")));
     let readme = b"The Logophor 16's system card: Boiler, Panorama and its applications.\n\
@@ -124,6 +131,7 @@ fn system_card(out: &Path) {
             ("BOOT/BOILER.BIN".into(), prog.binary),
             ("README.TXT".into(), readme.to_vec()),
             ("PANORAMA/TILE.RAW".into(), skin),
+            ("RADIO/SCOPE.RAW".into(), scope),
         ],
     )
     .expect("system card");

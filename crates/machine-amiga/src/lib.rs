@@ -870,7 +870,7 @@ impl Bus for AmigaBus<'_> {
 }
 
 impl TimedBus68 for AmigaBus<'_> {
-    fn bus_cycle(&mut self, access: Access, _fc: u8, addr: u32, _size: Size, t: u32) -> u32 {
+    fn bus_cycle(&mut self, access: Access, _fc: u8, addr: u32, size: Size, t: u32) -> u32 {
         let at = self.start + u64::from(t);
         self.bus_start = at;
         let (clk, bus) = (self.b.clk, self.b.bus_clocks);
@@ -886,39 +886,54 @@ impl TimedBus68 for AmigaBus<'_> {
             return w;
         }
         let region = self.b.mem.region(addr, access == Access::Write);
+        // The A1200's board is 16 bits wide: a long access of its 68EC020
+        // is two bus cycles (dynamic bus sizing, MC68020UM 5.2.1), the
+        // second right after the first.
+        let cycles = if clk == 4 && size == Size::Long { 2 } else { 1 };
         if region.chip_bus() {
             // The CPU's data slot is the second colour clock of its cycle;
             // in the first it already asks for the bus (the Blitter's
-            // starvation count sees it). On the A1200 the request comes
-            // with the cycle's start, its data slot being the next colour
-            // clock.
+            // starvation count sees it).
             // A 68000 chip bus cycle starts its S0 on a colour clock edge
             // (Commodore, "A+ Processor/Chip Bus Timing Relations", 1992,
             // "Processor Read Cycle (7 MHz 68000)": S0 on the CCK edge, the
             // data in the cycle's second colour clock), so one due in the
             // middle of a colour clock (after an E-clock-stretched CIA
             // cycle) waits a CPU clock first.
-            let align = u64::from(bus == 4 && !at.is_multiple_of(clk));
-            let at = at + align;
-            let c0 = at / clk + 1;
-            self.b.run_to(c0 - 1);
-            if self.b.cck == c0 - 1 {
-                self.b.custom.cpu_request();
-                self.b.tick(false);
-            }
-            loop {
-                let c = self.b.cck;
-                if self.b.tick(true) {
-                    return (clk * (c - c0) + align) as u32;
+            // The A1200's 68EC020 is held to the same two colour clocks per
+            // chip access: Gayle synchronises it to the 7 MHz bus, and the
+            // owner's A1200 (68EC020, Kickstart 40.068, 2026-11-07, the
+            // hardware disk of `tools/amiga_hwdisk.py`) ran the bus test's
+            // chip-RAM loop at 2.04 colour clocks an access without DMA,
+            // twice what a one-colour-clock data slot had given.
+            let mut start = at;
+            for _ in 0..cycles {
+                let align = (clk - start % clk) % clk;
+                let c0 = (start + align) / clk + 1;
+                self.b.run_to(c0 - 1);
+                if self.b.cck == c0 - 1 {
+                    self.b.custom.cpu_request();
+                    self.b.tick(false);
+                }
+                loop {
+                    let c = self.b.cck;
+                    if self.b.tick(true) {
+                        // The cycle ends with its data colour clock.
+                        start = clk * (c + 1);
+                        break;
+                    }
                 }
             }
+            return (start - at - bus) as u32;
         }
         if region == Region::Cia {
             let w = e_clock_waits(at, clk, bus);
             self.b.run_to((at + bus + u64::from(w)) / clk - 1);
             return w;
         }
-        0
+        // ROM and the rest of the A1200's board: the second cycle of a
+        // long access.
+        ((cycles - 1) * bus) as u32
     }
 
     fn reset_devices(&mut self) {

@@ -1,0 +1,18 @@
+# The owner's A1200 (68EC020, Kickstart 40.068 = 3.1, 2 MB chip RAM, Alice $23 (VPOSR $A300),
+# Lisa, PAL, no expansion) running the hardware disk of tools/amiga_hwdisk.py on 2026-11-07,
+# read back with the Greaseweazle (gw read --format amiga.amigados); every block of the
+# pattern intact. Values as `python tools/amiga_hwdisk.py results` prints them (hex;
+# bus tests 1, 3, 4: E-clock ticks a row, 1 tick = 5 colour clocks; bus test 2: ticks until
+# the blit ended and the CPU's loop count, a row each; bus test 5: VHPOSR at the interrupt
+# per setup). The same machine with its 68030 turbo card (AttnFlags $0007) gave bus test
+# 1, 2, 3 within 1-6 % of these and bus test 4's noblit rows 24-33 % lower.
+amiga_bustest: 1EA4 24A1 26CE 2056
+amiga_bustest2: 20AF 01C9 1A22 0001 40C2 02B7 1A27 0360
+amiga_bustest3: 1F58 1FBA 26CD 26CE
+amiga_bustest4: 1487 152E 1A48 2896 3537 39B0 42F4 6653
+amiga_bustest5: E072 E271 E471 E672 E879 EA79 EC79 EE7A F081 F281 F481 F682 F889 FA89 FC89 FE8A E06F E271 E473 E675 E877 EA79 EC7B EE7D F07F F281 F483 F685 F887 FA89 FC8B FE8D E06C E26F E471 E673 E875 EA77 EC79 EE7B F07D F27F F481 F683 F885 FA87 FC89 FE8B E06D E271 E471 E675 E875 EA79 EC79 EE7D F07D F281 F481 F685 F885 FA89 FC89 FE8D
+# with the 68030 turbo card:
+turbo amiga_bustest: 1E37 243F 2610 1F00
+turbo amiga_bustest2: 20A9 01E3 1A1F 0001 411F 02C4 1A2C 0391
+turbo amiga_bustest3: 1E6B 1F14 260C 260E
+turbo amiga_bustest4: 0F96 1028 12ED 1B4B 3408 39DA 43F2 67A5

@@ -898,6 +898,24 @@ const btnW = 18
 
 var buttons *gfx.Surface
 
+// loadPointer reads the skin's 32 x 32 mouse pointer into sprite 0.
+func loadPointer(f *files.File) bool {
+	img := make([]byte, 32*32)
+	got := 0
+	for got < len(img) {
+		k := f.Read(img[got:])
+		if k == 0 {
+			break
+		}
+		got += k
+	}
+	if got == len(img) {
+		gfx.SetPointerImage(img)
+	}
+	free(img)
+	return got == 32*32
+}
+
 // loadPicture reads a w x h picture from the skin file, a row at a time
 // into chip RAM.
 func loadPicture(f *files.File, w, h int) *gfx.Surface {
@@ -1012,7 +1030,7 @@ func loadSkin() {
 		if wall != nil {
 			buttons = loadPicture(f, 3*btnW, btnW)
 		}
-		if buttons != nil {
+		if buttons != nil && loadPointer(f) {
 			loadIcons(f)
 		}
 	}
