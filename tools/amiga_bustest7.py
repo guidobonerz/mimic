@@ -60,6 +60,9 @@ LIST_SPECS = [
     (0x46000, "A", 60, 0x60),
     (0x48000, "A", 30, 0xA0),
 ]
+# None: E-clock ticks for ITER iterations (bus test 3's measure); a number:
+# iterations in that many whole fields instead (tools/amiga_bustest9.py).
+FRAMES = None
 FONT_AT = 0x700
 HEAD_AT = FONT_AT + 0x80
 TESTS_AT = HEAD_AT + 2 * bt.HEAD_WORDS + 4
@@ -211,20 +214,52 @@ def build_main(harness=False):
     a.move("l", D16(0x04, 6), D(0))
     a.andi("l", 0x1FF00, D(0))
     a.bne("w1")
-    a.bsr("timer")
-    a.move("w", D(0), D(2))
-    a.lea(ABSL(LOOPMEM), 0)
-    a.lea(ABSL(LOOPMEM + 0x100), 1)
-    a.moveq(0, 1)
-    a.move("w", IMM(ITER - 1, "w"), D(7))
-    a.label("loop")
-    for _ in range(16):
-        a.move("w", IDX(0, 1, 1), D16(4, 0))
-    a.dbra(7, "loop")
-    a.bsr("timer")
-    a.sub_dd(0, 2)
-    a.move("w", D(2), D(0))
-    a.rts()
+    if FRAMES is None:
+        a.bsr("timer")
+        a.move("w", D(0), D(2))
+        a.lea(ABSL(LOOPMEM), 0)
+        a.lea(ABSL(LOOPMEM + 0x100), 1)
+        a.moveq(0, 1)
+        a.move("w", IMM(ITER - 1, "w"), D(7))
+        a.label("loop")
+        for _ in range(16):
+            a.move("w", IDX(0, 1, 1), D16(4, 0))
+        a.dbra(7, "loop")
+        a.bsr("timer")
+        a.sub_dd(0, 2)
+        a.move("w", D(2), D(0))
+        a.rts()
+    else:
+        # Iterations in FRAMES whole fields: from line 0, counting the
+        # returns from the field's upper half (lines 128-255) to its lower
+        # (one read of VHPOSR per iteration; line 0 alone is shorter than
+        # an iteration and was missed now and then).
+        a.lea(ABSL(LOOPMEM), 0)
+        a.lea(ABSL(LOOPMEM + 0x100), 1)
+        a.moveq(0, 1)
+        a.moveq(0, 7)                            # iterations
+        a.moveq(FRAMES - 1, 5)                   # fields to go
+        a.moveq(0, 2)                            # 1 = the beam was in the upper half
+        a.label("loop")
+        for _ in range(16):
+            a.move("w", IDX(0, 1, 1), D16(4, 0))
+        a.addq("w", 1, D(7))
+        # VHPOSR alone (one bus cycle): bit 15 = line bit 7, so lines
+        # 128-255 are the upper half, 256-312 and 0-127 the lower. A long
+        # read of VPOSR/VHPOSR straddling the step from 255 to 256 showed
+        # line 0 and counted a field too many.
+        a.move("w", D16(0x06, 6), D(0))
+        a.andi("w", 0x8000, D(0))
+        a.bne("upper")
+        a.tst("w", D(2))
+        bccw(a, 7, "loop")                       # BEQ: still the lower half
+        a.moveq(0, 2)                            # back in the lower half: a field done
+        a.dbra(5, "loop")
+        a.move("w", D(7), D(0))
+        a.rts()
+        a.label("upper")
+        a.moveq(1, 2)
+        bccw(a, 0, "loop")                       # BRA
 
     a.label("timer")
     a.move("b", ABSL(CIAB_TAHI), D(0))
@@ -304,8 +339,9 @@ def build_boot(length):
 
 
 def main():
-    """`OUT.adf`: a bootable disk of the program alone (the boot block loads
-    it as bus test 4's does); without arguments only a build check."""
+    """`OUT.adf [OUT.bin]`: a bootable disk of the program alone (the boot
+    block loads it as bus test 4's does) and its first bytes for a test;
+    without arguments only a build check."""
     prog = build_main(harness=not sys.argv[1:])
     print("program bytes", len(prog), "rows", ROWS)
     if not sys.argv[1:]:
@@ -323,6 +359,8 @@ def main():
         s = (s & 0xFFFFFFFF) + (s >> 32)
     adf[4:8] = struct.pack(">I", (~s) & 0xFFFFFFFF)
     open(sys.argv[1], "wb").write(adf)
+    if len(sys.argv) > 2:
+        open(sys.argv[2], "wb").write(adf[:1024 + len(prog)])
 
 
 if __name__ == "__main__":

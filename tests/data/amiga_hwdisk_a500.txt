@@ -21,3 +21,10 @@ amiga_bustest7: A2B5 7ACC 7EFA 6A83 73C6 5D50 6427 597D A66C 79AC 7E67 BC7C
 # mimic's run of the same disk (A500, Kickstart 1.3, slow=0), for the phase-dependent rows:
 mimic amiga_bustest6: 6FDB 71CB 71CF 7298 79D7 9740 B47A 6D9B 71A2 5EBF 57B8 7191
 mimic amiga_bustest7: A49B 7B85 7EA5 69F0 72E5 5D1D 6384 5970 A653 794E 7D2B B153
+# Fourth run (bus tests 8 and 9 added; bus test 9 = iterations in four fields, race-free):
+amiga_bustest8: 5786 63D5 6813 6D79 753B 96CE BF84 89AB BC29 9AAD 93D5 7379
+amiga_bustest9: 0502 0493 0463 0414 03C5 030D 0256 033C 0260 0283 0303 03F7
+# mimic before the Copper's bus hold after a strobe (bus test 9: 0.1-4.8 % more than the hardware,
+# growing with the chain's length), and after it (within 1.6 %):
+mimic amiga_bustest9 before: 0543 0494 0463 041C 03D4 031B 0262 0346 0279 028B 031B 03FF
+mimic amiga_bustest9 after:  0506 0494 0463 0415 03C4 0302 024F 0338 0262 0279 0302 03FF

@@ -16,3 +16,12 @@ turbo amiga_bustest: 1E37 243F 2610 1F00
 turbo amiga_bustest2: 20A9 01E3 1A1F 0001 411F 02C4 1A2C 0391
 turbo amiga_bustest3: 1E6B 1F14 260C 260E
 turbo amiga_bustest4: 0F96 1028 12ED 1B4B 3408 39DA 43F2 67A5
+# Second run of the plain A1200 (2026-11-07, the disk with bus tests 6-9; bus tests 1-5 as above):
+amiga_bustest6: 26E6 24E3 26CD 2562 2761 30D9 39AA 246B 26CE 1F0B 1F47 26CD
+amiga_bustest7: (phase-dependent rows, see amiga_hwdisk_a500.txt)
+amiga_bustest8: 1FD1 1F05 1EFB 2466 2B84 30E2 3E3B 2F90 3926 3BA4 31A9 2BDE
+amiga_bustest9: 0E43 0E2A 0DA5 0D51 0D07 0C92 0C34 0CE6 0C52 0CE6 0CAB 0DB0
+# mimic with the Copper's bus hold after a strobe: bus test 9 within 0.1-3.4 % (the hardware
+# slower), bus test 4 rows 2 and 3 now 5 and 11 % faster than mimic (open):
+mimic amiga_bustest9: 0E45 0E2A 0DD5 0D9A 0D7C 0CFA 0C8F 0CFA 0C85 0D0F 0CFA 0DE3
+mimic amiga_bustest4: 14EB 15FC 1BC5 2D63 3334 38F4 4289 6606

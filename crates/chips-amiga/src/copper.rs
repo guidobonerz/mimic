@@ -21,7 +21,10 @@
 //! 68000 gets that slot, which code polling VHPOSR for line 0 relies on.
 //!
 //! After a satisfied WAIT the Copper wakes up in one even slot of its own
-//! (it holds the bus; the CPU does not get it) before it fetches again.
+//! (it holds the bus; the CPU does not get it) before it fetches again,
+//! and after a COPJMP1/COPJMP2 strobe it holds the bus in its two wake-up
+//! cycles too (measured on the owner's A500 with `tools/amiga_bustest9.py`);
+//! only the field's restart leaves them to the CPU.
 //! The common way past line 255, `WAIT $FF,$DE` followed by a WAIT for a
 //! line below $2C, depends on it: the second WAIT is fetched in line 256,
 //! where the beam's low eight bits start over (Rule 30's kaleidoscope).
@@ -85,6 +88,14 @@ pub struct Copper {
     fetched: Vec<u32>,
     /// Even slots to let pass before the next fetch (restart wake-up).
     wake: u8,
+    /// The wake-up follows a COPJMP strobe (not the field's restart): the
+    /// Copper holds the bus in it and the CPU gets nothing (the owner's
+    /// A500 and A1200 with `tools/amiga_bustest9.py`, 2026-11-07: a list
+    /// jumping into a sub-list and back on every line costs the 68000 four
+    /// slots a line more than the free wake-up gave; with the hold the
+    /// twelve rows of that test and bus test 4's eight match the A500
+    /// within 1.6 %).
+    pub hold: bool,
     /// Even slots the Copper takes without fetching after a satisfied
     /// WAIT (its wake-up cycle; it holds the bus, the CPU waits).
     pub busy_wake: u8,
@@ -125,6 +136,7 @@ impl Copper {
             watch: false,
             fetched: Vec::new(),
             wake: 0,
+            hold: false,
             busy_wake: 0,
             settle: 0,
         }
@@ -136,12 +148,27 @@ impl Copper {
     }
 
     pub fn jump(&mut self, second: bool) {
+        self.jump_with(second, false);
+    }
+
+    /// A COPJMP1/COPJMP2 strobe.
+    pub fn strobe(&mut self, second: bool) {
+        self.jump_with(second, true);
+    }
+
+    fn jump_with(&mut self, second: bool, hold: bool) {
         self.pc = if second { self.cop2lc } else { self.cop1lc };
         self.state = State::Fetch1;
         // Counted down on the even slot of the restart (if any) and the
         // next two: the first fetch comes two Copper cycles later (vAmigaTS
         // `Agnus/Copper`; the WinUAE bus test holds either way).
         self.wake = 3;
+        self.hold = hold;
+    }
+
+    /// Does the Copper hold this (even) slot while waking up after a strobe?
+    pub fn holds_wake(&self) -> bool {
+        self.hold && self.wake > 0
     }
 
     /// Every colour clock: a WAIT that is satisfied releases the Copper
@@ -242,10 +269,12 @@ impl Copper {
         w.u8(self.wake);
         w.u8(self.busy_wake);
         w.u8(self.settle);
+        w.bool(self.hold);
     }
 
     /// `version`: the enclosing chunk's; 1 had no wake-up count, before 5
-    /// no wake-up after WAIT, before 12 no settling of a fetched WAIT.
+    /// no wake-up after WAIT, before 12 no settling of a fetched WAIT,
+    /// before 14 no bus hold after a strobe.
     pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let cop1lc = r.u32()?;
         let cop2lc = r.u32()?;
@@ -276,6 +305,7 @@ impl Copper {
             } else {
                 0
             },
+            hold: version >= 14 && r.bool()?,
         })
     }
 }

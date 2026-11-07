@@ -992,6 +992,14 @@ impl Custom {
                     // The Copper's wake-up after a WAIT holds the bus.
                     self.copper.busy_wake -= 1;
                     copper_held = true;
+                } else if h & 1 == 0
+                    && h != COPPER_BLOCKED
+                    && self.copper.holds_wake()
+                    && self.dma_on(dma::COPEN)
+                {
+                    // So does the wake-up after a COPJMP strobe (the owner's
+                    // A500, bus test 9: four slots a line with two jumps).
+                    copper_held = true;
                 } else if h == COPPER_BLOCKED
                     && (self.copper.wants_slot() || self.copper.busy_wake > 0)
                     && self.dma_on(dma::COPEN)
@@ -1378,8 +1386,8 @@ impl Custom {
             reg::COP2LCH | reg::COP2LCL => {
                 Self::set_ptr(&mut self.copper.cop2lc, r == reg::COP2LCH, v, mask)
             }
-            reg::COPJMP1 => self.copper.jump(false),
-            reg::COPJMP2 => self.copper.jump(true),
+            reg::COPJMP1 => self.copper.strobe(false),
+            reg::COPJMP2 => self.copper.strobe(true),
             reg::DIWSTRT | reg::DIWSTOP => {
                 if r == reg::DIWSTRT {
                     self.diwstrt = v;
@@ -1613,8 +1621,9 @@ impl Savestate for Custom {
         // version 7: the ECS registers; version 8: AGA (eight planes, FMODE,
         // Denise's 256 colours of 24 bits); version 10: 35 ns output;
         // version 12: the Copper's settling after a WAIT fetch; 13: sprite
-        // writes on their way in Denise.
-        w.chunk(TAG, 13, |w| {
+        // writes on their way in Denise; 14: the Copper's bus hold after a
+        // COPJMP strobe.
+        w.chunk(TAG, 14, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1672,7 +1681,7 @@ impl Savestate for Custom {
 
     /// Atomic; the standard and pointer width are configuration.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (version, mut c) = r.chunk(TAG, 13)?;
+        let (version, mut c) = r.chunk(TAG, 14)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
