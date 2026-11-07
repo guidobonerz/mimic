@@ -16,6 +16,13 @@ continues at the next block (the scheme of Sanity's "Interference").
   row 3: 30 MOVEs, 5 lowres planes
 The list's end sets COP1LCL back to its start (every block changes it).
 
+Flaw (found 2026-11-07 with tools/amiga_bustest6.py, which does it right):
+the blocks rewrite COP1LCL themselves and both lists share the high word
+$4, so after row 0 the Copper never leaves LIST5: rows 1 and 3 measure
+LIST5 again (in mimic and WinUAE alike; the owner's A500 with an ECS Agnus
+gave different values for rows 1 and 3, so that chip does leave it). Kept
+as it is for the references already taken.
+
 usage: python tools/amiga_bustest3.py OUT.adf [OUT.bootblock]
 """
 import importlib.util

@@ -11,7 +11,7 @@ without a monitor. Results go onto the disk itself.
    - reads every block through trackdisk and checks the pattern this
      tool put there: proves that a real Amiga reads what the Greaseweazle
      wrote;
-   - runs the five bus tests (tools/amiga_bustest.py, 2, 3, 4, 5, as
+   - runs the bus tests (tools/amiga_bustest.py, 2, 3, 4, 5, 6, 7, as
      `build_main(harness=True)`: they leave the OS's CIA masks alone and
      return) one after another, keeping plane 1 of each, where its numbers
      are drawn;
@@ -64,7 +64,8 @@ HARN_BLOCKS = 16
 PROG_BLOCK = 32          # the tests from block 32, 16 blocks each
 PROG_BLOCKS = 16
 RESULT_BLOCK = 1000      # the results: info block, then the planes
-TESTS = ["amiga_bustest", "amiga_bustest2", "amiga_bustest3", "amiga_bustest4", "amiga_bustest5"]
+TESTS = ["amiga_bustest", "amiga_bustest2", "amiga_bustest3", "amiga_bustest4", "amiga_bustest5",
+         "amiga_bustest6", "amiga_bustest7"]
 RESULT_LEN = (512 + len(TESTS) * PLANE_SIZE + 511) // 512 * 512
 RESULT_BLOCKS = RESULT_LEN // 512
 PATTERN_KEY = 0xA5A55A5A

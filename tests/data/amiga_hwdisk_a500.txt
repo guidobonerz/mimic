@@ -1,12 +1,23 @@
 # The owner's A500 (68000, Kickstart 1.3 = 34.5, ROM word $00220005, 512 KB chip RAM, no other RAM,
-# ECS Agnus 8372A (VPOSR $A000, id $20), OCS Denise (no id), PAL) running the hardware disk of
-# tools/amiga_hwdisk.py on 2026-11-07, read back with the Greaseweazle; every block of the pattern
-# intact. Values as `python tools/amiga_hwdisk.py results` prints them (see amiga_hwdisk_a1200.txt).
-# Bus test 3 rows 2 and 3 (Copper jumps on every line with 5 planes) take 48-69 % longer than in
-# mimic and in WinUAE's cycle-exact A500 (71DF, 71D5), while the real A1200 agreed with mimic there:
-# open, see CLAUDE.md "Chip-bus residual".
-amiga_bustest: 5537 6DD3 7197 5E1C
-amiga_bustest2: 2084 00AA 1A43 0001 4119 00FE 1A54 0128
-amiga_bustest3: 58FB 5A2C C221 A9A4
-amiga_bustest4: 3FD6 42A8 572E 7186 5A58 65D1 7AA7 A833
+# ECS Agnus 8372A (VPOSR $A000, id $20), OCS Denise (no id), PAL; a late A500, not an A500+) running
+# the hardware disk of tools/amiga_hwdisk.py on 2026-11-07 (third run, with bus tests 6 and 7), read
+# back with the Greaseweazle; every block of the pattern intact. Values as
+# `python tools/amiga_hwdisk.py results` prints them (see amiga_hwdisk_a1200.txt).
+# Bus tests 1-5 came out the same in all three runs except bus test 3's first run (58FB 5A2C C221
+# A9A4, rows 1 and 3 off by 48-69 %), which the two later runs (58FB 58FB 71D4 71D5, mimic's values)
+# did not repeat: an outlier of unknown cause. Bus test 6's rows with 60 MOVEs (7) and bus test 7's
+# rows 2-10 run the Copper chain without line synchronisation (60 MOVEs need more even slots than a
+# line has), so their values depend on the start phase; the hardware gave 94D2 for bus test 6 row 7
+# in two runs, mimic 7940 or 6D9B depending on the disk's layout. The clean residual: bus test 7
+# row 11 (a 30-MOVE sub-list from h $A0 inside the 5-plane fetch window) costs the CPU 6.3 % more on
+# the hardware than in mimic (B153); bus test 6 row 6 (30 MOVEs from $DF) 3.3 %.
+amiga_bustest: 5537 6DD2 7197 5E1C
+amiga_bustest2: 2083 00AA 1A39 0001 411B 00FE 1A53 0128
+amiga_bustest3: 58FB 58FB 71D4 71D5
+amiga_bustest4: 3FD5 42A7 572A 7183 5A4E 65D1 7AA8 A829
 amiga_bustest5: E076 E278 E47D E67E E880 EA82 EC82 EE87 F088 F28A F48C F68C F891 FA92 FC94 FE96 E07B E27D E47F E681 E881 EA87 EC87 EE89 F08B F28D F48D F693 F893 FA95 FC97 FE99 E076 E278 E47A E67C E880 EA83 EC85 EE87 F089 F28B F48D F68F F891 FA93 FC95 FE97 E079 E27F E47D E681 E881 EA87 EC85 EE89 F089 F28F F48D F691 F891 FA97 FC95 FE99
+amiga_bustest6: 71BD 71D4 71D4 71D5 7B96 99D8 BA59 94D2 7057 5EC7 57BC 7197
+amiga_bustest7: A2B5 7ACC 7EFA 6A83 73C6 5D50 6427 597D A66C 79AC 7E67 BC7C
+# mimic's run of the same disk (A500, Kickstart 1.3, slow=0), for the phase-dependent rows:
+mimic amiga_bustest6: 6FDB 71CB 71CF 7298 79D7 9740 B47A 6D9B 71A2 5EBF 57B8 7191
+mimic amiga_bustest7: A49B 7B85 7EA5 69F0 72E5 5D1D 6384 5970 A653 794E 7D2B B153
