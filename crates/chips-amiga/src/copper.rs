@@ -23,8 +23,9 @@
 //! After a satisfied WAIT the Copper wakes up in one even slot of its own
 //! (it holds the bus; the CPU does not get it) before it fetches again,
 //! and after a COPJMP1/COPJMP2 strobe it holds the bus in its two wake-up
-//! cycles too (measured on the owner's A500 with `tools/amiga_bustest9.py`);
-//! only the field's restart leaves them to the CPU.
+//! cycles too (measured on the owner's A500 with `tools/amiga_bustest9.py`;
+//! the AGA's Alice holds one of the two); only the field's restart leaves
+//! them to the CPU.
 //! The common way past line 255, `WAIT $FF,$DE` followed by a WAIT for a
 //! line below $2C, depends on it: the second WAIT is fetched in line 256,
 //! where the beam's low eight bits start over (Rule 30's kaleidoscope).
@@ -94,7 +95,9 @@ pub struct Copper {
     /// jumping into a sub-list and back on every line costs the 68000 four
     /// slots a line more than the free wake-up gave; with the hold the
     /// twelve rows of that test and bus test 4's eight match the A500
-    /// within 1.6 %).
+    /// within 1.6 %). Agnus holds both wake-up cycles, Alice one: with
+    /// two the A1200 came out 5 and 11 % slow in bus test 4's long
+    /// sub-list rows and 1.8 % in bus test 9's, with one both within 4 %.
     pub hold: bool,
     /// Even slots the Copper takes without fetching after a satisfied
     /// WAIT (its wake-up cycle; it holds the bus, the CPU waits).
@@ -166,9 +169,10 @@ impl Copper {
         self.hold = hold;
     }
 
-    /// Does the Copper hold this (even) slot while waking up after a strobe?
-    pub fn holds_wake(&self) -> bool {
-        self.hold && self.wake > 0
+    /// Does the Copper hold this (even) slot while waking up after a
+    /// strobe? `slots`: how many of its two wake-up cycles it holds.
+    pub fn holds_wake(&self, slots: u8) -> bool {
+        self.hold && self.wake + slots > 2
     }
 
     /// Every colour clock: a WAIT that is satisfied releases the Copper

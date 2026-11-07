@@ -69,6 +69,15 @@ TESTS = ["amiga_bustest", "amiga_bustest2", "amiga_bustest3", "amiga_bustest4", 
 RESULT_LEN = (512 + len(TESTS) * PLANE_SIZE + 511) // 512 * 512
 RESULT_BLOCKS = RESULT_LEN // 512
 PATTERN_KEY = 0xA5A55A5A
+# `build OUT.adf --quick`: no pattern check, only the last test (bus test 9),
+# for a quick comparison; `--raw` also leaves the drive motor on and the
+# cache uncleared before the test, like a program booted alone.
+QUICK = False
+RAW = False
+# `--wait N`: with --quick, idle N fields (interrupts on) before the test.
+WAIT_FIELDS = 0
+# `--from K`: with --quick, run the tests from index K on (default: the last).
+FROM_TEST = None
 MAGIC = b"MIMICHW1"   # MIMICHW0: the boot block failure record
 
 # harness memory (all inside the reserved range, above the tests')
@@ -152,6 +161,8 @@ def build_harness(irqs):
     a.move("w", ABSL(CUSTOM + 0x7C), ABSL(INFO + 18))  # DENISEID
     a.move("l", ABSL(0xF8000C), ABSL(INFO + 20))       # the ROM's version
     # --- every track: read, check the pattern
+    if QUICK:
+        bccw(a, 0, "patdone")                    # BRA
     a.moveq(0, 7)
     a.label("track")
     a.move("w", D(7), D(0))
@@ -204,6 +215,19 @@ def build_harness(irqs):
     a.cmpi("w", BLOCKS // 11, D(7))
     bccw(a, 6, "track")                          # BNE
     doio(a, TD_MOTOR, 0, 0)
+    a.label("patdone")
+    if WAIT_FIELDS:
+        a.move("l", IMM(WAIT_FIELDS, "l"), D(7))
+        a.label("idle0")
+        a.move("l", ABSL(CUSTOM + 4), D(0))
+        a.andi("l", 0x1FF00, D(0))
+        a.beq("idle0")
+        a.label("idle1")
+        a.move("l", ABSL(CUSTOM + 4), D(0))
+        a.andi("l", 0x1FF00, D(0))
+        a.bne("idle1")
+        a.subq("l", 1, D(7))
+        a.bne("idle0")
     a.move("l", ABSL(BADS), ABSL(INFO + 24))
     a.move("l", ABSL(FIRSTBAD), ABSL(INFO + 28))
     a.move("l", ABSL(READERR), ABSL(INFO + 32))
@@ -215,18 +239,21 @@ def build_harness(irqs):
     a.move("l", D(0), ABSL(CAPT))
     bccw(a, 7, "write")                          # none: no tests
     # --- the tests
-    a.moveq(0, 7)
+    first = (len(TESTS) - 1 if FROM_TEST is None else FROM_TEST) if QUICK else 0
+    a.moveq(first, 7)
     a.label("test")
     a.move("w", D(7), D(0))
     a.emit(0xC0FC, PROG_BLOCKS * 512)            # MULU
     a.addi("l", PROG_BLOCK * 512, D(0))
     doio(a, CMD_READ, CODE, PROG_BLOCKS * 512, offset_dn=0)
-    doio(a, TD_MOTOR, 0, 0)
+    if not RAW:
+        doio(a, TD_MOTOR, 0, 0)
     a.movea("l", ABSL(EXEC), 6)
-    a.cmpi("w", 37, D16(20, 6))
-    a.bcc(5, "nocache")                          # BCS: no CacheClearU before V37
-    jsr_lib(a, CACHECLEARU)
-    a.label("nocache")
+    if not RAW:
+        a.cmpi("w", 37, D16(20, 6))
+        a.bcc(5, "nocache")                      # BCS: no CacheClearU before V37
+        jsr_lib(a, CACHECLEARU)
+        a.label("nocache")
     a.move("l", ABSL(0x64), ABSL(OLD64))
     # the level-1 vector of the tests that have a handler
     a.lea(ABSL(TABLE), 0)                        # table of handlers (0 = none)
@@ -238,6 +265,12 @@ def build_harness(irqs):
     a.label("novec")
     a.move("w", ABSL(CUSTOM + 0x1C), ABSL(SAVEINT))  # INTENAR
     a.move("w", ABSL(CUSTOM + 0x02), ABSL(SAVEDMA))  # DMACONR
+    # FMODE 0 for every test: Kickstart 3.1 leaves $7FFF in it (64-bit
+    # fetch) once it had the machine back after a test, which halves the
+    # bitplane DMA of the tests that follow (found 2026-11-07 on the A1200:
+    # a test booted alone counted up to 47 % fewer iterations); nothing on
+    # the OCS/ECS at $1FC.
+    a.move("w", IMM(0, "w"), ABSL(CUSTOM + 0x1FC))
     a.emit(0x48E7, 0xFFFE)                       # MOVEM.L D0-D7/A0-A6,-(SP)
     a.emit(0x4EB9, CODE >> 16, CODE & 0xFFFF)   # JSR CODE
     a.emit(0x4CDF, 0x7FFF)                       # MOVEM.L (SP)+,D0-D7/A0-A6
@@ -559,6 +592,15 @@ def results(path, against=None):
 
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "build":
+        global QUICK, RAW
+        global WAIT_FIELDS
+        QUICK = "--quick" in sys.argv[3:]
+        RAW = "--raw" in sys.argv[3:]
+        global FROM_TEST
+        if "--from" in sys.argv[3:]:
+            FROM_TEST = int(sys.argv[sys.argv.index("--from") + 1])
+        if "--wait" in sys.argv[3:]:
+            WAIT_FIELDS = int(sys.argv[sys.argv.index("--wait") + 1])
         build(sys.argv[2])
     elif len(sys.argv) >= 3 and sys.argv[1] == "results":
         against = sys.argv[4] if len(sys.argv) >= 5 and sys.argv[3] == "--against" else None

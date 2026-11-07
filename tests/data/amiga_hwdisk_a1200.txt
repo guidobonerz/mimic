@@ -25,3 +25,17 @@ amiga_bustest9: 0E43 0E2A 0DA5 0D51 0D07 0C92 0C34 0CE6 0C52 0CE6 0CAB 0DB0
 # slower), bus test 4 rows 2 and 3 now 5 and 11 % faster than mimic (open):
 mimic amiga_bustest9: 0E45 0E2A 0DD5 0D9A 0D7C 0CFA 0C8F 0CFA 0C85 0D0F 0CFA 0DE3
 mimic amiga_bustest4: 14EB 15FC 1BC5 2D63 3334 38F4 4289 6606
+# Third run of the plain A1200 (2026-11-07): the harness now writes FMODE 0 before every test.
+# Before, Kickstart 3.1 had put $7FFF into FMODE (64-bit fetch) whenever it had the machine back
+# after a test, so the runs above measured bus tests 2-9 with half the bitplane DMA; bus test 4
+# came out the same (its Copper lists make no difference to that), bus test 9's rows with planes
+# did not. These are the references of a1200_bus_timing_matches_the_hardware.
+amiga_bustest: 1EA4 24A1 26CE 2057
+amiga_bustest2: 20AF 01C9 1A22 0001 40C2 02B7 1A26 0360
+amiga_bustest3: 1ED0 1F47 26CD 26CD
+amiga_bustest4: 1483 1529 1A45 2892 3539 39B2 42F6 6654
+amiga_bustest9: 0E43 0D7B 0CBC 0BE1 0B1B 092B 0673 09A1 0704 0737 092B 0D33
+# mimic with Alice holding one wake-up cycle after a strobe (Agnus two): bus test 4 within 3.9 %,
+# bus test 9 within 2.4 %, bus test 3 row 0 3.2 % slow:
+mimic amiga_bustest4: 14EB 15FB 1ABB 278D 3334 38ED 4114 6563
+mimic amiga_bustest9: 0E45 0D7C 0CBD 0C0D 0B38 092C 069B 09A1 0723 0737 092C 0D4D

@@ -994,7 +994,7 @@ impl Custom {
                     copper_held = true;
                 } else if h & 1 == 0
                     && h != COPPER_BLOCKED
-                    && self.copper.holds_wake()
+                    && self.copper.holds_wake(if self.chipset.aga { 1 } else { 2 })
                     && self.dma_on(dma::COPEN)
                 {
                     // So does the wake-up after a COPJMP strobe (the owner's
