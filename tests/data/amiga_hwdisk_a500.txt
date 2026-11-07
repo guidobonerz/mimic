@@ -28,3 +28,11 @@ amiga_bustest9: 0502 0493 0463 0414 03C5 030D 0256 033C 0260 0283 0303 03F7
 # growing with the chain's length), and after it (within 1.6 %):
 mimic amiga_bustest9 before: 0543 0494 0463 041C 03D4 031B 0262 0346 0279 028B 031B 03FF
 mimic amiga_bustest9 after:  0506 0494 0463 0415 03C4 0302 024F 0338 0262 0279 0302 03FF
+# Fifth run (bus test 10 added: bus test 5's probes with loops of NOP, LSL.L #8 (24 clocks, one
+# prefetch at the start), MULU (38 clocks) and LSL.L with 2 planes; the first field after enabling
+# the interrupt is thrown away). Latencies (colour clock - trigger) run 37-50; over the three
+# bus-free loops the machine is 3.7 colour clocks later than mimic on average with the same spread,
+# in no pattern a constant delay, another sample point or an E-clock-synchronised acknowledge
+# reproduces (that one gives a period-5 sawtooth the machine does not show).
+amiga_bustest10: E078 E27C E47C E67E E880 EA80 EC88 EE87 F08C F28A F490 F691 F892 FA90 FC98 FE97 E083 E281 E47F E67E E87E EA8A EC8F EE8F F08F F28E F48D F68C F898 FA9D FC9D FE9D E078 E278 E47C E67C E884 EA83 EC86 EE86 F08C F28B F48E F68C F892 FA92 FC94 FE9A E07B E283 E481 E685 E883 EA8B EC87 EE8D F08D F28F F493 F697 F893 FA97 FC95 FE9D
+mimic amiga_bustest10: E078 E274 E47C E67E E880 EA80 EC82 EE84 F084 F28A F48A F68C F88A FA90 FC92 FE94 E07D E27C E47A E678 E887 EA85 EC84 EE84 F084 F284 F490 F695 F895 FA94 FC92 FE90 E074 E278 E478 E678 E87C EA7C EC84 EE84 F086 F286 F48C F68C F890 FA8E FC94 FE96 E07F E27D E481 E681 E887 EA81 EC89 EE89 F08F F28D F48D F68F F897 FA95 FC99 FE99
