@@ -1161,6 +1161,19 @@ const RADIO: std::net::Ipv4Addr = std::net::Ipv4Addr::new(192, 0, 2, 80);
 const RADIO_METAINT: usize = 8192;
 static TONE_MP3: &[u8] = include_bytes!("../../../tests/data/logophor16/tone.mp3");
 
+/// What the station streams: the test tone, or the file EMU_MP3 names (a
+/// development aid, see `the_radio_decodes_a_file_to_a_wav`).
+fn station_bytes() -> &'static [u8] {
+    static FILE: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+    FILE.get_or_init(|| {
+        std::env::var("EMU_MP3")
+            .ok()
+            .map(|p| std::fs::read(p).unwrap())
+    })
+    .as_deref()
+    .unwrap_or(TONE_MP3)
+}
+
 impl RadioListener {
     fn fill(&mut self, want: usize) {
         if self.redirected {
@@ -1198,8 +1211,9 @@ impl RadioListener {
                 self.out.extend(meta);
                 self.since_meta = 0;
             }
-            self.out.push_back(TONE_MP3[self.pos]);
-            self.pos = (self.pos + 1) % TONE_MP3.len();
+            let src = station_bytes();
+            self.out.push_back(src[self.pos]);
+            self.pos = (self.pos + 1) % src.len();
             self.since_meta += 1;
         }
     }
@@ -2188,6 +2202,174 @@ fn the_radio_plays_a_station_through_phonograph() {
             }
             std::fs::write(format!("{dir}/radio{k}.ppm"), img).unwrap();
         }
+    }
+}
+
+/// Development aid: the Radio app plays the file EMU_MP3 from the
+/// in-memory station for EMU_SECONDS (default 10) and the machine's sound
+/// goes to EMU_WAV (48 kHz stereo), to compare with another decoder's
+/// output of the same file (`ffmpeg -af highpass=f=8000,volumedetect`).
+#[test]
+#[ignore = "needs EMU_MP3 and EMU_WAV"]
+fn the_radio_decodes_a_file_to_a_wav() {
+    let Ok(wav) = std::env::var("EMU_WAV") else {
+        return;
+    };
+    let secs: usize = std::env::var("EMU_SECONDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let card = asm_ada::sdimage::fat32(
+        64,
+        &[
+            ("BOOT/BOILER.BIN".into(), system_binary()),
+            ("PANORAMA/TILE.RAW".into(), SYSTEM_TILE.to_vec()),
+            ("RADIO/SCOPE.RAW".into(), SYSTEM_SCOPE.to_vec()),
+            (
+                "RADIO/STATIONS.TXT".into(),
+                b"Test Radio|http://radio.example/stream\n".to_vec(),
+            ),
+        ],
+    )
+    .unwrap();
+    let mut ms = net_machines_with(1, Some(card));
+    let m = &mut ms[0];
+    point(m, (512, 384), (994, 236));
+    click(m);
+    frames(m, 60);
+    point(m, (994, 236), (230, 40 + 22 + 28 + 10));
+    click(m);
+    let mut dbg = DebugHooks::new();
+    let (mut audio, mut all) = (Vec::new(), Vec::<i16>::new());
+    for _ in 0..secs * 60 {
+        assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
+        m.audio(&mut audio);
+        all.extend_from_slice(&audio);
+        audio.clear();
+    }
+    let n = all.len() as u32;
+    let mut w = Vec::with_capacity(44 + 2 * all.len());
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + 2 * n).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    for v in [16u32, 1 | 2 << 16, 48_000, 48_000 * 4, 4 | 16 << 16] {
+        w.extend_from_slice(&v.to_le_bytes());
+    }
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&(2 * n).to_le_bytes());
+    for s in &all {
+        w.extend_from_slice(&s.to_le_bytes());
+    }
+    std::fs::write(&wav, w).unwrap();
+    eprintln!("wrote {wav}: {} samples", n / 2);
+}
+
+/// Development aid: what a savestate costs per frame while the Radio plays
+/// the in-memory station (the desktop takes one every frame for rewinding):
+/// size and time over 300 frames.
+#[test]
+#[ignore = "development aid"]
+fn radio_savestate_cost() {
+    let card = asm_ada::sdimage::fat32(
+        64,
+        &[
+            ("BOOT/BOILER.BIN".into(), system_binary()),
+            ("PANORAMA/TILE.RAW".into(), SYSTEM_TILE.to_vec()),
+            ("RADIO/SCOPE.RAW".into(), SYSTEM_SCOPE.to_vec()),
+            (
+                "RADIO/STATIONS.TXT".into(),
+                b"Test Radio|http://radio.example/stream\n".to_vec(),
+            ),
+        ],
+    )
+    .unwrap();
+    let mut ms = net_machines_with(1, Some(card));
+    let m = &mut ms[0];
+    point(m, (512, 384), (994, 236));
+    click(m);
+    frames(m, 60);
+    point(m, (994, 236), (230, 40 + 22 + 28 + 10));
+    click(m);
+    frames(m, 180);
+    let mut dbg = DebugHooks::new();
+    let (mut sizes, mut times, mut frame_times) = (Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..300 {
+        let t = std::time::Instant::now();
+        assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
+        frame_times.push(t.elapsed().as_secs_f64() * 1e3);
+        let t = std::time::Instant::now();
+        let s = m.save_state();
+        times.push(t.elapsed().as_secs_f64() * 1e3);
+        sizes.push(s.len());
+    }
+    sizes.sort();
+    times.sort_by(f64::total_cmp);
+    frame_times.sort_by(f64::total_cmp);
+    eprintln!(
+        "state size min {} median {} max {} bytes; save ms min {:.2} median {:.2} p90 {:.2} max {:.2}; frame ms median {:.2} p90 {:.2} max {:.2}",
+        sizes[0], sizes[150], sizes[299], times[0], times[150], times[270], times[299],
+        frame_times[150], frame_times[270], frame_times[299]
+    );
+}
+
+/// Development aid: where the Ada CPU spends its time while the Radio
+/// plays the in-memory station (EMU_MP3 or the tone): a PC histogram by
+/// 256-byte block over EMU_SECONDS (default 15), two samples a frame at
+/// shifting phases, the 30 busiest blocks printed.
+#[test]
+#[ignore = "development aid"]
+fn radio_pc_profile() {
+    let secs: usize = std::env::var("EMU_SECONDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(15);
+    let card = asm_ada::sdimage::fat32(
+        64,
+        &[
+            ("BOOT/BOILER.BIN".into(), system_binary()),
+            ("PANORAMA/TILE.RAW".into(), SYSTEM_TILE.to_vec()),
+            ("RADIO/SCOPE.RAW".into(), SYSTEM_SCOPE.to_vec()),
+            (
+                "RADIO/STATIONS.TXT".into(),
+                b"Test Radio|http://radio.example/stream\n".to_vec(),
+            ),
+        ],
+    )
+    .unwrap();
+    let mut ms = net_machines_with(1, Some(card));
+    let m = &mut ms[0];
+    point(m, (512, 384), (994, 236));
+    click(m);
+    frames(m, 60);
+    point(m, (994, 236), (230, 40 + 22 + 28 + 10));
+    click(m);
+    frames(m, 180);
+    let mut dbg = DebugHooks::new();
+    let mut hist: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+    let mut total = 0u32;
+    for i in 0..secs * 60 {
+        for half in 0..2 {
+            let steps = (i * 7919 + half * 400_000) % 800_000;
+            for _ in 0..steps {
+                m.step_cycle();
+            }
+            let regs = m.debug_target(CPU).unwrap().regs();
+            let pc = regs.get("s0").unwrap() << 16 | regs.get("pc").unwrap();
+            *hist.entry(pc >> 8).or_default() += 1;
+            total += 1;
+        }
+        assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
+    }
+    let mut v: Vec<(u32, u32)> = hist.into_iter().collect();
+    v.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+    eprintln!("{total} samples");
+    for (block, n) in v.iter().take(30) {
+        eprintln!(
+            "{:08x}-{:08x} {:5.1} %",
+            block << 8,
+            (block << 8) + 255,
+            100.0 * f64::from(*n) / f64::from(total)
+        );
     }
 }
 

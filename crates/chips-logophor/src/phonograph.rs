@@ -844,6 +844,50 @@ mod tests {
         check_tone(MP3, 0, 128..=128);
     }
 
+    /// Development aid: decode EMU_MP3 (or EMU_AAC) through the chip and
+    /// write the 48 kHz output as EMU_WAV, to compare its spectrum with
+    /// another decoder's (`ffmpeg -af highpass=f=8000,volumedetect`).
+    #[test]
+    #[ignore = "needs EMU_MP3/EMU_AAC and EMU_WAV"]
+    fn decodes_a_file_to_a_wav() {
+        let (src, con) = match (std::env::var("EMU_MP3"), std::env::var("EMU_AAC")) {
+            (Ok(p), _) => (std::fs::read(p).unwrap(), 0),
+            (_, Ok(p)) => (std::fs::read(p).unwrap(), CON_AAC),
+            _ => return,
+        };
+        let (mut p, mut ram) = chip(32_768, con);
+        let mut at = 0;
+        let mut all: Vec<[i32; 2]> = Vec::new();
+        while at < src.len() || p.peek(PHSTAT) & STAT_STARVED == 0 {
+            let (out, _, _) = run(&mut p, &mut ram, &src, &mut at, 4800, true);
+            all.extend(out);
+            if all.len() > 48_000 * 600 {
+                break;
+            }
+        }
+        let n = all.len() as u32;
+        let mut w = Vec::with_capacity(44 + 4 * all.len());
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + 4 * n).to_le_bytes());
+        w.extend_from_slice(b"WAVEfmt ");
+        for v in [16u32, 1 | 2 << 16, 48_000, 48_000 * 4, 4 | 16 << 16] {
+            w.extend_from_slice(&v.to_le_bytes());
+        }
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&(4 * n).to_le_bytes());
+        for s in &all {
+            for v in s {
+                w.extend_from_slice(&((*v).clamp(-32768, 32767) as i16).to_le_bytes());
+            }
+        }
+        std::fs::write(std::env::var("EMU_WAV").unwrap(), w).unwrap();
+        eprintln!(
+            "{n} samples, PHRATE {}, PHSTAT {:04x}",
+            p.peek(PHRATE),
+            p.peek(PHSTAT)
+        );
+    }
+
     #[test]
     fn aac_plays_its_tone_at_48_khz() {
         check_tone(AAC, CON_AAC, 80..=112);

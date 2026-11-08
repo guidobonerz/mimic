@@ -265,17 +265,26 @@ fn net_host_radio_watch() {
     };
     let mut last = 0;
     let mut audio = Vec::new();
+    // EMU_WAV=file.wav: the whole output as 48 kHz stereo 16-bit WAV
+    let mut all: Vec<i16> = Vec::new();
     for s in 0..secs {
         let t0 = std::time::Instant::now();
-        frames(&mut m, 60);
+        // a frame at a time, taking the audio as a frontend does (Calliope
+        // keeps at most a second of it)
+        let mut dbg = DebugHooks::new();
+        for _ in 0..60 {
+            assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
+            m.audio(&mut audio);
+            all.extend_from_slice(&audio);
+            audio.clear();
+        }
         let host_ms = t0.elapsed().as_millis();
         // in real time, as a frontend runs it (60 fields: 998.5 ms)
         if let Some(rest) = std::time::Duration::from_micros(998_500).checked_sub(t0.elapsed()) {
             std::thread::sleep(rest);
         }
-        audio.clear();
-        m.audio(&mut audio);
-        let quiet = audio
+        let second = &all[all.len().saturating_sub(96_000)..];
+        let quiet = second
             .chunks(96)
             .filter(|c| c.iter().all(|v| v.unsigned_abs() < 8))
             .count();
@@ -289,5 +298,26 @@ fn net_host_radio_watch() {
             reg(&mut m, 0x3214),
         );
         last = decoded;
+    }
+    if let Ok(path) = std::env::var("EMU_WAV") {
+        let data_len = (all.len() * 2) as u32;
+        let mut w = Vec::with_capacity(44 + all.len() * 2);
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + data_len).to_le_bytes());
+        w.extend_from_slice(b"WAVEfmt ");
+        w.extend_from_slice(&16u32.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        w.extend_from_slice(&2u16.to_le_bytes()); // stereo
+        w.extend_from_slice(&48_000u32.to_le_bytes());
+        w.extend_from_slice(&(48_000u32 * 4).to_le_bytes());
+        w.extend_from_slice(&4u16.to_le_bytes());
+        w.extend_from_slice(&16u16.to_le_bytes());
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&data_len.to_le_bytes());
+        for s in &all {
+            w.extend_from_slice(&s.to_le_bytes());
+        }
+        std::fs::write(&path, w).expect("EMU_WAV");
+        eprintln!("wrote {path}");
     }
 }

@@ -791,6 +791,18 @@ pub fn spawn(
         // maximum, ns): the phase lock starts the frame as late as that
         // allows before the next vertical blank.
         let mut slice_ns = 0.0f64;
+        // Frames between two rewind states. A state costs wall time (the
+        // Logophor's 768 KB picture: about a tenth of a frame); when a
+        // frame's emulation gets close to the frame's length, states are
+        // taken every 2nd, 4th or 8th frame rather than the sound running
+        // dry (the Logophor's Radio, 2026-11-08: 1-3 % short of real time
+        // with a state every frame, thousands of underruns a second, dull
+        // and crackling sound; in time without).
+        let mut rewind_every = 1u32;
+        // Frames the load has stayed low: the way back is slow (a state
+        // every 8th frame is good enough for rewinding, a lost frame is a
+        // click in the sound).
+        let mut rewind_calm = 0u32;
         let mut shown_at = None;
         let debug_stats = std::env::var_os("EMU_DESKTOP_DEBUG").is_some();
         let mut report = Instant::now();
@@ -1234,6 +1246,25 @@ pub fn spawn(
             push_frame(&shared, session.machine(), screen);
             let took = slice_start.elapsed().as_nanos() as f64;
             slice_ns = took.max(slice_ns * 0.98);
+            if rewind_mb > 0 {
+                let load = slice_ns / frame_time.as_nanos() as f64;
+                rewind_calm = if load < 0.6 { rewind_calm + 1 } else { 0 };
+                let want = if load > 0.9 {
+                    (rewind_every * 2).min(8)
+                } else if rewind_calm >= 600 {
+                    rewind_calm = 0;
+                    (rewind_every / 2).max(1)
+                } else {
+                    rewind_every
+                };
+                if want != rewind_every {
+                    rewind_every = want;
+                    session.rewind_config(Some(want), None);
+                    if debug_stats {
+                        eprintln!("rewind: a state every {want} frames (load {load:.2})");
+                    }
+                }
+            }
         }
     })
 }
