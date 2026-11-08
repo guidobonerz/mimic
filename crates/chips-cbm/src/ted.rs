@@ -336,6 +336,8 @@ pub struct Ted {
     /// The character rows have begun this field (set by its first
     /// attribute DMA), and the line being put out fetched pattern bytes.
     rows_active: bool,
+    /// The field's first pointer DMA has set the character line to 0.
+    row_started: bool,
     line_rows: bool,
     /// Debug overlay record (not machine state; see `crate::overlay`).
     rec: crate::overlay::Recorder<overlay::Record>,
@@ -390,6 +392,7 @@ impl Ted {
             line_pattern: [0; 40],
             line_vc: 0,
             rows_active: false,
+            row_started: false,
             line_rows: false,
             rec: crate::overlay::Recorder(None),
             kind: 0,
@@ -734,6 +737,7 @@ impl Ted {
             self.vc_step = false;
             self.chrast = 0;
             self.rows_active = false;
+            self.row_started = false;
             self.flash = (self.flash + 1) & 0x0f;
             return;
         }
@@ -741,9 +745,13 @@ impl Ted {
             return;
         }
         // The character line counts on from the field's first attribute
-        // DMA and starts again with a pointer DMA, not with YSCROLL (FLI
-        // keeps it running: xplus4, `ted_timing` fli2).
-        self.chrast = if self.pointer_line(line) {
+        // DMA; the field's first pointer DMA sets it to 0, later ones
+        // leave it running, and so does YSCROLL (FLI: an attribute DMA on
+        // every line, `ted_timing` fli2, or the real two-line FLI with a
+        // pointer DMA every second line, fli2line, where xplus4 shows the
+        // character lines 0-7 straight down).
+        self.chrast = if self.pointer_line(line) && !self.row_started {
+            self.row_started = true;
             0
         } else {
             (self.chrast + 1) & 7
@@ -1118,7 +1126,7 @@ impl Ted {
 }
 
 const TAG: [u8; 4] = *b"TED1";
-const VERSION: u16 = 5;
+const VERSION: u16 = 6;
 
 impl Savestate for Ted {
     fn save(&self, w: &mut StateWriter) {
@@ -1179,6 +1187,8 @@ impl Savestate for Ted {
             w.bool(self.rows_active);
             w.bool(self.line_rows);
             w.bool(self.vc_step);
+            // Version 6.
+            w.bool(self.row_started);
         });
     }
 
@@ -1264,6 +1274,11 @@ impl Savestate for Ted {
             t.rows_active = c.bool()?;
             t.line_rows = c.bool()?;
             t.vc_step = c.bool()?;
+        }
+        if version >= 6 {
+            t.row_started = c.bool()?;
+        } else {
+            t.row_started = t.rows_active;
         }
         t.samples = std::mem::take(&mut self.samples);
         // The overlay record is not state: keep it switched on, fresh.

@@ -370,7 +370,9 @@ fn split_matches_xplus4() {
 #[ignore = "needs Plus/4 ROMs in EMU_ROM_DIR"]
 fn fetch_pipeline_pictures_match_xplus4() {
     let mut failed = Vec::new();
-    for name in ["rows", "matrix", "matrixc", "fli2", "fli3", "fli4"] {
+    for name in [
+        "rows", "matrix", "matrixc", "fli2", "fli3", "fli4", "fli2line",
+    ] {
         let bad = compare_picture(name);
         println!("{name}: {bad} pixels differ");
         if bad != 0 {

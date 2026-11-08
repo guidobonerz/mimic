@@ -702,7 +702,7 @@ def build_flicnt():
     return a.assemble(), len(FLICNT_REGS) * 0x100
 
 
-def build_fli(coded=False, shift=0, start=2):
+def build_fli(coded=False, shift=0, start=2, step=1):
     """A picture test of FLI: eight video matrices at $8000-$BFFF (ROM off
     for the CPU), matrix k with attributes ($42 + k) and character 0,
     solid in a charset in RAM at $C000. On every line L from 2 to 199 the program waits for the line
@@ -715,7 +715,12 @@ def build_fli(coded=False, shift=0, start=2):
     of character c is `hhhhhrrr` with h = k + 1 for the characters 0-7,
     31 for the space $20 (the KERNAL screen's) and 30 for the rest, so
     each line shows which matrix its attributes and its characters came
-    from and which character row the TED fetched."""
+    from and which character row the TED fetched.
+
+    `step` 2 (`fli2line`): the real Plus/4 FLI. Only on every second line
+    L: YSCROLL = (L + 1) & 7 and $FF14 = matrix (L / 2) & 7, so line L + 1
+    has an attribute DMA and L + 2 the character DMA that follows it (no
+    write on L + 1 turns it into another attribute DMA)."""
     a = Asm(0x1001)
     basic_stub(a)
     a.label("main")
@@ -773,15 +778,16 @@ def build_fli(coded=False, shift=0, start=2):
     a.op("CMP", "imm", 1)
     a.op("BNE", "rel", "fw0")
     # unrolled: a DMA line leaves the CPU only some 25 cycles.
-    for line in range(start, 200):
+    for line in range(start, 200, step):
         nxt = (line + 1) & 7
+        matrix = nxt if step == 1 else (line // 2) & 7
         a.op("LDA", "imm", line)
         a.label(f"fl{line}")
         a.op("CMP", "abs", 0xFF1D)
         a.op("BNE", "rel", f"fl{line}")
         a.op("LDA", "imm", 0x18 | nxt)   # DEN, 25 rows
         a.op("STA", "abs", 0xFF06)
-        a.op("LDA", "imm", (0x8000 + ((nxt + shift) & 7) * 0x800) >> 8)
+        a.op("LDA", "imm", (0x8000 + ((matrix + shift) & 7) * 0x800) >> 8)
         a.op("STA", "abs", 0xFF14)
     a.op("LDA", "imm", 0x1B)             # back to normal for the rest
     a.op("STA", "abs", 0xFF06)
@@ -803,6 +809,61 @@ DMA_FRAMES = 80         # write positions, one cycle apart
 DMA_SAMPLES = 24
 DMA_BASE = int(os.environ.get("TED_DMA_BASE", "950"))
 DMA_VALUES = [0x18 | (DMA_LINE & 7), 0x18 | ((DMA_LINE + 1) & 7)]
+
+
+def build_palette():
+    """All 128 colours as 8 x 8 cells of a hires bitmap (every dot 1): the
+    cell in column 2h (and 2h + 1), row 2l (and 2l + 1) has hue h,
+    luminance l (matrix bits 4-7 = hue, attribute bits 0-2 = luminance);
+    rows 16-24 and columns 32-39 black. The reference of
+    `chips-cbm/src/ted/palette.rs`."""
+    a = Asm(0x1001)
+    basic_stub(a)
+    a.label("main")
+    a.op("SEI")
+    # Bitmap all ones.
+    a.op("LDA", "imm", 0xFF)
+    a.op("LDX", "imm", 0)
+    a.label("ones")
+    for page in range(0x20):
+        a.op("STA", "abx", 0x2000 + page * 0x100)
+    a.op("INX")
+    a.op("BNE", "rel", "ones")
+    # Matrix and attributes from tables, 1000 cells.
+    cells_m, cells_a = bytearray(1024), bytearray(1024)
+    for row in range(25):
+        for col in range(40):
+            i = row * 40 + col
+            if row < 16 and col < 32:
+                cells_m[i] = (col // 2) << 4
+                cells_a[i] = row // 2
+    a.op("LDX", "imm", 0)
+    a.label("copy")
+    for page in range(4):
+        a.op("LDA", "abx", f"mtab+{page * 256}")
+        a.op("STA", "abx", 0x0C00 + page * 0x100)
+        a.op("LDA", "abx", f"atab+{page * 256}")
+        a.op("STA", "abx", 0x0800 + page * 0x100)
+    a.op("INX")
+    a.op("BNE", "rel", "copy")
+    a.op("LDA", "imm", 0x00)
+    a.op("STA", "abs", 0xFF15)
+    a.op("STA", "abs", 0xFF19)
+    a.op("LDA", "imm", 0x08)
+    a.op("STA", "abs", 0xFF12)
+    a.op("LDA", "imm", 0x08)
+    a.op("STA", "abs", 0xFF14)
+    a.op("LDA", "imm", 0x3B)
+    a.op("STA", "abs", 0xFF06)
+    a.op("LDA", "imm", 0x08)
+    a.op("STA", "abs", 0xFF07)
+    a.label("done")
+    a.op("JMP", "abs", "done")
+    a.label("mtab")
+    a.code += cells_m
+    a.label("atab")
+    a.code += cells_a
+    return a.assemble(), 0
 
 
 def build_dma():
@@ -1091,15 +1152,17 @@ def build_start(yscroll=None, base=None):
 
 
 # Tests whose result is xplus4's picture (tests/data/ted-<name>.png).
-PICTURES = {"split", "rows", "fli", "fli2", "matrix", "matrixc"}
+PICTURES = {"split", "rows", "fli", "fli2", "fli2line", "matrix", "matrixc", "palette"}
 
 TESTS = {
     "split": build_split,
+    "palette": build_palette,
     "rows": build_rows,
     "fli": build_fli,
     "fli2": lambda: build_fli(coded=True),
     "fli3": lambda: build_fli(coded=True, shift=2),
     "fli4": lambda: build_fli(coded=True, start=6),
+    "fli2line": lambda: build_fli(coded=True, step=2),
     "flicnt": build_flicnt,
     "matrix": build_matrix,
     "matrixc": lambda: build_matrix(codes=True),
@@ -1115,7 +1178,7 @@ TESTS = {
 }
 
 # Tests that run longer than LIMIT_CYCLES.
-LIMITS = {"irqall": 40_000_000, "split": 40_000_000, "rows": 30_000_000, "fli": 80_000_000, "fli2": 80_000_000, "fli3": 80_000_000, "fli4": 80_000_000, "flicnt": 90_000_000, "matrix": 30_000_000, "matrixc": 30_000_000, "dma": 40_000_000, "start": 40_000_000, "startdma": 40_000_000}
+LIMITS = {"palette": 40_000_000, "fli2line": 80_000_000, "irqall": 40_000_000, "split": 40_000_000, "rows": 30_000_000, "fli": 80_000_000, "fli2": 80_000_000, "fli3": 80_000_000, "fli4": 80_000_000, "flicnt": 90_000_000, "matrix": 30_000_000, "matrixc": 30_000_000, "dma": 40_000_000, "start": 40_000_000, "startdma": 40_000_000}
 
 # xplus4 cycles until the screenshot (PAL, ~1.77 M per second: autostart
 # takes about 3 s, the tests well under one).
@@ -1246,7 +1309,7 @@ def main(argv):
                         return sum(1 for p, q in zip(col, col[1:]) if p != q)
                     # (The coded FLI pictures are one even pattern down
                     # every column: the screenshot existing is enough.)
-                    if max(changes(5), changes(200)) >= 8 or name in ("fli2", "fli3", "fli4"):
+                    if max(changes(5), changes(200)) >= 8 or name in ("fli2", "fli3", "fli4", "fli2line", "palette"):
                         break
                 else:
                     raise SystemExit(f"{name}: no stripes in xplus4's picture")
