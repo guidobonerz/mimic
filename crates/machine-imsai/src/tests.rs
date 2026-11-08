@@ -207,6 +207,10 @@ fn terminal_echoes_through_the_sio2() {
     ];
     let mut m = machine();
     toggle_in(&mut m, &program);
+    // The 8251 set up first, as every program on the card must: mode
+    // (8 bits, x16, 1 stop), command (TxEN, RxE, DTR, RTS, error reset).
+    m.board.io_write(0x03, 0x4e);
+    m.board.io_write(0x03, 0x37);
     press(&mut m, ctl::RUN);
     for b in b"HELLO\r\nOK" {
         m.type_byte(*b);
@@ -331,6 +335,9 @@ fn tape_reads_on_the_reader_ports_or_the_console() {
     assert_eq!(m.board.io_peek(0x06) & 1, 0, "88-ACR: byte waiting");
     assert_eq!(m.board.io_read(0x07), b'X');
     frames(&mut m, 2);
+    assert_eq!(m.board.io_read(0x05) & 2, 0, "SIO-2 B: receiver still off");
+    m.board.io_write(0x05, 0x4e);
+    m.board.io_write(0x05, 0x37);
     assert_eq!(m.board.io_read(0x05) & 2, 2, "SIO-2 B: RxRDY");
     assert_eq!(m.board.io_read(0x04), b'Y');
 
@@ -361,7 +368,15 @@ fn mpu_rom_maps_at_zero_and_d800_until_port_f3_removes_it() {
     assert_eq!(m.peek_mem(0xd800), 0x3e, "ROM");
     press(&mut m, ctl::STEP);
     press(&mut m, ctl::STEP);
-    assert_eq!(m.peek_mem(0), 0, "low copy gone");
+    assert_eq!(
+        m.peek_mem(4),
+        0xc3,
+        "after the OUT the JMP still comes from the copy"
+    );
+    press(&mut m, ctl::STEP);
+    assert_eq!(m.pc(), 0xd800);
+    press(&mut m, ctl::STEP);
+    assert_eq!(m.peek_mem(0), 0, "low copy gone once the CPU read at $D800");
     assert_eq!(m.peek_mem(0xd800), 0x3e, "high copy stays");
     m.board.io_write(0xf3, 0xc0);
     assert_eq!(m.peek_mem(0xd800), 0);
@@ -413,11 +428,133 @@ fn debugger_steps_while_stopped_and_sees_the_screens() {
     let t = m.screen(TERMINAL_SCREEN).unwrap();
     assert_eq!((t.width, t.height), (640, 384));
     assert!(m.screen(ScreenId(7)).is_none());
-    assert_eq!(m.controls().len(), 26);
-    assert!(m.controls().iter().all(|c| c.on_picture));
+    assert_eq!(m.controls().len(), 28);
+    // The paddles are in the picture, PROTECT and UNPROTECT are not.
+    assert_eq!(m.controls().iter().filter(|c| c.on_picture).count(), 26);
     assert_eq!(m.disassemble(0).mnemonic, "NOP");
     assert_eq!(
         DebugTarget::peek(&m, CPU_SPACE, IO_BASE + 0xff, Size::Byte),
         Some(0)
     );
+}
+
+fn writable(kind: MediaKind, bytes: Vec<u8>) -> Media {
+    Media {
+        name: "w".into(),
+        kind,
+        backend: Box::new(crate::fif::tests::MemoryBackend { data: bytes }),
+    }
+}
+
+/// A disk whose boot sector (track 0, sector 1) shows $5A on the
+/// programmed output and halts: RESET and RUN boot it through the FIF's
+/// bootstrap; with the disk in before the first frame and autostart it
+/// runs by itself.
+#[test]
+fn a_disk_in_drive_a_boots_through_the_fif() {
+    let mut image = vec![0xe5; fif::IMAGE_BYTES];
+    image[..5].copy_from_slice(&[0x3e, 0xa5, 0xd3, 0xff, 0x76]); // MVI A,$A5; OUT $FF; HLT
+    let mut m = machine();
+    frames(&mut m, 1);
+    m.media_slot(SLOT_DISKS[0])
+        .unwrap()
+        .insert(writable(MediaKind::Disk, image.clone()))
+        .unwrap();
+    assert_eq!(
+        m.peek_mem(0),
+        0,
+        "no bootstrap yet: the FIF saw no disk at power-up"
+    );
+    press(&mut m, ctl::RESET);
+    assert_eq!(&[m.peek_mem(0), m.peek_mem(1)], &[0xc3, 0x87], "JMP $0087");
+    press(&mut m, ctl::RUN);
+    frames(&mut m, 30);
+    assert_eq!(m.board.output, 0xa5, "the boot sector ran");
+    assert!(m.cpu.halted);
+    assert_eq!(m.media_slots()[3].name, "A:");
+
+    let mut c = MachineConfig::default();
+    c.options.insert("autostart".into(), "on".into());
+    let mut m = Imsai::new(&c).unwrap();
+    m.media_slot(SLOT_DISKS[0])
+        .unwrap()
+        .insert(writable(MediaKind::Disk, image))
+        .unwrap();
+    frames(&mut m, 30);
+    assert_eq!(m.board.output, 0xa5, "booted by itself");
+    // A wrong-sized image is refused.
+    assert!(m
+        .media_slot(SLOT_DISKS[1])
+        .unwrap()
+        .insert(writable(MediaKind::Disk, vec![0; 1000]))
+        .is_err());
+}
+
+#[test]
+fn the_punch_writes_into_its_reel_and_rewinds() {
+    let mut m = machine();
+    m.media_slot(SLOT_PUNCH)
+        .unwrap()
+        .insert(writable(MediaKind::Tape, vec![0; 3]))
+        .unwrap();
+    for b in *b"ABCD" {
+        m.board.io_write(0x07, b); // the 88-ACR
+        frames(&mut m, 1);
+    }
+    assert_eq!(m.board.io_peek(0x06) & 0x80, 0, "ready again");
+    m.media_slot(SLOT_PUNCH).unwrap().control("rewind").unwrap();
+    // The SIO-2's channel B punches once its 8251 is set up.
+    m.board.io_write(0x04, b'Z');
+    frames(&mut m, 1);
+    m.board.io_write(0x05, 0x4e);
+    m.board.io_write(0x05, 0x37);
+    frames(&mut m, 1);
+    let mut media = m.media_slot(SLOT_PUNCH).unwrap().eject().unwrap();
+    let mut reel = vec![0; 3];
+    media.backend.read(0, &mut reel).unwrap();
+    assert_eq!(
+        reel, b"ZBC",
+        "D past the reel's end is lost; Z after the rewind"
+    );
+}
+
+#[test]
+fn protect_and_unprotect_take_the_block_the_switches_select() {
+    let mut m = machine();
+    set_switches(&mut m, 0x0c00);
+    press(&mut m, ctl::PROTECT);
+    m.board.mem_write(0x0c10, 0x55);
+    m.board.mem_write(0x0810, 0x55);
+    assert_eq!(m.peek_mem(0x0c10), 0, "block 3 protected");
+    assert_eq!(m.peek_mem(0x0810), 0x55);
+    press(&mut m, ctl::UNPROTECT);
+    m.board.mem_write(0x0c10, 0x55);
+    assert_eq!(m.peek_mem(0x0c10), 0x55);
+    let names: Vec<&str> = m
+        .controls()
+        .iter()
+        .filter(|c| !c.on_picture)
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(names, ["PROTECT", "UNPROTECT"]);
+}
+
+#[test]
+fn the_mpu_b_timer_counts_while_its_rom_is_in() {
+    let mut c = MachineConfig::default();
+    c.options.insert("mpu".into(), "b".into());
+    c.roms.insert("mpu-b".into(), vec![0x76; 0x800]);
+    let mut m = Imsai::new(&c).unwrap();
+    // Counter 0, both bytes, mode 2, count 1000.
+    m.board.mem_write(0xd103, 0x34);
+    m.board.mem_write(0xd100, 0xe8);
+    m.board.mem_write(0xd100, 0x03);
+    m.board.t += 101;
+    let lo = m.board.mem_read_cpu(0xd100);
+    let hi = m.board.mem_read_cpu(0xd100);
+    assert_eq!(u16::from(hi) << 8 | u16::from(lo), 900);
+    // With the ROM's upper copy out the page is RAM.
+    m.board.io_write(0xf3, 0xc0);
+    m.board.mem_write(0xd100, 0x42);
+    assert_eq!(m.peek_mem(0xd100), 0x42);
 }

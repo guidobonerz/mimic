@@ -142,6 +142,17 @@ mkdir -p "$DEST/imsai"
 fetch "https://raw.githubusercontent.com/bhall66/IMSAI-8080/$IMSAI_COMMIT/Altair-Basic/basic-tape.hex" "$DEST/imsai/basic-tape.hex"
 [ "$(sha256 "$DEST/imsai/basic-tape.hex")" = "d342f6978f9d5840bb629469dd38ca9652d231cab097b75bebb5ffe912dd6b1a" ] || { echo "error: basic-tape.hex: checksum" >&2; exit 1; }
 
+# CP/M 2.2 for the IMSAI with the FIF floppy controller, z80pack's 8-inch
+# disk image (Udo Munk's archive); run, never committed.
+echo "IMSAI CP/M 2.2 -> $DEST/imsai/cpm22.dsk"
+if [ ! -s "$DEST/imsai/cpm22.dsk" ]; then
+  fetch "https://www.icl1900.co.uk/unix4fun/z80pack/ftp/imsai/cpm22.tgz" "$DEST/imsai/cpm22.tgz"
+  tar -xzf "$DEST/imsai/cpm22.tgz" -C "$DEST/imsai" disks/library/cpm22.dsk
+  mv "$DEST/imsai/disks/library/cpm22.dsk" "$DEST/imsai/cpm22.dsk"
+  rm -rf "$DEST/imsai/disks" "$DEST/imsai/cpm22.tgz"
+fi
+[ "$(sha256 "$DEST/imsai/cpm22.dsk")" = "ddc9084f536845b3611f6c44d864fee7c123244a269e5a602d87bd3cc6a32bbe" ] || { echo "error: cpm22.dsk: checksum" >&2; exit 1; }
+
 # ZEXDOC/ZEXALL Z80 instruction exercisers (Frank Cringle, GPL-2.0 test
 # programs; run, never committed), CP/M .COM files, checked by SHA-256.
 ZEX_COMMIT=8f71d418bae69a476a5a0e5c6e122c8801b8d9f4

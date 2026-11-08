@@ -101,6 +101,38 @@ fn a_loaded_program_talks_to_the_terminal_screen() {
     assert_eq!(power.value, 0);
 }
 
+/// An Intel HEX file with bytes changed (each record's checksum redone).
+fn patch_hex(data: &[u8], patches: &[(u16, u8)]) -> Vec<u8> {
+    let text = std::str::from_utf8(data).unwrap();
+    let mut out = String::new();
+    for line in text.lines() {
+        let Some(hex) = line.trim().strip_prefix(':') else {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        };
+        let mut rec: Vec<u8> = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        let (len, addr) = (usize::from(rec[0]), u16::from_be_bytes([rec[1], rec[2]]));
+        if rec[3] == 0 {
+            for &(at, v) in patches {
+                if (addr..addr + len as u16).contains(&at) {
+                    rec[4 + usize::from(at - addr)] = v;
+                }
+            }
+            let sum = rec[..4 + len].iter().fold(0u8, |a, b| a.wrapping_add(*b));
+            rec[4 + len] = sum.wrapping_neg();
+        }
+        out.push(':');
+        for b in rec {
+            out.push_str(&format!("{b:02X}"));
+        }
+        out.push('\n');
+    }
+    out.into_bytes()
+}
+
 /// Run a program file from `testdata/imsai` and answer on the terminal:
 /// each pair is the text to wait for and the line to type.
 fn session(file: Option<&str>, script: &[(&str, &str)]) -> Option<String> {
@@ -117,7 +149,16 @@ fn session(file: Option<&str>, script: &[(&str, &str)]) -> Option<String> {
     }
     let mut m = machine_imsai::Imsai::new(&config).unwrap();
     if let Some(file) = file {
-        let data = std::fs::read(format!("{dir}/imsai/{file}")).expect("fetch-testdata.sh");
+        let mut data = std::fs::read(format!("{dir}/imsai/{file}")).expect("fetch-testdata.sh");
+        if file == "basic-tape.hex" {
+            // The port's INIT sets up the SIO-2's 8251 with `LDA 0CAh` and
+            // `LDA 27h` where it means `MVI A`: it sends the bytes at $00CA
+            // and $0027 ($D2: 5 bits; $00: transmitter off), so on an IMSAI
+            // it prints nothing (its own machine, an emulation, ignores the
+            // 8251's set-up). MVI A plus the address's high byte ($00 = NOP)
+            // has the same length.
+            data = patch_hex(&data, &[(0x0d17, 0x3e), (0x0d1c, 0x3e)]);
+        }
         m.media_slot(machine_imsai::SLOT_PROGRAM)
             .unwrap()
             .insert(Media {
@@ -213,4 +254,85 @@ fn mpu_b_monitor_answers_on_the_console() {
     };
     assert!(text.contains("MONITOR"), "{text}");
     assert!(text.contains("0000  00"), "{text}");
+}
+
+/// CP/M 2.2 boots from a disk in drive A of the FIF (z80pack's IMSAI
+/// CP/M 2.2 disk; with `mpu=b` through the MPU-B monitor's own boot, else
+/// through the FIF's bootstrap), answers DIR, and STAT reads the disk.
+/// (Bruce Hall's system disks boot too, but their PROFILE.SUB runs LEDSOFF
+/// from drive I:, a hard disk this IMSAI does not have.)
+fn cpm_session(mpu: bool, disk: &str) -> Option<String> {
+    let dir = std::env::var("EMU_TESTDATA_DIR").ok()?;
+    let mut config = MachineConfig::default();
+    config.options.insert("autostart".into(), "on".into());
+    if mpu {
+        let roms = std::env::var("EMU_ROM_DIR").ok()?;
+        let rom = std::fs::read(format!("{roms}/imsai/mpu-b.rom")).expect("mpu-b.rom");
+        config.roms.insert("mpu-b".into(), rom);
+        config.options.insert("mpu".into(), "b".into());
+    }
+    let mut m = machine_imsai::Imsai::new(&config).unwrap();
+    let data = std::fs::read(format!("{dir}/imsai/{disk}")).expect("fetch-testdata.sh");
+    m.media_slot(machine_imsai::SLOT_DISKS[0])
+        .unwrap()
+        .insert(Media {
+            name: disk.into(),
+            kind: MediaKind::Disk,
+            backend: Box::new(Mem(data)),
+        })
+        .unwrap();
+    let mut dbg = DebugHooks::new();
+    let screen = |m: &machine_imsai::Imsai| {
+        (0..24)
+            .map(|r| m.terminal().line(r))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let prompt = |m: &machine_imsai::Imsai| {
+        m.terminal().col == 2 && m.terminal().line(m.terminal().row) == "A>"
+    };
+    let wait = |m: &mut machine_imsai::Imsai, dbg: &mut DebugHooks, what: &str| {
+        for _ in 0..60 * 60 {
+            m.run_frame(dbg);
+            if prompt(m) {
+                return;
+            }
+        }
+        panic!("no A> ({what}) on\n{}", screen(m));
+    };
+    // The MPU-B boots a disk at once; the FIF's bootstrap needs RUN from 0,
+    // which autostart gives.
+    wait(&mut m, &mut dbg, "boot");
+    for cmd in ["DIR", "STAT"] {
+        for b in cmd.bytes() {
+            m.type_byte(b);
+        }
+        m.type_byte(b'\r');
+        for _ in 0..30 {
+            m.run_frame(&mut dbg);
+        }
+        wait(&mut m, &mut dbg, cmd);
+    }
+    let text = screen(&m);
+    println!("{text}");
+    Some(text)
+}
+
+#[test]
+#[ignore = "needs EMU_TESTDATA_DIR"]
+fn cpm_boots_from_the_fif() {
+    let Some(text) = cpm_session(false, "cpm22.dsk") else {
+        return;
+    };
+    assert!(text.contains("ASM") && text.contains("COM"), "{text}");
+    assert!(text.contains("R/W"), "{text}");
+}
+
+#[test]
+#[ignore = "needs EMU_TESTDATA_DIR and EMU_ROM_DIR"]
+fn cpm_boots_through_the_mpu_b_monitor() {
+    let Some(text) = cpm_session(true, "cpm22.dsk") else {
+        return;
+    };
+    assert!(text.contains("ASM"), "{text}");
 }

@@ -7,8 +7,11 @@
 //! the desktop), and the host keyboard types on it.
 //!
 //! **Memory.** RAM from 0 up to option `ram` (default 64 KB), reads above
-//! it give $FF. 1 KB blocks can be protected: PROTECT comes from the
-//! panel's debugger chip only (the IMSAI's panel has no such paddle).
+//! it give $FF. 1 KB blocks can be protected (the RAM cards' protection,
+//! which blocks writes from the CPU and from DMA alike): the controls
+//! PROTECT and UNPROTECT (in the panel strip, not paddles in the picture:
+//! the IMSAI's panel has none) set it for the block the address switches
+//! A10-A15 select, as the Altair's paddles of that name do.
 //!
 //! **I/O.** Port $FF: IN reads the left eight switches (sense), OUT sets
 //! PROGRAMMED OUTPUT, whose lamps show the inverse. The console and the
@@ -22,12 +25,25 @@
 //! | $00 status, $01 data | MITS 88-SIO (bit 0 low: byte waiting, bit 7 low: ready to send) | terminal |
 //! | $06, $07 | MITS 88-ACR, as the 88-SIO | tape reader |
 //! | $10 status, $11 data | MITS 88-2SIO port A (6850) | terminal |
-//! | $12, $13 | 88-2SIO port B | tape reader |
+//! | $12, $13 | 88-2SIO port B | tape reader and punch |
+//! | $FD | IMSAI FIF floppy disk interface ([`fif`]) | drives A:-D: |
 //!
-//! A byte takes 10 bit times at option `baud` (default 9600). With option
-//! `reader=console` the tape plays into the terminal's line instead, as on
-//! a Teletype's reader. The 6850's receive interrupt pulls INT (the CPU
-//! fetches RST 7 from the idle bus).
+//! The reader cards' channels also punch: a byte written to their data
+//! port goes to the paper tape punch (slot "punch"). A byte takes 10 bit
+//! times at option `baud` (default 9600); on the SIO-2 the 8251's mode word
+//! sets the character's length instead (`usart`: after a reset the 8251
+//! waits for its mode and command words, with transmitter and receiver
+//! off, as on the card). With option `reader=console` the tape plays into
+//! the terminal's line instead, as on a Teletype's reader. The 6850's
+//! receive interrupt pulls INT (the CPU fetches RST 7 from the idle bus).
+//!
+//! **Disks.** The FIF with four 8-inch drives (slots "A:"-"D:", raw IBM
+//! 3740 images of 256 256 bytes, as z80pack's IMSAI CP/M disks). At
+//! power-up and RESET the FIF puts its bootstrap into memory when drive A
+//! holds a disk, so RESET and RUN boot it (a disk inserted before the
+//! first frame counts as in the drive at power-up; with `autostart=on`
+//! the machine then runs). An OUT to the FIF while it works holds the CPU
+//! in WAIT until it takes the byte.
 //!
 //! **Front panel** ([`Imsai::controls`], ids in [`ctl`]). As the 8080
 //! has no direct memory access for the panel, EXAMINE sets PC and the
@@ -42,18 +58,23 @@
 //! **MPU-A / MPU-B ROM** (optional; the machine needs no ROM). Option
 //! `mpu=a` or `b` fits the 2 KB monitor ROM (roles "mpu-a", "mpu-b"): it
 //! appears at $D800 and, after power-on and RESET, also at 0, so the CPU
-//! starts in it. OUT $F3: bit 6 removes the copy at 0, bit 7 the one at
-//! $D800. With a ROM fitted, $12/$13 are the MPU's 8251 (nothing connected)
+//! starts in it. OUT $F3: bit 6 removes the copy at 0 (at the next read
+//! from $D800-$DFFF, or at once with bit 7), bit 7 the one at $D800. With a ROM fitted, $12/$13 are the MPU's 8251 (nothing connected)
 //! and the parallel port $14/$15 reports nothing, instead of the 88-2SIO's
-//! port B. As elsewhere RUN starts the CPU, `autostart=on` at power-on.
-//! The mapping is read from Bruce Hall's commented disassemblies of these
-//! ROMs (z80pack's images); their floppy port $FD is not built, so the
-//! monitor finds no disk and asks for the space bar on the console.
+//! port B. The MPU-B also has an 8253 timer at $D100-$D103 (memory-mapped,
+//! 2 MHz, `pit`), the clock of its 8251, there while the ROM's upper copy
+//! is. As elsewhere RUN starts the
+//! CPU, `autostart=on` at power-on. The mapping is read from Bruce Hall's
+//! commented disassemblies of these ROMs (z80pack's images); the MPU-B
+//! boots a disk in drive A through the FIF, else it asks for the space bar
+//! on the console.
 //!
 //! Media: slot "program" (a binary loaded to option `load`, default 0, or
-//! Intel HEX by its addresses), slot "tape" (paper tape image). Option
-//! `autostart=on` runs a loaded program. Loaded programs return after a
-//! power cycle.
+//! Intel HEX by its addresses), slot "tape" (paper tape image for the
+//! reader), slot "punch" (the punched bytes go into this file from its
+//! start, until its end: a blank reel of the size wanted; "rewind" starts
+//! over), slots "A:"-"D:" (disks). Option `autostart=on` runs a loaded
+//! program. Loaded programs return after a power cycle.
 //!
 //! Sources: Thomas Fischer's edition of the IMSAI 8080 System manual,
 //! "General Assembly and Test Instructions" (panel use, status after
@@ -67,8 +88,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod fif;
 pub mod panel;
+mod pit;
 pub mod terminal;
+mod usart;
 
 use std::collections::VecDeque;
 
@@ -84,14 +108,21 @@ use emu_core::{
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
+use fif::{Disk, Fif};
 use panel::{Hit, Lamps, Paddle, Panel};
+use pit::Pit;
 use terminal::Terminal;
+use usart::Usart;
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The 8080's view: memory at 0–$FFFF, I/O ports at `IO_BASE + port`.
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(0);
 pub const SLOT_TAPE: SlotId = SlotId(1);
+pub const SLOT_PUNCH: SlotId = SlotId(2);
+/// Drives A:-D: of the FIF.
+pub const SLOT_DISKS: [SlotId; fif::DRIVES] = [SlotId(3), SlotId(4), SlotId(5), SlotId(6)];
+const DISK_NAMES: [&str; fif::DRIVES] = ["A:", "B:", "C:", "D:"];
 pub const CPU_HZ: u32 = 2_000_000;
 /// Fields a second of the panel picture: nothing in the machine sets this.
 pub const FPS: u32 = 60;
@@ -113,6 +144,9 @@ pub mod ctl {
     pub const RUN: u16 = 26;
     pub const STOP: u16 = 27;
     pub const STEP: u16 = 28;
+    /// Memory protection of the block the switches A10-A15 select.
+    pub const PROTECT: u16 = 29;
+    pub const UNPROTECT: u16 = 30;
 }
 
 /// Machine keys on the terminal: what a key sends unshifted (the Apple II
@@ -262,7 +296,28 @@ struct Board {
     /// Its copies at 0 and at $D800 are mapped in.
     rom_low: bool,
     rom_high: bool,
+    /// OUT $F3 bit 6 was written: the copy at 0 goes at the next read from
+    /// the ROM's own range ([S] a jump-start latch: the listings' start-up
+    /// code fetches its JP from the copy at 0 right after that OUT).
+    rom_low_leaving: bool,
+    /// The MPU-B's 8253 at $D100 (with `mpu=b`).
+    timer: bool,
+    pit: Pit,
+    /// The 8251s: SIO-2 channel A (console), B (tape), the MPU's.
+    usart: [Usart; 3],
+    /// The punch is busy until this clock.
+    punch_busy: u64,
+    /// The MPU's 8251 sends until this clock.
+    mpu_tx_busy: u64,
+    /// Bytes for the punch, taken by the machine into the punch slot.
+    punched: Vec<u8>,
+    fif: Fif,
+    /// The CPU waits in an OUT to the FIF until this clock.
+    stall_until: u64,
 }
+
+/// The MPU-B's 8253: $D100-$D103.
+const PIT_BASE: u16 = 0xd100;
 
 impl Board {
     fn protected(&self, addr: u16) -> bool {
@@ -280,6 +335,9 @@ impl Board {
     }
 
     fn mem_read(&self, addr: u16) -> u8 {
+        if self.pit_at(addr) {
+            return self.pit.peek((addr - PIT_BASE) as u8, self.t);
+        }
         if let Some(v) = self.rom_at(addr) {
             v
         } else if u32::from(addr) < self.ram_size {
@@ -289,30 +347,85 @@ impl Board {
         }
     }
 
+    /// The 8253 answers while the MPU-B's upper ROM copy is mapped in
+    /// ([S]: the listings do not say how the card decodes it; with OUT $F3
+    /// bit 7 the page is RAM again, as a 54K CP/M with its BIOS up to $D7FF
+    /// needs, which the MPU-B boots after removing its ROM).
+    fn pit_at(&self, addr: u16) -> bool {
+        self.timer && self.rom_high && (PIT_BASE..PIT_BASE + 4).contains(&addr)
+    }
+
+    /// A CPU read of memory (the 8253's counters have read effects).
+    fn mem_read_cpu(&mut self, addr: u16) -> u8 {
+        if self.rom_low_leaving && (0xd800..=0xdfff).contains(&addr) {
+            self.rom_low_leaving = false;
+            self.rom_low = false;
+        }
+        if self.pit_at(addr) {
+            return self.pit.read((addr - PIT_BASE) as u8, self.t);
+        }
+        self.mem_read(addr)
+    }
+
     fn mem_write(&mut self, addr: u16, v: u8) {
+        if self.pit_at(addr) {
+            self.pit.write((addr - PIT_BASE) as u8, v, self.t);
+            return;
+        }
         let rom = self.rom.is_some() && self.rom_high && (0xd800..=0xdfff).contains(&addr);
         if !rom && u32::from(addr) < self.ram_size && !self.protected(addr) {
             self.mem[usize::from(addr)] = v;
         }
     }
 
-    fn send(&mut self, v: u8) {
+    fn send(&mut self, v: u8, clocks: u64) {
         self.terminal.put(v);
-        self.tx_busy = self.t + self.char_clocks;
+        self.tx_busy = self.t + clocks;
     }
 
     fn tx_ready(&self) -> bool {
         self.t >= self.tx_busy
     }
 
+    fn punch_ready(&self) -> bool {
+        self.t >= self.punch_busy
+    }
+
+    fn punch(&mut self, v: u8, clocks: u64) {
+        self.punched.push(v);
+        self.punch_busy = self.t + clocks;
+    }
+
+    /// The MPU 8251's character time: its clock is the 8253's counter 0
+    /// (without the timer, or with it stopped, option `baud`'s).
+    fn mpu_clocks(&self) -> u64 {
+        let u = &self.usart[2];
+        match self.pit.period0() {
+            Some(p) if self.timer => {
+                u64::from(p) * u64::from(u.factor()) * u64::from(u.half_bits()) / 2
+            }
+            _ => self.char_clocks,
+        }
+    }
+
+    /// An 8251's character time at the line rate of option `baud`.
+    fn usart_clocks(&self, n: usize) -> u64 {
+        self.char_clocks * u64::from(self.usart[n].half_bits()) / 20
+    }
+
+    /// SIO-2 channel `n`'s 8251 status: TxRDY and TxE with the buffer
+    /// empty, RxRDY with a byte waiting and the receiver on, DSR.
+    fn sio2_status(&self, n: usize, line: &Line, ready: bool) -> u8 {
+        let u = &self.usart[n];
+        let tx = ready && !u.holding();
+        0x80 | u8::from(tx)
+            | u8::from(line.data.is_some() && u.rx_enabled()) << 1
+            | u8::from(tx) << 2
+    }
+
     /// The 88-SIO status: active low.
     fn sio_status(&self, line: &Line, tx_ready: bool) -> u8 {
         0x7e | u8::from(line.data.is_none()) | u8::from(!tx_ready) << 7
-    }
-
-    /// The 8251 status: bit 0 TxRDY, 1 RxRDY, 2 TxE, 7 DSR.
-    fn usart_status(&self, line: &Line, tx_ready: bool) -> u8 {
-        0x80 | u8::from(tx_ready) | u8::from(line.data.is_some()) << 1 | u8::from(tx_ready) << 2
     }
 
     /// The 6850 status: bit 0 RDRF, 1 TDRE, 7 IRQ.
@@ -326,16 +439,23 @@ impl Board {
         let tx = self.tx_ready();
         match port {
             // The MPU's own 8251 and parallel port: nothing connected.
-            0x13 if self.rom.is_some() => 0x01,
+            // TxRDY and TxE once its character time (the 8253's counter 0
+            // as its clock) is over.
+            0x13 if self.rom.is_some() => {
+                let tx = self.t >= self.mpu_tx_busy && !self.usart[2].holding();
+                0x80 | u8::from(tx) | u8::from(tx) << 2
+            }
             0x12 | 0x14 | 0x15 if self.rom.is_some() => 0x00,
             0x00 => self.sio_status(&self.console, tx),
-            0x06 => self.sio_status(&self.reader, true),
-            0x03 => self.usart_status(&self.console, tx),
-            0x05 => self.usart_status(&self.reader, true),
+            0x06 => self.sio_status(&self.reader, self.punch_ready()),
+            0x03 => self.sio2_status(0, &self.console, tx),
+            0x05 => self.sio2_status(1, &self.reader, self.punch_ready()),
             0x10 => self.acia_status(&self.console, tx, self.acia[0]),
-            0x12 => self.acia_status(&self.reader, true, self.acia[1]),
-            0x01 | 0x02 | 0x11 => self.console.peek(),
-            0x04 | 0x07 | 0x13 => self.reader.peek(),
+            0x12 => self.acia_status(&self.reader, self.punch_ready(), self.acia[1]),
+            0x02 => self.console.peek() & self.usart[0].mask(),
+            0x04 => self.reader.peek() & self.usart[1].mask(),
+            0x01 | 0x11 => self.console.peek(),
+            0x07 | 0x13 => self.reader.peek(),
             0xff => (self.switches >> 8) as u8,
             _ => 0xff,
         }
@@ -344,20 +464,65 @@ impl Board {
     fn io_read(&mut self, port: u8) -> u8 {
         match port {
             0x12..=0x15 if self.rom.is_some() => self.io_peek(port),
-            0x01 | 0x02 | 0x11 => self.console.take(),
-            0x04 | 0x07 | 0x13 => self.reader.take(),
+            0x02 => self.console.take() & self.usart[0].mask(),
+            0x04 => self.reader.take() & self.usart[1].mask(),
+            0x01 | 0x11 => self.console.take(),
+            0x07 | 0x13 => self.reader.take(),
             _ => self.io_peek(port),
         }
     }
 
     fn io_write(&mut self, port: u8, v: u8) {
         match port {
-            0x12 | 0x13 if self.rom.is_some() => {}
-            0xf3 => {
-                self.rom_low &= v & 0x40 == 0;
-                self.rom_high &= v & 0x80 == 0;
+            // The MPU's 8251: set up, sends into nothing.
+            0x13 if self.rom.is_some() => self.usart[2].control(v),
+            0x12 if self.rom.is_some() => {
+                if self.usart[2].transmit(v).is_some() {
+                    self.mpu_tx_busy = self.t + self.mpu_clocks();
+                }
             }
-            0x01 | 0x02 | 0x11 => self.send(v),
+            0xf3 => {
+                self.rom_low_leaving |= self.rom_low && v & 0x40 != 0;
+                self.rom_high &= v & 0x80 == 0;
+                // Both copies off at once (the MPU-B's boot, OUT $C0): the
+                // CPU goes on from RAM, so the copy at 0 goes now.
+                if v & 0xc0 == 0xc0 {
+                    self.rom_low = false;
+                    self.rom_low_leaving = false;
+                }
+            }
+            fif::PORT => {
+                let go_on = self.fif.out(v, self.t);
+                self.stall_until = self.stall_until.max(go_on);
+            }
+            0x03 => {
+                self.usart[0].control(v);
+                if let Some(b) = self.usart[0].release() {
+                    let c = self.usart_clocks(0);
+                    self.send(b, c);
+                }
+            }
+            0x05 => {
+                self.usart[1].control(v);
+                if let Some(b) = self.usart[1].release() {
+                    let c = self.usart_clocks(1);
+                    self.punch(b, c);
+                }
+            }
+            0x02 => {
+                if let Some(b) = self.usart[0].transmit(v) {
+                    let c = self.usart_clocks(0);
+                    self.send(b, c);
+                }
+            }
+            0x04 => {
+                if let Some(b) = self.usart[1].transmit(v) {
+                    let c = self.usart_clocks(1);
+                    self.punch(b, c);
+                }
+            }
+            0x07 | 0x13 => self.punch(v, self.char_clocks),
+            0x01 | 0x11 => self.send(v, self.char_clocks),
             0x10 | 0x12 => {
                 let n = usize::from(port == 0x12);
                 self.acia[n] = v;
@@ -377,6 +542,16 @@ impl Board {
     }
 }
 
+impl fif::Dma for Board {
+    fn dma_read(&self, addr: u16) -> u8 {
+        self.mem_read(addr)
+    }
+
+    fn dma_write(&mut self, addr: u16, v: u8) {
+        self.mem_write(addr, v);
+    }
+}
+
 /// The 8080's bus for one instruction.
 struct ImsaiBus<'a> {
     b: &'a mut Board,
@@ -389,7 +564,7 @@ impl Bus for ImsaiBus<'_> {
         let v = if addr >= IO_BASE {
             u32::from(self.b.io_read(addr as u8))
         } else {
-            u32::from(self.b.mem_read(addr as u16))
+            u32::from(self.b.mem_read_cpu(addr as u16))
         };
         match self.dbg.as_deref_mut() {
             Some(dbg) if dbg.read_armed(CPU_SPACE) => {
@@ -586,11 +761,110 @@ impl MediaSlot for TapeSlot {
     }
 }
 
+/// The paper tape punch: bytes go into the file from its start.
+#[derive(Default)]
+struct PunchSlot {
+    media: Option<Media>,
+    pos: u64,
+}
+
+impl PunchSlot {
+    fn punch(&mut self, bytes: &[u8]) {
+        let Some(m) = &mut self.media else {
+            return;
+        };
+        for &b in bytes {
+            // Past the reel's end the bytes are lost.
+            if self.pos < m.backend.len() && m.backend.write(self.pos, &[b]).is_ok() {
+                self.pos += 1;
+            }
+        }
+    }
+}
+
+impl MediaSlot for PunchSlot {
+    fn insert(&mut self, media: Media) -> Result<(), MediaError> {
+        if media.kind != MediaKind::Tape {
+            return Err(MediaError::Unsupported(media.kind));
+        }
+        self.media = Some(media);
+        self.pos = 0;
+        Ok(())
+    }
+
+    fn eject(&mut self) -> Option<Media> {
+        self.pos = 0;
+        self.media.take()
+    }
+
+    fn write_protect(&mut self, _on: bool) {}
+
+    fn flush(&mut self) -> Result<(), MediaError> {
+        match &mut self.media {
+            Some(m) => m.backend.commit(),
+            None => Ok(()),
+        }
+    }
+
+    fn dirty(&self) -> bool {
+        self.media.as_ref().is_some_and(|m| m.backend.dirty())
+    }
+
+    fn control(&mut self, command: &str) -> Result<(), MediaError> {
+        match command {
+            "rewind" => {
+                self.pos = 0;
+                Ok(())
+            }
+            other => Err(MediaError::Control(format!("'{other}': only rewind"))),
+        }
+    }
+}
+
+/// A drive of the FIF as a media slot: the disk and what the drive shows.
+struct DiskSlot {
+    disk: Disk,
+    shown: emu_core::media::DriveStatus,
+}
+
+impl MediaSlot for DiskSlot {
+    fn insert(&mut self, media: Media) -> Result<(), MediaError> {
+        self.disk.insert(media)
+    }
+
+    fn eject(&mut self) -> Option<Media> {
+        self.disk.eject()
+    }
+
+    fn write_protect(&mut self, on: bool) {
+        self.disk.write_protect(on);
+    }
+
+    fn flush(&mut self) -> Result<(), MediaError> {
+        self.disk.flush()
+    }
+
+    fn dirty(&self) -> bool {
+        self.disk.dirty()
+    }
+
+    fn status(&self) -> emu_core::media::DriveStatus {
+        emu_core::media::DriveStatus {
+            error: self.disk.write_error(),
+            ..self.shown
+        }
+    }
+}
+
 pub struct Imsai {
     cpu: I8080,
     board: Board,
     program: ProgramSlot,
     tape: TapeSlot,
+    punch: PunchSlot,
+    disks: [DiskSlot; fif::DRIVES],
+    /// A disk was in drive A at power-up (or before the first frame).
+    booted: bool,
     input: InputQueue,
     power: bool,
     /// The panel's RUN flip-flop.
@@ -694,9 +968,18 @@ impl Imsai {
                 acia: [0; 2],
                 char_clocks: u64::from(CPU_HZ) * 10 / u64::from(baud),
                 reader_console,
+                timer: get("mpu") == Some("b"),
                 rom,
                 rom_low: true,
                 rom_high: true,
+                rom_low_leaving: false,
+                pit: Pit::new(),
+                usart: std::array::from_fn(|_| Usart::new()),
+                punch_busy: 0,
+                mpu_tx_busy: 0,
+                punched: Vec::new(),
+                fif: Fif::new(),
+                stall_until: 0,
             },
             program: ProgramSlot {
                 load,
@@ -705,6 +988,12 @@ impl Imsai {
                 pending: false,
             },
             tape: TapeSlot::default(),
+            punch: PunchSlot::default(),
+            disks: std::array::from_fn(|_| DiskSlot {
+                disk: Disk::default(),
+                shown: Default::default(),
+            }),
+            booted: false,
             input: InputQueue::new(),
             power: true,
             running: boot,
@@ -861,9 +1150,41 @@ impl Imsai {
         self.tape.pos = 0;
         self.board.rom_low = true;
         self.board.rom_high = true;
+        self.board.rom_low_leaving = false;
+        self.board.pit = Pit::new();
+        self.board.usart = std::array::from_fn(|_| Usart::new());
+        self.board.punch_busy = 0;
+        self.board.mpu_tx_busy = 0;
+        self.board.punched.clear();
+        self.board.stall_until = 0;
         self.running = self.autostart && self.board.rom.is_some();
         self.program.pending = !self.program.image.blocks.is_empty();
+        self.fif_restart();
         self.show_fetch();
+    }
+
+    /// The FIF's IFM restarts (power-up, RESET): its bootstrap goes into
+    /// memory when drive A holds a disk.
+    fn fif_restart(&mut self) {
+        self.board.fif.reset();
+        self.board.stall_until = 0;
+        self.booted = self.disks[0].disk.media.is_some();
+        if self.booted {
+            Fif::bootstrap(&mut self.board);
+        }
+    }
+
+    /// Let the FIF work up to now and show the drives' state.
+    fn fif_run(&mut self) {
+        let mut fif = std::mem::take(&mut self.board.fif);
+        let mut disks: [Disk; fif::DRIVES] =
+            std::array::from_fn(|d| std::mem::take(&mut self.disks[d].disk));
+        fif.run(self.board.t, &mut self.board, &mut disks);
+        for (d, disk) in disks.into_iter().enumerate() {
+            self.disks[d].disk = disk;
+            self.disks[d].shown = fif.drive_status(d);
+        }
+        self.board.fif = fif;
     }
 
     /// One press of a control (rising edge).
@@ -902,12 +1223,23 @@ impl Imsai {
                 self.cpu.reset();
                 self.board.rom_low = true;
                 self.board.rom_high = true;
+                self.board.rom_low_leaving = false;
+                self.fif_restart();
                 self.show_fetch();
             }
             ctl::EXT_CLR => {
                 self.board.acia = [0; 2];
+                self.board.usart = std::array::from_fn(|_| Usart::new());
                 self.board.console = Line::default();
                 self.board.reader = Line::default();
+            }
+            ctl::PROTECT | ctl::UNPROTECT => {
+                let block = self.board.switches >> 10;
+                if id == ctl::PROTECT {
+                    self.board.protect |= 1 << block;
+                } else {
+                    self.board.protect &= !(1 << block);
+                }
             }
             _ => {}
         }
@@ -934,7 +1266,7 @@ impl Imsai {
                     self.board.switches &= !bit;
                 }
             }
-            ctl::EXAMINE..=ctl::STEP => {
+            ctl::EXAMINE..=ctl::UNPROTECT => {
                 let mask = 1u64 << id;
                 if value != 0 {
                     if self.held & mask == 0 {
@@ -1055,6 +1387,23 @@ impl Imsai {
         while let Some(ev) = self.input.pop_due(Cycle(self.board.t)) {
             self.apply_input(ev);
         }
+        // A disk put into drive A before the first frame was there at
+        // power-up.
+        if !self.booted && self.frames == 0 && self.power && self.disks[0].disk.media.is_some() {
+            self.fif_restart();
+            if self.autostart && self.board.rom.is_none() {
+                self.cpu.pc = 0;
+                self.running = true;
+            }
+            self.show_fetch();
+        }
+        if !self.board.punched.is_empty() {
+            let bytes = std::mem::take(&mut self.board.punched);
+            self.punch.punch(&bytes);
+        }
+        if self.board.fif.pending() {
+            self.fif_run();
+        }
         if self.program.pending && self.power {
             self.program.pending = false;
             for (addr, data) in &self.program.image.blocks {
@@ -1125,6 +1474,17 @@ impl Imsai {
         }
     }
 
+    /// The CPU waits in an OUT to the FIF (READY low): the bus stands still
+    /// until the FIF takes the byte or the frame ends.
+    fn wait_stall(&mut self) {
+        let b = &mut self.board;
+        let t = b.stall_until.min(self.frame_end).saturating_sub(b.t).max(1);
+        let (st, addr, data) = b.latch;
+        b.t += t;
+        b.time.add(st, addr, data, t as u32);
+        b.time.wait += t as u32;
+    }
+
     /// The rest of the frame with the CPU stopped: the bus stands still.
     fn stand_still(&mut self) {
         let b = &mut self.board;
@@ -1161,7 +1521,9 @@ impl Machine for Imsai {
                 self.end_frame();
                 return StopReason::FrameDone;
             }
-            if self.power && (self.running || dbg.instr_step_armed()) {
+            if self.power && self.board.t < self.board.stall_until {
+                self.wait_stall();
+            } else if self.power && (self.running || dbg.instr_step_armed()) {
                 if let Some(stop) = self.instruction(Some(dbg)) {
                     self.show_fetch();
                     self.render();
@@ -1176,7 +1538,9 @@ impl Machine for Imsai {
     /// One instruction, running or not (the debugger's step).
     fn step_cycle(&mut self) -> StopReason {
         self.service();
-        if self.power {
+        if self.power && self.board.t < self.board.stall_until {
+            self.wait_stall();
+        } else if self.power {
             self.instruction(None);
             self.show_fetch();
         } else {
@@ -1197,6 +1561,8 @@ impl Machine for Imsai {
                 self.cpu.reset();
                 self.board.rom_low = true;
                 self.board.rom_high = true;
+                self.board.rom_low_leaving = false;
+                self.fif_restart();
             }
         }
         self.input.clear();
@@ -1302,7 +1668,42 @@ impl Machine for Imsai {
                     port("SIO2B", 0x05, u32::from(b.io_peek(0x05))),
                     port("88SIO", 0x00, u32::from(b.io_peek(0x00))),
                     reg("TAPEPOS", self.tape.pos as u32, 32),
+                    reg("PUNCHPOS", self.punch.pos as u32, 32),
                 ],
+            },
+            ChipInfo {
+                name: "memory",
+                regs: vec![
+                    reg("PROTECT", b.protect as u32, 32),
+                    reg("PROTECTHI", (b.protect >> 32) as u32, 32),
+                ],
+            },
+            ChipInfo {
+                name: "fif",
+                regs: (0..fif::DRIVES)
+                    .map(|d| {
+                        let s = b.fif.drive_status(d);
+                        reg(
+                            ["TRACKA", "TRACKB", "TRACKC", "TRACKD"][d],
+                            u32::from(s.track.unwrap_or(1) - 1),
+                            8,
+                        )
+                    })
+                    .chain([reg("STALL", u32::from(b.t < b.stall_until), 1)])
+                    .collect(),
+            },
+            ChipInfo {
+                name: "8253",
+                regs: if b.timer {
+                    vec![
+                        reg("OUT0", u32::from(b.pit.out(0, b.t)), 1),
+                        reg("OUT1", u32::from(b.pit.out(1, b.t)), 1),
+                        reg("OUT2", u32::from(b.pit.out(2, b.t)), 1),
+                        reg("PERIOD0", b.pit.period0().unwrap_or(0), 17),
+                    ]
+                } else {
+                    Vec::new()
+                },
             },
         ]
     }
@@ -1354,8 +1755,13 @@ impl Machine for Imsai {
         for (id, name) in buttons {
             c.push(ControlInfo::button(id, name, self.held >> id & 1 != 0));
         }
-        // All of them are paddles in the picture.
-        c.into_iter().map(ControlInfo::shown_on_picture).collect()
+        // All of them are paddles in the picture; PROTECT and UNPROTECT
+        // are not (the IMSAI's panel has no such paddles).
+        let mut c: Vec<ControlInfo> = c.into_iter().map(ControlInfo::shown_on_picture).collect();
+        for (id, name) in [(ctl::PROTECT, "PROTECT"), (ctl::UNPROTECT, "UNPROTECT")] {
+            c.push(ControlInfo::button(id, name, self.held >> id & 1 != 0));
+        }
+        c
     }
 
     fn ports(&self) -> Vec<PortInfo> {
@@ -1384,13 +1790,29 @@ impl Machine for Imsai {
                 kind: MediaKind::Tape,
                 inserted: self.tape.media.is_some(),
             },
+            MediaSlotInfo {
+                id: SLOT_PUNCH,
+                name: "punch",
+                kind: MediaKind::Tape,
+                inserted: self.punch.media.is_some(),
+            },
         ]
+        .into_iter()
+        .chain((0..fif::DRIVES).map(|d| MediaSlotInfo {
+            id: SLOT_DISKS[d],
+            name: DISK_NAMES[d],
+            kind: MediaKind::Disk,
+            inserted: self.disks[d].disk.media.is_some(),
+        }))
+        .collect()
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
         match slot {
             SLOT_PROGRAM => Some(&mut self.program),
             SLOT_TAPE => Some(&mut self.tape),
+            SLOT_PUNCH => Some(&mut self.punch),
+            SlotId(n @ 3..=6) => Some(&mut self.disks[usize::from(n) - 3]),
             _ => None,
         }
     }
@@ -1398,7 +1820,8 @@ impl Machine for Imsai {
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         let b = &self.board;
-        w.chunk(*b"IMSA", 1, |w| {
+        // Version 2: the 8251s, the 8253, the punch, the FIF.
+        w.chunk(*b"IMSA", 2, |w| {
             w.bytes(&b.mem);
             w.u32(b.ram_size);
             w.u64(b.protect);
@@ -1428,6 +1851,18 @@ impl Machine for Imsai {
             w.bool(self.shift);
             w.bool(self.ctrl);
             w.bool(self.upper);
+            for u in &b.usart {
+                u.save(w);
+            }
+            b.pit.save(w);
+            w.u64(b.punch_busy);
+            w.u64(b.mpu_tx_busy);
+            w.bytes(&b.punched);
+            w.u64(self.punch.pos);
+            b.fif.save(w);
+            w.u64(b.stall_until);
+            w.bool(self.booted);
+            w.bool(b.rom_low_leaving);
         });
         self.cpu.save(&mut w);
         self.input.save(&mut w);
@@ -1437,7 +1872,7 @@ impl Machine for Imsai {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"IMSA", 1)?;
+        let (version, mut c) = r.chunk(*b"IMSA", 2)?;
         let mut b = self.board.clone();
         let mem = c.bytes()?;
         if mem.len() != b.mem.len() {
@@ -1471,6 +1906,28 @@ impl Machine for Imsai {
         let shift = c.bool()?;
         let ctrl = c.bool()?;
         let upper = c.bool()?;
+        let mut punch_pos = self.punch.pos;
+        let mut booted = self.booted;
+        if version >= 2 {
+            for u in &mut b.usart {
+                u.load(&mut c)?;
+            }
+            b.pit.load(&mut c)?;
+            b.punch_busy = c.u64()?;
+            b.mpu_tx_busy = c.u64()?;
+            b.punched = c.bytes()?.to_vec();
+            punch_pos = c.u64()?;
+            b.fif.load(&mut c)?;
+            b.stall_until = c.u64()?;
+            booted = c.bool()?;
+            b.rom_low_leaving = c.bool()?;
+        } else {
+            // Version 1 had the 8251s working without set-up and no FIF.
+            b.usart =
+                std::array::from_fn(|_| Usart::with(0x4e, usart::cmd::TXEN | usart::cmd::RXE));
+            b.fif = Fif::new();
+            b.stall_until = 0;
+        }
         if frame_end < b.t.saturating_sub(FRAME) || frame_end > b.t + 2 * FRAME {
             return Err(StateError::Invalid("frame position"));
         }
@@ -1483,6 +1940,8 @@ impl Machine for Imsai {
         self.input = input;
         self.board = b;
         self.tape.pos = tape_pos.min(self.tape.bytes.len());
+        self.punch.pos = punch_pos;
+        self.booted = booted;
         self.power = power;
         self.running = running;
         self.frame_end = frame_end;
