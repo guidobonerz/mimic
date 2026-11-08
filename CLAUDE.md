@@ -58,7 +58,7 @@ crates/
   devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts
   devices-net/     Devices that reach outside through emu-core::host: Ultimate 64 command interface (UCI), WiC64
   devices-printer/ Printers: Epson FX-80, NEC P6+ and ImageWriter models with page pictures, Commodore bus end, output through emu-core::host
-  media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR
+  media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR, punched-card decks (.deck/.crd/.chx)
   media-backends/  Where media bytes come from: image file, copy-on-write overlay, host directory, real hardware
   emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
   emu-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends
@@ -69,7 +69,8 @@ crates/
   machine-apple2/  Apple II, II+, IIe (enhanced and unenhanced) as models; Mockingboard in slot 4
   machine-mac/     Macintosh 128K, 512K, Plus, SE as models: RTC, keyboard, ADB, SCC 8530, SCSI 5380 with hard disks
   machine-archimedes/ Acorn Archimedes A305, A310, A440, A3000 as models
-  machine-imsai/   IMSAI 8080: the picture is the front panel (clickable paddles, lamps by bus duty), serial terminal as second screen
+  machine-imsai/   IMSAI 8080: the picture is the front panel (clickable paddles, lamps by bus duty), serial terminal as second screen; card reader
+  machine-keypunch/ IBM 029 card punch: the user types card decks (picture: the card), read back by the IMSAI's card reader
   machine-zx81/    Sinclair ZX81 / TS1000
   machine-logophor16/ Logophor 16, the project's own fictional steampunk computer (spec: docs/logophor16/SPEC.md); ROM built from rom/ sources, shipped as a built-in profile
   machine-spectrum/ ZX Spectrum 48K, 128K, +2 as models: AY, tape traps, SNA/Z80, joysticks, Multiface 128, Interface 1 with Microdrives
@@ -152,7 +153,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 24, 26 and 31 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 24, 26, 31 and 32 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

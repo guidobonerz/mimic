@@ -351,6 +351,12 @@ impl TvDetect {
 pub struct Atari2600 {
     standard: VideoStandard,
     tv: TvDetect,
+    /// Lines of the last field (0: none yet). The program's VSYNC ends a
+    /// field, so its length is the game's: the signal timing reports it,
+    /// and frontends pace by it (with the standard's lines a game of 263
+    /// lines ran 0.4 % fast, the console without a cartridge, free-running,
+    /// a third; derived, not saved).
+    field_lines: u16,
     cpu: Cpu6502,
     board: Board,
     sched: Scheduler,
@@ -426,6 +432,7 @@ impl Atari2600 {
                 auto,
                 ..TvDetect::default()
             },
+            field_lines: 0,
             cpu,
             board: Board {
                 tia: Tia::new(tia_standard),
@@ -531,6 +538,7 @@ impl Atari2600 {
             if let Some(rec) = &mut self.board.overlay {
                 rec.end_field();
             }
+            self.field_lines = line_before + 1;
             if let Some(standard) = self.tv.field(line_before + 1) {
                 self.set_standard(standard);
             }
@@ -712,7 +720,11 @@ impl Atari2600 {
             pixel_clock_hz: colour_clock_hz(self.standard),
             active_pixels: tia::WIDTH,
             total_pixels: u32::from(tia::CLOCKS_PER_LINE),
-            lines_per_field: tia::height(self.standard),
+            lines_per_field: if self.field_lines > 0 {
+                u32::from(self.field_lines)
+            } else {
+                tia::height(self.standard)
+            },
             standard: self.standard,
             output: OutputType::Composite,
             field: FieldParity::Progressive,

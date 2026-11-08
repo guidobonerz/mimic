@@ -18,7 +18,9 @@ impl MediaBackend for Mem {
         buf.copy_from_slice(&self.0[o..o + buf.len()]);
         Ok(())
     }
-    fn write(&mut self, _offset: u64, _data: &[u8]) -> Result<(), MediaError> {
+    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), MediaError> {
+        let o = offset as usize;
+        self.0[o..o + data.len()].copy_from_slice(data);
         Ok(())
     }
     fn commit(&mut self) -> Result<(), MediaError> {
@@ -44,8 +46,10 @@ fn send(m: &mut Box<dyn Machine>, target: InputTarget, event: InputEvent) {
 #[test]
 fn a_loaded_program_talks_to_the_terminal_screen() {
     let program = vec![
-        0xdb, 0x03, 0xe6, 0x02, 0xca, 0x00, 0x00, // wait for RxRDY
-        0xdb, 0x02, 0xd3, 0x02, 0xc3, 0x00, 0x00, // echo
+        0x3e, 0x4e, 0xd3, 0x03, // 8251 mode: 8 bits, 1 stop bit, x16
+        0x3e, 0x37, 0xd3, 0x03, // command: TxEN, RxE, error reset
+        0xdb, 0x03, 0xe6, 0x02, 0xca, 0x08, 0x00, // wait for RxRDY
+        0xdb, 0x02, 0xd3, 0x02, 0xc3, 0x08, 0x00, // echo
     ];
     let mut config = MachineConfig::default();
     config.options.insert("autostart".into(), "on".into());
@@ -262,6 +266,16 @@ fn mpu_b_monitor_answers_on_the_console() {
 /// (Bruce Hall's system disks boot too, but their PROFILE.SUB runs LEDSOFF
 /// from drive I:, a hard disk this IMSAI does not have.)
 fn cpm_session(mpu: bool, disk: &str) -> Option<String> {
+    cpm_commands(mpu, disk, None, &["DIR", "STAT"])
+}
+
+/// [`cpm_session`] with the commands `cmds`; the screen afterwards. With a
+/// card deck (text, `.crd`) in the card reader, which plays into the
+/// reader line (SIO-2 channel B, the BIOS's UR2:): this disk's boot sets
+/// up only channel A's 8251, so channel B gets its mode and command words
+/// here (8 data bits, 2 stop bits, ×16; TxEN, RxE, error reset) the way
+/// the DDT program in `docs/claude/machines.md` gives them.
+fn cpm_commands(mpu: bool, disk: &str, deck: Option<&[u8]>, cmds: &[&str]) -> Option<String> {
     let dir = std::env::var("EMU_TESTDATA_DIR").ok()?;
     let mut config = MachineConfig::default();
     config.options.insert("autostart".into(), "on".into());
@@ -281,6 +295,24 @@ fn cpm_session(mpu: bool, disk: &str) -> Option<String> {
             backend: Box::new(Mem(data)),
         })
         .unwrap();
+    if let Some(deck) = deck {
+        let io = 0x1_0000 + 5;
+        let t = m.debug_target(machine_imsai::CPU).unwrap();
+        // Twice: the sequence works whatever state the 8251 is in.
+        for _ in 0..2 {
+            for v in [0x00, 0x00, 0x00, 0x40, 0xce, 0x37] {
+                t.poke(emu_core::MemSpaceId(0), io, emu_core::Size::Byte, v);
+            }
+        }
+        m.media_slot(machine_imsai::SLOT_CARDS)
+            .unwrap()
+            .insert(Media {
+                name: "deck.crd".into(),
+                kind: MediaKind::Cards,
+                backend: Box::new(Mem(deck.to_vec())),
+            })
+            .unwrap();
+    }
     let mut dbg = DebugHooks::new();
     let screen = |m: &machine_imsai::Imsai| {
         (0..24)
@@ -303,7 +335,7 @@ fn cpm_session(mpu: bool, disk: &str) -> Option<String> {
     // The MPU-B boots a disk at once; the FIF's bootstrap needs RUN from 0,
     // which autostart gives.
     wait(&mut m, &mut dbg, "boot");
-    for cmd in ["DIR", "STAT"] {
+    for &cmd in cmds {
         for b in cmd.bytes() {
             m.type_byte(b);
         }
@@ -335,4 +367,29 @@ fn cpm_boots_through_the_mpu_b_monitor() {
         return;
     };
     assert!(text.contains("ASM"), "{text}");
+}
+
+#[test]
+#[ignore = "needs EMU_TESTDATA_DIR"]
+fn pip_reads_a_card_deck_from_rdr() {
+    let deck = b"      PROGRAM HELLO
+      PRINT *, 'HELLO'
+      END
+";
+    let Some(text) = cpm_commands(
+        false,
+        "cpm22.dsk",
+        Some(deck),
+        &["STAT RDR:=UR2:", "PIP HELLO.FOR=RDR:", "TYPE HELLO.FOR"],
+    ) else {
+        return;
+    };
+    assert!(
+        text.contains(
+            "      PROGRAM HELLO
+      PRINT *, 'HELLO'
+      END"
+        ),
+        "{text}"
+    );
 }

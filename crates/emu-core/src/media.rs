@@ -53,6 +53,13 @@ pub trait MediaBackend: Send {
     fn dirty(&self) -> bool {
         false
     }
+
+    /// Grow or shrink the medium to `len` bytes; new bytes read 0. Media
+    /// that grow as they are written (a card deck in a stacker, a punched
+    /// tape) need it; a fixed-size image refuses.
+    fn set_len(&mut self, _len: u64) -> Result<(), MediaError> {
+        Err(MediaError::Backend("medium cannot change its size".into()))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -62,6 +69,9 @@ pub enum MediaKind {
     Cartridge,
     /// Loadable program file (PRG, XEX).
     Program,
+    /// A deck of punched cards (binary column images `.deck`, text `.crd`,
+    /// hex columns `.chx`; `media::cards`).
+    Cards,
 }
 
 /// A piece of media: a name, its kind and the backend holding its bytes.

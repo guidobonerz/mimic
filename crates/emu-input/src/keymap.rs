@@ -1354,6 +1354,13 @@ pub static IMSAI: Keymap = Keymap {
     entries: APPLE2_POSITIONAL,
 };
 
+/// IBM 029 card punch: the same codes as the IMSAI's terminal (see
+/// `machine-keypunch::keys`).
+pub static KEYPUNCH: Keymap = Keymap {
+    machine: "keypunch",
+    entries: APPLE2_POSITIONAL,
+};
+
 /// Macintosh: machine keys are the Mac key codes (Inside Macintosh; the
 /// ADB keyboard's codes, see `machine-mac::keyboard`). The PC's keys map
 /// by position on a US layout; Alt is Command (next to the space bar, as
@@ -1470,6 +1477,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "spectrum" => Some(&SPECTRUM),
         "apple2" => Some(&APPLE2),
         "imsai" => Some(&IMSAI),
+        "keypunch" => Some(&KEYPUNCH),
         "archimedes" => Some(&ARCHIMEDES),
         "mac" => Some(&MAC),
         "logophor16" => Some(&LOGOPHOR),

@@ -1183,6 +1183,7 @@ dependencies = [
  "machine-coleco",
  "machine-cpc",
  "machine-imsai",
+ "machine-keypunch",
  "machine-logophor16",
  "machine-mac",
  "machine-nes",
@@ -1241,6 +1242,7 @@ dependencies = [
  "machine-c64",
  "machine-cpc",
  "machine-imsai",
+ "machine-keypunch",
  "machine-logophor16",
  "machine-mac",
  "machine-pet",
@@ -2232,6 +2234,15 @@ version = "0.1.0"
 dependencies = [
  "cpu-8080",
  "emu-core",
+ "media",
+]
+
+[[package]]
+name = "machine-keypunch"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+ "media",
 ]
 
 [[package]]

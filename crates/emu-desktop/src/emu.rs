@@ -414,6 +414,7 @@ fn open_media(
     let media = match kind {
         MediaKind::Tape => media_backends::image::open_tape(p, machine_id),
         MediaKind::Cartridge => media_backends::image::open_cart(p),
+        MediaKind::Cards => media_backends::image::open_cards(p),
         _ => media_backends::image::open(p),
     }
     .map_err(|e| e.to_string())?;
@@ -785,7 +786,6 @@ pub fn spawn(
         // Ctrl+R held: the machine was running before and resumes after.
         let mut rewind_resume = false;
         let mut samples = Vec::new();
-        let frame_time = session.frame_duration();
         let mut deadline = Instant::now();
         // Wall time a frame takes to emulate and queue (a slowly decaying
         // maximum, ns): the phase lock starts the frame as late as that
@@ -831,6 +831,12 @@ pub fn spawn(
         let mut tracker = Tracker::default();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
         while !shared.quit.load(Ordering::Relaxed) {
+            // The frame's length as the picture's timing gives it now: a
+            // machine may change it (the Logophor's Panorama switches to
+            // the XGA timing, 59.79 instead of 60.09 fields a second; paced
+            // with the length from the start, its sound ran 0.5 % ahead of
+            // the sound card and the buffer filled up, 2026-11-08).
+            let frame_time = session.frame_duration();
             if !drain_input(&input, &mut mapper, &mut tracker, &mut session) {
                 return;
             }

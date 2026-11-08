@@ -73,7 +73,10 @@
 //! Intel HEX by its addresses), slot "tape" (paper tape image for the
 //! reader), slot "punch" (the punched bytes go into this file from its
 //! start, until its end: a blank reel of the size wanted; "rewind" starts
-//! over), slots "A:"-"D:" (disks). Option `autostart=on` runs a loaded
+//! over), slots "A:"-"D:" (disks), slot "cards" (a card deck for the
+//! card reader, [`cardreader`]: option `cardreader=text` plays it into the
+//! reader line after the tape, `raw` hands its columns out at ports
+//! $20-$22). Option `autostart=on` runs a loaded
 //! program. Loaded programs return after a power cycle.
 //!
 //! Sources: Thomas Fischer's edition of the IMSAI 8080 System manual,
@@ -88,6 +91,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cardreader;
 pub mod fif;
 pub mod panel;
 mod pit;
@@ -96,6 +100,7 @@ mod usart;
 
 use std::collections::VecDeque;
 
+use cardreader::CardReader;
 use cpu_8080::{status, StatusBus, I8080, IO_BASE};
 use emu_core::frame::{FrameRef, PixelData, ScreenId, ScreenInfo};
 use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
@@ -123,6 +128,8 @@ pub const SLOT_PUNCH: SlotId = SlotId(2);
 /// Drives A:-D: of the FIF.
 pub const SLOT_DISKS: [SlotId; fif::DRIVES] = [SlotId(3), SlotId(4), SlotId(5), SlotId(6)];
 const DISK_NAMES: [&str; fif::DRIVES] = ["A:", "B:", "C:", "D:"];
+/// The card reader ([`cardreader`]).
+pub const SLOT_CARDS: SlotId = SlotId(7);
 pub const CPU_HZ: u32 = 2_000_000;
 /// Fields a second of the panel picture: nothing in the machine sets this.
 pub const FPS: u32 = 60;
@@ -555,13 +562,16 @@ impl fif::Dma for Board {
 /// The 8080's bus for one instruction.
 struct ImsaiBus<'a> {
     b: &'a mut Board,
+    cards: &'a mut CardReader,
     dbg: Option<&'a mut DebugHooks>,
     beam: BeamPos,
 }
 
 impl Bus for ImsaiBus<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
-        let v = if addr >= IO_BASE {
+        let v = if addr >= IO_BASE && self.cards.decodes(addr as u8) {
+            u32::from(self.cards.read(addr as u8, self.b.t))
+        } else if addr >= IO_BASE {
             u32::from(self.b.io_read(addr as u8))
         } else {
             u32::from(self.b.mem_read_cpu(addr as u16))
@@ -589,7 +599,9 @@ impl Bus for ImsaiBus<'_> {
                 }
             }
         }
-        if addr >= IO_BASE {
+        if addr >= IO_BASE && self.cards.decodes(addr as u8) {
+            self.cards.write(addr as u8, v as u8, self.b.t);
+        } else if addr >= IO_BASE {
             self.b.io_write(addr as u8, v as u8);
         } else {
             self.b.mem_write(addr as u16, v as u8);
@@ -863,6 +875,7 @@ pub struct Imsai {
     tape: TapeSlot,
     punch: PunchSlot,
     disks: [DiskSlot; fif::DRIVES],
+    cards: CardReader,
     /// A disk was in drive A at power-up (or before the first frame).
     booted: bool,
     input: InputQueue,
@@ -948,6 +961,15 @@ impl Imsai {
             }
         };
         let autostart = get("autostart") == Some("on");
+        let card_raw = match get("cardreader") {
+            None | Some("text") => false,
+            Some("raw") => true,
+            Some(s) => {
+                return Err(ConfigError::Invalid(format!(
+                    "cardreader option '{s}' (text or raw)"
+                )))
+            }
+        };
         let boot = autostart && rom.is_some();
         let mut m = Self {
             cpu: I8080::new(),
@@ -993,6 +1015,7 @@ impl Imsai {
                 disk: Disk::default(),
                 shown: Default::default(),
             }),
+            cards: CardReader::new(card_raw),
             booted: false,
             input: InputQueue::new(),
             power: true,
@@ -1424,6 +1447,9 @@ impl Imsai {
             if byte.is_none() && b.reader_console {
                 byte = self.tape.bytes.get(self.tape.pos).copied();
                 self.tape.pos += usize::from(byte.is_some());
+                if byte.is_none() {
+                    byte = self.cards.text_byte();
+                }
             }
             if byte.is_some() {
                 b.console.data = byte;
@@ -1431,8 +1457,10 @@ impl Imsai {
             }
         }
         if !b.reader_console && b.reader.data.is_none() && b.t >= b.reader.next {
-            if let Some(&byte) = self.tape.bytes.get(self.tape.pos) {
-                self.tape.pos += 1;
+            let tape = self.tape.bytes.get(self.tape.pos).copied();
+            self.tape.pos += usize::from(tape.is_some());
+            // The tape first, then the card reader's deck.
+            if let Some(byte) = tape.or_else(|| self.cards.text_byte()) {
                 b.reader.data = Some(byte);
                 b.reader.next = b.t + char_clocks;
             }
@@ -1448,6 +1476,7 @@ impl Imsai {
         {
             let mut bus = ImsaiBus {
                 b: &mut self.board,
+                cards: &mut self.cards,
                 dbg: dbg.as_deref_mut(),
                 beam,
             };
@@ -1804,6 +1833,12 @@ impl Machine for Imsai {
             kind: MediaKind::Disk,
             inserted: self.disks[d].disk.media.is_some(),
         }))
+        .chain([MediaSlotInfo {
+            id: SLOT_CARDS,
+            name: "cards",
+            kind: MediaKind::Cards,
+            inserted: self.cards.media.is_some(),
+        }])
         .collect()
     }
 
@@ -1813,6 +1848,7 @@ impl Machine for Imsai {
             SLOT_TAPE => Some(&mut self.tape),
             SLOT_PUNCH => Some(&mut self.punch),
             SlotId(n @ 3..=6) => Some(&mut self.disks[usize::from(n) - 3]),
+            SLOT_CARDS => Some(&mut self.cards),
             _ => None,
         }
     }
@@ -1821,7 +1857,7 @@ impl Machine for Imsai {
         let mut w = StateWriter::new();
         let b = &self.board;
         // Version 2: the 8251s, the 8253, the punch, the FIF.
-        w.chunk(*b"IMSA", 2, |w| {
+        w.chunk(*b"IMSA", 3, |w| {
             w.bytes(&b.mem);
             w.u32(b.ram_size);
             w.u64(b.protect);
@@ -1863,6 +1899,7 @@ impl Machine for Imsai {
             w.u64(b.stall_until);
             w.bool(self.booted);
             w.bool(b.rom_low_leaving);
+            self.cards.save(w);
         });
         self.cpu.save(&mut w);
         self.input.save(&mut w);
@@ -1872,7 +1909,7 @@ impl Machine for Imsai {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"IMSA", 2)?;
+        let (version, mut c) = r.chunk(*b"IMSA", 3)?;
         let mut b = self.board.clone();
         let mem = c.bytes()?;
         if mem.len() != b.mem.len() {
@@ -1907,6 +1944,7 @@ impl Machine for Imsai {
         let ctrl = c.bool()?;
         let upper = c.bool()?;
         let mut punch_pos = self.punch.pos;
+        let mut card_pos = None;
         let mut booted = self.booted;
         if version >= 2 {
             for u in &mut b.usart {
@@ -1921,6 +1959,9 @@ impl Machine for Imsai {
             b.stall_until = c.u64()?;
             booted = c.bool()?;
             b.rom_low_leaving = c.bool()?;
+            if version >= 3 {
+                card_pos = Some(cardreader::Position::load(&mut c)?);
+            }
         } else {
             // Version 1 had the 8251s working without set-up and no FIF.
             b.usart =
@@ -1941,6 +1982,9 @@ impl Machine for Imsai {
         self.board = b;
         self.tape.pos = tape_pos.min(self.tape.bytes.len());
         self.punch.pos = punch_pos;
+        if let Some(p) = card_pos {
+            self.cards.set_position(p);
+        }
         self.booted = booted;
         self.power = power;
         self.running = running;
@@ -1971,7 +2015,13 @@ impl DebugTarget for Imsai {
             return None;
         }
         Some((0..size.bytes()).fold(0, |v, i| {
-            v | u32::from(peek(&self.board, addr.wrapping_add(i))) << (8 * i)
+            let a = addr.wrapping_add(i);
+            let byte = if a >= IO_BASE && self.cards.decodes(a as u8) {
+                self.cards.peek(a as u8, self.board.t)
+            } else {
+                peek(&self.board, a)
+            };
+            v | u32::from(byte) << (8 * i)
         }))
     }
 

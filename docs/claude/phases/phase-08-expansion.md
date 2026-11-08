@@ -19,3 +19,5 @@ The web frontend was confirmed by the user in a browser on 2026-11-04 (with the 
 - Device work by phase (part of each gate): **Phase 8:** light pens, real-hardware backends (feature-gated), mapping-profile UI.
 - Memory freezer by phase: **Phase 8:** cheat UI in desktop/web frontends, per-game cheat database.
 - CRT work by phase: **Phase 8:** full CRT stage (mask types, bloom, curvature, phosphor decay), profile editor, "lite" preset for WASM.
+
+Desktop pacing, 2026-11-08: the emulation thread took the frame length from the picture's signal timing once at start; the Logophor's Panorama switches to the XGA timing (59.79 instead of 60.09 fields a second), so the radio ran 0.5 % ahead of the sound card (rate control at its +0.5 % limit, the buffer at 200 ms and growing). The length is now read every frame. The test `audio_rate` (`tests/tests/audio_rate.rs`) checks every machine's samples a frame against its signal timing: all within a few ppm; it found the Atari 2600 reporting its standard's lines instead of the field its program's VSYNC made (now the last field's lines; a cartridge-less console free-runs a third longer).

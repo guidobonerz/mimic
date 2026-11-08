@@ -68,8 +68,7 @@ fn kind_name(k: MediaKind) -> &'static str {
         MediaKind::Tape => "tape",
         MediaKind::Cartridge => "cartridge",
         MediaKind::Program => "program",
-        #[allow(unreachable_patterns)]
-        _ => "other",
+        MediaKind::Cards => "cards",
     }
 }
 
@@ -79,6 +78,7 @@ fn kind_from(name: &str) -> Option<MediaKind> {
         "tape" => Some(MediaKind::Tape),
         "cartridge" | "cart" => Some(MediaKind::Cartridge),
         "program" | "prg" => Some(MediaKind::Program),
+        "cards" | "deck" => Some(MediaKind::Cards),
         _ => None,
     }
 }

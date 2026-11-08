@@ -1,5 +1,5 @@
 //! Image formats: PRG, D64/D71/D81, G64, T64/TAP, CRT, ADF(→MFM; extended ADF, DMS), ATR, XEX, CAS, DSK, CDT, DMK/JV1/JV3,
-//! Apple II DSK/DO/PO (→GCR 6-and-2) and WOZ, WAV recordings, ZX Microdrive MDR.
+//! Apple II DSK/DO/PO (→GCR 6-and-2) and WOZ, WAV recordings, ZX Microdrive MDR, punched-card decks.
 //!
 //! Pure parsing and encoding: no files, no host access (golden rule 10).
 //! Bytes come from a `MediaBackend`.
@@ -11,6 +11,7 @@ pub mod adf;
 pub mod adfx;
 pub mod atr;
 pub mod car;
+pub mod cards;
 pub mod cas;
 pub mod cdt;
 pub mod crt;

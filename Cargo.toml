@@ -63,6 +63,7 @@ machine-vectrex = { path = "crates/machine-vectrex" }
 machine-apple2 = { path = "crates/machine-apple2" }
 machine-mac = { path = "crates/machine-mac" }
 machine-imsai = { path = "crates/machine-imsai" }
+machine-keypunch = { path = "crates/machine-keypunch" }
 machine-logophor16 = { path = "crates/machine-logophor16" }
 machine-archimedes = { path = "crates/machine-archimedes" }
 machine-sim6502 = { path = "crates/machine-sim6502" }

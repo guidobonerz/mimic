@@ -43,6 +43,12 @@ impl MediaBackend for MemoryBackend {
     fn commit(&mut self) -> Result<(), MediaError> {
         Ok(())
     }
+
+    fn set_len(&mut self, len: u64) -> Result<(), MediaError> {
+        self.data
+            .resize(usize::try_from(len).map_err(|_| MediaError::OutOfRange)?, 0);
+        Ok(())
+    }
 }
 
 /// An image file on the host. The content is read once; writes go straight
@@ -92,39 +98,60 @@ impl MediaBackend for FileBackend {
     fn commit(&mut self) -> Result<(), MediaError> {
         Ok(())
     }
+
+    fn set_len(&mut self, len: u64) -> Result<(), MediaError> {
+        let n = usize::try_from(len).map_err(|_| MediaError::OutOfRange)?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&self.path)
+            .and_then(|f| f.set_len(len))
+            .map_err(io_err)?;
+        self.data.resize(n, 0);
+        Ok(())
+    }
 }
 
 const BLOCK: u64 = 256;
 
 /// Writes collect in memory, in 256-byte blocks over the base; `commit`
 /// applies them to the base, `discard` forgets them.
+/// The overlay can also change the medium's size (`set_len`); `commit`
+/// then resizes the base first.
 pub struct CowOverlay {
     base: Box<dyn MediaBackend>,
+    /// Full blocks; bytes past the base (a grown medium) start as 0.
     blocks: BTreeMap<u64, Vec<u8>>,
+    /// The medium's size as the guest sees it.
+    len: u64,
 }
 
 impl CowOverlay {
     pub fn new(base: Box<dyn MediaBackend>) -> Self {
+        let len = base.len();
         Self {
             base,
             blocks: BTreeMap::new(),
+            len,
         }
     }
 
     pub fn is_dirty(&self) -> bool {
-        !self.blocks.is_empty()
+        !self.blocks.is_empty() || self.len != self.base.len()
     }
 
     pub fn discard(&mut self) {
         self.blocks.clear();
+        self.len = self.base.len();
     }
 
     fn block(&mut self, index: u64) -> Result<&mut Vec<u8>, MediaError> {
         if !self.blocks.contains_key(&index) {
             let start = index * BLOCK;
-            let len = BLOCK.min(self.base.len() - start) as usize;
-            let mut buf = vec![0; len];
-            self.base.read(start, &mut buf)?;
+            let mut buf = vec![0; BLOCK as usize];
+            let from_base = BLOCK.min(self.base.len().saturating_sub(start)) as usize;
+            if from_base > 0 {
+                self.base.read(start, &mut buf[..from_base])?;
+            }
             self.blocks.insert(index, buf);
         }
         Ok(self
@@ -136,12 +163,17 @@ impl CowOverlay {
 
 impl MediaBackend for CowOverlay {
     fn len(&self) -> u64 {
-        self.base.len()
+        self.len
     }
 
     fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), MediaError> {
         range(self.len(), offset, buf.len())?;
-        self.base.read(offset, buf)?;
+        // The part the base holds; a grown medium reads 0 past it.
+        let in_base = self.base.len().saturating_sub(offset).min(buf.len() as u64) as usize;
+        buf[in_base..].fill(0);
+        if in_base > 0 {
+            self.base.read(offset, &mut buf[..in_base])?;
+        }
         for (&index, data) in self
             .blocks
             .range(offset / BLOCK..=(offset + buf.len() as u64) / BLOCK)
@@ -168,14 +200,49 @@ impl MediaBackend for CowOverlay {
     }
 
     fn commit(&mut self) -> Result<(), MediaError> {
+        if self.len != self.base.len() {
+            self.base.set_len(self.len)?;
+        }
         for (index, data) in std::mem::take(&mut self.blocks) {
-            self.base.write(index * BLOCK, &data)?;
+            let start = index * BLOCK;
+            let n = BLOCK.min(self.len.saturating_sub(start)) as usize;
+            if n > 0 {
+                self.base.write(start, &data[..n])?;
+            }
         }
         self.base.commit()
     }
 
     fn dirty(&self) -> bool {
         self.is_dirty()
+    }
+
+    fn set_len(&mut self, len: u64) -> Result<(), MediaError> {
+        if len < self.len {
+            // Bytes cut off read 0 if the medium grows again.
+            self.blocks.retain(|&i, _| i * BLOCK < len);
+            if let Some((&i, data)) = self.blocks.iter_mut().next_back() {
+                let keep = (len - i * BLOCK).min(BLOCK) as usize;
+                data[keep..].fill(0);
+            }
+            // A base byte past a cut that grows back must read 0 as well:
+            // cover the base's rest with zero blocks.
+            let mut at = len;
+            while at < self.base.len() {
+                self.block(at / BLOCK)?;
+                at = (at / BLOCK + 1) * BLOCK;
+            }
+            for (&i, data) in &mut self.blocks {
+                let start = i * BLOCK;
+                for (k, b) in data.iter_mut().enumerate() {
+                    if start + k as u64 >= len {
+                        *b = 0;
+                    }
+                }
+            }
+        }
+        self.len = len;
+        Ok(())
     }
 }
 
@@ -204,8 +271,26 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
         // "ptp": paper tape.
         "tap" | "cas" | "cdt" | "tzx" | "p" | "81" | "ptp" => Some(MediaKind::Tape),
         "crt" | "car" | "a26" | "vec" => Some(MediaKind::Cartridge),
+        // Punched-card decks: binary columns, text, hex columns.
+        "deck" | "crd" | "chx" => Some(MediaKind::Cards),
         _ => None,
     }
+}
+
+/// A card deck file for a reader's hopper or a punch's stacker. A punch
+/// writes into a deck that does not exist yet: a missing file is created
+/// empty. The deck sits behind a copy-on-write overlay like every image;
+/// committing writes the punched cards to the file.
+pub fn open_cards(path: &Path) -> Result<Media, MediaError> {
+    if kind_for(path) != Some(MediaKind::Cards) {
+        return Err(MediaError::Format(
+            "not a card deck (.deck, .crd, .chx)".into(),
+        ));
+    }
+    if !path.exists() {
+        fs::write(path, []).map_err(io_err)?;
+    }
+    open(path)
 }
 
 /// A tape for the datasette of machine `machine_id`: a TAP image (behind
@@ -396,5 +481,50 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), [1, 9, 3, 4]);
         assert!(open(&dir.join("x.unknown")).is_err());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_overlay_grows_and_shrinks() {
+        let mut cow = CowOverlay::new(mem(300));
+        cow.set_len(700).unwrap();
+        assert_eq!(cow.len(), 700);
+        cow.write(650, &[7; 50]).unwrap();
+        let mut buf = vec![1; 400];
+        cow.read(300, &mut buf).unwrap();
+        assert!(buf[..350].iter().all(|&b| b == 0), "grown bytes read 0");
+        assert!(buf[350..].iter().all(|&b| b == 7));
+        // Cut into the base, grow again: the cut bytes read 0.
+        cow.set_len(100).unwrap();
+        cow.set_len(300).unwrap();
+        let mut buf = vec![1; 200];
+        cow.read(100, &mut buf).unwrap();
+        assert!(buf.iter().all(|&b| b == 0));
+        cow.set_len(500).unwrap();
+        cow.write(400, &[9; 100]).unwrap();
+        cow.commit().unwrap();
+        assert_eq!(cow.len(), 500);
+        assert!(!cow.is_dirty());
+        let mut all = vec![0; 500];
+        cow.read(0, &mut all).unwrap();
+        assert!(all[100..400].iter().all(|&b| b == 0));
+        assert!(all[400..].iter().all(|&b| b == 9));
+    }
+
+    #[test]
+    fn memory_and_file_backends_change_size() {
+        let mut m = MemoryBackend { data: vec![5; 10] };
+        m.set_len(20).unwrap();
+        assert_eq!(m.data[10..], [0; 10]);
+        let dir = std::env::temp_dir().join(format!("mimic-setlen-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("d.deck");
+        std::fs::write(&path, [1u8; 10]).unwrap();
+        let mut f = FileBackend::open(&path).unwrap();
+        f.set_len(4).unwrap();
+        f.set_len(6).unwrap();
+        f.write(4, &[2, 3]).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), [1, 1, 1, 1, 2, 3]);
+        assert_eq!(kind_for(&path), Some(MediaKind::Cards));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
