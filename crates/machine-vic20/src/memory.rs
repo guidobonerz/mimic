@@ -86,10 +86,36 @@ pub enum Area {
     None,
 }
 
+/// RAM as it comes up at power-on. Static RAMs have no common pattern;
+/// the dumps of real VIC-20s in VICE's `VIC20/raminitpattern/readme.txt`
+/// differ from machine to machine. The pattern here is one of them, chosen
+/// so the programs the readme names as reading uninitialised RAM work as
+/// they do on the machines they were sold for (**[S]**):
+///
+/// - $1000-$1FFF, the main 4 KB: `ops.bin` (TMM2016 chips): `00`/`FF`
+///   alternating, the phase turning every 8 bytes (`FF 00 FF 00 FF 00 FF
+///   00 00 FF 00 FF 00 FF 00 FF`). Jelly Monsters reads `$1046` and needs
+///   `$FF` (on `darwinNE.bin`'s machine it would not start).
+/// - $0000-$03FF, the 1 KB of 2114s: `$FF` (no dump covers it; AE reads
+///   `$0288` and needs `$FF`, as the readme says writing `$FF` there
+///   makes it work).
+/// - Expansion RAM (3 KB, the 8 KB blocks): `$00`, close to the
+///   internal 3 KB dump (`srowe-324002-02RevD.bin`, mostly `00`).
+/// - Colour RAM: `0`.
+fn power_on_ram() -> Vec<u8> {
+    (0..0x10000usize)
+        .map(|i| match i {
+            0x0000..=0x03ff => 0xff,
+            0x1000..=0x1fff if (i >> 3 & 1 == 0) == (i & 1 == 0) => 0xff,
+            _ => 0x00,
+        })
+        .collect()
+}
+
 impl Memory {
     pub fn new(roms: Roms, expansion: u8) -> Self {
         Self {
-            ram: vec![0; 0x10000],
+            ram: power_on_ram(),
             color: vec![0; 0x400],
             roms,
             expansion,
@@ -97,10 +123,11 @@ impl Memory {
         }
     }
 
-    /// Power-on clears RAM; a reset (the KERNAL's RAM test) keeps it.
+    /// Power-on brings RAM back to [`power_on_ram`]; a reset (the KERNAL's
+    /// RAM test) keeps it.
     pub fn reset(&mut self, hard: bool) {
         if hard {
-            self.ram.fill(0);
+            self.ram = power_on_ram();
             self.color.fill(0);
         }
     }
@@ -207,5 +234,24 @@ impl Savestate for Memory {
         self.ram = ram;
         self.color = color;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::power_on_ram;
+
+    #[test]
+    fn power_on_pattern() {
+        let ram = power_on_ram();
+        // The bytes AE and Jelly Monsters read before writing.
+        assert_eq!(ram[0x0288], 0xff);
+        assert_eq!(ram[0x1046], 0xff);
+        // ops.bin's line at $1800.
+        assert_eq!(
+            ram[0x1800..0x1810],
+            [0xff, 0, 0xff, 0, 0xff, 0, 0xff, 0, 0, 0xff, 0, 0xff, 0, 0xff, 0, 0xff]
+        );
+        assert!(ram[0x2000..0x8000].iter().all(|&b| b == 0));
     }
 }
