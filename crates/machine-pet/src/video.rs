@@ -3,25 +3,34 @@
 //! code selects 8 bytes of the 2 KB character ROM.
 //!
 //! - Character ROM: two sets of 128 characters (graphics / text), chosen
-//!   by VIA CA2 (high = text). Code bit 7 inverts the character; rows 8
-//!   and 9 of a 10-line character are blank.
+//!   by VIA CA2 (high = text). Code bit 7 inverts the character; scan
+//!   lines 8 and up of a row (rows 8 and 9 of a 10-line character) are
+//!   blanked, dark also under a reverse character or screen.
 //! - CRTC MA12 low inverts the whole screen (the editors keep it high).
 //! - 40 columns: one character per 1 MHz clock from 1 KB of video RAM.
 //!   80 columns (8032): two characters per clock from 2 KB, at `2 × MA`
 //!   and `2 × MA + 1`.
 //!
-//! The frame buffer shows the display window with a fixed black margin
-//! (the PET has no border colour); the picture is aligned to the window,
-//! not to sync, so CRTC sync position changes do not move it.
+//! The frame buffer is what the monitor shows: each scan line starts at
+//! its horizontal sync, the field at the vertical sync, so a line whose
+//! sync the program moves is drawn shifted, a line longer than 40 clocks
+//! runs into the right margin, and rows outside the usual window show
+//! (VICE test programs `CRTC/crtc3`-`crtc13`). Where the picture sits is
+//! taken from the registers at each vertical sync (**[S]**): the normal
+//! window lands 2 clocks right of the left edge and `MARGIN_Y` lines
+//! below the top, in text and graphics mode alike, as a monitor adjusted
+//! to the machine would show it.
 
 use chips_cbm::crtc::{Crtc, CrtcOut};
 use emu_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
 use emu_core::{BeamPos, Savestate, StateError, StateReader, StateWriter};
 
 /// Margin around the display window in pixels (per 40-column character
-/// width) and lines.
-const MARGIN_X: u32 = 32;
+/// width: 2 character clocks) and lines.
+const MARGIN_X: u32 = 16;
 const MARGIN_Y: u32 = 20;
+/// Clocks of left margin.
+const MARGIN_CLOCKS: i32 = 2;
 
 /// The 2001's timing chain as CRTC values: 64 clocks × 260 lines (60.1 Hz),
 /// 25 rows of 8 lines, retrace after the last row.
@@ -43,8 +52,18 @@ pub struct Video {
     standard: VideoStandard,
     pixels: Vec<u8>,
     frame: u64,
-    /// Lowest frame-buffer line drawn this frame.
-    drawn_to: u32,
+    /// The field each frame-buffer row was last drawn in (derived: a
+    /// loaded state counts all rows as this field's).
+    row_field: Vec<u32>,
+    field: u32,
+    /// The monitor: clocks since the last horizontal sync began, lines
+    /// since the last vertical sync began, the sync levels of the last
+    /// clock, and where the picture starts (latched at vertical sync).
+    h: u16,
+    v: u16,
+    hsync: bool,
+    vsync: bool,
+    origin: (i32, i32),
 }
 
 impl Video {
@@ -56,9 +75,20 @@ impl Video {
             standard,
             pixels: Vec::new(),
             frame: 0,
-            drawn_to: 0,
+            row_field: Vec::new(),
+            field: 0,
+            h: 0,
+            v: 0,
+            hsync: false,
+            vsync: false,
+            origin: (0, 0),
         };
+        v.origin = v.origin_now();
+        // Power-on: as if the syncs had come where they would.
+        v.h = (v.origin.0 + MARGIN_CLOCKS).max(0) as u16;
+        v.v = (v.origin.1 + MARGIN_Y as i32).max(0) as u16;
         v.pixels = vec![0; (v.width() * v.height()) as usize];
+        v.row_field = vec![0; v.height() as usize];
         v
     }
 
@@ -72,6 +102,18 @@ impl Video {
 
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
+    }
+
+    /// Where the picture starts, from the registers now: the first display
+    /// clock lies `R0 + 1 - R2` clocks after horizontal sync, the first
+    /// display line `frame lines - R7 (R9 + 1)` lines after vertical sync.
+    fn origin_now(&self) -> (i32, i32) {
+        let r = &self.crtc.regs;
+        let h = i32::from(r[0]) + 1 - i32::from(r[2]) - MARGIN_CLOCKS;
+        let v = self.crtc.frame_lines() as i32
+            - i32::from(r[7]) * (i32::from(r[9]) + 1)
+            - MARGIN_Y as i32;
+        (h, v)
     }
 
     /// Frame-buffer row showing CRTC scan line `line` (counted from the
@@ -110,42 +152,65 @@ impl Video {
     /// the 2 KB character ROM, `text` the VIA CA2 level. Returns the CRTC
     /// output (sync) and draws the character.
     pub fn tick(&mut self, vram: &[u8], chargen: &[u8], text: bool) -> CrtcOut {
-        let line = u32::from(self.crtc.line());
-        let col = u32::from(self.crtc.column());
         let o = self.crtc.tick();
-        if o.display {
-            let y = MARGIN_Y + line;
-            let x0 = (MARGIN_X + col * 8) * self.cpc;
+        // The monitor follows the syncs' leading edges.
+        if o.vsync && !self.vsync {
+            self.v = 0;
+            self.origin = self.origin_now();
+            // Rows the field now over did not draw go dark.
+            let w = self.width() as usize;
+            for (y, f) in self.row_field.iter().enumerate() {
+                if *f != self.field {
+                    self.pixels[y * w..(y + 1) * w].fill(0);
+                }
+            }
+            self.field = self.field.wrapping_add(1);
+        }
+        if o.hsync && !self.hsync {
+            self.h = 0;
+            self.v = self.v.saturating_add(1);
+        }
+        self.vsync = o.vsync;
+        self.hsync = o.hsync;
+        let clock = i32::from(self.h) - self.origin.0;
+        let y = i32::from(self.v) - self.origin.1;
+        self.h = self.h.saturating_add(1);
+        if o.display && clock >= 0 && y >= 0 {
+            let (y, x0) = (y as u32, clock as u32 * 8 * self.cpc);
             if y < self.height() && x0 + 8 * self.cpc <= self.width() {
+                // The row's first character this field: the rest of it
+                // is dark until drawn.
+                if self.row_field[y as usize] != self.field {
+                    self.row_field[y as usize] = self.field;
+                    let w = self.width() as usize;
+                    self.pixels[y as usize * w..(y as usize + 1) * w].fill(0);
+                }
                 let invert = o.ma & 0x1000 == 0;
                 let set = if text { 0x400 } else { 0 };
                 for i in 0..self.cpc {
                     let addr = (u32::from(o.ma) * self.cpc + i) as usize % vram.len();
                     let code = vram[addr];
-                    let mut pattern = if o.ra < 8 {
-                        chargen[set | (usize::from(code & 0x7f) << 3) | usize::from(o.ra)]
+                    // Scan lines 8 and up of a row are blanked: dark,
+                    // reverse or not (RA3/RA4; VICE `CRTC/crtc10` and its
+                    // readme).
+                    let pattern = if o.ra < 8 {
+                        let p = chargen[set | (usize::from(code & 0x7f) << 3) | usize::from(o.ra)];
+                        if (code & 0x80 != 0) != invert {
+                            !p
+                        } else {
+                            p
+                        }
                     } else {
                         0
                     };
-                    if (code & 0x80 != 0) != invert {
-                        pattern = !pattern;
-                    }
                     let at = (y * self.width() + x0 + i * 8) as usize;
                     for (b, p) in self.pixels[at..at + 8].iter_mut().enumerate() {
                         *p = (pattern >> (7 - b)) & 1;
                     }
                 }
-                self.drawn_to = self.drawn_to.max(y + 1);
             }
         }
         if o.frame_end {
-            // Lines below the window (after a switch to fewer lines) go dark.
-            let from = (self.drawn_to.max(MARGIN_Y) * self.width()) as usize;
-            let to = ((self.height() - MARGIN_Y) * self.width()) as usize;
-            if from < to {
-                self.pixels[from..to].fill(0);
-            }
-            self.drawn_to = 0;
             self.frame += 1;
         }
         o
@@ -153,32 +218,46 @@ impl Video {
 }
 
 const TAG: [u8; 4] = *b"PETV";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Video {
     fn save(&self, w: &mut StateWriter) {
         self.crtc.save(w);
         w.chunk(TAG, VERSION, |w| {
             w.u64(self.frame);
-            w.u32(self.drawn_to);
+            w.u32(0); // version 1: the lowest line drawn
             w.raw(&self.pixels);
+            // Version 2: the monitor.
+            w.u16(self.h);
+            w.u16(self.v);
+            w.bool(self.hsync);
+            w.bool(self.vsync);
+            w.u32(self.origin.0 as u32);
+            w.u32(self.origin.1 as u32);
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
         let mut crtc = self.crtc.clone();
         crtc.load(r)?;
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let frame = c.u64()?;
-        let drawn_to = c.u32()?.min(self.height());
+        c.u32()?;
         let mut pixels = vec![0; self.pixels.len()];
         c.raw_into(&mut pixels)?;
         for p in &mut pixels {
             *p &= 1;
         }
+        if version >= 2 {
+            self.h = c.u16()?;
+            self.v = c.u16()?;
+            self.hsync = c.bool()?;
+            self.vsync = c.bool()?;
+            self.origin = (c.u32()? as i32, c.u32()? as i32);
+        }
         self.crtc = crtc;
         self.frame = frame;
-        self.drawn_to = drawn_to;
+        self.row_field.fill(self.field);
         self.pixels = pixels;
         Ok(())
     }

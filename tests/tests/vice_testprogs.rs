@@ -138,6 +138,13 @@ const PLUS4: Target = Target {
     name: "vice-testprogs-plus4",
 };
 
+const PET: Target = Target {
+    machine: "pet",
+    list: "testbench/pet-testlist.in",
+    exit_addr: 0x8bff,
+    name: "vice-testprogs-pet",
+};
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Verdict {
     Pass,
@@ -207,6 +214,12 @@ fn config(t: Target, base: &MachineConfig, e: &Entry) -> Result<MachineConfig, S
                 return Err(format!("{u} not emulated"));
             }
         }
+        return Ok(c);
+    }
+    if t.machine == "pet" {
+        // xpet runs the list as an 8096 (an 8032 with 64 KB more RAM,
+        // which no entry uses): our 8032 with its 50 Hz editor.
+        c.model = Some("8032".into());
         return Ok(c);
     }
     if t.machine == "vic20" {
@@ -580,6 +593,64 @@ fn compare_ted(m: &dyn Machine, reference: &Path) -> Result<(), String> {
     }
 }
 
+/// Lines xpet's screenshot may sit above or below ours. Both show 32
+/// pixels of margin left of the text (the same width), but xpet frames
+/// the picture vertically its own way (text mode and the CRTC programs'
+/// graphics mode land at different heights), so the comparison takes the
+/// vertical offset that fits best.
+const PET_SEARCH_DY: i64 = 48;
+
+/// Compare a PET picture: one colour on black, so pixels compare as lit
+/// or dark, over the area both pictures cover, at the best vertical
+/// offset.
+fn compare_pet(m: &dyn Machine, reference: &Path) -> Result<(), String> {
+    let (rw, rh, rpx) = load_png(reference)?;
+    let frame = m.framebuffer();
+    let (ow, oh) = (i64::from(frame.width), i64::from(frame.height));
+    let (rw, rh) = (i64::from(rw), i64::from(rh));
+    let ours: Vec<bool> = (0..oh)
+        .flat_map(|y| (0..ow).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            let o = frame.rgb_at(x as u32, y as u32).unwrap_or_default();
+            u32::from(o.r) + u32::from(o.g) + u32::from(o.b) > 192
+        })
+        .collect();
+    let lit: Vec<bool> = rpx
+        .iter()
+        .map(|r| r.iter().map(|&c| u32::from(c)).sum::<u32>() > 192)
+        .collect();
+    let differ = |dy: i64| {
+        let (mut bad, mut first) = (0, None);
+        for y in 0..oh {
+            let ry = y + dy;
+            if ry < 0 || ry >= rh {
+                continue;
+            }
+            // xpet draws nothing left of x 8 or right of x 695 (in no
+            // reference): its window, not the machine's.
+            for x in 8..ow.min(rw).min(696) {
+                let r = lit[(ry * rw + x) as usize];
+                if r != ours[(y * ow + x) as usize] {
+                    bad += 1;
+                    first.get_or_insert((x, y, r));
+                }
+            }
+        }
+        (bad, first)
+    };
+    let (dy, (bad, first)) = (-PET_SEARCH_DY..=PET_SEARCH_DY)
+        .map(|dy| (dy, differ(dy)))
+        .min_by_key(|(dy, (bad, _))| (*bad, dy.abs()))
+        .unwrap_or((0, (0, None)));
+    match first {
+        None => Ok(()),
+        Some((x, y, lit)) => Err(format!(
+            "{bad} pixels differ (best at {dy:+} lines), first at {x},{y} (frame), reference {}",
+            if lit { "lit" } else { "dark" }
+        )),
+    }
+}
+
 /// `EMU_VICE_DUMP`: our picture of a failed screenshot entry, next to
 /// the report in `target/tmp/vice-testprogs/`.
 fn dump(m: &dyn Machine, e: &Entry) {
@@ -618,6 +689,17 @@ fn judge(t: Target, base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
     let outcome = run(t, m.as_mut(), e, data);
     let result = match outcome {
         Err(why) => Verdict::Error(why),
+        // The PET's CRTC programs never write an exit code: the picture
+        // at the cycle limit is the result, as in the testbench.
+        Ok(None) if t.machine == "pet" && e.kind == "screenshot" => {
+            match reference(e, data, false) {
+                None => Verdict::Skipped("reference picture missing".into()),
+                Some(r) => match compare_pet(m.as_ref(), &r) {
+                    Ok(()) => Verdict::Pass,
+                    Err(why) => Verdict::Fail(why),
+                },
+            }
+        }
         Ok(None) => Verdict::Timeout,
         Ok(Some(code)) if e.kind == "screenshot" => {
             let ntsc = config.video_format == Some(emu_core::frame::VideoStandard::Ntsc);
@@ -625,6 +707,8 @@ fn judge(t: Target, base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
                 None => Verdict::Skipped("reference picture missing".into()),
                 Some(r) => match if t.machine == "plus4" {
                     compare_ted(m.as_ref(), &r)
+                } else if t.machine == "pet" {
+                    compare_pet(m.as_ref(), &r)
                 } else {
                     compare(m.as_ref(), &r)
                 } {
@@ -666,6 +750,12 @@ fn vice_testprogs_vic20() {
 #[ignore = "needs EMU_ROM_DIR and EMU_TESTDATA_DIR (tools/fetch_vice_testprogs.py --list plus4)"]
 fn vice_testprogs_plus4() {
     suite(PLUS4);
+}
+
+#[test]
+#[ignore = "needs EMU_ROM_DIR and EMU_TESTDATA_DIR (tools/fetch_vice_testprogs.py --list pet)"]
+fn vice_testprogs_pet() {
+    suite(PET);
 }
 
 fn suite(t: Target) {

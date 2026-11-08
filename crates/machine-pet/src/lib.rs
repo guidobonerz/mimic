@@ -16,8 +16,9 @@
 //! Options: `ram` ("8k", "16k", "32k"); `keyboard` ("graphics" or
 //! "business"; the 8032 and the editor ROMs decide what exists); `hz` ("50"
 //! default, or "60": which 4.0 editor, i.e. the CRTC refresh rate);
-//! `drive8` ("virtual" default, or "none"); `roms` = "stub" for tests
-//! without ROMs.
+//! `drive8` ("virtual" default, or "none"); `debugcart` ("on": VICE's
+//! exit-code register at `$8BFF` for its test programs, chip "debugcart");
+//! `roms` = "stub" for tests without ROMs.
 //!
 //! ROM roles (`MachineConfig::roms`, user-supplied): `basic1`/`basic2`
 //! (8 KB at `$C000`), `basic4` (12 KB at `$B000`), `kernal1/2/4` (4 KB at
@@ -275,6 +276,13 @@ pub struct Io {
     pub cassette_sense: bool,
     /// IEEE-488 bus levels after the last update (`true` = low).
     pub ieee: IeeeLines,
+    /// VICE's debug register (`options["debugcart"] = "on"`): test
+    /// programs write their exit code to `$8BFF`, in the video RAM's
+    /// mirror (`testprogs/testbench/selftest/pet.asm`); as in xpet the
+    /// register takes the write, video RAM (`$83FF`) does not see it.
+    /// Configuration and output, not state.
+    pub debugcart: bool,
+    pub debugcart_exit: Option<u8>,
 }
 
 impl Io {
@@ -397,6 +405,10 @@ impl Bus for PetBus<'_> {
         match self.mem.area(a) {
             Area::Ram => self.mem.ram[usize::from(a)] = v,
             Area::Video => {
+                if self.io.debugcart && a == 0x8bff {
+                    self.io.debugcart_exit = Some(v);
+                    return;
+                }
                 let i = self.mem.vram_index(a);
                 self.mem.vram[i] = v;
             }
@@ -585,6 +597,11 @@ impl Pet {
                 )))
             }
         };
+        let debugcart = match config.options.get("debugcart").map(String::as_str) {
+            None | Some("off") => false,
+            Some("on") => true,
+            Some(other) => return Err(ConfigError::Invalid(format!("debugcart option '{other}'"))),
+        };
         let roms = load_roms(config, model, layout, hz)?;
         let (regs, standard) = match (model.crtc(), model.columns(), hz) {
             (false, _, _) => (video::FIXED_TIMING, VideoStandard::Ntsc),
@@ -615,6 +632,8 @@ impl Pet {
                 retrace: false,
                 cassette_sense: false,
                 ieee: IeeeLines::default(),
+                debugcart,
+                debugcart_exit: None,
             },
             video: Video::new(regs, cpc, char_lines, standard),
             sched: Scheduler::new(),
@@ -996,6 +1015,16 @@ impl Machine for Pet {
                     .zip(self.video.crtc.regs)
                     .map(|(&n, v)| reg(n, None, u32::from(v), 8))
                     .collect(),
+            });
+        }
+        if self.io.debugcart {
+            let exit = self.io.debugcart_exit;
+            chips.push(ChipInfo {
+                name: "debugcart",
+                regs: vec![
+                    reg("EXIT", Some(0x8bff), u32::from(exit.unwrap_or(0)), 8),
+                    reg("WRITTEN", None, u32::from(exit.is_some()), 1),
+                ],
             });
         }
         chips

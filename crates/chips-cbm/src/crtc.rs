@@ -18,6 +18,19 @@
 //! [`Crtc::tick`] is one character clock: it reports whether the display is
 //! enabled, the memory address (MA) and row address (RA) of that character
 //! and the sync level, then advances the counters.
+//!
+//! Display enable and the row address latch work by equality, as on the
+//! 6845: the horizontal display turns off when the column counter equals
+//! R1, the vertical when the row counter equals R6, and both turn on again
+//! at the line's (the frame's) start. MA counts on from the row's start
+//! address with every clock; on a row's last scan line the address
+//! reached at column R1 becomes the next row's start. So R1 written below
+//! the column already passed leaves the display on through the
+//! horizontal retrace, taking characters from further on, and the next row
+//! repeats this one; R6 written below the row counter opens the vertical
+//! border (André Fachat's PET CRTC test programs, VICE `CRTC/crtc6`-`crtc9`
+//! and `crtc13`, readme there). The scan line counter ends a row only on
+//! equality with R9 as well (5 bits: a row of up to 32 lines, `crtc10`).
 
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -40,6 +53,9 @@ pub struct CrtcOut {
     pub ra: u8,
     /// Vertical sync active.
     pub vsync: bool,
+    /// Horizontal sync active: from column R2 for R3 bits 0-3 clocks (0
+    /// counts as 16).
+    pub hsync: bool,
     /// A new frame starts with the next clock.
     pub frame_end: bool,
 }
@@ -57,6 +73,12 @@ pub struct Crtc {
     vsync: u8,
     /// Scan line within the frame.
     line: u16,
+    /// MA of the next clock, the start address latched for the next row,
+    /// and the horizontal and vertical display enables.
+    ma: u16,
+    next_row_start: u16,
+    hdisp: bool,
+    vdisp: bool,
 }
 
 impl Crtc {
@@ -73,11 +95,17 @@ impl Crtc {
             row_start: 0,
             vsync: 0,
             line: 0,
+            ma: 0,
+            next_row_start: 0,
+            hdisp: true,
+            vdisp: true,
         };
         for (i, v) in regs.into_iter().enumerate() {
             c.regs[i] = v & MASKS[i];
         }
         c.row_start = c.start_address();
+        c.next_row_start = c.row_start;
+        c.ma = c.row_start;
         c
     }
 
@@ -123,13 +151,37 @@ impl Crtc {
         }
     }
 
+    fn in_hsync(&self) -> bool {
+        let width = match self.regs[3] & 0x0f {
+            0 => 16,
+            w => u16::from(w),
+        };
+        let start = u16::from(self.regs[2]);
+        (start..start + width).contains(&u16::from(self.hc))
+    }
+
     pub fn tick(&mut self) -> CrtcOut {
-        let display = !self.adjusting && self.hc < self.regs[1] && self.row < self.regs[6];
+        if self.hc == 0 {
+            self.ma = self.row_start;
+            self.hdisp = true;
+        }
+        if self.hc == self.regs[1] {
+            self.hdisp = false;
+            if self.sc == self.regs[9] && !self.adjusting {
+                self.next_row_start = self.ma;
+            }
+        }
+        if self.row == self.regs[6] && !self.adjusting {
+            self.vdisp = false;
+        }
+        let ma = self.ma;
+        self.ma = (self.ma + 1) & 0x3fff;
         let mut out = CrtcOut {
-            display,
-            ma: (self.row_start + u16::from(self.hc)) & 0x3fff,
+            display: self.hdisp && self.vdisp,
+            ma,
             ra: self.sc,
             vsync: self.vsync > 0,
+            hsync: self.in_hsync(),
             frame_end: false,
         };
         if self.hc >= self.regs[0] {
@@ -153,9 +205,9 @@ impl Crtc {
             }
             return false;
         }
-        if self.sc >= self.regs[9] {
+        if self.sc == self.regs[9] {
             self.sc = 0;
-            self.row_start = (self.row_start + u16::from(self.regs[1])) & 0x3fff;
+            self.row_start = self.next_row_start;
             self.row = self.row.wrapping_add(1);
             if self.row > self.regs[4] {
                 if self.regs[5] > 0 {
@@ -169,7 +221,9 @@ impl Crtc {
                 self.vsync = VSYNC_LINES;
             }
         } else {
-            self.sc += 1;
+            // A 5-bit counter: R9 written below it is met only after it
+            // wraps (a row of up to 32 lines, `CRTC/crtc10`).
+            self.sc = (self.sc + 1) & 0x1f;
         }
         false
     }
@@ -180,6 +234,8 @@ impl Crtc {
         self.adjusting = false;
         self.line = 0;
         self.row_start = self.start_address() & 0x3fff;
+        self.next_row_start = self.row_start;
+        self.vdisp = true;
         if self.regs[7] == 0 {
             self.vsync = VSYNC_LINES;
         }
@@ -187,7 +243,7 @@ impl Crtc {
 }
 
 const TAG: [u8; 4] = *b"6545";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Crtc {
     fn save(&self, w: &mut StateWriter) {
@@ -202,11 +258,16 @@ impl Savestate for Crtc {
             w.u16(self.row_start);
             w.u8(self.vsync);
             w.u16(self.line);
+            // Version 2.
+            w.u16(self.ma);
+            w.u16(self.next_row_start);
+            w.bool(self.hdisp);
+            w.bool(self.vdisp);
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut regs = [0u8; 18];
         c.raw_into(&mut regs)?;
         let mut n = Crtc::new(regs);
@@ -219,6 +280,17 @@ impl Savestate for Crtc {
         n.row_start = c.u16()? & 0x3fff;
         n.vsync = c.u8()?.min(VSYNC_LINES);
         n.line = c.u16()?;
+        if version >= 2 {
+            n.ma = c.u16()? & 0x3fff;
+            n.next_row_start = c.u16()? & 0x3fff;
+            n.hdisp = c.bool()?;
+            n.vdisp = c.bool()?;
+        } else {
+            n.ma = (n.row_start + u16::from(n.hc)) & 0x3fff;
+            n.next_row_start = (n.row_start + u16::from(n.regs[1])) & 0x3fff;
+            n.hdisp = n.hc < n.regs[1];
+            n.vdisp = n.row < n.regs[6];
+        }
         *self = n;
         Ok(())
     }
@@ -259,6 +331,25 @@ mod tests {
         let vsync: Vec<usize> = (0..400).filter(|l| f[l * 50].vsync).collect();
         assert_eq!(vsync.first(), Some(&320));
         assert_eq!(vsync.len(), 16);
+    }
+
+    #[test]
+    fn r1_below_the_column_keeps_the_display_on_and_repeats_the_row() {
+        let mut c = Crtc::new(PET_TEXT_50HZ);
+        frame(&mut c);
+        // To the last line of row 0, column 20; then R1 = 10.
+        for _ in 0..50 * 9 + 20 {
+            c.tick();
+        }
+        c.write(0, 1);
+        c.write(1, 10);
+        let line: Vec<CrtcOut> = (0..30).map(|_| c.tick()).collect();
+        assert!(line.iter().all(|o| o.display), "on through the retrace");
+        assert_eq!(line[29].ma, 0x1000 + 49, "MA counts on");
+        // Row 1 starts where row 0 did, and is 10 characters long.
+        let row1: Vec<CrtcOut> = (0..50).map(|_| c.tick()).collect();
+        assert_eq!(row1[0].ma, 0x1000);
+        assert_eq!(row1.iter().filter(|o| o.display).count(), 10);
     }
 
     #[test]

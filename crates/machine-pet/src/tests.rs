@@ -189,9 +189,9 @@ fn video_shows_characters_and_reverse() {
     m.run_frame(&mut dbg);
     m.run_frame(&mut dbg);
     let w = m.video.width() as usize;
-    let row: Vec<u8> = m.video.pixels()[20 * w + 32..20 * w + 48].to_vec();
+    let row: Vec<u8> = m.video.pixels()[20 * w + 16..20 * w + 32].to_vec();
     assert_eq!(row, [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1]);
-    assert_eq!(m.video.pixels()[19 * w + 32], 0, "margin");
+    assert_eq!(m.video.pixels()[19 * w + 16], 0, "margin");
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn frame_rows_follow_the_crtc_window() {
     while m.run_frame(&mut dbg) != StopReason::FrameDone {}
     let row = m.frame_row(0).unwrap();
     let f = m.framebuffer();
-    assert_eq!(f.rgb_at(32, row), Some(PALETTE[1]), "line 0 of row 0");
-    assert_eq!(f.rgb_at(32, row - 1), Some(PALETTE[0]));
+    assert_eq!(f.rgb_at(16, row), Some(PALETTE[1]), "line 0 of row 0");
+    assert_eq!(f.rgb_at(16, row - 1), Some(PALETTE[0]));
     assert_eq!(m.frame_row(10_000), None);
 }
