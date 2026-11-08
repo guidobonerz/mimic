@@ -494,6 +494,19 @@ impl M68000 {
             if level == 7 {
                 self.nmi_seen = true;
             }
+            if self.stopped {
+                // STOP ends without its final prefetch, IRD still holds it
+                // (and the 68000 leaves its immediate in IRC, the 68020
+                // refills IRC), so AU is short of an instruction's start
+                // by the immediate's word and, on the 68000, the next
+                // instruction's: the exception stacks the instruction
+                // after the STOP (MC68000 UM, STOP). Without this the
+                // handler's RTE ran the immediate as an opcode ($2000 =
+                // MOVE.L D0,D0, 4 clocks; the owner's A500 and WinUAE,
+                // 2026-11-08: bus test 14's loop after a STOP started 2
+                // colour clocks earlier than in mimic).
+                self.au = self.au.wrapping_add(if self.is_020() { 2 } else { 4 });
+            }
             self.stopped = false;
             self.entered = Some(if level == 7 {
                 InterruptKind::Nmi
@@ -1452,6 +1465,41 @@ mod tests {
             ram.write(a, Size::Word, u32::from(w));
         }
         ram
+    }
+
+    #[test]
+    fn an_interrupt_from_stop_returns_after_the_stop() {
+        // $400: STOP #$2000; $404: NOP. Level 1 autovector -> $500: RTE.
+        let mut bus = machine();
+        for (a, w) in [
+            (0x400u32, 0x4e72u16),
+            (0x402, 0x2000),
+            (0x404, 0x4e71),
+            (0x500, 0x4e73),
+        ] {
+            bus.write(a, Size::Word, u32::from(w));
+        }
+        bus.write(0x64, Size::Word, 0);
+        bus.write(0x66, Size::Word, 0x500);
+        let mut cpu = M68000::new();
+        cpu.reset_timed(&mut NoWait(&mut bus));
+        cpu.step_timed(&mut NoWait(&mut bus));
+        assert!(cpu.is_stopped());
+        cpu.set_ipl(1);
+        cpu.step_timed(&mut NoWait(&mut bus));
+        assert_eq!(cpu.pc(), 0x500);
+        let sp = cpu.regs().get("A7").unwrap();
+        assert_eq!(
+            bus.peek(sp + 2, Size::Word) << 16 | bus.peek(sp + 4, Size::Word),
+            0x404
+        );
+        cpu.set_ipl(0);
+        cpu.step_timed(&mut NoWait(&mut bus));
+        assert_eq!(
+            cpu.pc(),
+            0x404,
+            "RTE returns to the NOP, not into the immediate"
+        );
     }
 
     #[test]

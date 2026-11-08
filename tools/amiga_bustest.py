@@ -66,6 +66,7 @@ class Asm:
         return self.base + 2 * len(self.words)
 
     def label(self, name):
+        assert name not in self.labels, f"label {name!r} defined twice"
         self.labels[name] = self.pc
 
     def emit(self, *ws):

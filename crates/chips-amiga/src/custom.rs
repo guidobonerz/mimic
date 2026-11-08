@@ -218,6 +218,32 @@ const COPPER_NO_COMPARE: u16 = 2;
 /// clocks after the Copper turns the planes off (vAmigaTS `Agnus/DDF/DDF`,
 /// the row of `ddf1` with BPLCON0 at $90D9).
 const BPLCON0_DELAY: u8 = 3;
+/// Denise already takes the new BPLCON0 inside the colour clock before
+/// [`BPLCON0_DELAY`] runs out, from this 35 ns pixel of it on (4: one
+/// low-resolution pixel before its end). vAmigaTS `Agnus/DDF/DDF`
+/// `farright1` and `farright3`: BPLCON0 with no planes at $90D9 ends the
+/// picture one low-resolution pixel before the colour clock boundary.
+const BPLCON0_DENISE_AT: u32 = 4;
+
+/// Colour clocks from a Copper MOVE to INTREQ or INTENA until Paula acts
+/// on it (`Custom::copper_paula`). A CPU write lands one colour clock after
+/// its slot (`CPU_WRITE_DELAY` in `machine-amiga`) and vAmigaTS
+/// `Paula/Interrupts/inttim1`-`6` (CPU-raised) match with that; the
+/// Copper's write takes longer. Measured on the owner's A500 with
+/// `tools/amiga_bustest11.py` (2026-11-08): the CPU-raised SOFT of group 0
+/// enters the handler 38 colour clocks after the anchor in every phase, as
+/// in mimic, while the Copper-raised one of group 1 (bus test 5's probes,
+/// `nop` + `bra.s` loop) came out 37 37 40 39 39 39 39 over the loop's
+/// seven phases; one colour clock gave 37 35 35 39 39 39 39, two the same,
+/// three all sixteen values. With it (and the IPL sample at the granted
+/// bus cycle, see `IPL_DELAY` in `machine-amiga`) the reproducible groups
+/// of bus tests 5 and 11 match 66 of 96 values (59 before), mean
+/// difference 0.69 colour clocks (1.00). vAmigaTS (from vAmiga, not
+/// hardware) keeps its 94 passes; its differing pixels grow 1.2 %, mostly
+/// in `Agnus/Copper/Irq/irq3`/`irq4`, `Paula/Interrupts/basicint4` and
+/// `irqbpl3`-`5`, while `inttim/enatim2`/`4`, `irqbpl1`/`4b`/`6b` and
+/// `Agnus/Copper/copvbl2` lose more than half of theirs.
+const COPPER_PAULA_DELAY: u8 = 3;
 /// VHPOSR shows the beam this many colour clocks ahead of the slot that
 /// reads it. Measured with vAmigaTS, whose tests poll VHPOSR to synchronise
 /// the CPU: with the CPU's register writes a colour clock late
@@ -226,7 +252,13 @@ const BPLCON0_DELAY: u8 = 3;
 /// from `Agnus/Registers/VPOS/probe2`–`probe4` (sixteen reads in a row,
 /// whose stored values the test `vpos_probe_values` reads back: 3 gave
 /// every value one too many) and `vprobe1`–`vprobe4` (VPOSR over the
-/// field's end).
+/// field's end). Only the horizontal part runs ahead: the line number (and
+/// LOF) changes when the counter itself wraps, so the first two positions
+/// of a line read with the old line, $xx00 and $xx01 (WinUAE 6.0.3,
+/// cycle-exact A500, `tools/amiga_bustest17.py` reading VHPOSR eight times
+/// in a row over the line's end, 2026-11-08: `3FDE 3F01 4007`,
+/// `4E01 4F07`; the owner's A500 agrees with that WinUAE on every bus and
+/// interrupt timing measured).
 const VHPOSR_AHEAD: u16 = 2;
 /// DIWHIGH with DIWSTRT/DIWSTOP both 0: stop H8 set, stop V8 set.
 const DIWHIGH_DEFAULT: u16 = 0x2100;
@@ -350,6 +382,10 @@ pub struct Custom {
     cpu_pending: bool,
     /// A BPLCON0 write on its way to Denise, with the ticks left.
     bplcon0_pending: Option<(u16, u8)>,
+    /// A Copper write to INTREQ or INTENA on its way to Paula (register,
+    /// value, ticks left): it lands [`COPPER_PAULA_DELAY`] colour clocks
+    /// after its slot.
+    copper_paula: Option<(u16, u16, u8)>,
     spr_dma: [SprDma; 8],
     fetch_cache: FetchCache,
     frame: Vec<Rgb8>,
@@ -419,6 +455,7 @@ impl Custom {
             cpu_starved: 0,
             cpu_pending: false,
             bplcon0_pending: None,
+            copper_paula: None,
             spr_dma: [SprDma::Off; 8],
             fetch_cache: FetchCache::default(),
             frame: vec![Rgb8::default(); (WIDTH * standard.height()) as usize],
@@ -478,19 +515,17 @@ impl Custom {
         }
     }
 
-    /// The beam as a read sees it, [`VHPOSR_AHEAD`] colour clocks on:
-    /// line, position and LOF, over the end of the line and of the field.
+    /// The beam as a read sees it: the position [`VHPOSR_AHEAD`] colour
+    /// clocks on (wrapping to the line's start), the line and LOF as they
+    /// stand.
     fn beam_ahead(&self) -> (u16, u16, bool) {
         let h = self.h + VHPOSR_AHEAD;
-        if h < self.line_len() {
-            return (self.v, h, self.lof);
-        }
-        let h = h - self.line_len();
-        if self.v + 1 < self.field_lines() {
-            (self.v + 1, h, self.lof)
+        let h = if h < self.line_len() {
+            h
         } else {
-            (0, h, self.lof != self.interlaced())
-        }
+            h - self.line_len()
+        };
+        (self.v, h, self.lof)
     }
 
     /// LPEN in BPLCON0 and the ECS LPENDIS: the latch shows in VPOSR/VHPOSR.
@@ -888,10 +923,22 @@ impl Custom {
     /// light pen.
     #[inline(always)]
     fn tick_with<const EXTRAS: bool>(&mut self, chip: &mut ChipRam, cpu_wants: bool) -> TickOut {
+        if let Some((r, val, left)) = self.copper_paula {
+            if left > 1 {
+                self.copper_paula = Some((r, val, left - 1));
+            } else {
+                self.copper_paula = None;
+                self.write(r, val);
+            }
+        }
         if let Some((value, left)) = self.bplcon0_pending {
             self.bplcon0_pending = (left > 1).then_some((value, left - 1));
             if left <= 1 {
                 self.denise.bplcon0 = value;
+                self.denise.bplcon0_at = None;
+            } else if left == 2 {
+                self.denise.bplcon0_at =
+                    Some((value, 8 * self.denise_h(self.h) + BPLCON0_DENISE_AT));
             }
         }
         let (v, h) = (self.v, self.h);
@@ -1017,7 +1064,16 @@ impl Custom {
                         if EXTRAS && self.rec.is_some() {
                             self.record_copper_move(v, h, r, val);
                         }
-                        self.write(r, val);
+                        if r == reg::INTREQ || r == reg::INTENA {
+                            // Paula latches it COPPER_PAULA_DELAY later.
+                            if let Some((r0, v0, _)) =
+                                self.copper_paula.replace((r, val, COPPER_PAULA_DELAY))
+                            {
+                                self.write(r0, v0);
+                            }
+                        } else {
+                            self.write(r, val);
+                        }
                     }
                 } else if self.blitter.wants_slot() && self.dma_on(dma::BLTEN) {
                     if self.blitter.idle_now() {
@@ -1471,6 +1527,7 @@ impl Custom {
                 // A write still under way lands first.
                 if let Some((value, _)) = self.bplcon0_pending.take() {
                     self.denise.bplcon0 = value;
+                    self.denise.bplcon0_at = None;
                 }
                 self.bplcon0_pending = Some((v, BPLCON0_DELAY));
             }
@@ -1622,8 +1679,9 @@ impl Savestate for Custom {
         // Denise's 256 colours of 24 bits); version 10: 35 ns output;
         // version 12: the Copper's settling after a WAIT fetch; 13: sprite
         // writes on their way in Denise; 14: the Copper's bus hold after a
-        // COPJMP strobe.
-        w.chunk(TAG, 14, |w| {
+        // COPJMP strobe; 15: a Copper write to INTREQ/INTENA on its way;
+        // 16: with its colour clocks left.
+        w.chunk(TAG, 16, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1676,12 +1734,17 @@ impl Savestate for Custom {
             let (value, left) = self.bplcon0_pending.unwrap_or_default();
             w.u16(value);
             w.u8(left);
+            w.bool(self.copper_paula.is_some());
+            let (r, v, left) = self.copper_paula.unwrap_or_default();
+            w.u16(r);
+            w.u16(v);
+            w.u8(left);
         });
     }
 
     /// Atomic; the standard and pointer width are configuration.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (version, mut c) = r.chunk(TAG, 14)?;
+        let (version, mut c) = r.chunk(TAG, 16)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -1754,6 +1817,16 @@ impl Savestate for Custom {
                 let pending = c.bool()?;
                 let (value, left) = (c.u16()?, c.u8()?);
                 n.bplcon0_pending = pending.then_some((value, left.min(BPLCON0_DELAY)));
+            }
+            if version >= 15 {
+                let pending = c.bool()?;
+                let (r, v) = (c.u16()?, c.u16()?);
+                // Version 15 kept one colour clock, then the write.
+                let left = if version >= 16 { c.u8()? } else { 1 };
+                if pending && (r != reg::INTREQ && r != reg::INTENA || left == 0) {
+                    return Err(StateError::Invalid("Copper write to Paula"));
+                }
+                n.copper_paula = pending.then_some((r, v, left.min(COPPER_PAULA_DELAY)));
             }
         } else {
             n.diwhigh = Self::diwhigh_default(n.diwstop);

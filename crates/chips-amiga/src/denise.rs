@@ -200,6 +200,10 @@ pub struct Denise {
     pub sprites: [Sprite; 8],
     /// Sprite register writes on their way, the earliest first.
     sprite_writes: [Option<SpriteWrite>; SPRITE_WRITES],
+    /// A BPLCON0 write that reaches Denise at a 35 ns pixel inside the
+    /// colour clock being drawn (set and used up within one colour clock,
+    /// so never in a savestate).
+    pub(crate) bplcon0_at: Option<(u16, u32)>,
     pub clxcon: u16,
     /// AGA: planes 7 and 8 in collisions.
     pub clxcon2: u16,
@@ -317,6 +321,7 @@ impl Denise {
             ham: 0,
             sprites: [Sprite::default(); 8],
             sprite_writes: [None; SPRITE_WRITES],
+            bplcon0_at: None,
             clxcon: 0,
             clxcon2: 0,
             clxdat: 0,
@@ -740,6 +745,7 @@ impl Denise {
     #[inline(always)]
     fn idle(&self, h: u32) -> bool {
         if self.armed
+            || self.bplcon0_at.is_some()
             || self.pending[0][0].is_some()
             || self.pending[1][0].is_some()
             || self.sprite_writes[0].is_some()
@@ -814,15 +820,15 @@ impl Denise {
         out: &mut [u32; N],
     ) {
         let (start, stop) = self.window();
-        let hires = self.hires();
-        let shres = self.shres();
-        let planes = self.planes();
-        let con3 = self.con3();
-        let border_blank = con3 & 0x20 != 0;
-        let border_sprites = con3 & 0x02 != 0;
+        let mut hires = self.hires();
+        let mut shres = self.shres();
+        let mut planes = self.planes();
+        let mut con3 = self.con3();
+        let mut border_blank = con3 & 0x20 != 0;
+        let mut border_sprites = con3 & 0x02 != 0;
         let sprites_live =
             self.sprite_writes[0].is_some() || self.sprites_due::<FINE>(N as u32 * h, N as u32);
-        let plane_mask = ((1u16 << planes) - 1) as u8;
+        let mut plane_mask = ((1u16 << planes) - 1) as u8;
         let xor = if self.aga {
             (self.bplcon4 >> 8) as u8
         } else {
@@ -834,6 +840,19 @@ impl Denise {
             let x35 = if FINE { x } else { (2 * x) | 1 };
             if self.sprite_writes[0].is_some() {
                 self.apply_sprite_writes(x35);
+            }
+            if let Some((v, at)) = self.bplcon0_at {
+                if x35 >= at {
+                    self.bplcon0 = v;
+                    self.bplcon0_at = None;
+                    hires = self.hires();
+                    shres = self.shres();
+                    planes = self.planes();
+                    con3 = self.con3();
+                    border_blank = con3 & 0x20 != 0;
+                    border_sprites = con3 & 0x02 != 0;
+                    plane_mask = ((1u16 << planes) - 1) as u8;
+                }
             }
             for g in 0..2 {
                 if let Some(l) = self.pending[g][0] {
@@ -1278,6 +1297,26 @@ mod tests {
         assert_eq!(&px[..6], &[0; 6]);
         assert_eq!(&px[6..10], &[WHITE; 4], "two low-resolution pixels");
         assert_eq!(px[10], 0);
+    }
+
+    #[test]
+    fn bplcon0_reaches_denise_inside_a_colour_clock() {
+        let mut d = Denise::new();
+        d.write_color(0, 0x000);
+        d.write_color(1, 0xfff);
+        d.bplcon0 = 0x1200;
+        d.diwstrt = 0x2c81;
+        d.diwstop = 0x2cc1;
+        d.start_line();
+        d.write_bpldat(0, w(0xffff), 0x3f);
+        // No planes from 35 ns pixel 4 of colour clock $41 on: its first
+        // two 70 ns columns still show the plane, the last two do not.
+        d.bplcon0_at = Some((0x0200, 8 * 0x41 + 4));
+        let px = line(&mut d, 0x3f, 0x43);
+        assert_eq!(&px[6..10], &[WHITE; 4]);
+        assert_eq!(&px[4 * 2..4 * 2 + 4], &[WHITE, WHITE, 0, 0]);
+        assert_eq!(d.bplcon0, 0x0200);
+        assert_eq!(d.bplcon0_at, None, "used up in the colour clock");
     }
 
     #[test]

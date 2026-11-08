@@ -160,7 +160,9 @@ impl Uart {
     /// One colour clock. Returns interrupt requests.
     pub fn tick(&mut self) -> u16 {
         let mut ints = 0;
-        // Transmit.
+        // Transmit. A bit counts as sent at the end of its period, so the
+        // shifter stays busy (TSRE clear) through the last bit, and a word
+        // waiting in the buffer moves in (TBE) only then.
         if self.tx_bits != 0 {
             if self.tx_counter == 0 {
                 if std::mem::take(&mut self.tx_start) {
@@ -169,13 +171,15 @@ impl Uart {
                     self.txd = self.tx_shift & 1 != 0;
                     self.tx_shift >>= 1;
                 }
-                self.tx_bits -= 1;
                 self.tx_counter = self.bit_period();
             }
             self.tx_counter -= 1;
-            if self.tx_counter == 0 && self.tx_bits == 0 {
-                self.txd = true;
-                ints |= self.load_shifter();
+            if self.tx_counter == 0 {
+                self.tx_bits -= 1;
+                if self.tx_bits == 0 {
+                    self.txd = true;
+                    ints |= self.load_shifter();
+                }
             }
         }
         // Receive.
@@ -298,6 +302,22 @@ mod tests {
         assert_eq!(u.serdatr() & 0x2000, 0, "buffer full");
         let ints = run(&mut u, 10);
         assert_eq!(ints & int::TBE, int::TBE, "TBE when the shifter takes it");
+    }
+
+    #[test]
+    fn the_buffered_word_moves_in_after_the_whole_frame() {
+        let mut u = Uart::new();
+        u.serper = 9; // 10 clocks per bit
+        u.write_serdat(0xff); // start bit + 8 data bits = 90 clocks
+        u.write_serdat(0xff);
+        assert_eq!(run(&mut u, 89), 0, "no TBE while the last bit is out");
+        assert_eq!(u.serdatr() & 0x3000, 0, "buffer full, shifter busy");
+        assert_eq!(u.tick(), int::TBE, "TBE when the frame ends");
+        assert_eq!(u.serdatr() & 0x3000, 0x2000, "buffer empty, shifter busy");
+        assert_eq!(run(&mut u, 89), 0);
+        assert_eq!(u.serdatr() & 0x1000, 0, "TSRE clear through the last bit");
+        u.tick();
+        assert_eq!(u.serdatr() & 0x3000, 0x3000, "both empty");
     }
 
     #[test]

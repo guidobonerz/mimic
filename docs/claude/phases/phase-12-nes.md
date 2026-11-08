@@ -1,0 +1,15 @@
+# Phase 12: NES / Famicom
+
+Part of the project's instructions for Claude Code; the core is `CLAUDE.md` at the repository root, the index of these files is its section "Further documentation".
+
+| # | Phase | Est. | Gate |
+| --- | --- | --- | --- |
+| 12 | Nintendo NES/Famicom (`machine-nes`; begun 2026-10-23): 2A03 as a cpu-6502 variant (no decimal mode, APU on chip), PPU 2C02/2C07 with VRAM/OAM (`chips-nintendo`), mappers NROM, MMC1, UxROM, CNROM, MMC3 (`devices-cartridge::nes`, iNES/NES 2.0), controllers; console panel POWER/RESET | 8 wk | nestest and blargg's CPU/PPU/APU test ROMs green; user-supplied games run |
+
+## Status
+
+User choices: NTSC and PAL, the mappers of the phase (NROM, MMC1, UxROM, CNROM, MMC3), the standard controller, Zapper, Four Score and Arkanoid controller, the Famicom Disk System later; test ROMs from the nes-test-roms collection (fetched, never committed). Done: `cpu-6502` `Variant::Rp2A03` (no decimal mode; Harte `nes6502` green; late interrupt sampling and the vector chosen as P is pushed, so an NMI in BRK's last cycles follows the handler's first instruction), `chips-nintendo` (PPU with dot-level background pipeline, sprite evaluation timed for the overflow flag, A12 one dot ahead of pattern reads, odd-frame skip decided at dot 338, I/O latch decay, the power-up palette blargg measured; palette computed from the composite signal levels; APU with frame counter, all five channels, load/reload DMC fetches, non-linear mixer), `devices-cartridge::nes` (iNES/NES 2.0, trainer, four-screen, mappers 0–4, MMC3A as submapper 4), `devices-input::nes` (`PortKind::NesControl`; controller, Zapper with the light decided by the console from the picture, Arkanoid), `machine-nes` (DMA unit, Four Score, panel POWER/RESET, debugger spaces cpu/ppu/oam and chips ppu/apu/mapper, savestates), `tests/tests/nes_testroms.rs`: 116 ROMs pass (nestest; instr_test-v5, instr_misc, instr_timing, cpu_interrupts_v2, cpu_dummy_writes, cpu_exec_space, cpu_reset, ppu_vbl_nmi, vbl_nmi_timing, ppu_open_bus, ppu_read_buffer, oam_read, oam_stress, sprite_hit, sprite_overflow, blargg_ppu_tests, apu_test, apu_reset, blargg_apu_2005 1–9, sprdma_and_dmc_dma, mmc3_test_2 1–5, branch_timing). Known failures: `6-MMC3_alt` (tests the MMC3A, which its iNES 1.0 header cannot select), blargg_apu_2005 `10.len_halt_timing` and `11.len_reload_timing` (a halt or reload write in the cycle of the length clock; apu_test's versions pass). Open: user-supplied games (none at hand yet); battery-backed PRG RAM is not written back to a file; screen-only test ROMs (dmc_dma_during_read4, cpu_dummy_reads, read_joy3, blargg_nes_cpu_test5, cpu_timing_test6) not judged; the Zapper's light model (bright point up to 20 lines above the beam) is this project's approximation; the LXA constant $FF follows blargg's instr_test, while Harte's nes6502 data uses $EE.
+
+## Backlog detail
+
+- **Nintendo NES (Famicom)** (Phase 12): new CPU variant 2A03 (6502 without decimal mode, APU on chip), PPU 2C02/2C07 with its own VRAM and OAM, cartridge mappers (NROM, MMC1, UxROM, CNROM, MMC3 …), controllers; console panel: POWER, RESET.

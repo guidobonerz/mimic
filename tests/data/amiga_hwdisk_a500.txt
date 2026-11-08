@@ -36,3 +36,86 @@ mimic amiga_bustest9 after:  0506 0494 0463 0415 03C4 0302 024F 0338 0262 0279 0
 # reproduces (that one gives a period-5 sawtooth the machine does not show).
 amiga_bustest10: E078 E27C E47C E67E E880 EA80 EC88 EE87 F08C F28A F490 F691 F892 FA90 FC98 FE97 E083 E281 E47F E67E E87E EA8A EC8F EE8F F08F F28E F48D F68C F898 FA9D FC9D FE9D E078 E278 E47C E67C E884 EA83 EC86 EE86 F08C F28B F48E F68C F892 FA92 FC94 FE9A E07B E283 E481 E685 E883 EA8B EC87 EE8D F08D F28F F493 F697 F893 FA97 FC95 FE9D
 mimic amiga_bustest10: E078 E274 E47C E67E E880 EA80 EC82 EE84 F084 F28A F48A F68C F88A FA90 FC92 FE94 E07D E27C E47A E678 E887 EA85 EC84 EE84 F084 F284 F490 F695 F895 FA94 FC92 FE90 E074 E278 E478 E678 E87C EA7C EC84 EE84 F086 F286 F48C F68C F890 FA8E FC94 FE96 E07F E27D E481 E681 E887 EA81 EC89 EE89 F08F F28D F48D F68F F897 FA95 FC99 FE99
+# Sixth run (2026-11-08, quick disk with bus tests 5-11; the earlier attempt blinked fast: the
+# harness asked AllocMem for all eleven tests' planes, 135520 bytes, which this machine no longer
+# had besides the reserved range, so no test ran; it now asks only for the tests that run).
+# Repeats prefixed "run6" (bus test 5 groups 1-3 came out the same as in the fifth run, group 0
+# moved by up to 4 colour clocks, bus test 10 by up to 18: both depend on the start phase).
+# Bus test 11 (tools/amiga_bustest11.py): latencies (colour clocks) group 0 CPU-raised SOFT all 38
+# (mimic 38); group 1 Copper-raised SOFT 37 37 40 39 39 39 39 37 37 40 39 39 39 39 37 37 (mimic
+# 37 35 35 39 39 39 39 37 35 35 ..., positions 1 and 2 of the period-7 pattern 2 and 5 early);
+# group 2 UART TBE after a frame at SERPER 2k: 62 67 88 104 123 139 158 175 194 211 230 249 266 285
+# 301 320 = 18k + 50 +-1 from k = 2 (mimic 18k + 46, 4 colour clocks early; k = 0, 1 equal);
+# group 3 CPU SOFT with 2 planes all 40 (mimic 41 then 40).
+run6 amiga_bustest5: E078 E278 E480 E681 E884 EA84 EC84 EE86 F086 F28C F48C F690 F88E FA94 FC95 FE96 E07B E27D E47F E681 E881 EA87 EC87 EE89 F08B F28D F48D F693 F893 FA95 FC97 FE99 E076 E278 E47A E67C E880 EA83 EC85 EE87 F089 F28B F48D F68F F891 FA93 FC95 FE97 E079 E27F E47D E681 E881 EA87 EC85 EE89 F089 F28F F48D F691 F891 FA97 FC95 FE99
+run6 amiga_bustest6: 71BF 71D3 71D5 71D6 7B96 99D8 BA59 94D2 7056 5EC6 57BC 7197
+run6 amiga_bustest7: A2B4 7CD2 94C9 804F 66D2 6B8B 6554 597E A66D 79AB 7E67 BC7C
+run6 amiga_bustest8: 58B9 60D0 6813 6D79 753B 96CE BF84 89AB BC29 9AAD 93CA 724B
+run6 amiga_bustest9: 0504 0493 0463 0414 03C5 030D 0256 033C 0260 0283 0303 03F7
+run6 amiga_bustest10: E07C E27C E47D E680 E880 EA82 EC84 EE84 F08A F28A F48C F692 F890 FA92 FC94 FE9A E078 E278 E480 E681 E884 EA84 EC84 EE86 F086 F28C F48C F690 F88E FA94 FC95 FE96 E07F E289 E485 E67E E88E EA85 EC96 EE8E F086 F295 F48C F69C F895 FAA4 FC9B FEA5 E07D E281 E47F E685 E883 EA89 EC8B EE8D F089 F291 F493 F693 F897 FA9B FC99 FE9B
+amiga_bustest11: 403A 4060 483F 4865 5044 506A 5849 586F 604E 6074 6853 6879 7058 707E 785D 7883 8062 8088 8867 888D 906C 9092 9871 9897 A076 A09C A87B A8A1 B080 B0A6 B885 B8AB E051 E076 E253 E278 E455 E47D E657 E67E E859 E880 EA5B EA82 EC5D EC84 EE5F EE84 F061 F086 F263 F28B F465 F48C F667 F68E F869 F890 FA6B FA92 FC6D FC92 FE6F FE94 403D 407B 4842 4885 5047 509F 584C 58B4 6051 60CC 6856 68E1 705B 7116 7860 792C 8065 8144 886A 895A 906F 9172 9874 998A A079 A1A0 A87E A9B8 B083 B1CD B888 BA02 403B 4063 4835 485D 503F 5067 584B 5873 6045 606D 684D 6875 705B 7083 7853 787B 805F 8087 886D 8895 9065 908D 9871 9899 A07F A0A7 A877 A89F B083 B0AB B891 B8B9
+# mimic after COPPER_PAULA_DELAY = 3 and the IPL sample at the granted bus cycle (2026-11-08): bus test
+# 11 group 1 matches the sixth run in all 16 values; bus test 5 groups 1-3 and bus test 11 groups
+# 0, 1, 3 together 66 of 96 exact (59 before), mean 0.69 colour clocks (1.00).
+# Seventh run (2026-11-08, quick disk with bus tests 11 and 12): bus test 11 the same as the sixth run.
+# Bus test 12 (tools/amiga_bustest12.py, Copper-raised SOFT against one-instruction loops), latencies:
+#   group 0 MOVEM.L (A0),6 regs:  39 63 57 51 45 39 40 37 61 55 47 39 37 61 57 53
+#            mimic (sample at the start of the last bus cycle): the same but 2 colour clocks later at
+#            probes 1-5 (11 of 16 exact); every earlier sample point fits worse
+#   group 1 MOVEM.L 6 regs,(A0):  41 47 51 55 59 39 37 41 45 51 55 59 63 37 41 45
+#            mimic 59 37 37 43 47 51 55 61 37 40 39 45 49 53 57 37 (off by up to 20); sampled at the
+#            start of the instruction's 5th or 6th bus cycle 14 of 16 within 1 colour clock: the
+#            register-to-memory MOVEM samples early (Motorola AN1012: MOVEM at its start)
+#   group 2 DIVS.W:  39 62 94 42 74 107 55 87 40 67 99 46 78 39 61 95 (mimic's sequence two probes on,
+#            mostly 2 colour clocks shorter: the same orbit from another start phase)
+#   group 3 MULU.W:  39 39 42 45 48 51 56 60 63 66 69 73 39 39 42 45 (likewise)
+amiga_bustest12: E051 E078 E255 E294 E459 E492 E65D E690 E861 E88E EA65 EA8C EC69 EC91 EE6D EE92 F071 F0AE F275 F2AC F479 F4A8 F67D F6A4 F881 F8A6 FA85 FAC2 FC89 FCC2 FE8D FEC2 E051 E07A E255 E284 E459 E48C E65D E694 E861 E89C EA65 EA8C EC69 EC8E EE6D EE96 F071 F09E F275 F2A8 F479 F4B0 F67D F6B8 F881 F8C0 FA85 FAAA FC89 FCB2 FE8D FEBA E051 E078 E255 E293 E459 E4B7 E65D E687 E861 E8AB EA65 EAD0 EC69 ECA0 EE6D EEC4 F071 F099 F275 F2B8 F479 F4DC F67D F6AB F881 F8CF FA85 FAAC FC89 FCC6 FE8D FF09 E051 E078 E255 E27C E459 E483 E65D E68A E861 E891 EA65 EA98 EC69 ECA1 EE6D EEA9 F071 F0B0 F275 F2B7 F479 F4BE F67D F6C6 F881 F8A8 FA85 FAAC FC89 FCB3 FE8D FEBA
+# Eighth run (2026-11-08, bus tests 12 and 13; a first try broke off writing the results at block 1089,
+# cylinder 49 head 1, which the Greaseweazle's weak head 1 had written: the A500's drive could not read
+# the track trackdisk reads before writing). Bus test 12 groups 1-3 as in the seventh run, group 0
+# from another start phase. Bus test 13 (tools/amiga_bustest13.py) latencies:
+#   group 0 MOVEM.L D0/D1,(A0):        40 40 39 39 39 39 39 39 40 40 39 39 39 39 39 39
+#   group 1 MOVEM.L D0-D7/A1/A3,(A0):  39 39 39 39 40 37 39 41 41 41 41 41 41 41 43 43
+#   group 2 MOVEM.L 6 regs,-(A0):      45 45 45 45 45 45 45 43 41 39 37 40 39 39 39 39
+#   group 3 MOVEM.L (A0)+,6 regs:      40 60 39 58 37 56 39 52 65 46 64 40 58 41 54 37
+# No single MOVEM sample step fits: bus test 12 group 1 wants an early one, bus test 13's write groups
+# mimic's last bus cycle (mimic still off by 2-10 colour clocks there). Each probe's loop phase follows
+# from the last probe's latency, so one wrong latency moves all later probes: these loops cannot pin
+# the rule down; a test that restarts the loop at a fixed beam position before every probe can.
+run8 amiga_bustest12: E051 E076 E255 E292 E459 E490 E65D E68E E861 E88C EA65 EA8C EC69 EC91 EE6D EE92 F071 F0AE F275 F2AC F479 F4A8 F67D F6A4 F881 F8A6 FA85 FAC2 FC89 FCC2 FE8D FEC2 E051 E07A E255 E284 E459 E48C E65D E694 E861 E89C EA65 EA8C EC69 EC8E EE6D EE96 F071 F09E F275 F2A8 F479 F4B0 F67D F6B8 F881 F8C0 FA85 FAAA FC89 FCB2 FE8D FEBA E051 E078 E255 E293 E459 E4B7 E65D E687 E861 E8AB EA65 EAD0 EC69 ECA0 EE6D EEC4 F071 F099 F275 F2B8 F479 F4DC F67D F6AB F881 F8CF FA85 FAAC FC89 FCC6 FE8D FF09 E051 E078 E255 E27C E459 E483 E65D E68A E861 E891 EA65 EA98 EC69 ECA1 EE6D EEA9 F071 F0B0 F275 F2B7 F479 F4BE F67D F6C6 F881 F8A8 FA85 FAAC FC89 FCB3 FE8D FEBA
+run8 amiga_bustest13: E051 E079 E255 E27D E459 E480 E65D E684 E861 E888 EA65 EA8C EC69 EC90 EE6D EE94 F071 F099 F275 F29D F479 F4A0 F67D F6A4 F881 F8A8 FA85 FAAC FC89 FCB0 FE8D FEB4 E051 E078 E255 E27C E459 E480 E65D E684 E861 E889 EA65 EA8A EC69 EC90 EE6D EE96 F071 F09A F275 F29E F479 F4A2 F67D F6A6 F881 F8AA FA85 FAAE FC89 FCB4 FE8D FEB8 E051 E07E E255 E282 E459 E486 E65D E68A E861 E88E EA65 EA92 EC69 EC96 EE6D EE98 F071 F09A F275 F29C F479 F49E F67D F6A5 F881 F8A8 FA85 FAAC FC89 FCB0 FE8D FEB4 E051 E079 E255 E291 E459 E480 E65D E697 E861 E886 EA65 EA9D EC69 EC90 EE6D EEA1 F071 F0B2 F275 F2A3 F479 F4B9 F67D F6A5 F881 F8BB FA85 FAAE FC89 FCBF FE8D FEB2
+# Ninth run (2026-11-08, bus test 14 alone; blinked fast, the results complete; the read-back missed a
+# sector on cylinder 46). Bus test 14 (tools/amiga_bustest14.py: STOP, Copper sync, the loop from a fixed
+# start, the SOFT trigger 2 colour clocks later each probe). Latency (value - trigger) and the trigger's
+# distance from the sync read:
+#   group 0 MOVEM.L D0/D1,(A0):   37 45 43 41 39 37 40 40 39 47 45 43 41 39 37 40
+#                         sync:   55 58 60 62 64 66 68 69 71 74 75 77 79 81 83 85
+#   group 1 MOVEM.L 6 regs,(A0):  47 43 41 39 37 40 40 39 63 61 59 57 55 53 51 49
+#   group 2 MOVEM.L 10 regs,(A0): 77 77 73 73 69 69 65 65 61 61 57 57 53 53 49 49
+#   group 3 MOVEM.L 6 regs,-(A0): 59 57 55 53 51 49 47 45 43 41 39 37 40 39 37 39
+# Sync distance + latency (the handler's read after the sync read) gives the instruction end that took
+# the interrupt: an end takes it when the trigger lies at least 36 colour clocks before that read, for
+# every MOVEM here and for BRA alike, on the A500 and in mimic: MOVEM to memory samples at its end like
+# any instruction (AN1012's start-of-instruction sample does not show for these forms). All ends lie
+# 2 colour clocks later in mimic than on the A500 (group 0: 103/108-110/120/125 against 105/110-112/122):
+# from the sync handler's VHPOSR read (MOVE.W 6(A6),(A2)+), its RTE and the loop's start mimic takes
+# 2 colour clocks more; open.
+run9 amiga_bustest14: 404E 40AA 444D 44B4 484D 48B4 4C4D 4CB4 504D 50B4 544D 54B4 584D 58B9 5C4E 5CBB 604E 60BC 644D 64C6 684E 68C6 6C4E 6CC6 704E 70C6 744E 74C6 784E 78C6 7C4E 7CCB 404E 40B4 444D 44B2 484D 48B2 4C4D 4CB2 504D 50B2 544D 54B7 584E 58B9 5C4E 5CBA 604D 60D4 644D 64D4 684D 68D4 6C4D 6CD4 704D 70D4 744D 74D4 784D 78D4 7C4D 7CD4 404D 40D2 444E 44D4 484D 48D2 4C4E 4CD4 504D 50D2 544E 54D4 584D 58D2 5C4E 5CD4 604D 60D2 644E 64D4 684D 68D2 6C4E 6CD4 704D 70D2 744E 74D4 784D 78D2 7C4E 7CD4 404E 40C0 444E 44C0 484E 48C0 4C4E 4CC0 504E 50C0 544E 54C0 584E 58C0 5C4E 5CC0 604E 60C0 644E 64C0 684E 68C0 6C4E 6CC0 704E 70C5 744E 74C6 784E 78C6 7C4E 7CCA
+# Tenth run (2026-11-08, bus test 15 alone; tools/amiga_bustest15.py: bus test 14's scheme, loop
+# MOVEM.L D0/D1,(A0) + BRA.S, four sync handler tails). Sync distance + latency per probe (the
+# instruction end that took the probe, colour clocks after the sync read), A500 / mimic:
+#   group 0 MOVE.W 6(A6),(A2)+; RTE:            104 109 120 / 106 111 122  (+2, as bus test 14)
+#   group 1 MOVE.W 6(A6),D4; RTE:               101 106 118 / 104 109 120  (+3)
+#   group 2 MOVE.W 6(A6),D4; MOVE.W D4,(A3); RTE: 106 111 122 / 108 113 125  (+2)
+#   group 3 MOVE.W 6(A6),D4; ADDQ.L #6,A7; MOVE #$2000,SR; JMP: 110 115 126 / 108 113 125  (-2)
+# Each write to chip RAM costs the A500 one colour clock more than mimic (group 0 - group 1: 3 against
+# 2, group 2 - group 1: 5 against 4); the RTE return comes about 3 colour clocks later in mimic, the
+# ADDQ/MOVE SR/JMP return 2 earlier (A500: 9 colour clocks more than the RTE, book 8, mimic 4). Open.
+run10 amiga_bustest15: 404D 40AA 444E 44B6 484E 48B6 4C4E 4CB6 504E 50B6 544E 54B6 584E 58B6 5C4E 5CBB 604E 60BC 644E 64BC 684E 68C6 6C4E 6CC6 704E 70C6 744E 74C6 784E 78C6 7C4E 7CCB 404E 40B4 444D 44B2 484D 48B2 4C4D 4CB2 504D 50B2 544D 54B7 584E 58B9 5C4E 5CBA 604E 60BA 644E 64C4 684E 68C4 6C4E 6CC4 704E 70C4 744E 74C4 784E 78C9 7C4D 7CCA 404D 40AC 444D 44AC 484D 48B6 4C4E 4CB8 504E 50B8 544E 54B8 584E 58B8 5C4E 5CB8 604E 60BD 644E 64BE 684E 68BE 6C4E 6CC8 704E 70C8 744E 74C8 784E 78C8 7C4E 7CC8 404E 40AA 444D 44AF 484E 48B0 4C4D 4CB0 504D 50BA 544E 54BC 584E 58BC 5C4E 5CBC 604E 60BC 644E 64BC 684E 68C1 6C4E 6CC2 704E 70C2 744E 74CC 784D 78CC 7C4D 7CCC
+# Eleventh run (2026-11-08, bus test 16 alone; tools/amiga_bustest16.py: bus test 15's scheme, sync
+# handler: acknowledge, MOVE.W 6(A6),D4, n x MOVE.W D4,(A3), RTE). The loop's MOVEM end after the
+# sync read (colour clocks, mod 17 = the loop), A500 / mimic:
+#   n = 0: 101 / 104    n = 1: 106 / 108    n = 2: 110 / 112    n = 4: 118 / 120
+# The A500: the first write costs 5 colour clocks, each further one 4 (the book's 8 CPU clocks);
+# mimic: 4 each. With no write mimic is 3 colour clocks late (bus test 15 group 1 again).
+run11 amiga_bustest16: 404E 40B4 444D 44B2 484D 48B2 4C4D 4CB2 504D 50B2 544D 54B7 584E 58B9 5C4E 5CBA 604E 60BA 644E 64C4 684E 68C4 6C4E 6CC4 704E 70C4 744E 74C4 784E 78C9 7C4D 7CCA 404E 40AC 444D 44AC 484D 48B6 4C4E 4CB8 504E 50B8 544E 54B8 584E 58B8 5C4E 5CB8 604E 60BD 644E 64BE 684E 68BE 6C4E 6CC8 704E 70C8 744E 74C8 784E 78C8 7C4E 7CC8 404D 40AA 444D 44AF 484E 48B0 4C4D 4CB0 504D 50BA 544E 54BC 584E 58BC 5C4E 5CBC 604E 60BC 644E 64BC 684E 68C1 6C4E 6CC2 704E 70C2 744E 74CC 784D 78CC 7C4D 7CCC 404E 40B2 444D 44B2 484D 48B2 4C4D 4CB2 504D 50B2 544D 54B7 584E 58B8 5C4E 5CB8 604E 60C4 644E 64C4 684E 68C4 6C4E 6CC4 704E 70C4 744E 74C4 784E 78C9 7C4D 7CC8

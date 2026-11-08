@@ -416,8 +416,13 @@ struct Board {
 /// on two sampling edges (MC68000 User's Manual, interrupt exception
 /// processing): about six clocks, three colour clocks. The sampling
 /// point is taken as the start of the instruction's last bus cycle (a
-/// rule of thumb from the same discussion); a bus cycle that then waits
-/// for the chip bus does not move it. A request that arrives later is
+/// rule of thumb from the same discussion); a chip bus cycle that waits
+/// for its slot starts when it gets it, and the sample moves with it
+/// (the owner's A500, `tools/amiga_bustest11.py` and bus test 5 with two
+/// planes, 2026-11-08: sampled at the asked-for start, the Copper-raised
+/// interrupts with planes on came out up to 6 colour clocks early once
+/// the Copper's write took its measured three colour clocks, see
+/// `COPPER_PAULA_DELAY` in `chips-amiga`). A request that arrives later is
 /// taken after the next instruction. Desert Dream's main loop depends on
 /// this: it polls VHPOSR for line 0 in a loop whose branch waits for the
 /// Copper's burst at the line start, and reads the 0 only because the
@@ -924,6 +929,8 @@ impl TimedBus68 for AmigaBus<'_> {
                     }
                 }
             }
+            // IPL0-2 are sampled when the cycle got the bus.
+            self.bus_start = start - bus;
             return (start - at - bus) as u32;
         }
         if region == Region::Cia {

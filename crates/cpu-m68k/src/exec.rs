@@ -963,7 +963,17 @@ fn misc4e(cpu: &mut M68000, bus: &mut dyn TimedBus68, op: u16) -> Res {
             if !privileged(cpu, bus)? {
                 return Ok(());
             }
-            let v = cpu.ext(bus)?;
+            // The 68000's STOP is 4 clocks without a bus cycle (MC68000
+            // UM, table 8-12: 4(0/0)): the immediate is in IRC already. A
+            // prefetch here would wait for a colour clock on the Amiga's
+            // chip bus and shift the clocks the stopped CPU wakes on.
+            let v = if cpu.is_020() {
+                cpu.ext(bus)?
+            } else {
+                let v = cpu.irc;
+                cpu.idle(bus, 4);
+                v
+            };
             cpu.set_sr(v);
             cpu.set_stopped();
             Ok(())

@@ -297,6 +297,51 @@ fn savestate_round_trip() {
 }
 
 #[test]
+fn a_copper_write_to_intreq_lands_three_colour_clocks_later() {
+    let (mut c, mut chip) = setup();
+    for (i, w) in [0x6001u16, 0xfffe, 0x009c, 0x8004, 0xffff, 0xfffe]
+        .iter()
+        .enumerate()
+    {
+        chip.set_word(0x2000 + 2 * i as u32, *w);
+    }
+    c.write(reg::COP1LCH, 0);
+    c.write(reg::COP1LCL, 0x2000);
+    c.write(reg::DMACON, 0x8000 | dma::DMAEN | dma::COPEN);
+    field(&mut c, &mut chip);
+    c.write(reg::INTREQ, 0x7fff); // the first field's request
+    let mut ticks = 0;
+    while c.copper_paula.is_none() {
+        c.tick(&mut chip, false);
+        ticks += 1;
+        assert!(ticks < 400_000, "the Copper never wrote INTREQ");
+    }
+    assert_eq!(c.paula.requests() & int::SOFT, 0, "not in the MOVE's slot");
+    // The write on its way survives a savestate.
+    let mut w = StateWriter::new();
+    c.save(&mut w);
+    let data = w.into_bytes();
+    let mut d = Custom::new(Standard::Pal, 0x7fffe, Chipset::OCS);
+    d.load(&mut StateReader::new(&data)).unwrap();
+    assert_eq!(
+        d.copper_paula,
+        Some((reg::INTREQ, 0x8004, COPPER_PAULA_DELAY))
+    );
+    let mut chip2 = chip.clone();
+    for k in 1..=COPPER_PAULA_DELAY {
+        c.tick(&mut chip, false);
+        d.tick(&mut chip2, false);
+        let want = if k == COPPER_PAULA_DELAY {
+            int::SOFT
+        } else {
+            0
+        };
+        assert_eq!(c.paula.requests() & int::SOFT, want, "colour clock {k}");
+        assert_eq!(d.paula.requests() & int::SOFT, want, "restored, {k}");
+    }
+}
+
+#[test]
 fn ecs_state_keeps_the_beam_registers_and_the_switched_standard() {
     let (mut c, mut chip) = setup_ecs(Standard::Pal);
     screen(&mut c, &mut chip);

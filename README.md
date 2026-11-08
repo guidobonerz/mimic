@@ -1,6 +1,6 @@
 MIMIC:Imitates Machines, Inspects Code
 
-A cycle-accurate multi-machine emulator in Rust. Every machine gets the same remote debugger and a live preview stream (see `CLAUDE.md` for architecture and commands, `docs/` for usage).
+A cycle-accurate multi-machine emulator in Rust. Every machine gets the same remote debugger and a live preview stream (see `CLAUDE.md` and `docs/claude/` for architecture and commands, `docs/` for usage).
 
 The user guide — how to use the emulator plus the complete reference of every option, the start profiles and the web front end — is `docs/mimic-user-guide-en.pdf` (English) and `docs/mimic-user-guide-de.pdf` (German); both ship with every release package and the web bundle. Regenerate them with `python tools/user_guide.py` (needs `reportlab`; the text is in `tools/guide_en.py` and `tools/guide_de.py`).
 

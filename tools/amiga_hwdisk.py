@@ -11,7 +11,7 @@ without a monitor. Results go onto the disk itself.
    - reads every block through trackdisk and checks the pattern this
      tool put there: proves that a real Amiga reads what the Greaseweazle
      wrote;
-   - runs the bus tests (tools/amiga_bustest.py, 2, 3, 4, 5, 6, 7, 8, 9, 10, as
+   - runs the bus tests (tools/amiga_bustest.py, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, as
      `build_main(harness=True)`: they leave the OS's CIA masks alone and
      return) one after another, keeping plane 1 of each, where its numbers
      are drawn;
@@ -66,7 +66,9 @@ PROG_BLOCKS = 16
 RESULT_BLOCK = 1000      # the results: info block, then the planes
 TESTS = ["amiga_bustest", "amiga_bustest2", "amiga_bustest3", "amiga_bustest4", "amiga_bustest5",
          "amiga_bustest6", "amiga_bustest7", "amiga_bustest8", "amiga_bustest9",
-         "amiga_bustest10"]
+         "amiga_bustest10", "amiga_bustest11", "amiga_bustest12",
+         "amiga_bustest13", "amiga_bustest14", "amiga_bustest15",
+         "amiga_bustest16", "amiga_bustest17"]
 RESULT_LEN = (512 + len(TESTS) * PLANE_SIZE + 511) // 512 * 512
 RESULT_BLOCKS = RESULT_LEN // 512
 PATTERN_KEY = 0xA5A55A5A
@@ -232,15 +234,20 @@ def build_harness(irqs):
     a.move("l", ABSL(BADS), ABSL(INFO + 24))
     a.move("l", ABSL(FIRSTBAD), ABSL(INFO + 28))
     a.move("l", ABSL(READERR), ABSL(INFO + 32))
-    # --- a buffer for the planes
-    a.move("l", IMM(len(TESTS) * PLANE_SIZE, "l"), D(0))
+    # --- a buffer for the planes of the tests that run (only those: the
+    # owner's 512 KB A500 had no 11 x 11200 bytes left besides the reserved
+    # range, 2026-11-08); its address and size go into the info block
+    first = (len(TESTS) - 1 if FROM_TEST is None else FROM_TEST) if QUICK else 0
+    capt_len = (len(TESTS) - first) * PLANE_SIZE
+    a.move("l", IMM(capt_len, "l"), ABSL(INFO + 40))
+    a.move("l", IMM(capt_len, "l"), D(0))
     a.move("l", IMM(0x10001, "l"), D(1))         # MEMF_PUBLIC | MEMF_CLEAR
     a.movea("l", ABSL(EXEC), 6)
     jsr_lib(a, ALLOCMEM)
     a.move("l", D(0), ABSL(CAPT))
+    a.move("l", D(0), ABSL(INFO + 36))
     bccw(a, 7, "write")                          # none: no tests
     # --- the tests
-    first = (len(TESTS) - 1 if FROM_TEST is None else FROM_TEST) if QUICK else 0
     a.moveq(first, 7)
     a.label("test")
     a.move("w", D(7), D(0))
@@ -288,6 +295,8 @@ def build_harness(irqs):
     a.lea(ABSL(PLANES), 0)
     a.movea("l", ABSL(CAPT), 1)
     a.move("w", D(7), D(0))
+    if first:
+        a.emit(0x0440, first)                    # SUBI.W #first,D0
     a.emit(0xC0FC, PLANE_SIZE)                   # MULU
     a.emit(0xD3C0)                               # ADDA.L D0,A1
     a.move("w", IMM(PLANE_SIZE // 4 - 1, "w"), D(0))
@@ -302,9 +311,16 @@ def build_harness(irqs):
     copy_longs(a, INFO, 0x30000, 128)
     a.tst("l", ABSL(CAPT))
     a.beq("nocapt")
+    # the planes of the tests that did not run: empty
+    if first:
+        a.lea(ABSL(0x30200), 1)
+        a.move("w", IMM(first * PLANE_SIZE // 4 - 1, "w"), D(0))
+        a.label("clrp")
+        a.move("l", IMM(0, "l"), POSTINC(1))
+        a.dbra(0, "clrp")
     a.movea("l", ABSL(CAPT), 0)
-    a.lea(ABSL(0x30200), 1)
-    a.move("w", IMM(len(TESTS) * PLANE_SIZE // 4 - 1, "w"), D(0))
+    a.lea(ABSL(0x30200 + first * PLANE_SIZE), 1)
+    a.move("w", IMM(capt_len // 4 - 1, "w"), D(0))
     a.label("cpc")
     a.move("l", POSTINC(0), POSTINC(1))
     a.dbra(0, "cpc")
@@ -515,6 +531,7 @@ def describe(info):
     chip, = struct.unpack(">I", info[12:16])
     vposr, denise = struct.unpack(">HH", info[16:20])
     rom, bads, first, rderr = struct.unpack(">IiiI", info[20:36])
+    capt, capt_len = struct.unpack(">II", info[36:44])
     cpu = "68000"
     for bit, name in ((7, "68060"), (3, "68040"), (2, "68030"), (1, "68020"), (0, "68010")):
         if attn & (1 << bit):
@@ -526,7 +543,8 @@ def describe(info):
     return [f"exec V{ver}, ROM version word ${rom:08X}, CPU {cpu} (AttnFlags ${attn:04X})",
             f"chip RAM up to ${chip:06X}, Agnus/Alice {agnus} (VPOSR ${vposr:04X}), Denise {lisa}",
             f"pattern: {bads} bad blocks" + (f" (first {first})" if bads else "")
-            + f", {rderr} tracks unreadable"]
+            + f", {rderr} tracks unreadable",
+            f"plane buffer: {capt_len} bytes " + (f"at ${capt:06X}" if capt else "NOT allocated (no tests run)")]
 
 
 def memory_map(block):
@@ -580,6 +598,17 @@ def results(path, against=None):
         vals = numbers(adf[at:at + PLANE_SIZE])
         line = f"{name}: " + " ".join("%04X" % v for v in vals)
         print(line if vals else f"{name}: no numbers (not run?)")
+        mod = load(name) if vals else None
+        if mod is not None and hasattr(mod, "latencies"):
+            lat = mod.latencies(vals)
+            for g in range(0, len(lat), 16):
+                print(" " * len(name) + f"  group {g // 16} latency: "
+                      + " ".join(str(v) for v in lat[g:g + 16]))
+            if hasattr(mod, "sync_offsets"):
+                sync = mod.sync_offsets(vals)
+                for g in range(0, len(sync), 16):
+                    print(" " * len(name) + f"  group {g // 16} trigger after sync: "
+                          + " ".join(str(v) for v in sync[g:g + 16]))
         if other is not None:
             ovals = numbers(other[at:at + PLANE_SIZE])
             print(" " * len(name) + "  " + " ".join("%04X" % v for v in ovals) + "  (against)")
