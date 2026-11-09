@@ -161,6 +161,24 @@ fn run(t: &Test, check_io_addr: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Tests where the data contradicts real hardware: `(dp,X)` in emulation
+/// mode with DL not zero, whose pointer's two bytes straddle a page. The
+/// data reads the high byte from the next page; a real SNES wraps it within
+/// the page (gilyon's snes-tests cputest, test 0027, run on hardware; its
+/// README "What undocumented behavior is tested"). Skipped.
+fn contradicts_hardware(op: u8, t: &Test) -> bool {
+    let i = &t.initial;
+    if op & 0x1f != 0x01 || i.e == 0 || i.d & 0xff == 0 {
+        return false;
+    }
+    let at = (u32::from(i.pbr) << 16) | u32::from(i.pc.wrapping_add(1));
+    let Some(&(_, operand)) = i.ram.iter().find(|(a, _)| *a == at) else {
+        return false;
+    };
+    let lo = i.d.wrapping_add(u16::from(operand).wrapping_add(i.x));
+    lo & 0xff == 0xff
+}
+
 #[test]
 #[ignore = "needs EMU_TESTDATA_DIR (tools/fetch-testdata.sh)"]
 fn harte_65816() {
@@ -178,6 +196,7 @@ fn harte_65816() {
     let check_io = std::env::var("EMU_HARTE_IO").map_or(true, |v| v != "0");
     let mut failures = Vec::new();
     let mut total = 0;
+    let mut skipped = 0;
     for op in 0..=255u8 {
         if !only.is_empty() && !only.iter().any(|o| *o == format!("{op:02x}")) {
             continue;
@@ -189,6 +208,10 @@ fn harte_65816() {
             let tests: Vec<Test> = serde_json::from_str(&text).unwrap();
             let mut failed = 0;
             for t in tests.iter().step_by(stride) {
+                if contradicts_hardware(op, t) {
+                    skipped += 1;
+                    continue;
+                }
                 total += 1;
                 if let Err(why) = run(t, check_io) {
                     failed += 1;
@@ -205,7 +228,10 @@ fn harte_65816() {
     for f in &failures {
         eprintln!("{f}");
     }
-    eprintln!("{total} tests, {} failure lines", failures.len());
+    eprintln!(
+        "{total} tests, {} failure lines; {skipped} skipped (contradict hardware)",
+        failures.len()
+    );
     assert!(
         failures.is_empty(),
         "{} failure lines of {total} tests",

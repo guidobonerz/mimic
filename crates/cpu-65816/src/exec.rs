@@ -246,8 +246,18 @@ impl Cpu65816 {
                 let a = self.last_pc();
                 self.io(bus, a);
                 let p = o.wrapping_add(self.x);
-                let lo = self.rd(bus, self.dp(p));
-                let hi = self.rd(bus, self.dp(p.wrapping_add(1)));
+                let lo_at = self.dp(p);
+                // Emulation mode with DL not zero: the low byte comes from
+                // D+dp+X unwrapped, the high byte from the next address
+                // wrapped within that page (gilyon's snes-tests cputest
+                // 0027: D=$011A, X=$EE, ($F7,X) reads $02FF and $0200).
+                let hi_at = if self.e && self.d & 0xff != 0 {
+                    (lo_at & 0xff_ff00) | (lo_at.wrapping_add(1) & 0xff)
+                } else {
+                    self.dp(p.wrapping_add(1))
+                };
+                let lo = self.rd(bus, lo_at);
+                let hi = self.rd(bus, hi_at);
                 long(self.data(u16::from_le_bytes([lo, hi])))
             }
             Mode::DpIndY => {

@@ -740,8 +740,12 @@ impl SPpu {
         } else {
             1
         };
-        let line = y - 1;
-        let my = line - line % mosaic;
+        // Screen line y shows BG line VOFS + y (line 0 is drawn but not
+        // shown), as mode 7 does; mosaic blocks count from line 1
+        // (PeterLemon's SNES PPU tests: every picture one line off with
+        // VOFS + y - 1).
+        let line = y;
+        let my = line - (line - 1) % mosaic;
         let opt = matches!(self.mode(), 2 | 4 | 6) && n < 2;
         let pal_base = match (self.mode(), bpp) {
             (0, _) => (n as u16) * 32,

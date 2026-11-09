@@ -228,6 +228,13 @@ own section.
 | FD1771 / FD179X command set, status bits (record type, lost data, not found), step rates, WRITE TRACK codes ($F5–$F7, $F8–$FB, $FE) | Western Digital FD1771 and FD179X-02 data sheets | `machine-trs80/src/fdc.rs` |
 | Model III: 2.028 MHz, 14 KB ROM to $37FF, ports $E0 (interrupt mask and active-low status, 30 Hz clock), $E4 (NMI mask/status, RESET bit 5), $EC, $F0–$F3 FD1793, $F4 (drive, side, WAIT, density), $F8; the boot from track 0 sector 1 to $4300 with INI under WAIT and the NMI vector $4049, the RTC handler at $3529 and the ROM's "Cass?" text at $37F6 | TRS-80 Model III Technical Reference Manual (Radio Shack 26-1061); the user's Model III Rev C ROM (boot code at $3455, interrupt dispatcher at $35C2) | `machine-trs80/src/m3.rs`, `tests/tests/trs80_boot.rs` |
 
+### SNES test ROMs
+
+| Topic | Document | Used in |
+| --- | --- | --- |
+| 65C816 and SPC700 instruction tests reporting "Success"/"Fail" in VRAM word $0032; the emulation-mode `(dp,X)` page wrap of the pointer's high byte | gilyon, snes-tests v1.4 (MIT, https://github.com/gilyon/snes-tests, cputest README "What undocumented behavior is tested") | `tests/tests/snes_tests.rs`, `cpu-65816/src/exec.rs`, `cpu-65816/tests/harte.rs` |
+| CPU, SPC700, PPU and bank test ROMs with reference pictures; the BG line shown on screen line y (VOFS + y) | PeterLemon, SNES (https://github.com/PeterLemon/SNES, commit 350b394, no licence given; run only) | `tests/tests/snes_peterlemon.rs`, `chips-nintendo/src/sppu.rs` |
+
 ### Sinclair ZX81
 
 | Topic | Document | Used in |

@@ -352,4 +352,35 @@ if [ ! -s "$DEST/spectrum/fusetest.tap" ]; then
   rm "$DEST/spectrum/fusetest.zip"
 fi
 
+# gilyon's snes-tests v1.4 (MIT): 65C816 (cputest-basic/-full) and SPC700
+# (spctest) instruction tests that report on screen; Phase 12b. Run only,
+# never committed.
+SNESTESTS_URL="https://github.com/gilyon/snes-tests/releases/download/v1.4/snes-tests.zip"
+SNESTESTS_SHA256=c3a39e15a9f3789fe143e54dfa035c988204576eafacf97df8ff3546a917c5e9
+if [ ! -s "$DEST/snes-tests/cputest/cputest-full.sfc" ]; then
+  echo "snes-tests -> $DEST/snes-tests"
+  mkdir -p "$DEST/snes-tests"
+  fetch "$SNESTESTS_URL" "$DEST/snes-tests/snes-tests.zip"
+  [ "$(sha256 "$DEST/snes-tests/snes-tests.zip")" = "$SNESTESTS_SHA256" ] || {
+    echo "error: snes-tests archive checksum mismatch" >&2; exit 1; }
+  python3 -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$DEST/snes-tests/snes-tests.zip" "$DEST/snes-tests" 2>/dev/null     || python -c "import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$DEST/snes-tests/snes-tests.zip" "$DEST/snes-tests"
+  rm "$DEST/snes-tests/snes-tests.zip"
+fi
+
+# PeterLemon's SNES test and demo ROMs with reference PNGs (no licence
+# given): CPU/SPC700/PPU/bank tests for tests/tests/snes_peterlemon.rs;
+# Phase 12b. Run only, never committed.
+PLSNES_COMMIT=350b394e86ec5d62f600b5cbf64cdce3721bb6ef
+PLSNES_SHA256=acc9c50f6201bfb0c4c0c6b4f2e159820d3c11b99cffe8d61aed34c391883548
+if [ ! -e "$DEST/peterlemon-snes/COMMIT" ]; then
+  echo "PeterLemon SNES -> $DEST/peterlemon-snes"
+  mkdir -p "$DEST/peterlemon-snes"
+  fetch "https://codeload.github.com/PeterLemon/SNES/tar.gz/$PLSNES_COMMIT" "$DEST/peterlemon-snes.tar.gz"
+  [ "$(sha256 "$DEST/peterlemon-snes.tar.gz")" = "$PLSNES_SHA256" ] || {
+    echo "error: PeterLemon SNES archive checksum mismatch" >&2; exit 1; }
+  tar -xzf "$DEST/peterlemon-snes.tar.gz" -C "$DEST/peterlemon-snes" --strip-components=1
+  rm "$DEST/peterlemon-snes.tar.gz"
+  echo "$PLSNES_COMMIT" > "$DEST/peterlemon-snes/COMMIT"
+fi
+
 echo "done. export EMU_TESTDATA_DIR=$DEST"

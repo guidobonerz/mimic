@@ -96,7 +96,7 @@ Where the project stands against test suites and checks, as of 2026-11-09. 🟢 
 | ZX Spectrum 48K/128K/+2 | Fuse test | all pass | 🟢 | border timing beyond the Fuse test, SAVE to tape |
 | ColecoVision | cartridge collection | 231/235 show a picture | 🟡 | TMS9918A reference pictures, VRAM timing |
 | NES | nes-test-roms (blargg, nestest …) | 116/119 | 🟡 | `6-MMC3_alt`, `blargg_apu_2005` 10 and 11 |
-| SNES | Harte CPU sets, games | games run with sound | 🟡 | DSP-1, no SNES test ROMs, mid-line register changes |
+| SNES | Harte CPU sets, snes-tests (gilyon), PeterLemon's ROMs | snes-tests 3/3, PeterLemon 59/78, games run with sound | 🟡 | DSP-1, mode 7/mosaic/interlace/window cases, mid-line register changes, SRAM file |
 | Vectrex | executive, Mine Storm, Scramble | play | 🟡 | overlays, phosphor persistence |
 | Apple II / II+ / IIe | real ROMs, Zork I, test disks | all four boot | 🟡 | DOS 3.3/ProDOS, Mockingboard software, WOZ protections |
 | Macintosh 128K–SE | real ROMs, test disk, System 6/7 | boot | 🟡 | 1.44 MB (SWIM), ADB handshake details |
