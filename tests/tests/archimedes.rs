@@ -152,7 +152,7 @@ fn type_keys(m: &mut Archimedes, keys: &[u8]) {
 }
 
 /// Phase 24's gate: RISC OS 3.11 reaches the Supervisor prompt, `*DESKTOP`
-/// starts the Desktop.
+/// starts the Desktop. The picture lands in target/tmp.
 #[test]
 #[ignore = "needs EMU_ROM_DIR"]
 fn riscos_reaches_the_desktop() {
@@ -169,6 +169,8 @@ fn riscos_reaches_the_desktop() {
     for _ in 0..1000 {
         m.run_frame(&mut dbg);
     }
+    let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("archimedes-desktop.png");
+    std::fs::write(&out, emu_preview::encode_png(&m.framebuffer())).unwrap();
     assert!(lit(&m) > 20_000, "the Desktop's pinboard and icon bar");
 }
 

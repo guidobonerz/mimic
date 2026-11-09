@@ -152,7 +152,16 @@ impl Mmu {
     }
 
     /// The RAM bank and address a CPU RAM access lands in: page
-    /// relocation, then shared RAM (always bank 0).
+    /// relocation, with shared RAM (always bank 0) decided by the address
+    /// the CPU put out, not the relocated one.
+    ///
+    /// Rules from the VICE test programs `c128/mmu/mmuswap-*` (results of
+    /// a dozen real C128s in `mmuswap-tests.txt`): zero page mapped to page
+    /// $30 of bank 1 with shared bottom RAM reads page $30 of bank 0 (15);
+    /// non-shared zero page mapped to page $E0 of bank 1 reads bank 1 even
+    /// when $E0 is shared (17); the back translation of a target page
+    /// happens only in the target bank (08, 16); with P0 and P1 on the same
+    /// page that page reads the stack page (06; some 8722R2 differ).
     pub fn ram(&self, addr: u16) -> (u8, u16) {
         self.ram_mapped(addr, true)
     }
@@ -166,28 +175,29 @@ impl Mmu {
     }
 
     fn ram_mapped(&self, addr: u16, forward: bool) -> (u8, u16) {
-        let bank = (self.cr >> 6) & 3;
-        let page = (addr >> 8) as u8;
-        let low = addr & 0xff;
-        // Zero page and stack swap with their relocation targets.
-        let (bank, addr) = if page <= 1 && !forward {
-            (bank, addr)
-        } else if page == 0 {
-            (self.p0.1 & 3, (u16::from(self.p0.0) << 8) | low)
-        } else if page == 1 {
-            (self.p1.1 & 3, (u16::from(self.p1.0) << 8) | low)
-        } else if page == self.p0.0 && bank == self.p0.1 & 3 {
-            (bank, low)
-        } else if page == self.p1.0 && bank == self.p1.1 & 3 {
-            (bank, 0x0100 | low)
-        } else {
-            (bank, addr)
-        };
         let size = self.shared_size();
         let shared = (self.rcr & 0x04 != 0 && addr < size)
             || (self.rcr & 0x08 != 0 && addr >= 0u16.wrapping_sub(size));
-        if shared {
-            (0, addr)
+        let bank = if shared { 0 } else { (self.cr >> 6) & 3 };
+        let page = (addr >> 8) as u8;
+        let low = addr & 0xff;
+        // Zero page and stack swap with their relocation targets.
+        if page <= 1 && !forward {
+            (bank, addr)
+        } else if page == 0 {
+            (
+                if shared { 0 } else { self.p0.1 & 3 },
+                (u16::from(self.p0.0) << 8) | low,
+            )
+        } else if page == 1 {
+            (
+                if shared { 0 } else { self.p1.1 & 3 },
+                (u16::from(self.p1.0) << 8) | low,
+            )
+        } else if page == self.p1.0 && bank == self.p1.1 & 3 {
+            (bank, 0x0100 | low)
+        } else if page == self.p0.0 && bank == self.p0.1 & 3 {
+            (bank, low)
         } else {
             (bank, addr)
         }
