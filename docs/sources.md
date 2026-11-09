@@ -217,6 +217,17 @@ own section.
 | Sprite behaviour checks: display-window clipping of sprites (shown only after the line's first BPL1DAT, or on lines without planes), sprite/playfield and sprite/sprite collisions (CLXCON/CLXDAT: bit 0 follows the odd planes alone, the odd-plane sprite bits need the even planes too in single-playfield mode, nothing counts outside the window or on lines without bitplane data), playfield priorities, SPRxPOS/CTL/DATA write timing | vAmiga test suite (github.com/dirkwhoffmann/vAmigaTS, GPL-3.0; the test programs are mostly Alpine9000's Amiga examples) — was run as test data only (runner removed 2026-11-08), compared against the repository's photographs of real A500s; no code or images copied into this repository | `chips-amiga/src/denise.rs` |
 | DMS archive layout (file header, track headers, CRC-16/ARC, checksums), compression modes NOCOMP/SIMPLE/QUICK/MEDIUM/DEEP/HEAVY1/HEAVY2 and the track flags (state carry-over, new trees, RLE) | xDMS 1.3.2 by André Rodrigues de la Rocha (public domain, `COPYING`: "xdms is licensed under PUBLIC DOMAIN"), read as the format's documentation; its decoders derive from LZHUF (Haruyasu Yoshizaki, public domain) and UNIX LHA (Masaru Oki); verified with freely distributed DMS archives from Aminet | `media/src/dms.rs` |
 
+### Tandy TRS-80
+
+| Topic | Document | Used in |
+| --- | --- | --- |
+| Model I memory map (ROM, Expansion Interface $37E0, keyboard $3800, video RAM $3C00, RAM $4000), keyboard matrix, 64 × 16 video with 2 × 3 block graphics and the 32-column mode, seven-bit video RAM (bit 6 the NOR of bits 5 and 7), port $FF (cassette out, motor, 32 columns; cassette latch in), 1.774 MHz clock, the RESET button's NMI | TRS-80 Model I Technical Reference Manual (Radio Shack 26-2103); TRS-80 Model III Technical Reference Manual | `machine-trs80/src/*.rs` |
+| Cassette at 500 baud: cell length, data pulse position, the longer last cell of a byte and the pause after the sync byte | the user's Level II ROM (M1L2 1.3) as it writes and reads in this emulator: CSAVE's pulses measured, CLOAD's read routine at $0241 (wait for a pulse, clear the latch, sample) and its three-$D3 header check at $2C43 | `machine-trs80/src/cassette.rs`, `tests/tests/trs80_boot.rs` |
+| Character generator | none: the 5 × 7 font is this project's own design | `machine-trs80/src/charset.rs` |
+| Expansion Interface: interrupt latch $37E0 (clock bit 7 cleared by reading, FDC INTRQ bit 6), drive select $37E1, cassette select $37E4, printer $37E8, FD1771 at $37EC–$37EF, 40 Hz clock, the boot from drive 0 and BREAK to skip it | TRS-80 Model I Technical Reference Manual (Expansion Interface); the Level II ROM's boot code at $0696 | `machine-trs80/src/ei.rs` |
+| FD1771 / FD179X command set, status bits (record type, lost data, not found), step rates, WRITE TRACK codes ($F5–$F7, $F8–$FB, $FE) | Western Digital FD1771 and FD179X-02 data sheets | `machine-trs80/src/fdc.rs` |
+| Model III: 2.028 MHz, 14 KB ROM to $37FF, ports $E0 (interrupt mask and active-low status, 30 Hz clock), $E4 (NMI mask/status, RESET bit 5), $EC, $F0–$F3 FD1793, $F4 (drive, side, WAIT, density), $F8; the boot from track 0 sector 1 to $4300 with INI under WAIT and the NMI vector $4049, the RTC handler at $3529 and the ROM's "Cass?" text at $37F6 | TRS-80 Model III Technical Reference Manual (Radio Shack 26-1061); the user's Model III Rev C ROM (boot code at $3455, interrupt dispatcher at $35C2) | `machine-trs80/src/m3.rs`, `tests/tests/trs80_boot.rs` |
+
 ### Sinclair ZX81
 
 | Topic | Document | Used in |

@@ -378,6 +378,32 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ],
         0x2000,
     )];
+    // TRS-80: Level II BASIC 1.3 before 1.2 (12 KB), Level I (4 KB), Model III.
+    const TRS80: &[RomSpec] = &[
+        optional(
+            "level2",
+            &[
+                "m1l2_1.3",
+                "m1l2",
+                "level2",
+                "level-2",
+                "trs80-level2",
+                "trs80m1",
+            ],
+            0x3000,
+        ),
+        optional(
+            "level1",
+            &["m1l1", "level1", "level-1", "trs80-level1"],
+            0x1000,
+        ),
+        // Model III (14 KB); the plain Rev C image before the FreHD one.
+        optional(
+            "model3",
+            &["model3-revc-2ef8", "model3", "model-3", "trs80m3", "m3rom"],
+            0x3800,
+        ),
+    ];
     // ZX Spectrum: one ROM per model (the 128K and +2 files hold both
     // 16 KB ROMs, the 128 editor first).
     const SPECTRUM: &[RomSpec] = &[
@@ -547,6 +573,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "mac" => MAC,
         "apple2" => APPLE2,
         "zx81" => ZX81,
+        "trs80" => TRS80,
         "spectrum" => SPECTRUM,
         "vectrex" => VECTREX,
         "coleco" => COLECO,
@@ -579,6 +606,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "imsai" => &["imsai"],
         "archimedes" => &["archimedes", "riscos", "acorn"],
         "zx81" => &["zx81", "sinclair"],
+        "trs80" => &["trs80", "trs-80", "tandy"],
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
         "snes" => &["snes", "sfc", "superfamicom"],

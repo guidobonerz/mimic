@@ -972,6 +972,76 @@ pub static ZX81: Keymap = Keymap {
     entries: ZX81_POSITIONAL,
 };
 
+/// TRS-80 Model I: row · 8 + bit of its 8 × 8 matrix (see
+/// `machine-trs80::keyboard`). `@` on `[`, `:` on `'`; Home/Delete =
+/// CLEAR, Escape/End = BREAK, Backspace = ← (the ROM's backspace), `=` =
+/// SHIFT + `-`.
+const TRS80_POSITIONAL: &[(&str, &[u16])] = &[
+    ("KeyA", &[1]),
+    ("KeyB", &[2]),
+    ("KeyC", &[3]),
+    ("KeyD", &[4]),
+    ("KeyE", &[5]),
+    ("KeyF", &[6]),
+    ("KeyG", &[7]),
+    ("KeyH", &[8]),
+    ("KeyI", &[9]),
+    ("KeyJ", &[10]),
+    ("KeyK", &[11]),
+    ("KeyL", &[12]),
+    ("KeyM", &[13]),
+    ("KeyN", &[14]),
+    ("KeyO", &[15]),
+    ("KeyP", &[16]),
+    ("KeyQ", &[17]),
+    ("KeyR", &[18]),
+    ("KeyS", &[19]),
+    ("KeyT", &[20]),
+    ("KeyU", &[21]),
+    ("KeyV", &[22]),
+    ("KeyW", &[23]),
+    ("KeyX", &[24]),
+    ("KeyY", &[25]),
+    ("KeyZ", &[26]),
+    ("Digit0", &[32]),
+    ("Digit1", &[33]),
+    ("Digit2", &[34]),
+    ("Digit3", &[35]),
+    ("Digit4", &[36]),
+    ("Digit5", &[37]),
+    ("Digit6", &[38]),
+    ("Digit7", &[39]),
+    ("Digit8", &[40]),
+    ("Digit9", &[41]),
+    ("BracketLeft", &[0]),
+    ("Quote", &[42]),
+    ("Semicolon", &[43]),
+    ("Comma", &[44]),
+    ("Minus", &[45]),
+    ("Period", &[46]),
+    ("Slash", &[47]),
+    ("Enter", &[48]),
+    ("NumpadEnter", &[48]),
+    ("Home", &[49]),
+    ("Delete", &[49]),
+    ("Escape", &[50]),
+    ("End", &[50]),
+    ("ArrowUp", &[51]),
+    ("ArrowDown", &[52]),
+    ("ArrowLeft", &[53]),
+    ("Backspace", &[53]),
+    ("ArrowRight", &[54]),
+    ("Space", &[55]),
+    ("ShiftLeft", &[56]),
+    ("ShiftRight", &[56]),
+    ("Equal", &[56, 45]),
+];
+
+pub static TRS80: Keymap = Keymap {
+    machine: "trs80",
+    entries: TRS80_POSITIONAL,
+};
+
 /// ZX Spectrum: row · 5 + column of its 8 × 5 matrix (see
 /// `machine-spectrum::keyboard`). Shift is CAPS SHIFT, Ctrl and AltGr are
 /// SYMBOL SHIFT (the desktop keeps the left Ctrl's P, M, D, I, R and Space
@@ -1474,6 +1544,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
         "zx81" => Some(&ZX81),
+        "trs80" => Some(&TRS80),
         "spectrum" => Some(&SPECTRUM),
         "apple2" => Some(&APPLE2),
         "imsai" => Some(&IMSAI),

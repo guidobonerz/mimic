@@ -1,0 +1,14 @@
+[package]
+name = "machine-trs80"
+description = "Tandy TRS-80 Model I and III"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-z80.workspace = true
+media.workspace = true

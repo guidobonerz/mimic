@@ -104,7 +104,8 @@ Where the project stands against test suites and checks, as of 2026-11-09. 🟢 
 | IMSAI 8080 | CP/M 2.2 from FIF floppy, card reader | boots | 🟡 | FIF interrupt jumper, 88-SIO status bits |
 | IBM 029 keypunch | own tests, IMSAI reads decks | green | 🟢 | – |
 | Logophor 16 | own tests, Foundry ROM golden images | steps 1–11 accepted | 🟢 | Steampunk machine |
-| TRS-80, Colour Genie, CPC Plus, TI-99/4A, QL, BBC, Atari ST, KC85, KIM-1, HP calculators | – | – | ⚪ | planned phases |
+| TRS-80 Model I / III | Level II and Model III ROMs (`trs80_boot`, 7 tests) | both boot to BASIC and compute; Model I block graphics, CSAVE/CLOAD; both boot and write a test disk (FD1771 SD, FD1793 DD with WAIT/NMI) | 🟡 | a real DOS disk, Model III cassette |
+| Colour Genie, CPC Plus, TI-99/4A, QL, BBC, Atari ST, KC85, KIM-1, HP calculators | – | – | ⚪ | planned phases |
 
 ### Drives, devices and frontends
 
@@ -163,7 +164,7 @@ Where the project stands against test suites and checks, as of 2026-11-09. 🟢 
 | SNES | `machine-snes` | NTSC, PAL | games run with sound; DSP-1 missing, no SNES test ROMs, mid-line register changes | 70 % |
 | Vectrex | `machine-vectrex` | – | executive and Scramble run; light pen and 3D Imager modelled; overlays and phosphor persistence open; Mine Storm and 3-D Mine Storm need the 8 KB system ROM | 55 % |
 | Test machine (6502 + RAM + raster chip) | `machine-sim6502` | – | reference for debugger tests | 100 % |
-| Tandy TRS-80 Model I/III | – | Phase 10 | – | 0 % |
+| Tandy TRS-80 Model I/III | `machine-trs80` | Model I, Model III | both boot to BASIC with real ROMs; Model I cassette (CSAVE/CLOAD) and Expansion Interface with FD1771, Model III FD1793 with WAIT and NMI (DMK/JV1/JV3; test disks boot and are written); no real DOS tried, no Model III cassette | 65 % |
 | Sinclair ZX Spectrum 48K/128K | – | Phase 15 | – | 0 % |
 | Apple II / II+ / IIe | `machine-apple2` | II, II+, IIe, enhanced IIe | all four boot with real ROMs; Zork I boots from DSK; a disk built by the tests boots through the Disk II PROMs; cassette save/load through the monitor; colours checked through the composite stage; DOS 3.3/ProDOS disks, Mockingboard software and WOZ copy protections not yet tried | 70 % |
 | Apple Macintosh 128K–SE | `machine-mac` | 128K, 512K, Plus, SE | all four reach the disk icon with real ROMs (startup sound, RTC, memory test); a disk built by the tests boots through the IWM (400K with the 128K's speed control, 800K); SCSI disks, ADB, SCC and keyboard only unit-tested; System 6 not yet tried | 55 % |

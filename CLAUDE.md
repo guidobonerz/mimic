@@ -72,6 +72,7 @@ crates/
   machine-imsai/   IMSAI 8080: the picture is the front panel (clickable paddles, lamps by bus duty), serial terminal as second screen; card reader
   machine-keypunch/ IBM 029 card punch: the user types card decks (picture: the card), read back by the IMSAI's card reader
   machine-zx81/    Sinclair ZX81 / TS1000
+  machine-trs80/   Tandy TRS-80 Model I (Level I/II, cassette, Expansion Interface with an FD1771) and Model III (FD1793, WAIT, NMI); floppy controller at track level on DMK/JV1/JV3
   machine-logophor16/ Logophor 16, the project's own fictional steampunk computer (spec: docs/logophor16/SPEC.md); ROM built from rom/ sources, shipped as a built-in profile
   machine-spectrum/ ZX Spectrum 48K, 128K, +2 as models: AY, tape traps, SNA/Z80, joysticks, Multiface 128, Interface 1 with Microdrives
   machine-sim6502/ Reference/test machine: 6502 + 64 KB RAM + minimal raster chip (not real hardware)

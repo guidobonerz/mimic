@@ -1192,6 +1192,7 @@ dependencies = [
  "machine-snes",
  "machine-spectrum",
  "machine-ted",
+ "machine-trs80",
  "machine-vectrex",
  "machine-vic20",
  "machine-zx81",
@@ -1248,6 +1249,7 @@ dependencies = [
  "machine-pet",
  "machine-spectrum",
  "machine-ted",
+ "machine-trs80",
  "machine-vic20",
  "machine-zx81",
  "media",
@@ -2340,6 +2342,15 @@ dependencies = [
  "devices-printer",
  "drives-cbm",
  "drives-other",
+ "emu-core",
+ "media",
+]
+
+[[package]]
+name = "machine-trs80"
+version = "0.1.0"
+dependencies = [
+ "cpu-z80",
  "emu-core",
  "media",
 ]
