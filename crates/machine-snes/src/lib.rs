@@ -26,8 +26,11 @@
 //! the PPU counters), WRMPYA/B (8 × 8 → RDMPY; RDDIV = B), WRDIV/WRDIVB
 //! (16 ÷ 8; ÷ 0 gives $FFFF and the dividend), HTIME, VTIME, MDMAEN,
 //! HDMAEN, MEMSEL; RDNMI (bit 7 cleared by the read), TIMEUP (likewise),
-//! HVBJOY, RDIO, RDDIV, RDMPY, JOY1–4. Results are there at once (the
-//! hardware needs 8/16 cycles). The DMA registers at $43x0–$43xF.
+//! HVBJOY, RDIO, RDDIV, RDMPY, JOY1–4. The multiplier works one bit per
+//! CPU cycle after the write to WRMPYB (8 cycles; RDDIV shifts WRMPYA out
+//! and ends as WRMPYB), the divider one quotient bit per cycle after
+//! WRDIVB (16 cycles, restoring division in RDDIV/RDMPY); a read before
+//! the end sees the partial result. The DMA registers at $43x0–$43xF.
 //!
 //! **Controllers** (`devices_input::snes`): $4016 bit 0 drives the latch
 //! of both ports; reads of $4016/$4017 return D0/D1 in bits 0/1 and pulse
@@ -42,8 +45,15 @@
 //! uses this project's own sound boot loader even when the IPL is there.
 //! ROM role "spc700" (64 bytes, user-supplied, optional).
 //!
-//! Not emulated: the multiplier/divider delay, the PPU's open bus details,
-//! mid-line PPU register changes, cartridge coprocessors.
+//! **Media slots:** the cartridge and its battery RAM as a `.srm` file
+//! (`slot.rs`).
+//!
+//! **Coprocessors:** the NEC DSP boards (DSP-1 to DSP-4, `dsp.rs`); ROM
+//! roles "dsp1", "dsp1b", "dsp2", "dsp3", "dsp4" (8 KB, user-supplied,
+//! needed only by those games).
+//!
+//! Not emulated: the PPU's open bus details,
+//! mid-line PPU register changes, the other cartridge coprocessors.
 //!
 //! Sources: Martin Korth, fullsnes, "SNES I/O Map", "SNES Memory Map",
 //! "SNES DMA …", "SNES PPU Interrupts", "SNES Timing …", "SNES Maths
@@ -52,7 +62,9 @@
 
 #![forbid(unsafe_code)]
 
+mod dsp;
 mod overlay;
+mod slot;
 
 pub mod apu;
 
@@ -60,9 +72,9 @@ use apu::{Apu, ARAM_SPACE, SMP_HZ};
 use chips_nintendo::sppu::{self, SPpu};
 use cpu_65816::{Bus816, Cpu65816};
 use devices_cartridge::snes::SnesCart;
-use devices_cartridge::CartSlot;
 use devices_input::snes::{pin, NO_AIM};
 use devices_input::{SnesController, SnesKind};
+use dsp::{DspUnit, DSP, DSP_HZ, DSP_RAM_SPACE};
 use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
 use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
@@ -76,6 +88,7 @@ use emu_core::{
     MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError, StateReader,
     StateWriter, StopReason,
 };
+use slot::{BatterySlot, SnesSlot};
 
 pub const CPU: DeviceId = DeviceId("cpu");
 pub const SPC: DeviceId = DeviceId("spc700");
@@ -85,6 +98,8 @@ pub const VRAM_SPACE: MemSpaceId = MemSpaceId(1);
 pub const CGRAM_SPACE: MemSpaceId = MemSpaceId(2);
 pub const OAM_SPACE: MemSpaceId = MemSpaceId(3);
 pub const SLOT_CARTRIDGE: SlotId = SlotId(0);
+/// The cartridge's battery RAM as a `.srm` file (`slot.rs`).
+pub const SLOT_BATTERY: SlotId = SlotId(1);
 
 pub const MASTER_HZ_NTSC: u64 = 21_477_270;
 pub const MASTER_HZ_PAL: u64 = 21_281_370;
@@ -204,6 +219,7 @@ struct Board {
     ppu: SPpu,
     apu: Apu,
     cart: Option<SnesCart>,
+    dsp: Option<DspUnit>,
     open_bus: u8,
     nmitimen: u8,
     wrio: u8,
@@ -214,6 +230,10 @@ struct Board {
     memsel: u8,
     rddiv: u16,
     rdmpy: u16,
+    /// The multiplier's and divider's remaining steps and moving operand.
+    alu_mpy: u8,
+    alu_div: u8,
+    alu_shift: u32,
     nmi_flag: bool,
     irq_flag: bool,
     joy: [u16; 4],
@@ -284,6 +304,26 @@ impl Board {
         }
     }
 
+    /// One CPU cycle of the multiplier or divider.
+    fn alu_step(&mut self) {
+        if self.alu_mpy > 0 {
+            self.alu_mpy -= 1;
+            if self.rddiv & 1 != 0 {
+                self.rdmpy = self.rdmpy.wrapping_add(self.alu_shift as u16);
+            }
+            self.rddiv >>= 1;
+            self.alu_shift <<= 1;
+        } else if self.alu_div > 0 {
+            self.alu_div -= 1;
+            self.alu_shift >>= 1;
+            self.rddiv <<= 1;
+            if u32::from(self.rdmpy) >= self.alu_shift {
+                self.rdmpy = (u32::from(self.rdmpy) - self.alu_shift) as u16;
+                self.rddiv |= 1;
+            }
+        }
+    }
+
     fn nmi_line(&self) -> bool {
         self.nmi_flag && self.nmitimen & 0x80 != 0
     }
@@ -314,6 +354,9 @@ impl Board {
             self.h += step;
             self.clock += u64::from(step);
             n -= step;
+            if let Some(d) = &mut self.dsp {
+                d.acc += u64::from(step) * DSP_HZ;
+            }
             self.smp_acc += u64::from(step) * SMP_HZ;
             let hz = self.model.master_hz();
             if self.smp_acc >= hz * 64 {
@@ -417,7 +460,16 @@ impl Board {
         self.ov.record_event(e, self.v, (self.h / 4) as u16, rows);
     }
 
+    /// Catch the cartridge's DSP up with the master clock.
+    fn sync_dsp(&mut self) {
+        let hz = self.model.master_hz();
+        if let Some(d) = &mut self.dsp {
+            d.sync(hz);
+        }
+    }
+
     fn new_line(&mut self) {
+        self.sync_dsp();
         self.h = 0;
         self.v += 1;
         if self.v >= self.frame_lines() {
@@ -713,11 +765,24 @@ impl Board {
 
     // ---- memory
 
+    /// The DSP register at `addr` (true: status), if the board has one.
+    fn dsp_port(&self, addr: u32) -> Option<bool> {
+        self.dsp.as_ref()?;
+        self.cart.as_ref()?.dsp_port(addr)
+    }
+
     fn mem_peek(&self, addr: u32) -> u8 {
         let bank = (addr >> 16) as u8;
         let a = addr as u16;
         if bank == 0x7e || bank == 0x7f {
             return self.wram[(addr & 0x1ffff) as usize];
+        }
+        if let (Some(status), Some(d)) = (self.dsp_port(addr), &self.dsp) {
+            return if status {
+                d.chip.read_sr()
+            } else {
+                d.chip.peek_dr()
+            };
         }
         if bank & 0x40 == 0 && a < 0x8000 {
             return match a {
@@ -749,6 +814,11 @@ impl Board {
                 _ => {}
             }
         }
+        if let Some(status) = self.dsp_port(addr) {
+            self.sync_dsp();
+            let d = &mut self.dsp.as_mut().expect("DSP present").chip;
+            return if status { d.read_sr() } else { d.read_dr() };
+        }
         if let Some(c) = self.cart.as_mut() {
             if !(bank == 0x7e || bank == 0x7f || bank & 0x40 == 0 && a < 0x2000) {
                 if let Some(v) = c.read(addr) {
@@ -764,6 +834,14 @@ impl Board {
         let a = addr as u16;
         if bank == 0x7e || bank == 0x7f {
             self.wram[(addr & 0x1ffff) as usize] = v;
+            return;
+        }
+        if let Some(status) = self.dsp_port(addr) {
+            // The status register is read-only.
+            if !status {
+                self.sync_dsp();
+                self.dsp.as_mut().expect("DSP present").chip.write_dr(v);
+            }
             return;
         }
         if bank & 0x40 == 0 && a < 0x8000 {
@@ -924,19 +1002,23 @@ impl Board {
             }
             0x4202 => self.wrmpya = v,
             0x4203 => {
-                self.rdmpy = u16::from(self.wrmpya) * u16::from(v);
-                self.rddiv = u16::from(v);
+                // RDDIV shifts WRMPYA's bits out at the bottom while WRMPYB
+                // moves up: one bit per CPU cycle.
+                self.rdmpy = 0;
+                self.rddiv = u16::from(v) << 8 | u16::from(self.wrmpya);
+                self.alu_shift = u32::from(v);
+                self.alu_mpy = 8;
+                self.alu_div = 0;
             }
             0x4204 => self.wrdiv = (self.wrdiv & 0xff00) | u16::from(v),
             0x4205 => self.wrdiv = (self.wrdiv & 0x00ff) | u16::from(v) << 8,
             0x4206 => {
-                if v == 0 {
-                    self.rddiv = 0xffff;
-                    self.rdmpy = self.wrdiv;
-                } else {
-                    self.rddiv = self.wrdiv / u16::from(v);
-                    self.rdmpy = self.wrdiv % u16::from(v);
-                }
+                // Restoring division, one quotient bit per CPU cycle; a
+                // divisor of 0 gives $FFFF and the dividend.
+                self.rdmpy = self.wrdiv;
+                self.alu_shift = u32::from(v) << 16;
+                self.alu_div = 16;
+                self.alu_mpy = 0;
             }
             0x4207 => self.htime = (self.htime & 0x100) | u16::from(v),
             0x4208 => self.htime = (self.htime & 0xff) | u16::from(v & 1) << 8,
@@ -963,6 +1045,7 @@ impl Bus816 for SnesBus<'_> {
     fn read(&mut self, addr: u32) -> u8 {
         let speed = self.b.speed(addr);
         self.b.advance(speed, self.ports);
+        self.b.alu_step();
         let a = addr as u16;
         let sys = (addr >> 16) as u8 & 0x40 == 0;
         let v = if sys && (a == 0x4016 || a == 0x4017) {
@@ -988,6 +1071,7 @@ impl Bus816 for SnesBus<'_> {
     fn write(&mut self, addr: u32, v: u8) {
         let speed = self.b.speed(addr);
         self.b.advance(speed, self.ports);
+        self.b.alu_step();
         if let Some(dbg) = self.dbg.as_deref_mut() {
             if dbg.write_armed(CPU_SPACE) {
                 dbg.trace_write(CPU_SPACE, addr, Size::Byte, u32::from(v), self.beam);
@@ -1010,6 +1094,7 @@ impl Bus816 for SnesBus<'_> {
 
     fn idle(&mut self, _addr: u32) {
         self.b.advance(6, self.ports);
+        self.b.alu_step();
     }
 
     fn peek(&self, addr: u32) -> u8 {
@@ -1043,7 +1128,7 @@ pub struct Snes {
     cpu: Cpu65816,
     board: Board,
     ports: Ports,
-    cart: CartSlot<SnesCart>,
+    cart: SnesSlot,
     ipl: Option<Vec<u8>>,
     sched: Scheduler,
     input: InputQueue,
@@ -1104,6 +1189,7 @@ impl Snes {
             ppu: SPpu::new(model == Model::Pal),
             apu: Apu::new(ipl.as_deref()),
             cart: None,
+            dsp: None,
             open_bus: 0,
             nmitimen: 0,
             wrio: 0xff,
@@ -1114,6 +1200,9 @@ impl Snes {
             memsel: 0,
             rddiv: 0,
             rdmpy: 0,
+            alu_mpy: 0,
+            alu_div: 0,
+            alu_shift: 0,
             nmi_flag: false,
             irq_flag: false,
             joy: [0; 4],
@@ -1140,7 +1229,16 @@ impl Snes {
             cpu: Cpu65816::new(),
             board,
             ports: Ports { devices, multitap },
-            cart: devices_cartridge::snes::slot(),
+            cart: SnesSlot {
+                inner: devices_cartridge::snes::slot(),
+                roms: config
+                    .roms
+                    .iter()
+                    .filter(|(k, _)| k.starts_with("dsp"))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                battery: BatterySlot::default(),
+            },
             ipl,
             sched: Scheduler::new(),
             input: InputQueue::new(),
@@ -1166,8 +1264,15 @@ impl Snes {
 
     /// One instruction. Returns `Some` if emulation must stop.
     fn instruction(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
-        if self.cart.take_changed() {
+        if self.cart.inner.take_changed() {
             self.reset(ResetKind::Hard);
+        }
+        if std::mem::take(&mut self.cart.battery.loaded) {
+            if let (Some(c), Some(file)) = (&mut self.board.cart, &self.cart.battery.contents) {
+                if c.sram.len() == file.len() {
+                    c.sram.copy_from_slice(file);
+                }
+            }
         }
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
@@ -1188,6 +1293,13 @@ impl Snes {
         };
         self.sched.advance(self.board.clock - before);
         let field = std::mem::take(&mut self.board.field_done);
+        if field {
+            if let Some(c) = &self.board.cart {
+                if c.battery && !c.sram.is_empty() {
+                    self.cart.battery.update(&c.sram);
+                }
+            }
+        }
         if field && self.board.ov.any() {
             self.board.ppu.overlay_end_frame();
             self.board.ov.end_frame();
@@ -1331,13 +1443,29 @@ impl Machine for Snes {
             b.ppu = SPpu::new(self.model == Model::Pal);
             b.ppu.set_overlays(&b.ov.ids);
             b.apu = Apu::new(self.ipl.as_deref());
-            b.cart = self.cart.cart().cloned();
+            b.cart = self.cart.inner.cart().cloned();
+            // The battery keeps the SRAM through the power cycle.
+            let bat = &mut self.cart.battery;
+            bat.loaded = false;
+            if let (Some(c), Some(kept)) = (&mut b.cart, &bat.contents) {
+                if c.battery && kept.len() == c.sram.len() {
+                    c.sram.copy_from_slice(kept);
+                }
+            }
+            b.dsp = b
+                .cart
+                .as_ref()
+                .and_then(|c| dsp::program(c, &self.cart.roms))
+                .and_then(DspUnit::new);
             b.h = 0;
             b.v = 0;
             b.dma = [Dma::default(); 8];
         } else {
             b.ppu.reset();
             b.apu.reset();
+            if let Some(d) = &mut b.dsp {
+                d.chip.reset();
+            }
         }
         b.nmitimen = 0;
         b.hdmaen = 0;
@@ -1424,13 +1552,17 @@ impl Machine for Snes {
             addr_bits,
             big_endian: false,
         };
-        vec![
+        let mut v = vec![
             space(CPU_SPACE, "cpu", CPU, 24),
             space(VRAM_SPACE, "vram", CPU, 16),
             space(CGRAM_SPACE, "cgram", CPU, 9),
             space(OAM_SPACE, "oam", CPU, 10),
             space(ARAM_SPACE, "aram", SPC, 16),
-        ]
+        ];
+        if self.board.dsp.is_some() {
+            v.push(space(DSP_RAM_SPACE, "dsp-ram", DSP, 9));
+        }
+        v
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -1478,7 +1610,11 @@ impl Machine for Snes {
     }
 
     fn devices(&self) -> Vec<DeviceId> {
-        vec![CPU, SPC]
+        let mut d = vec![CPU, SPC];
+        if self.board.dsp.is_some() {
+            d.push(DSP);
+        }
+        d
     }
 
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget> {
@@ -1486,6 +1622,8 @@ impl Machine for Snes {
             Some(self as &mut dyn DebugTarget)
         } else if dev == SPC {
             Some(&mut self.board.apu as &mut dyn DebugTarget)
+        } else if dev == DSP {
+            self.board.dsp.as_mut().map(|d| d as &mut dyn DebugTarget)
         } else {
             None
         }
@@ -1549,22 +1687,34 @@ impl Machine for Snes {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        vec![MediaSlotInfo {
-            id: SLOT_CARTRIDGE,
-            name: "cartridge",
-            kind: MediaKind::Cartridge,
-            inserted: self.cart.is_inserted(),
-        }]
+        vec![
+            MediaSlotInfo {
+                id: SLOT_CARTRIDGE,
+                name: "cartridge",
+                kind: MediaKind::Cartridge,
+                inserted: self.cart.inner.is_inserted(),
+            },
+            MediaSlotInfo {
+                id: SLOT_BATTERY,
+                name: "battery RAM",
+                kind: MediaKind::BatteryRam,
+                inserted: self.cart.battery.is_inserted(),
+            },
+        ]
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
-        (slot == SLOT_CARTRIDGE).then_some(&mut self.cart as &mut dyn MediaSlot)
+        match slot {
+            SLOT_CARTRIDGE => Some(&mut self.cart as &mut dyn MediaSlot),
+            SLOT_BATTERY => Some(&mut self.cart.battery as &mut dyn MediaSlot),
+            _ => None,
+        }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         let b = &self.board;
-        w.chunk(*b"SNSM", 1, |w| {
+        w.chunk(*b"SNSM", 2, |w| {
             w.u8(self.model as u8);
             w.bool(self.ports.multitap);
             w.bool(self.field_done_pending);
@@ -1609,12 +1759,18 @@ impl Machine for Snes {
                 w.bool(d.terminated);
             }
             w.bool(b.cart.is_some());
+            w.u8(b.alu_mpy);
+            w.u8(b.alu_div);
+            w.u32(b.alu_shift);
         });
         self.cpu.save(&mut w);
         b.ppu.save(&mut w);
         b.apu.save(&mut w);
         if let Some(c) = &b.cart {
             c.save(&mut w);
+        }
+        if let Some(d) = &b.dsp {
+            d.save(&mut w);
         }
         self.sched.save(&mut w);
         self.input.save(&mut w);
@@ -1628,7 +1784,7 @@ impl Machine for Snes {
 
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"SNSM", 1)?;
+        let (version, mut c) = r.chunk(*b"SNSM", 2)?;
         if c.u8()? != self.model as u8 {
             return Err(StateError::Invalid("model differs"));
         }
@@ -1707,6 +1863,13 @@ impl Machine for Snes {
         if c.bool()? != b.cart.is_some() {
             return Err(StateError::Invalid("cartridge differs"));
         }
+        if version >= 2 {
+            b.alu_mpy = c.u8()?.min(8);
+            b.alu_div = c.u8()?.min(16);
+            b.alu_shift = c.u32()?;
+        } else {
+            (b.alu_mpy, b.alu_div) = (0, 0);
+        }
         b.samples.clear();
         let mut cpu = self.cpu.clone();
         let mut sched = self.sched.clone();
@@ -1716,6 +1879,9 @@ impl Machine for Snes {
         b.apu.load(&mut r)?;
         if let Some(cart) = &mut b.cart {
             cart.load(&mut r)?;
+        }
+        if let Some(d) = &mut b.dsp {
+            d.load(&mut r)?;
         }
         sched.load(&mut r)?;
         input.load(&mut r)?;

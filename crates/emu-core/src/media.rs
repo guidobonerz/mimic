@@ -72,6 +72,11 @@ pub enum MediaKind {
     /// A deck of punched cards (binary column images `.deck`, text `.crd`,
     /// hex columns `.chx`; `media::cards`).
     Cards,
+    /// The battery-backed RAM of a cartridge, kept in a file beside the
+    /// cartridge image (`.srm`). Frontends put it in when they insert the
+    /// cartridge (`media_backends::image::attach_battery_ram`); the machine
+    /// writes what the game saved back through the backend.
+    BatteryRam,
 }
 
 /// A piece of media: a name, its kind and the backend holding its bytes.

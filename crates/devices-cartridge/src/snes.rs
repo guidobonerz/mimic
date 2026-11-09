@@ -20,12 +20,23 @@
 //! the boards wire them (the bigger chip first, then the smaller one,
 //! mirrored up to the next power of two).
 //!
-//! Not supported (the image is refused): the coprocessor boards (DSP-n,
-//! Super FX, SA-1, S-DD1, SPC7110, CX4 …) — the DSP-1 is planned.
+//! **NEC DSP boards** (chipset $03–$06 with coprocessor type 0): the
+//! µPD77C25 runs in the machine (`cpu-upd7725`); the cartridge names it
+//! ([`SnesCart::dsp`], by title: DSP-2 Dungeon Master, DSP-3 SD Gundam
+//! GX, DSP-4 Top Gear 3000, otherwise DSP-1) and decodes its two
+//! registers ([`SnesCart::dsp_port`]), address bit 14 (HiROM: 12)
+//! choosing between data (0) and status (1):
+//! - LoROM up to 1 MB: $20–$3F/$A0–$BF:$8000–$FFFF;
+//! - LoROM above 1 MB: $60–$6F/$E0–$EF:$0000–$7FFF;
+//! - HiROM: $00–$1F/$80–$9F:$6000–$7FFF.
+//!
+//! Not supported (the image is refused): the other coprocessor boards
+//! (Super FX, SA-1, S-DD1, SPC7110, CX4, ST01x …).
 //!
 //! Sources: Martin Korth, fullsnes, "SNES Cartridge ROM Header", "SNES
 //! Cart LoROM Mapping", "SNES Cart HiROM Mapping", "SNES Cartridge
-//! ROM-Image Headers and File Extensions" (read 2026-10-23). The
+//! ROM-Image Headers and File Extensions" (read 2026-10-23), "SNES Cart
+//! DSP-n/ST010/ST011 - NEC uPD77C25 / uPD96050" (read 2026-11-09). The
 //! implementation is this project's own.
 
 use emu_core::media::MediaError;
@@ -40,6 +51,15 @@ pub enum SnesMap {
     ExHiRom,
 }
 
+/// Which NEC DSP program a board runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dsp {
+    Dsp1,
+    Dsp2,
+    Dsp3,
+    Dsp4,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SnesCart {
     rom: Vec<u8>,
@@ -51,6 +71,7 @@ pub struct SnesCart {
     /// The country code is a PAL one.
     pub pal: bool,
     pub battery: bool,
+    pub dsp: Option<Dsp>,
 }
 
 /// `addr` into an image of `size` bytes, laid out as the boards wire
@@ -134,20 +155,25 @@ impl SnesCart {
             return bad("no SNES header found".into());
         }
         let h = &data[at..at + 0x40];
-        // $00 ROM, $01 + RAM, $02 + RAM + battery; $x3 and up have a
-        // coprocessor.
+        // $00 ROM, $01 + RAM, $02 + RAM + battery; $x3 ROM + coprocessor,
+        // $x4 + RAM, $x5 + RAM + battery, $x6 + battery; the upper nibble
+        // the coprocessor (0 a NEC DSP).
         let chipset = h[0x16];
-        if chipset > 0x02 {
-            return bad(format!(
-                "SNES cartridge with a coprocessor (chipset ${chipset:02X}) is not supported"
-            ));
-        }
+        let title = String::from_utf8_lossy(&h[..21]).trim().to_string();
+        let dsp = match chipset {
+            0x00..=0x02 => None,
+            0x03..=0x06 => Some(dsp_by_title(&title)),
+            _ => {
+                return bad(format!(
+                    "SNES cartridge with a coprocessor (chipset ${chipset:02X}) is not supported"
+                ))
+            }
+        };
         let sram_kb = if h[0x18] == 0 || h[0x18] > 8 {
             0
         } else {
             1usize << h[0x18]
         };
-        let title = String::from_utf8_lossy(&h[..21]).trim().to_string();
         Ok(Self {
             rom: data.to_vec(),
             sram: vec![0; sram_kb * 1024],
@@ -155,8 +181,26 @@ impl SnesCart {
             title,
             fast: h[0x15] & 0x10 != 0,
             pal: (2..=12).contains(&h[0x19]),
-            battery: chipset == 0x02,
+            battery: matches!(chipset, 0x02 | 0x05 | 0x06),
+            dsp,
         })
+    }
+
+    /// The DSP register at `addr`: `Some(false)` data (DR), `Some(true)`
+    /// status (SR); `None` elsewhere or without a DSP.
+    pub fn dsp_port(&self, addr: u32) -> Option<bool> {
+        self.dsp?;
+        let bank = (addr >> 16) as u8 & 0x7f;
+        let a = addr as u16;
+        match self.map {
+            SnesMap::LoRom if self.rom.len() <= 0x10_0000 => {
+                ((0x20..=0x3f).contains(&bank) && a >= 0x8000).then_some(a & 0x4000 != 0)
+            }
+            SnesMap::LoRom => {
+                ((0x60..=0x6f).contains(&bank) && a < 0x8000).then_some(a & 0x4000 != 0)
+            }
+            _ => (bank < 0x20 && (0x6000..0x8000).contains(&a)).then_some(a & 0x1000 != 0),
+        }
     }
 
     pub fn rom_len(&self) -> usize {
@@ -235,6 +279,20 @@ impl SnesCart {
         }
         self.sram.copy_from_slice(s);
         Ok(())
+    }
+}
+
+/// The DSP program a DSP board's game uses (the header does not say).
+fn dsp_by_title(title: &str) -> Dsp {
+    let t = title.to_ascii_uppercase();
+    if t.starts_with("DUNGEON MASTER") {
+        Dsp::Dsp2
+    } else if t.starts_with("SD GUNDAM GX") {
+        Dsp::Dsp3
+    } else if t.contains("TOP GEAR 3000") || t.contains("TG3000") {
+        Dsp::Dsp4
+    } else {
+        Dsp::Dsp1
     }
 }
 
@@ -320,5 +378,37 @@ mod tests {
         let mut d = SnesCart::parse(&image(0x8_0000, SnesMap::LoRom, 1)).unwrap();
         d.load(&mut StateReader::new(&data)).unwrap();
         assert_eq!(d.sram, c.sram);
+    }
+
+    #[test]
+    fn dsp_boards_and_their_ports() {
+        let mut img = image(0x8_0000, SnesMap::LoRom, 1);
+        img[0x7fc0 + 0x16] = 0x05;
+        let c = SnesCart::parse(&img).unwrap();
+        assert_eq!(c.dsp, Some(Dsp::Dsp1));
+        assert!(c.battery);
+        assert_eq!(c.dsp_port(0x30_8000), Some(false));
+        assert_eq!(c.dsp_port(0xb0_c000), Some(true));
+        assert_eq!(c.dsp_port(0x00_8000), None);
+
+        let mut img = image(0x20_0000, SnesMap::LoRom, 0);
+        img[0x7fc0 + 0x16] = 0x03;
+        img[0x7fc0..0x7fc0 + 14].copy_from_slice(b"DUNGEON MASTER");
+        let c = SnesCart::parse(&img).unwrap();
+        assert_eq!(c.dsp, Some(Dsp::Dsp2));
+        assert_eq!(c.dsp_port(0x60_0000), Some(false));
+        assert_eq!(c.dsp_port(0xe0_4000), Some(true));
+        assert_eq!(c.dsp_port(0x30_8000), None);
+
+        let mut img = image(0x10_0000, SnesMap::HiRom, 0);
+        img[0xffc0 + 0x16] = 0x03;
+        let c = SnesCart::parse(&img).unwrap();
+        assert_eq!(c.dsp_port(0x00_6000), Some(false));
+        assert_eq!(c.dsp_port(0x80_7000), Some(true));
+        assert_eq!(c.dsp_port(0x20_6000), None);
+
+        let mut img = image(0x8_0000, SnesMap::LoRom, 0);
+        img[0x7fc0 + 0x16] = 0x13;
+        assert!(SnesCart::parse(&img).is_err());
     }
 }

@@ -13,7 +13,10 @@
 //! 24 per channel (the 15-bit to 8-bit expansion differs between tools).
 //! The report goes to `target/tmp/snes-peterlemon.txt` with the trend,
 //! our pictures of failing ROMs next to it. `EMU_SNES_FILTER=text` runs
-//! only paths containing it, `EMU_SNES_FRAMES=n` runs n frames (300).
+//! only paths containing it, `EMU_SNES_FRAMES=n` runs n frames (300);
+//! `EMU_SNES_SEARCH=1` compares after every frame and reports the frame
+//! closest to the reference (for animated demos: the picture is one moment
+//! of it, see [`FRAMES_OF`]).
 
 use std::path::{Path, PathBuf};
 
@@ -43,6 +46,44 @@ impl MediaBackend for Bytes {
 }
 
 const FRAMES: u32 = 300;
+/// Animated demos: the frame their reference picture shows (found with
+/// `EMU_SNES_SEARCH`).
+const FRAMES_OF: &[(&str, u32)] = &[("HDMA/WaveHDMA", 185), ("Mode7/StarWars", 262)];
+/// Tests that stop the CPU and wait for the RESET button (CPUMSC's STP):
+/// the frame it is pressed at.
+const RESET_AT: &[(&str, u32)] = &[("CPU/MSC/CPUMSC", 60)];
+/// Demos whose picture shows them after a button was held: the test,
+/// the pad 1 key (B A Select Start Y X L R = 0–7), and the PPU register
+/// value at which it is let go. The mosaic demos' pictures show size 16
+/// (R steps MOSAIC by $10 every 8 frames).
+const HOLD_UNTIL: &[(&str, u16, &str, u32)] = &[
+    ("Mosaic/Mode3", 7, "MOSAIC", 0xf1),
+    ("Mosaic/Mode5", 7, "MOSAIC", 0xf1),
+];
+
+/// A PPU register by its debugger name.
+fn ppu_reg(m: &dyn Machine, name: &str) -> Option<u32> {
+    m.chips()
+        .into_iter()
+        .find(|c| c.name == "ppu")?
+        .regs
+        .into_iter()
+        .find(|r| r.name == name)
+        .map(|r| r.value)
+}
+
+fn key(m: &mut dyn Machine, k: u16, down: bool) {
+    use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Keyboard,
+        event: InputEvent::Key {
+            machine_key: MachineKey(k),
+            down,
+        },
+    });
+}
 const SPC_FRAMES: u32 = 3000;
 const TOLERANCE: i32 = 24;
 /// Our frame row of the reference pictures' top row.
@@ -177,16 +218,45 @@ fn peterlemon_snes() {
                 let frames = std::env::var("EMU_SNES_FRAMES")
                     .ok()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or(if name.starts_with("CPUTest/SPC700") {
-                        // Their upload-and-run rounds take up to ~50 s
-                        // here (with the machine's own IPL loader; whether
-                        // the real IPL is quicker is open).
-                        SPC_FRAMES
-                    } else {
-                        FRAMES
+                    .unwrap_or_else(|| {
+                        if let Some(&(_, n)) = FRAMES_OF.iter().find(|(p, _)| name.contains(p)) {
+                            n
+                        } else if name.starts_with("CPUTest/SPC700") {
+                            // Their upload-and-run rounds take up to ~50 s
+                            // here (with the machine's own IPL loader;
+                            // whether the real IPL is quicker is open).
+                            SPC_FRAMES
+                        } else {
+                            FRAMES
+                        }
                     });
-                for _ in 0..frames {
+                let search = std::env::var_os("EMU_SNES_SEARCH").is_some();
+                let mut best = (usize::MAX, 0);
+                let reset_at = RESET_AT
+                    .iter()
+                    .find(|(p, _)| name.contains(p))
+                    .map(|&(_, n)| n);
+                let mut hold = HOLD_UNTIL.iter().find(|(p, ..)| name.contains(p)).copied();
+                for f in 1..=frames {
+                    if reset_at == Some(f) {
+                        m.reset(emu_core::machine::ResetKind::Soft);
+                    }
+                    if let Some((_, k, reg, value)) = hold {
+                        let done = ppu_reg(m.as_ref(), reg) == Some(value);
+                        key(m.as_mut(), k, !done);
+                        if done {
+                            hold = None;
+                        }
+                    }
                     m.run_frame(&mut dbg);
+                    if search {
+                        if let Ok(n) = compare(m.as_ref(), &path.with_extension("png")) {
+                            best = best.min((n, f));
+                        }
+                    }
+                }
+                if search {
+                    println!("{name}: closest at frame {} ({} pixels)", best.1, best.0);
                 }
                 match compare(m.as_ref(), &path.with_extension("png")) {
                     Ok(0) => "pass".into(),

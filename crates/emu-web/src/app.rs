@@ -69,6 +69,7 @@ fn kind_name(k: MediaKind) -> &'static str {
         MediaKind::Cartridge => "cartridge",
         MediaKind::Program => "program",
         MediaKind::Cards => "cards",
+        MediaKind::BatteryRam => "battery",
     }
 }
 
@@ -79,6 +80,7 @@ fn kind_from(name: &str) -> Option<MediaKind> {
         "cartridge" | "cart" => Some(MediaKind::Cartridge),
         "program" | "prg" => Some(MediaKind::Program),
         "cards" | "deck" => Some(MediaKind::Cards),
+        "battery" | "srm" => Some(MediaKind::BatteryRam),
         _ => None,
     }
 }

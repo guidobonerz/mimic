@@ -270,6 +270,7 @@ pub fn extensions(kind: MediaKind) -> &'static [&'static str] {
         ],
         MediaKind::Tape => &["tap", "cas", "cdt", "tzx", "p", "81", "prg", "wav", "ptp"],
         MediaKind::Cards => &["deck", "crd", "chx"],
+        MediaKind::BatteryRam => &["srm", "sav"],
         MediaKind::Program => &[
             "prg", "p00", "t64", "xex", "com", "exe", "sna", "z80", "bin", "hex",
         ],

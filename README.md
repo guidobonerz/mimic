@@ -96,7 +96,7 @@ Where the project stands against test suites and checks, as of 2026-11-09. 🟢 
 | ZX Spectrum 48K/128K/+2 | Fuse test | all pass | 🟢 | border timing beyond the Fuse test, SAVE to tape |
 | ColecoVision | cartridge collection | 231/235 show a picture | 🟡 | TMS9918A reference pictures, VRAM timing |
 | NES | nes-test-roms (blargg, nestest …) | 116/119 | 🟡 | `6-MMC3_alt`, `blargg_apu_2005` 10 and 11 |
-| SNES | Harte CPU sets, snes-tests (gilyon), PeterLemon's ROMs | snes-tests 3/3, PeterLemon 59/78, games run with sound | 🟡 | DSP-1, mode 7/mosaic/interlace/window cases, mid-line register changes, SRAM file |
+| SNES | Harte CPU sets, snes-tests (gilyon), PeterLemon's ROMs | snes-tests 3/3, PeterLemon 67/78, games run with sound, DSP-1 commands correct | 🟡 | mid-line register changes, input-driven PeterLemon pictures, coprocessors beyond the NEC DSPs |
 | Vectrex | executive, Mine Storm, Scramble | play | 🟡 | overlays, phosphor persistence |
 | Apple II / II+ / IIe | real ROMs, Zork I, test disks | all four boot | 🟡 | DOS 3.3/ProDOS, Mockingboard software, WOZ protections |
 | Macintosh 128K–SE | real ROMs, test disk, System 6/7 | boot | 🟡 | 1.44 MB (SWIM), ADB handshake details |
@@ -121,7 +121,7 @@ Where the project stands against test suites and checks, as of 2026-11-09. 🟢 
 | CIA | VICE `CIA/`, `interrupts/` | 188/188, 39/39 | 🟢 | – |
 | VIA | VICE `VIC20/via_sr` dumps, `drive/viavarious` | green | 🟢 | – |
 | Joysticks, paddles, mice, keypads, light pens | unit tests at pin level | green | 🟡 | interactive VICE tests checked by hand only |
-| Cartridges (C64 CRT, freezers, VIC-20, Plus/4, C128 function ROM, Atari, Coleco, NES mappers 0–4, SNES) | `cartridges` tests, VICE selftests | green | 🟡 | more NES mappers, SNES coprocessors |
+| Cartridges (C64 CRT, freezers, VIC-20, Plus/4, C128 function ROM, Atari, Coleco, NES mappers 0–4, SNES with DSP-1–4) | `cartridges` tests, VICE selftests | green | 🟡 | more NES mappers, SNES coprocessors beyond the DSPs |
 | Printers (FX-80, P6+, ImageWriter) | real ROMs on several machines | print | 🟡 | Amiga printer.device, more machines |
 | Debug server, VICE monitor adapter, preview | `emu-debug`/`emu-preview` tests | green | 🟢 | – |
 | Desktop, headless | smoke tests | green | 🟢 | – |
@@ -141,6 +141,7 @@ Where the project stands against test suites and checks, as of 2026-11-09. 🟢 
 | Motorola 68020 / 68EC020 | `cpu-m68k` | Amiga 1200 | unit tests only; timing approximate, no cache | 60 % |
 | WDC 65C816 (5A22) | `cpu-65816` | SNES | Tom Harte, all 5 080 400 tests | 95 % |
 | Sony SPC700 | `cpu-spc700` | SNES sound module | Tom Harte, all 256 000 tests | 98 % |
+| NEC µPD77C25 | `cpu-upd7725` | SNES DSP-1 to DSP-4 | own tests; DSP-1B program: multiply, sine/cosine, distance, inverse | 85 % |
 | Motorola 6809 (68A09) | `cpu-6809` | Vectrex | own per-instruction tests (cycle counts from the datasheet); the Vectrex executive and Scramble run; no external test suite | 75 % |
 
 ### Machines
@@ -161,7 +162,7 @@ Where the project stands against test suites and checks, as of 2026-11-09. 🟢 
 | Sinclair ZX81 / TS1000 | `machine-zx81` | 1/2/16 KB | boots, PRINT, .P files through traps | 85 % |
 | ColecoVision | `machine-coleco` | NTSC, PAL | 231 of 235 cartridges show a picture; MegaCart; four controller kinds | 90 % |
 | NES / Famicom | `machine-nes` | NTSC, PAL, Four Score | 116 of 119 test ROMs; mappers 0–4 | 90 % |
-| SNES | `machine-snes` | NTSC, PAL | games run with sound; DSP-1 missing, no SNES test ROMs, mid-line register changes | 70 % |
+| SNES | `machine-snes` | NTSC, PAL | games run with sound; DSP-1 to DSP-4, battery SRAM file; mid-line register changes open | 75 % |
 | Vectrex | `machine-vectrex` | – | executive and Scramble run; light pen and 3D Imager modelled; overlays and phosphor persistence open; Mine Storm and 3-D Mine Storm need the 8 KB system ROM | 55 % |
 | Test machine (6502 + RAM + raster chip) | `machine-sim6502` | – | reference for debugger tests | 100 % |
 | Tandy TRS-80 Model I/III | `machine-trs80` | Model I, Model III | both boot to BASIC with real ROMs; Model I cassette (CSAVE/CLOAD) and Expansion Interface with FD1771, Model III FD1793 with WAIT and NMI (DMK/JV1/JV3; test disks boot and are written); no real DOS tried, no Model III cassette | 65 % |
@@ -257,7 +258,7 @@ Where the project stands against test suites and checks, as of 2026-11-09. 🟢 
 | Atari 2600 bank switching (2K/4K, F8/F6/F4 + Superchip, FE, E0, E7, 3F, FA, DPC) | `devices-cartridge` | 88 % |
 | ColecoVision (plain, MegaCart) | `devices-cartridge` | 90 % |
 | NES mappers 0–4 (iNES/NES 2.0) | `devices-cartridge` | 60 % (further mappers missing) |
-| SNES LoROM/HiROM/ExHiROM, SRAM | `devices-cartridge` | 60 % (no coprocessors, SRAM not saved to file) |
+| SNES LoROM/HiROM/ExHiROM, SRAM, NEC DSP boards | `devices-cartridge` | 70 % (SRAM in a .srm file; Super FX, SA-1 and others missing) |
 | Vectrex (32 KB, 64 KB with PB6 banking) | `devices-cartridge` | 90 % |
 
 ### Network devices

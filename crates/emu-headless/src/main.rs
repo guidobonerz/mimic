@@ -486,6 +486,8 @@ fn run(args: Args) -> Result<ExitCode, String> {
             .ok_or("no such slot")?
             .insert(media)
             .map_err(|e| format!("{path}: {e}"))?;
+        media_backends::image::attach_battery_ram(machine.as_mut(), std::path::Path::new(path))
+            .map_err(|e| format!("{path}: battery RAM file: {e}"))?;
     }
     // Network and folder for the devices that reach outside (UCI, WiC64),
     // through a journal so debugger recordings replay exactly.

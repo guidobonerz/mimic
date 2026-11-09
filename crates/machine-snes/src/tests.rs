@@ -584,3 +584,200 @@ fn trace_cart() {
         }
     }
 }
+
+/// A DSP-1 board image (chipset $05): `code` at $8000.
+fn dsp_rom(code: &[u8]) -> Vec<u8> {
+    let mut rom = lorom(code, &[], &[], &[]);
+    rom[0x7fd6] = 0x05;
+    rom
+}
+
+#[test]
+fn dsp_cartridge_needs_its_program_rom() {
+    let mut m = Snes::new(&MachineConfig::default()).unwrap();
+    let err = m
+        .media_slot(SLOT_CARTRIDGE)
+        .unwrap()
+        .insert(Media {
+            kind: MediaKind::Cartridge,
+            name: "dsp.sfc".into(),
+            backend: Box::new(Bytes(dsp_rom(&[]))),
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("dsp1b"), "{err}");
+    assert!(!m.media_slots()[0].inserted);
+}
+
+#[test]
+fn dsp1_multiplies_for_the_cpu() {
+    let Some(dir) = std::env::var_os("EMU_ROM_DIR") else {
+        eprintln!("EMU_ROM_DIR not set; skipped");
+        return;
+    };
+    let Ok(program) = std::fs::read(std::path::Path::new(&dir).join("snes/dsp1b.rom")) else {
+        eprintln!("no snes/dsp1b.rom; skipped");
+        return;
+    };
+    // Wait for RQM (LDA $30C000; BPL), then move a byte through DR.
+    let wait = [0xaf, 0x00, 0xc0, 0x30, 0x10, 0xfa];
+    let mut code = NATIVE.to_vec();
+    for b in [0x00, 0x00, 0x40, 0x00, 0x40] {
+        code.extend(wait);
+        code.extend([0xa9, b, 0x8f, 0x00, 0x80, 0x30]); // LDA #b; STA $308000
+    }
+    for at in [0x10, 0x11] {
+        code.extend(wait);
+        code.extend([0xaf, 0x00, 0x80, 0x30, 0x85, at]); // LDA $308000; STA at
+    }
+    code.extend([0x80, 0xfe]);
+    let mut config = MachineConfig::default();
+    config.roms.insert("dsp1b".into(), program);
+    let mut m = Snes::new(&config).unwrap();
+    m.media_slot(SLOT_CARTRIDGE)
+        .unwrap()
+        .insert(Media {
+            kind: MediaKind::Cartridge,
+            name: "dsp.sfc".into(),
+            backend: Box::new(Bytes(dsp_rom(&code))),
+        })
+        .unwrap();
+    frames(&mut m, 2);
+    assert_eq!(m.devices(), [CPU, SPC, DSP]);
+    // $4000 × $4000 / $8000 = $2000.
+    assert_eq!((m.board.wram[0x10], m.board.wram[0x11]), (0x00, 0x20));
+    // The state carries the DSP along.
+    let s = m.save_state();
+    m.load_state(&s).unwrap();
+    assert_eq!(m.save_state(), s);
+}
+
+/// A file the test can look into after the machine wrote it.
+#[derive(Clone, Default)]
+struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl MediaBackend for Shared {
+    fn len(&self) -> u64 {
+        self.0.lock().unwrap().len() as u64
+    }
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), MediaError> {
+        let d = self.0.lock().unwrap();
+        let o = offset as usize;
+        buf.copy_from_slice(&d[o..o + buf.len()]);
+        Ok(())
+    }
+    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), MediaError> {
+        let mut d = self.0.lock().unwrap();
+        let o = offset as usize;
+        d[o..o + data.len()].copy_from_slice(data);
+        Ok(())
+    }
+    fn commit(&mut self) -> Result<(), MediaError> {
+        Ok(())
+    }
+    fn set_len(&mut self, len: u64) -> Result<(), MediaError> {
+        self.0.lock().unwrap().resize(len as usize, 0);
+        Ok(())
+    }
+}
+
+#[test]
+fn battery_ram_goes_to_its_file_and_back() {
+    // LDA $700000; STA $10 (what the battery kept); LDA #$42; STA $700001.
+    let mut code = NATIVE.to_vec();
+    code.extend([0xaf, 0x00, 0x00, 0x70, 0x85, 0x10]);
+    code.extend([0xa9, 0x42, 0x8f, 0x01, 0x00, 0x70, 0x80, 0xfe]);
+    let mut image = lorom(&code, &[], &[], &[]);
+    image[0x7fd6] = 0x02; // ROM + RAM + battery
+    image[0x7fd8] = 0x01; // 2 KB
+    let file = Shared::default();
+    let srm = |f: &Shared| Media {
+        kind: MediaKind::BatteryRam,
+        name: "test.srm".into(),
+        backend: Box::new(f.clone()),
+    };
+
+    let mut m = machine(&[], "ntsc", image.clone());
+    m.media_slot(SLOT_BATTERY)
+        .unwrap()
+        .insert(srm(&file))
+        .unwrap();
+    frames(&mut m, 2);
+    {
+        let d = file.0.lock().unwrap();
+        assert_eq!(d.len(), 2048);
+        assert_eq!(d[1], 0x42);
+    }
+    // A power cycle keeps it.
+    m.board.cart.as_mut().unwrap().sram[0] = 0x17;
+    frames(&mut m, 1);
+    m.reset(ResetKind::Hard);
+    frames(&mut m, 1);
+    assert_eq!(m.board.wram[0x10], 0x17);
+
+    // Another machine starts from the file.
+    file.0.lock().unwrap()[0] = 0x99;
+    let mut m = machine(&[], "ntsc", image);
+    m.media_slot(SLOT_BATTERY)
+        .unwrap()
+        .insert(srm(&file))
+        .unwrap();
+    assert!(m.media_slots()[1].inserted);
+    frames(&mut m, 1);
+    assert_eq!(m.board.wram[0x10], 0x99);
+
+    // Wrong sizes and cartridges without a battery refuse the file.
+    file.0.lock().unwrap().truncate(100);
+    assert!(matches!(
+        m.media_slot(SLOT_BATTERY).unwrap().insert(srm(&file)),
+        Err(MediaError::Format(_))
+    ));
+    let mut m = machine(&[], "ntsc", lorom(&code, &[], &[], &[]));
+    assert!(matches!(
+        m.media_slot(SLOT_BATTERY).unwrap().insert(srm(&file)),
+        Err(MediaError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn multiplier_and_divider_take_their_cycles() {
+    let sta = |a: u16| [0x8d, a as u8, (a >> 8) as u8];
+    let lda = |a: u16| [0xad, a as u8, (a >> 8) as u8];
+    let to = |zp: u8| [0x85, zp];
+    let mut code = NATIVE.to_vec();
+    // $12 × $34: read at once (the read is the 4th cycle after the write:
+    // 4 of 8 bits done), then after 8 NOPs.
+    code.extend([0xa9, 0x12]);
+    code.extend(sta(0x4202));
+    code.extend([0xa9, 0x34]);
+    code.extend(sta(0x4203));
+    code.extend(lda(0x4216));
+    code.extend(to(0x20));
+    code.extend([0xea; 8]);
+    for (reg, zp) in [(0x4216, 0x21), (0x4217, 0x22), (0x4214, 0x23)] {
+        code.extend(lda(reg));
+        code.extend(to(zp));
+    }
+    // 1000 ÷ 7 and 1000 ÷ 0, after 10 NOPs.
+    code.extend([0xa9, 0xe8]);
+    code.extend(sta(0x4204));
+    code.extend([0xa9, 0x03]);
+    code.extend(sta(0x4205));
+    for (divisor, zp) in [(7u8, 0x24u8), (0, 0x28)] {
+        code.extend([0xa9, divisor]);
+        code.extend(sta(0x4206));
+        code.extend([0xea; 10]);
+        for (i, reg) in [0x4214u16, 0x4215, 0x4216, 0x4217].into_iter().enumerate() {
+            code.extend(lda(reg));
+            code.extend(to(zp + i as u8));
+        }
+    }
+    code.extend([0x80, 0xfe]);
+    let mut m = machine(&[], "ntsc", lorom(&code, &[], &[], &[]));
+    frames(&mut m, 1);
+    let w = &m.board.wram;
+    // Bits 0–3 of $12 hold one 1 (bit 1): $34 << 1.
+    assert_eq!(w[0x20], 0x68);
+    assert_eq!((w[0x21], w[0x22], w[0x23]), (0xa8, 0x03, 0x34));
+    assert_eq!(&w[0x24..0x28], &[142, 0, 6, 0]);
+    assert_eq!(&w[0x28..0x2c], &[0xff, 0xff, 0xe8, 0x03]);
+}

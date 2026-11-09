@@ -363,7 +363,10 @@ fn swap_disk(m: &mut dyn Machine, path: &str) -> String {
     };
     let _ = slot.eject();
     match slot.insert(media) {
-        Ok(()) => String::new(),
+        Ok(()) => match media_backends::image::attach_battery_ram(m, std::path::Path::new(path)) {
+            Ok(()) => String::new(),
+            Err(e) => format!("{name}: battery RAM file: {e}"),
+        },
         Err(e) => format!("{name}: {e}"),
     }
 }
@@ -415,6 +418,7 @@ fn open_media(
         MediaKind::Tape => media_backends::image::open_tape(p, machine_id),
         MediaKind::Cartridge => media_backends::image::open_cart(p),
         MediaKind::Cards => media_backends::image::open_cards(p),
+        MediaKind::BatteryRam => media_backends::image::open_battery_ram(p),
         _ => media_backends::image::open(p),
     }
     .map_err(|e| e.to_string())?;
@@ -479,10 +483,39 @@ fn finish_mount(
             if let Ok(mut names) = shared.media_names.lock() {
                 names.insert(slot, name.clone());
             }
+            if info.kind == emu_core::media::MediaKind::Cartridge {
+                return battery_ram(shared, m, path);
+            }
             String::new()
         }
         Err(e) => format!("{name}: {e}"),
     }
+}
+
+/// Put the battery RAM file beside the cartridge image `path` into the
+/// machine (when it and the cartridge have one); returns a message.
+fn battery_ram(shared: &Shared, m: &mut dyn Machine, path: &str) -> String {
+    use emu_core::media::MediaKind;
+    let cart = std::path::Path::new(path);
+    if let Err(e) = media_backends::image::attach_battery_ram(m, cart) {
+        return format!(
+            "{}: {e}",
+            file_name(&cart.with_extension("srm").to_string_lossy())
+        );
+    }
+    let attached = m
+        .media_slots()
+        .into_iter()
+        .any(|s| s.kind == MediaKind::BatteryRam && s.inserted);
+    note_first(
+        shared,
+        m,
+        MediaKind::BatteryRam,
+        attached
+            .then(|| cart.with_extension("srm").to_string_lossy().into_owned())
+            .as_deref(),
+    );
+    String::new()
 }
 
 /// Carry out a side panel command; a mount into a full slot comes back

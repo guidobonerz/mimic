@@ -12,6 +12,7 @@ workspace = true
 emu-core.workspace = true
 cpu-65816.workspace = true
 cpu-spc700.workspace = true
+cpu-upd7725.workspace = true
 chips-nintendo.workspace = true
 devices-input.workspace = true
 devices-cartridge.workspace = true

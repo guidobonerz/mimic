@@ -635,6 +635,8 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             .insert(media)
             .map_err(|e| format!("{c}: {e}"))?;
         args.mounted.push((slot.0, c.clone()));
+        media_backends::image::attach_battery_ram(m.as_mut(), Path::new(c))
+            .map_err(|e| format!("{c}: battery RAM file: {e}"))?;
     }
     Ok(m)
 }

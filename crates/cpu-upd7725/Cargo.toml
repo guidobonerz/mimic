@@ -1,0 +1,12 @@
+[package]
+name = "cpu-upd7725"
+description = "NEC uPD77C25 signal processor (the SNES DSP-1 to DSP-4)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

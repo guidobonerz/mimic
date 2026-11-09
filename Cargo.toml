@@ -16,6 +16,7 @@ emu-core = { path = "crates/emu-core" }
 cpu-6502 = { path = "crates/cpu-6502" }
 cpu-65816 = { path = "crates/cpu-65816" }
 cpu-spc700 = { path = "crates/cpu-spc700" }
+cpu-upd7725 = { path = "crates/cpu-upd7725" }
 cpu-8080 = { path = "crates/cpu-8080" }
 cpu-ada = { path = "crates/cpu-ada" }
 asm-ada = { path = "crates/asm-ada" }

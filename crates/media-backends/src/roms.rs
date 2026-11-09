@@ -458,12 +458,20 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         0x2000,
     )];
     // SNES: the sound CPU's 64-byte boot ROM (optional: an own loader
-    // stands in).
-    const SNES: &[RomSpec] = &[optional(
-        "spc700",
-        &["spc700", "ipl", "snes-ipl", "spc700-ipl", "apu"],
-        64,
-    )];
+    // stands in); the programs of the NEC DSP cartridges (program and
+    // data ROM in one 8 KB file), needed only by their games.
+    const SNES: &[RomSpec] = &[
+        optional(
+            "spc700",
+            &["spc700", "ipl", "snes-ipl", "spc700-ipl", "apu"],
+            64,
+        ),
+        optional("dsp1", &["dsp1-", "dsp1a"], 0x2000),
+        optional("dsp1b", &["dsp1b"], 0x2000),
+        optional("dsp2", &["dsp2"], 0x2000),
+        optional("dsp3", &["dsp3"], 0x2000),
+        optional("dsp4", &["dsp4"], 0x2000),
+    ];
     // Vectrex: the 8 KB system ROM (executive and Mine Storm); a 4 KB
     // image of the executive alone is accepted too.
     const VECTREX: &[RomSpec] = &[

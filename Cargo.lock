@@ -866,6 +866,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpu-upd7725"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "cpu-z80"
 version = "0.1.0"
 dependencies = [
@@ -2313,6 +2320,7 @@ dependencies = [
  "chips-nintendo",
  "cpu-65816",
  "cpu-spc700",
+ "cpu-upd7725",
  "devices-cartridge",
  "devices-input",
  "emu-core",

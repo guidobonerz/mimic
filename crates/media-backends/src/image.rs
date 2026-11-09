@@ -8,6 +8,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
+use emu_core::Machine;
 
 fn range(len: u64, offset: u64, n: usize) -> Result<std::ops::Range<usize>, MediaError> {
     let end = offset.checked_add(n as u64).ok_or(MediaError::OutOfRange)?;
@@ -291,6 +292,52 @@ pub fn open_cards(path: &Path) -> Result<Media, MediaError> {
         fs::write(path, []).map_err(io_err)?;
     }
     open(path)
+}
+
+/// A battery RAM file (`.srm`), created empty if it does not exist (the
+/// machine gives it its size). Written straight through, without an
+/// overlay.
+pub fn open_battery_ram(path: &Path) -> Result<Media, MediaError> {
+    if !path.exists() {
+        fs::write(path, []).map_err(io_err)?;
+    }
+    Ok(Media {
+        name: path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+        kind: MediaKind::BatteryRam,
+        backend: Box::new(FileBackend::open(path)?),
+    })
+}
+
+/// Put the battery RAM file beside the cartridge image `cart`
+/// (`<name>.srm`) into the machine's battery RAM slot. The file is written
+/// straight through, without an overlay: what the game saves stays, as the
+/// battery keeps it. Nothing happens for a machine without such a slot or
+/// a cartridge without battery RAM (a file created for it is removed
+/// again); a file of the wrong size is refused.
+pub fn attach_battery_ram(m: &mut dyn Machine, cart: &Path) -> Result<(), MediaError> {
+    let Some(slot) = m
+        .media_slots()
+        .into_iter()
+        .find(|s| s.kind == MediaKind::BatteryRam)
+    else {
+        return Ok(());
+    };
+    let path = cart.with_extension("srm");
+    let created = !path.exists();
+    let media = open_battery_ram(&path)?;
+    let result = m
+        .media_slot(slot.id)
+        .ok_or(MediaError::NoMedia)?
+        .insert(media);
+    if result.is_err() && created {
+        let _ = fs::remove_file(&path);
+    }
+    match result {
+        Err(MediaError::Unsupported(_)) => Ok(()),
+        other => other,
+    }
 }
 
 /// A tape for the datasette of machine `machine_id`: a TAP image (behind

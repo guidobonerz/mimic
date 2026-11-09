@@ -746,6 +746,13 @@ impl SPpu {
         // VOFS + y - 1).
         let line = y;
         let my = line - (line - 1) % mosaic;
+        // Modes 5 and 6 in interlace show the BG at 448 lines: the field
+        // picks the even or odd one (scroll counts in those lines).
+        let my = if matches!(self.mode(), 5 | 6) && self.interlace() {
+            my * 2 + u16::from(self.field)
+        } else {
+            my
+        };
         let opt = matches!(self.mode(), 2 | 4 | 6) && n < 2;
         let pal_base = match (self.mode(), bpp) {
             (0, _) => (n as u16) * 32,
@@ -761,8 +768,10 @@ impl SPpu {
             } else {
                 (self.hofs[n] & 0x3ff, self.vofs[n])
             };
+            // Hires counts mosaic blocks in its own (512-wide) pixels
+            // (PeterLemon's MosaicMode5).
             let cx = if hires {
-                (hofs * 2).wrapping_add(msx * 2 + (x & 1))
+                (hofs * 2).wrapping_add(x - x % mosaic)
             } else {
                 hofs.wrapping_add(msx)
             };
@@ -896,6 +905,9 @@ impl SPpu {
             0
         };
         let line = (y - 1) as u8;
+        // OBJ interlace (SETINI bit 1): a field shows every other line of
+        // a sprite, which takes half as many lines on screen.
+        let obj_interlace = self.setini & 2 != 0;
         let mut found = Vec::with_capacity(32);
         for k in 0..128 {
             let i = (first + k) & 127;
@@ -903,6 +915,14 @@ impl SPpu {
             let (w, h) = if hi & 2 != 0 { large } else { small };
             let oy = self.oam[i * 4 + 1];
             let row = line.wrapping_sub(oy);
+            let row = if obj_interlace {
+                if u16::from(row) >= h / 2 {
+                    continue;
+                }
+                row * 2 + u8::from(self.field)
+            } else {
+                row
+            };
             if u16::from(row) >= h {
                 continue;
             }

@@ -38,6 +38,7 @@ crates/
   cpu-m68k/        68000 (Amiga, Macintosh) and 68020 (A1200)
   cpu-65816/       WDC 65C816 (SNES 5A22 core)
   cpu-spc700/      Sony SPC700 (SNES sound CPU)
+  cpu-upd7725/     NEC µPD77C25 (SNES DSP-1 to DSP-4 cartridge processor)
   cpu-6809/        Motorola 6809 / 68A09 (Vectrex)
   cpu-arm/         Acorn ARM2 (26-bit, Archimedes)
   cpu-8080/        Intel 8080A (IMSAI 8080), machine cycles reported with their status word
