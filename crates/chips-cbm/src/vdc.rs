@@ -155,13 +155,33 @@ impl Vdc {
         [self.regs[hi], self.regs[hi + 1]] = v.to_be_bytes();
     }
 
+    /// Where a VDC address lands in the RAM chips: register 28 bit 4
+    /// picks 64K (4164) or 16K (4416) addressing, and the chips fitted
+    /// decide what that does to the page bits (Robert Olessak's VDC Dump,
+    /// VICE test program VDC/vdcdump `patterns.txt`, measured on real
+    /// C128s): 64K RAM in 64K mode as is; 64K RAM in 16K mode page bits 5-0
+    /// move up one and bit 0 is doubled (bit 6 is lost); 16K RAM in 64K
+    /// mode the page halved; 16K RAM in 16K mode the low 16 KB.
+    fn ram_addr(&self, a: u16) -> usize {
+        let page = usize::from(a >> 8);
+        let low = usize::from(a & 0xff);
+        let mode64 = self.regs[28] & 0x10 != 0;
+        let page = match (self.ram.len() > 0x4000, mode64) {
+            (true, true) => page,
+            (true, false) => (page & 0x80) | ((page & 0x3f) << 1) | (page & 1),
+            (false, true) => (page >> 1) & 0x3f,
+            (false, false) => page & 0x3f,
+        };
+        (page << 8 | low) & (self.ram.len() - 1)
+    }
+
     fn vram(&self, a: u16) -> u8 {
-        self.ram[usize::from(a) & (self.ram.len() - 1)]
+        self.ram[self.ram_addr(a)]
     }
 
     fn set_vram(&mut self, a: u16, v: u8) {
-        let len = self.ram.len();
-        self.ram[usize::from(a) & (len - 1)] = v;
+        let i = self.ram_addr(a);
+        self.ram[i] = v;
     }
 
     pub fn frame_lines(&self) -> u32 {
@@ -482,8 +502,25 @@ mod tests {
     }
 
     #[test]
+    fn ram_addressing_follows_the_chips_and_mode() {
+        // VDC/vdcdump patterns: 64K in 16K mode, 16K in 64K mode.
+        let mut v = Vdc::new(64, VideoStandard::Pal);
+        assert_eq!(v.ram_addr(0x0100), 0x0300);
+        assert_eq!(v.ram_addr(0x4000), 0x0000);
+        assert_eq!(v.ram_addr(0x8100), 0x8300);
+        set(&mut v, 28, 0x10);
+        assert_eq!(v.ram_addr(0x4000), 0x4000);
+        let mut v = Vdc::new(16, VideoStandard::Pal);
+        assert_eq!(v.ram_addr(0x4100), 0x0100);
+        set(&mut v, 28, 0x10);
+        assert_eq!(v.ram_addr(0x0300), 0x0100);
+        assert_eq!(v.ram_addr(0x8000), 0x0000);
+    }
+
+    #[test]
     fn block_fill_and_copy() {
         let mut v = Vdc::new(64, VideoStandard::Pal);
+        set(&mut v, 28, 0x10); // 64K addressing: RAM addresses as written
         set(&mut v, 18, 0x10);
         set(&mut v, 19, 0x00);
         set(&mut v, 24, 0x00); // fill

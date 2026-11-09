@@ -111,7 +111,8 @@ impl Mmu {
                 }
                 v
             }
-            6 => self.rcr | 0x30,
+            // Bits 4-5 read 0 (VICE `c128/z80/outi/tstouti`: $0A reads back).
+            6 => self.rcr,
             7 => self.p0.0,
             8 => self.p0.1 | 0xf0,
             9 => self.p1.0,
@@ -181,15 +182,16 @@ impl Mmu {
         let bank = if shared { 0 } else { (self.cr >> 6) & 3 };
         let page = (addr >> 8) as u8;
         let low = addr & 0xff;
-        // Zero page and stack swap with their relocation targets.
-        if page <= 1 && !forward {
-            (bank, addr)
-        } else if page == 0 {
+        // Zero page and stack swap with their relocation targets. In C64
+        // mode pages 0 and 1 are not moved, but an access to a target page
+        // is, also when the target is page 0 or 1 itself (c64modemmu 12:
+        // P1 on page 0 makes page 0 read page 1; 13: P0 and P1 swapped).
+        if forward && page == 0 {
             (
                 if shared { 0 } else { self.p0.1 & 3 },
                 (u16::from(self.p0.0) << 8) | low,
             )
-        } else if page == 1 {
+        } else if forward && page == 1 {
             (
                 if shared { 0 } else { self.p1.1 & 3 },
                 (u16::from(self.p1.0) << 8) | low,

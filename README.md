@@ -82,7 +82,7 @@ Where the project stands against test suites and checks, as of 2026-11-09. 🟢 
 | Machine | Test suite / check | Result | State | Open |
 | --- | --- | --- | --- | --- |
 | C64 | VICE `c64-testlist.in`, Lorenz | 1173/1240 projected (94.6 %), Lorenz 264/264 | 🟡 | `VICII/` 229/273 (`videomode` 27), `SID/` 155/169, `drive/` 45/51, `C64/` 68/70; REU, GEO-RAM not emulated |
-| C128 | VICE `c128-testlist.in` (without 135 ZEXALL parts) | 1940/2015 projected (96.3 %); `mmu/` 30/30, `2mhzVIC` 4/4 | 🟡 | `d030tester` 0/33 (11 references show VICE's PAL hue shift), `c64modemmu` Z80 cases, `drive/scanner`, `burstmode`, `ram0001*`, `vic-mmu`, `vdcdump` |
+| C128 | VICE `c128-testlist.in` (without 135 ZEXALL parts) | 1976/2015 (98.1 %); `mmu/` 30/30, `c64modemmu` 51/51, `z80/` 1871/1871, `2mhzVIC` 4/4, `vic-mmu`, `burstmode` | 🟡 | `d030tester` 0/33 deferred (VICE's PAL hue shift), `drive/scanner` 1571 (3), `vdcdump` (right result, but ~5 % past the cycle limit), `ifnram`, `c128modezp0001` (test bug: `ldx $d7ff`); ZEXALL never run |
 | VIC-20 | VICE `vic20-testlist.in` | 72/72 | 🟢 | screenshot entries not compared |
 | C16 / Plus/4 | VICE `plus4-testlist.in`, xplus4 traces and pictures | 12/12; FLI, palette, fetch pipeline pixel-equal | 🟡 | TED split (window writes), `flicnt` |
 | PET | VICE `pet-testlist.in` | 13/16 | 🟡 | `crtc3`, `crtc13` (references marked FIXME), `crtc10` (8296 behaviour) |

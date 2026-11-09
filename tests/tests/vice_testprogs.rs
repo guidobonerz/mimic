@@ -241,6 +241,11 @@ fn config(t: Target, base: &MachineConfig, e: &Entry) -> Result<MachineConfig, S
                 "sid-new" => {
                     c.options.insert("sid".into(), "8580".into());
                 }
+                // A D64 goes into a 1541 (c128/burstmode burstcheck0: no
+                // fast serial then), a D71 into the default 1571.
+                o if o.starts_with("mountd64:") && c.roms.contains_key("dos1541") => {
+                    c.options.insert("drive8".into(), "1541".into());
+                }
                 _ => {}
             }
         }

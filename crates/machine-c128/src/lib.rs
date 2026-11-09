@@ -169,6 +169,11 @@ impl Bus for CpuBus<'_> {
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
         let (a, v) = (addr as u16, v as u8);
         self.io.cpu_data = v;
+        if a < 2 {
+            let bus = self.io.vic.last_bus();
+            self.mem.port_write_with_bus(a, v, bus);
+            return;
+        }
         let w = self.mem.cpu_write(a, v);
         if w == Write::Io {
             self.io.io_access = slow_io(self.mem, a);
@@ -235,10 +240,16 @@ struct Z80Bus<'a> {
 
 impl Bus for Z80Bus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
-        u32::from(match addr.checked_sub(IO_BASE) {
-            Some(port @ 0xd000..=0xdfff) => self.io.read(self.mem, port as u16),
-            Some(_) => 0xff,
-            None => self.mem.z80_read(addr as u16),
+        let (a, io) = match addr.checked_sub(IO_BASE) {
+            Some(port) => (port as u16, true),
+            None => (addr as u16, false),
+        };
+        u32::from(match self.mem.z80_read_value(a, io) {
+            Some(v) => v,
+            None => match self.mem.z80_access(a, io) {
+                memory::Z80Access::Io(a) => self.io.read(self.mem, a),
+                _ => 0xff,
+            },
         })
     }
 
@@ -247,10 +258,12 @@ impl Bus for Z80Bus<'_> {
     }
 
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
-        match addr.checked_sub(IO_BASE) {
-            Some(port @ 0xd000..=0xdfff) => self.io.write(self.mem, port as u16, v as u8),
-            Some(_) => {}
-            None => self.mem.z80_write(addr as u16, v as u8),
+        let (a, io) = match addr.checked_sub(IO_BASE) {
+            Some(port) => (port as u16, true),
+            None => (addr as u16, false),
+        };
+        if let Some(a) = self.mem.z80_store(a, v as u8, io) {
+            self.io.write(self.mem, a, v as u8);
         }
     }
 
@@ -260,10 +273,16 @@ impl Bus for Z80Bus<'_> {
 }
 
 fn z80_peek(mem: &Memory, io: &Io, addr: u32) -> u8 {
-    match addr.checked_sub(IO_BASE) {
-        Some(port @ 0xd000..=0xdfff) => io.peek(mem, port as u16),
-        Some(_) => 0xff,
-        None => mem.z80_read(addr as u16),
+    let (a, is_io) = match addr.checked_sub(IO_BASE) {
+        Some(port) => (port as u16, true),
+        None => (addr as u16, false),
+    };
+    match mem.z80_read_value(a, is_io) {
+        Some(v) => v,
+        None => match mem.z80_access(a, is_io) {
+            memory::Z80Access::Io(a) => io.peek(mem, a),
+            _ => 0xff,
+        },
     }
 }
 

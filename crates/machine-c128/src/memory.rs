@@ -60,6 +60,32 @@ pub enum Read {
     Function(u16),
 }
 
+/// Where a Z80 access goes ([`Memory::z80_access`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Z80Access {
+    Ram {
+        bank: u8,
+        addr: u16,
+    },
+    /// The Z80 BIOS in the KERNAL ROM (C128 mode, bank 0, `$0000–$0FFF`).
+    Bios(u8),
+    /// Another ROM byte (C128 ROMs, C64 mode BASIC/KERNAL/character ROM).
+    Rom(u8),
+    /// Colour RAM index (both banks).
+    Color(usize),
+    /// An I/O chip at this address.
+    Io(u16),
+    /// MMU load configuration register `$FF00 + n`.
+    Mmu(u16),
+    /// C64 mode, a memory cycle at an I/O address: reads the RAM, writes
+    /// the chip at `io`.
+    IoUnderRam {
+        bank: u8,
+        addr: u16,
+        io: u16,
+    },
+}
+
 /// Where a CPU write goes besides memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Write {
@@ -140,9 +166,12 @@ impl Memory {
     }
 
     /// Colour RAM index for a CPU access to `$D800–$DBFF`.
+    /// The CPU's colour RAM index: port bit 0 picks the bank in C128 mode;
+    /// C64 mode stays on bank 1 and no port write switches it (VICE
+    /// `c128/c64modemmu` 15, 16; c64modez80-04 for the Z80).
     pub fn color_index(&self, addr: u16) -> usize {
         let bank = if self.mmu.c64_mode() {
-            0
+            1
         } else {
             usize::from(self.port_out() & 1)
         };
@@ -216,14 +245,28 @@ impl Memory {
         })
     }
 
+    /// 8502 write to the processor port at `$00/$01`: the port takes `v`;
+    /// the RAM cell the MMU maps the address to (zero page relocation
+    /// included) gets `bus`, the byte the data bus held — the CPU drives
+    /// the port, not the bus (VICE `c128/ram0001` test1, `ram0001mmu`
+    /// c128modebank0001: $3001 in bank 1 gets the VIC-IIe's last byte).
+    pub fn port_write_with_bus(&mut self, a: u16, v: u8, bus: u8) {
+        self.port.write(a as u8, v);
+        let (bank, addr) = if self.mmu.c64_mode() {
+            self.mmu.ram_c64(a)
+        } else {
+            self.mmu.ram(a)
+        };
+        self.set_ram(bank, addr, bus);
+    }
+
     /// 8502 write. Writes under ROM land in RAM; in C64 mode also under
     /// cartridge ROM, except in Ultimax mode (no RAM there), whose open
     /// areas ignore them. I/O and the cartridge are the machine's.
     pub fn cpu_write(&mut self, a: u16, v: u8) -> Write {
         if a < 2 {
-            self.port.write(a as u8, v);
-            // The written cell of RAM gets the value too (as on the C64).
-            self.set_ram(0, a, v);
+            // The machine calls `port_write_with_bus` for these.
+            self.port_write_with_bus(a, v, v);
             return Write::Done;
         }
         if self.mmu.c64_mode() {
@@ -264,38 +307,154 @@ impl Memory {
         (self.mmu.cr >> 6) & 3 == 0
     }
 
-    pub fn z80_read(&self, a: u16) -> u8 {
-        if a < 0x1000 && self.z80_bios() {
-            return self.roms.kernal[0x1000 + usize::from(a)];
-        }
-        match self.mmu.translate(a) {
-            Target::Io(a) => {
-                let (bank, addr) = self.mmu.ram(a);
-                self.ram_at(bank, addr)
-            }
-            _ => match self.cpu_read_c128(a) {
-                Read::Value(v) => v,
-                _ => 0xff,
-            },
-        }
+    /// Colour RAM index of a Z80 access: the bank as for the 8502.
+    fn z80_color_index(&self, addr: u16) -> usize {
+        self.color_index(addr)
     }
 
-    /// The C128-mode map regardless of the C64 mode bit (for the Z80).
-    fn cpu_read_c128(&self, a: u16) -> Read {
+    /// Where a Z80 access goes: `io` for an IN/OUT cycle. Rules from the
+    /// VICE test programs `c128/c64modemmu/c128modez80-*` and
+    /// `c64modez80-*`:
+    /// - C128 mode: with RAM bank 0 in the CR, `$0000–$0FFF` is moved to
+    ///   `$D000–$DFFF`: memory reads see the Z80 BIOS (KERNAL ROM
+    ///   `$D000`), writes and I/O reads the RAM there (16, 17, 21, 25;
+    ///   not when shared RAM alone makes it bank 0: 18, 20). While the CR
+    ///   shows I/O, `$1000–$13FF` is the colour RAM, in memory and I/O
+    ///   cycles and over a relocated page (02, 03, 05–08). I/O cycles reach
+    ///   the chips at `$D000–$DFFF` whatever the CR says; reads of the MMU's
+    ///   own `$D5xx` only while it shows I/O (otherwise RAM, 10), writes
+    ///   always (tstz80bk). Other I/O
+    ///   cycles read RAM through the MMU, shared RAM and page relocation
+    ///   included (12–14); `$FF00–$FF04` are the MMU's in both kinds (11).
+    /// - C64 mode: no BIOS; memory and I/O cycles both use the C64 map,
+    ///   ROMs included (00, 06); at the I/O addresses memory writes reach
+    ///   the chips but memory reads the RAM (01, 02); the colour RAM is
+    ///   also at `$1000–$13FF` while I/O is visible (03, 05).
+    pub fn z80_access(&self, a: u16, io: bool) -> Z80Access {
+        if (0xff00..=0xff04).contains(&a) && !self.mmu.c64_mode() {
+            return Z80Access::Mmu(a - 0xff00);
+        }
         if self.mmu.c64_mode() {
-            let (bank, addr) = self.mmu.ram(a);
-            return Read::Value(self.ram_at(bank, addr));
+            // I/O cycles reach the chips even with no I/O in the C64 map
+            // (c64modez80-02: $01 = $30).
+            if io && (0xd000..=0xdfff).contains(&a) {
+                if (0xd800..=0xdbff).contains(&a) {
+                    return Z80Access::Color(self.z80_color_index(a));
+                }
+                return Z80Access::Io(a);
+            }
+            let io_visible = self.c64_bank(0xd000) == Bank::Io;
+            if (0x1000..=0x13ff).contains(&a) && io_visible {
+                return Z80Access::Color(self.z80_color_index(a));
+            }
+            return match self.c64_read(a) {
+                Read::Io(a) if (0xd800..=0xdbff).contains(&a) && io => {
+                    Z80Access::Color(self.z80_color_index(a))
+                }
+                Read::Io(a) if io => Z80Access::Io(a),
+                // Memory cycles: writes reach the chips, reads the RAM
+                // (c64modez80-01, -02).
+                Read::Io(_) => {
+                    let (bank, addr) = self.mmu.ram_c64(a);
+                    Z80Access::IoUnderRam { bank, addr, io: a }
+                }
+                Read::Value(v) => match self.c64_bank(a) {
+                    Bank::Ram => {
+                        let (bank, addr) = self.mmu.ram_c64(a);
+                        Z80Access::Ram { bank, addr }
+                    }
+                    _ => Z80Access::Rom(v),
+                },
+                _ => Z80Access::Rom(0xff),
+            };
         }
-        self.cpu_read(a)
-    }
-
-    pub fn z80_write(&mut self, a: u16, v: u8) {
-        if let Target::Mmu(r) = self.mmu.translate(a) {
-            self.mmu.write_lcr(r as u8, v);
-            return;
+        let io_enabled = self.mmu.cr & 0x01 == 0;
+        if (0x1000..=0x13ff).contains(&a) && io_enabled {
+            return Z80Access::Color(self.z80_color_index(a));
+        }
+        if a < 0x1000 && self.z80_bios() {
+            if !io {
+                return Z80Access::Bios(self.roms.kernal[0x1000 + usize::from(a)]);
+            }
+            let (bank, addr) = self.mmu.ram(0xd000 | a);
+            return Z80Access::Ram { bank, addr };
+        }
+        // I/O cycles reach the chips whatever the CR says (the tests
+        // report through $D7FF with I/O switched off), except the MMU's own
+        // registers, which follow the CR's I/O bit (10).
+        if io && (0xd000..=0xdfff).contains(&a) && (io_enabled || !(0xd500..=0xd5ff).contains(&a)) {
+            if (0xd800..=0xdbff).contains(&a) {
+                return Z80Access::Color(self.z80_color_index(a));
+            }
+            return Z80Access::Io(a);
+        }
+        if !io {
+            if let Read::Value(v) = self.cpu_read(a) {
+                if !matches!(self.mmu.translate(a), Target::Ram { .. } | Target::Io(_)) {
+                    return Z80Access::Rom(v);
+                }
+            }
         }
         let (bank, addr) = self.mmu.ram(a);
-        self.set_ram(bank, addr, v);
+        Z80Access::Ram { bank, addr }
+    }
+
+    /// A Z80 read that needs no I/O chip (`None` for one).
+    pub fn z80_read_value(&self, a: u16, io: bool) -> Option<u8> {
+        Some(match self.z80_access(a, io) {
+            Z80Access::Ram { bank, addr } | Z80Access::IoUnderRam { bank, addr, .. } => {
+                self.ram_at(bank, addr)
+            }
+            Z80Access::Bios(v) | Z80Access::Rom(v) => v,
+            Z80Access::Color(i) => self.color[i] | 0xf0,
+            Z80Access::Mmu(0) => self.mmu.cr,
+            Z80Access::Mmu(r) => self.mmu.pcr[usize::from(r - 1)],
+            Z80Access::Io(_) => return None,
+        })
+    }
+
+    /// A Z80 write; returns the I/O address for the machine's chips.
+    pub fn z80_store(&mut self, a: u16, v: u8, io: bool) -> Option<u16> {
+        // OUT reaches the MMU's registers even with I/O switched off in the
+        // CR; only reads then see RAM (c128modez80-10, z80/mmu_zp_sp
+        // tstz80bk: P0 set back with CR = $BF).
+        if io && (0xd500..=0xd5ff).contains(&a) && !self.mmu.c64_mode() {
+            return Some(a);
+        }
+        match self.z80_access(a, io) {
+            Z80Access::Ram { bank, addr } => self.set_ram(bank, addr, v),
+            Z80Access::Color(i) => self.color[i] = v & 0x0f,
+            Z80Access::Mmu(r) => self.mmu.write_lcr(r as u8, v),
+            Z80Access::Io(a) | Z80Access::IoUnderRam { io: a, .. } => return Some(a),
+            // Under ROM: the RAM there (C128 mode, bank 0: moved to $Dxxx).
+            Z80Access::Bios(_) => {
+                let (bank, addr) = self.mmu.ram(0xd000 | a);
+                self.set_ram(bank, addr, v);
+            }
+            Z80Access::Rom(_) => {
+                let (bank, addr) = if self.mmu.c64_mode() {
+                    self.mmu.ram_c64(a)
+                } else {
+                    self.mmu.ram(a)
+                };
+                self.set_ram(bank, addr, v);
+            }
+        }
+        None
+    }
+
+    /// Memory read as the Z80 sees it (debugger, tests): I/O chips read as
+    /// RAM.
+    pub fn z80_read(&self, a: u16) -> u8 {
+        self.z80_read_value(a, false).unwrap_or_else(|| {
+            let (bank, addr) = self.mmu.ram(a);
+            self.ram_at(bank, addr)
+        })
+    }
+
+    /// Memory write as the Z80 does it, I/O left out (debugger pokes).
+    pub fn z80_write(&mut self, a: u16, v: u8) {
+        let _ = self.z80_store(a, v, false);
     }
 }
 
@@ -333,17 +492,15 @@ impl VicView<'_> {
             let half = if c64 { 0 } else { 0x1000 };
             return m.roms.chargen[half | usize::from(addr & 0x0fff)];
         }
-        let bank = ram_bank.unwrap_or(if c64 { 0 } else { m.mmu.vic_bank() });
+        // The RCR's VIC bank holds in C64 mode too (VICE `c128/vic-mmu`
+        // b1c64victest: bank 1, no shared RAM for the VIC).
+        let bank = ram_bank.unwrap_or(m.mmu.vic_bank());
         m.ram_at(bank, self.base | addr)
     }
 
-    /// RAM bank the VIC sees now (bank 0 in C64 mode).
+    /// RAM bank the VIC sees now (the RCR's choice, also in C64 mode).
     pub fn ram_bank(&self) -> u8 {
-        if self.mem.mmu.c64_mode() {
-            0
-        } else {
-            self.mem.mmu.vic_bank() & 1
-        }
+        self.mem.mmu.vic_bank() & 1
     }
 }
 
@@ -370,8 +527,9 @@ impl VicMemory for VicView<'_> {
 
     fn color(&self, index: u16) -> u8 {
         let m = self.mem;
+        // C64 mode: bank 1, as for the CPU (see `Memory::color_index`).
         let bank = if m.mmu.c64_mode() {
-            0
+            1
         } else {
             usize::from((m.port_out() >> 1) & 1)
         };
