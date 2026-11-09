@@ -39,6 +39,16 @@ pub struct Io {
     /// VIC-IIe `$D02F` (K0–K2 out) and `$D030` (2 MHz, test).
     pub d02f: u8,
     pub d030: u8,
+    /// The byte of the 8502's latest bus access (read or write), for the
+    /// VIC-IIe in 2 MHz mode. Only meaningful within a cycle, not state.
+    pub cpu_data: u8,
+    /// The previous cycle ran in 2 MHz mode: the first fast cycle after
+    /// the switch gives the 8502 only its phi2 half.
+    pub fast_prev: bool,
+    /// The 8502's latest access went to a 1 MHz I/O chip (everything at
+    /// `$D000-$DFFF` but the MMU): in 2 MHz mode the VIC-IIe stretches
+    /// that cycle to a full system cycle. Only meaningful within a cycle.
+    pub io_access: bool,
     resampler: Decimator,
     /// Audio produced but not yet taken (output, not machine state).
     pub samples: Vec<i16>,
@@ -76,6 +86,9 @@ impl Io {
             vdc: Vdc::new(vdc_kb, standard),
             d02f: 0xff,
             d030: 0,
+            cpu_data: 0xff,
+            fast_prev: false,
+            io_access: false,
             resampler: Decimator::new(cpu_hz, SAMPLE_RATE).expect("valid rates"),
             samples: Vec::new(),
             tod: ClockDivider::new(mains, cpu_hz).expect("CPU clock is non-zero"),
@@ -98,6 +111,7 @@ impl Io {
         self.sid = Sid::new(self.sid.model(), self.vic.timing().cpu_hz());
         self.d02f = 0xff;
         self.d030 = 0;
+        self.fast_prev = false;
         if hard {
             self.vic = Vic2::new(self.vic.model());
             let kb = self.vdc.ram().len() / 1024;
@@ -240,7 +254,7 @@ impl Savestate for Io {
         w.chunk(*b"AUDR", 1, |w| self.resampler.save(w));
         self.tod.save(w);
         self.vdc_clock.save(w);
-        w.chunk(*b"C8IO", 3, |w| {
+        w.chunk(*b"C8IO", 4, |w| {
             w.u8(self.d02f);
             w.u8(self.d030);
             w.raw(&self.keyboard.columns);
@@ -257,6 +271,7 @@ impl Savestate for Io {
                 w.u16(pots[0]);
                 w.u16(pots[1]);
             }
+            w.bool(self.fast_prev);
         });
     }
 
@@ -270,7 +285,7 @@ impl Savestate for Io {
         self.resampler.load(&mut c)?;
         self.tod.load(r)?;
         self.vdc_clock.load(r)?;
-        let (version, mut c) = r.chunk(*b"C8IO", 3)?;
+        let (version, mut c) = r.chunk(*b"C8IO", 4)?;
         self.d02f = c.u8()? | 0xf8;
         self.d030 = c.u8()? & 3;
         c.raw_into(&mut self.keyboard.columns)?;
@@ -291,6 +306,8 @@ impl Savestate for Io {
         } else {
             [[u16::MAX; 2]; 2]
         };
+        // Version 4 adds the 2 MHz switch-over.
+        self.fast_prev = version >= 4 && c.bool()?;
         Ok(())
     }
 }

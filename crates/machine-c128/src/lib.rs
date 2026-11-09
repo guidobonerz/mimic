@@ -128,6 +128,16 @@ mod nmi {
     pub const CARTRIDGE: u8 = 1 << 2;
 }
 
+/// 2 MHz mode: which of a cycle's two 8502 steps falls into the VIC-IIe's
+/// phi1 half, whose byte its g-access latches.
+const PHI1_STEP: usize = 0;
+
+/// An I/O address on the 1 MHz bus: everything at `$D000-$DFFF` but the
+/// MMU's registers, which sit in the 8722 itself (C128 mode).
+fn slow_io(mem: &Memory, a: u16) -> bool {
+    !(0xd500..=0xd5ff).contains(&a) || mem.mmu.c64_mode()
+}
+
 /// I/O1 and I/O2, the expansion port's I/O pages.
 fn is_cart_io(addr: u16) -> bool {
     (0xde00..=0xdfff).contains(&addr)
@@ -141,21 +151,10 @@ struct CpuBus<'a> {
 }
 
 impl Bus for CpuBus<'_> {
-    fn read(&mut self, addr: u32, _size: Size) -> u32 {
-        let r = self.mem.cpu_read(addr as u16);
-        let from_cart = match (r, self.cart.as_deref_mut()) {
-            (Read::Value(v), _) => return u32::from(v),
-            (Read::RomL(a), Some(c)) => c.read_roml(a),
-            (Read::RomH(a), Some(c)) => c.read_romh(a),
-            (Read::Io(a), Some(c)) if is_cart_io(a) => c.read_io(a),
-            (Read::Function(o), Some(c)) => c.peek_function(o),
-            _ => None,
-        };
-        u32::from(from_cart.unwrap_or_else(|| match r {
-            Read::Function(_) => 0xff,
-            Read::Io(a) if !is_cart_io(a) => self.io.read(self.mem, a),
-            _ => self.io.open_bus(),
-        }))
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        let v = self.read_value(addr, size);
+        self.io.cpu_data = v as u8;
+        v
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
@@ -169,7 +168,12 @@ impl Bus for CpuBus<'_> {
 
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
         let (a, v) = (addr as u16, v as u8);
-        match (self.mem.cpu_write(a, v), self.cart.as_deref_mut()) {
+        self.io.cpu_data = v;
+        let w = self.mem.cpu_write(a, v);
+        if w == Write::Io {
+            self.io.io_access = slow_io(self.mem, a);
+        }
+        match (w, self.cart.as_deref_mut()) {
             (Write::Io, Some(c)) if is_cart_io(a) => c.write_io(a, v),
             (Write::Io, _) => self.io.write(self.mem, a, v),
             (Write::RomL, Some(c)) => c.write_roml(a, v),
@@ -180,6 +184,28 @@ impl Bus for CpuBus<'_> {
 
     fn addr_bits(&self) -> u8 {
         16
+    }
+}
+
+impl CpuBus<'_> {
+    fn read_value(&mut self, addr: u32, _size: Size) -> u32 {
+        let r = self.mem.cpu_read(addr as u16);
+        if let Read::Io(a) = r {
+            self.io.io_access = slow_io(self.mem, a);
+        }
+        let from_cart = match (r, self.cart.as_deref_mut()) {
+            (Read::Value(v), _) => return u32::from(v),
+            (Read::RomL(a), Some(c)) => c.read_roml(a),
+            (Read::RomH(a), Some(c)) => c.read_romh(a),
+            (Read::Io(a), Some(c)) if is_cart_io(a) => c.read_io(a),
+            (Read::Function(o), Some(c)) => c.peek_function(o),
+            _ => None,
+        };
+        u32::from(from_cart.unwrap_or_else(|| match r {
+            Read::Function(_) => 0xff,
+            Read::Io(a) if !is_cart_io(a) => self.io.read(self.mem, a),
+            _ => self.io.open_bus(),
+        }))
     }
 }
 
@@ -556,11 +582,16 @@ impl C128 {
         if self.sched.now().0 & 63 == 0 {
             self.poll_ports();
         }
+        let m8502 = self.mem.mmu.m8502();
+        let fast = m8502 && self.io.fast();
+        self.io.vic.set_fast(fast);
+        self.io.vic.set_test(self.io.d030 & 2 != 0);
         let base = self.io.vic_base();
         self.io.vic.phi1(&VicView {
             mem: &self.mem,
             base,
             cart: self.cart.cart().map(|c| c.as_ref()),
+            cpu_data: None,
         });
         let ba = self.io.vic.ba();
         self.io.tick_chips();
@@ -568,28 +599,53 @@ impl C128 {
         let (irq_on, nmi_on) = (self.ints.0 != 0, self.ints.1 != 0);
 
         // The CPU steps of this cycle: one or two 8502 cycles, or two Z80
-        // T-states. A debug stop ends the cycle's steps early.
-        let m8502 = self.mem.mmu.m8502();
-        let steps = match (m8502, self.io.fast(), ba) {
+        // T-states. A debug stop ends the cycle's steps early. In 2 MHz
+        // mode the VIC-IIe's DRAM refresh (cycles 11-15) still takes its
+        // half: the 8502 gets one cycle there, 121 per PAL line (VICE test
+        // programs c128/2mhzVIC: 121-cycle line loops); BA does not stop it.
+        let refresh = (11..=15).contains(&self.io.vic.cycle());
+        let switched = fast && !self.io.fast_prev;
+        self.io.fast_prev = fast;
+        let steps = match (m8502, fast, ba) {
+            (true, true, _) if refresh || switched => 1,
             (true, true, _) => 2,
             (true, false, _) => 1,
             (false, _, true) => 2,
             (false, _, false) => 0,
         };
         let mut jam = None;
+        // 2 MHz: the byte of the step in the VIC-IIe's phi2 half, for its
+        // c-access.
+        let mut phi2_data = self.io.cpu_data;
+        let mut stretched = false;
         for step in 0..steps {
             let (dev, space, (result, entered)) = if m8502 {
-                // 2 MHz: the second cycle in the VIC's half.
-                self.cpu.set_rdy(ba || step > 0);
+                // 2 MHz: BA does not stop the 8502.
+                self.cpu.set_rdy(ba || fast);
+                self.io.io_access = false;
                 self.cpu.set_irq(irq_on);
                 self.cpu.set_nmi(nmi_on);
                 // Without AEC the halted CPU does not reach the bus at all.
-                let result = if step == 0 && !self.io.vic.aec() {
+                let result = if !fast && !self.io.vic.aec() {
                     self.cpu.stall_off_bus();
                     (CycleResult::Busy, None)
                 } else {
                     self.cpu_cycle(dbg.as_deref_mut())
                 };
+                // In a refresh cycle the single step is the phi2 one.
+                if fast && steps == 2 && step == PHI1_STEP {
+                    self.io.vic.cpu_phi1_data(self.io.cpu_data);
+                    // An I/O access in the phi1 half is stretched to the
+                    // phi2 half: the step takes the whole cycle (VICE test
+                    // program c128/2mhzVIC/timing-change0: INC $D020 takes
+                    // two cycles more than INC $C000).
+                    if self.io.io_access {
+                        stretched = true;
+                        phi2_data = self.io.cpu_data;
+                    }
+                } else if fast {
+                    phi2_data = self.io.cpu_data;
+                }
                 (CPU, CPU_SPACE, result)
             } else {
                 self.z80.set_int(irq_on);
@@ -623,6 +679,9 @@ impl C128 {
                     break;
                 }
             }
+            if stretched {
+                break;
+            }
         }
 
         let base = self.io.vic_base();
@@ -630,6 +689,7 @@ impl C128 {
             mem: &self.mem,
             base,
             cart: self.cart.cart().map(|c| c.as_ref()),
+            cpu_data: fast.then_some(phi2_data),
         });
         self.cartridge_cycle();
         // Serial bus: the drive sees what CIA2 (and CIA1 as fast serial
@@ -1063,6 +1123,7 @@ impl Machine for C128 {
             mem: &self.mem,
             base: bank,
             cart: self.cart.cart().map(|c| c.as_ref()),
+            cpu_data: None,
         };
         let ram_bank = match (opts.get("rambank"), opts.get("addr")) {
             (Some(b), _) => (b & 1) as u8,

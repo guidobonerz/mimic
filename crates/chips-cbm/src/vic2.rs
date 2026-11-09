@@ -354,6 +354,21 @@ pub struct Vic2 {
     ba: bool,
     ba_low_cycles: u8,
     last_bus: u8,
+    /// C128 2 MHz mode (VIC-IIe `$D030` bit 0, set by the machine each
+    /// cycle): the 8502 owns the bus in both halves, and the VIC-IIe's
+    /// accesses take whatever the CPU puts on the data bus (see
+    /// [`Vic2::cpu_phi1_data`]).
+    fast: bool,
+    /// VIC-IIe TEST bit (`$D030` bit 1, set by the machine each cycle).
+    test: bool,
+    /// Picture row of the current line, counted like a monitor does: one
+    /// per line, back to 0 when the raster counter reaches the first
+    /// visible line. Equal to the raster's row unless the TEST bit made
+    /// the counter jump (VICE test programs c128/d030tester: the picture
+    /// below a cut moves up).
+    out_line: u16,
+    /// The `pending` slot this cycle's g-access went to.
+    g_slot: Option<usize>,
     raster_irq_done: bool,
     /// The raster compare value at the start of the previous cycle.
     cmp_held: u16,
@@ -489,6 +504,10 @@ impl Vic2 {
             ba: true,
             ba_low_cycles: 0,
             last_bus: 0xff,
+            fast: false,
+            test: false,
+            out_line: t.lines - t.first_line,
+            g_slot: None,
             raster_irq_done: false,
             cmp_held: 0,
             phi2_sprite: None,
@@ -556,6 +575,32 @@ impl Vic2 {
     /// controller", section 3.6.
     pub fn aec(&self) -> bool {
         self.ba_low_cycles <= 3
+    }
+
+    /// C128 2 MHz mode for the coming cycle (VIC-IIe `$D030` bit 0).
+    pub fn set_fast(&mut self, on: bool) {
+        self.fast = on;
+    }
+
+    /// VIC-IIe TEST bit for the coming cycle (`$D030` bit 1).
+    pub fn set_test(&mut self, on: bool) {
+        self.test = on;
+    }
+
+    /// 2 MHz mode: the byte of the 8502's access in this cycle's phi1, set
+    /// after [`Vic2::phi1`]. The VIC-IIe does not get the bus and its
+    /// g-access latches that byte instead of its own: code of two-cycle
+    /// immediate instructions paints its operands as pixels (VICE test
+    /// programs c128/2mhzVIC, Bodo^Rabenauge, with screenshots of a real
+    /// C128).
+    pub fn cpu_phi1_data(&mut self, v: u8) {
+        if !self.fast {
+            return;
+        }
+        if let Some(p) = self.g_slot.and_then(|i| self.pending[i].as_mut()) {
+            p.g = v;
+        }
+        self.last_bus = v;
     }
 
     /// IRQ output.
@@ -736,14 +781,18 @@ impl Vic2 {
             }
         }
         self.ba = !ba_low;
-        self.ba_low_cycles = if ba_low {
-            self.ba_low_cycles.saturating_add(1)
-        } else {
-            0
+        // In 2 MHz mode the 8502 ignores BA and keeps the bus: back at
+        // 1 MHz the VIC-IIe waits three cycles again (VICE test programs
+        // c128/d030tester: a bad line left in 2 MHz mode).
+        self.ba_low_cycles = match (ba_low, self.fast) {
+            (false, _) => 0,
+            (true, true) => 1,
+            (true, false) => self.ba_low_cycles.saturating_add(1),
         };
 
         // phi1 access.
         self.phi2_sprite = None;
+        self.g_slot = None;
         let mut phi1_value = 0xff;
         for n in 0..8 {
             let slot = t.sprite_slot(n);
@@ -875,11 +924,9 @@ impl Vic2 {
             age: 0,
             due: 4 + (self.ctrl2 & 7),
         };
-        if self.pending[0].is_none() {
-            self.pending[0] = Some(p);
-        } else {
-            self.pending[1] = Some(p);
-        }
+        let slot = usize::from(self.pending[0].is_some());
+        self.pending[slot] = Some(p);
+        self.g_slot = Some(slot);
         g
     }
 
@@ -887,6 +934,8 @@ impl Vic2 {
     /// bad lines, sprite data), pixel output and advance to the next cycle.
     /// Returns true when a new field starts.
     pub fn phi2(&mut self, mem: &dyn VicMemory) -> bool {
+        // Only the CPU's phi1 half of this cycle may replace the g-access.
+        self.g_slot = None;
         let c = self.cycle;
         let t = self.timing();
         // The Y expansion flip-flop turns in cycle 55 with $D017 as it is
@@ -945,7 +994,11 @@ impl Vic2 {
             // low nibble of the CPU's data bus: a CPU halted on an opcode
             // fetch of TXA ($8A) gives colour 10 (VICE test program
             // VICII/colorfetchbug).
-            let v = if self.ba_low_cycles > 3 {
+            // In 2 MHz mode the CPU keeps the bus all the time, as in the
+            // first three cycles below (VICE test programs c128/2mhzVIC
+            // and c128/d030tester: $FF in ECM picks background 3, colours
+            // from the opcodes).
+            let v = if self.ba_low_cycles > 3 && !self.fast {
                 let addr = self.vm_base() | self.vc;
                 u16::from(mem.read(addr)) | u16::from(mem.color(self.vc)) << 8
             } else {
@@ -976,7 +1029,11 @@ impl Vic2 {
             }
             self.cycle = 1;
             self.raster += 1;
-            if self.raster == t.lines {
+            self.out_line = (self.out_line + 1) % t.lines;
+            if self.raster == t.first_line + 1 {
+                self.out_line = 1;
+            }
+            if self.raster >= t.lines {
                 self.raster = 0;
                 self.frame += 1;
                 self.lp_done = false;
@@ -986,6 +1043,25 @@ impl Vic2 {
             }
         } else {
             self.cycle = c + 1;
+            // VIC-IIe TEST bit ($D030 bit 1): the raster counter steps in
+            // every cycle (VICE test programs c128/d030tester: set for
+            // four cycles it cuts four lines from the frame). It passes
+            // through 312 (PAL) before it wraps: the tester's windows that
+            // run through a whole frame cut one line less.
+            if self.test {
+                self.raster += 1;
+                if self.raster == t.first_line + 1 {
+                    self.out_line = 1;
+                }
+                if self.raster > t.lines {
+                    self.raster = 0;
+                    self.frame += 1;
+                    self.lp_done = false;
+                    self.vcbase = 0;
+                    self.bad_lines_enabled = false;
+                    return true;
+                }
+            }
         }
         false
     }
@@ -1011,7 +1087,8 @@ impl Vic2 {
         let p0 = (u16::from(self.cycle) - 1) * 8;
         let (left, right) = self.border_cols();
         let (top, bottom) = self.border_rows();
-        let row = t.row(self.raster).map(|r| r * t.width as usize);
+        let row = (u32::from(self.out_line) < t.height)
+            .then(|| usize::from(self.out_line) * t.width as usize);
         let mut out = [(usize::MAX, 0u8); 8];
         let (mm, md) = std::mem::take(&mut self.coll_late);
         self.collide(mm, md);
@@ -1650,7 +1727,7 @@ const TAG: [u8; 4] = *b"6569";
 /// the registers. 6: a light pen edge waiting for the next cycle. 7: the
 /// sequencer's load gate and the held raster compare value. 8: the colour
 /// source before the waiting pixels.
-const VERSION: u16 = 8;
+const VERSION: u16 = 9;
 
 fn save_sprite(w: &mut StateWriter, s: &Sprite) {
     w.u16(s.x);
@@ -1785,6 +1862,7 @@ impl Savestate for Vic2 {
             w.u16(self.cmp_held);
             w.u8(self.g_ctrl1);
             w.u8(self.lag_before);
+            w.u16(self.out_line);
         });
     }
 
@@ -1827,7 +1905,7 @@ impl Savestate for Vic2 {
         v.raster = c.u16()?;
         v.cycle = c.u8()?;
         v.frame = c.u64()?;
-        if v.raster >= t.lines || !(1..=t.cycles).contains(&v.cycle) {
+        if v.raster > t.lines || !(1..=t.cycles).contains(&v.cycle) {
             return Err(StateError::Invalid("VIC-II beam position"));
         }
         v.vc = c.u16()? & 0x3ff;
@@ -1924,6 +2002,11 @@ impl Savestate for Vic2 {
             }
             v.lag_before = if version >= 8 { c.u8()? } else { v.lag[0].1 };
         }
+        v.out_line = if version >= 9 {
+            c.u16()? % t.lines
+        } else {
+            (v.raster + t.lines - t.first_line) % t.lines
+        };
         v.cycle_regs = [v.sprite_prio, v.sprite_xe, v.sprite_mc];
         v.cycle_sprite_x = v.sprites.map(|s| s.x);
         v.cycle_mode = (v.ctrl1, v.ctrl2);

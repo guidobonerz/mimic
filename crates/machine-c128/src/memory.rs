@@ -308,6 +308,9 @@ pub struct VicView<'a> {
     /// The cartridge: in C64 Ultimax mode the VIC-II sees its ROMH at
     /// `$3000` of every bank (and no character ROM).
     pub cart: Option<&'a dyn ExpansionCart>,
+    /// The byte of the 8502's last access, for the VIC-IIe's accesses
+    /// while the CPU holds the bus ([`VicMemory::cpu_data`]).
+    pub cpu_data: Option<u8>,
 }
 
 impl VicView<'_> {
@@ -373,6 +376,10 @@ impl VicMemory for VicView<'_> {
             usize::from((m.port_out() >> 1) & 1)
         };
         m.color[(bank << 10) | usize::from(index & 0x3ff)]
+    }
+
+    fn cpu_data(&self) -> Option<u8> {
+        self.cpu_data
     }
 }
 
