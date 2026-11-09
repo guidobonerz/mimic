@@ -148,9 +148,11 @@ impl Bus for CpuBus<'_> {
             (Read::RomL(a), Some(c)) => c.read_roml(a),
             (Read::RomH(a), Some(c)) => c.read_romh(a),
             (Read::Io(a), Some(c)) if is_cart_io(a) => c.read_io(a),
+            (Read::Function(o), Some(c)) => c.peek_function(o),
             _ => None,
         };
         u32::from(from_cart.unwrap_or_else(|| match r {
+            Read::Function(_) => 0xff,
             Read::Io(a) if !is_cart_io(a) => self.io.read(self.mem, a),
             _ => self.io.open_bus(),
         }))
@@ -189,9 +191,11 @@ fn cpu_peek(mem: &Memory, io: &Io, cart: Option<&dyn ExpansionCart>, a: u16) -> 
         (Read::RomL(a), Some(c)) => c.peek_roml(a),
         (Read::RomH(a), Some(c)) => c.peek_romh(a),
         (Read::Io(a), Some(c)) if is_cart_io(a) => c.peek_io(a),
+        (Read::Function(o), Some(c)) => c.peek_function(o),
         _ => None,
     };
     from_cart.unwrap_or_else(|| match r {
+        Read::Function(_) => 0xff,
         Read::Io(a) if !is_cart_io(a) => io.peek(mem, a),
         _ => io.open_bus(),
     })
@@ -427,6 +431,11 @@ impl C128 {
         cpu.reset();
         let mut io = Io::new(vic, sid, vdc_kb);
         io.keyboard.display_80 = display_80;
+        io.debugcart = match option("debugcart") {
+            None | Some("off") => false,
+            Some("on") => true,
+            Some(other) => return Err(ConfigError::Invalid(format!("debugcart option '{other}'"))),
+        };
         let mut m = Self {
             cpu,
             z80: Z80::new(),
@@ -1179,6 +1188,25 @@ impl Machine for C128 {
                     .collect(),
             },
         ]
+        .into_iter()
+        .chain(self.io.debugcart.then(|| ChipInfo {
+            name: "debugcart",
+            regs: vec![
+                reg(
+                    "EXIT",
+                    Some(0xd7ff),
+                    u32::from(self.io.debugcart_exit.unwrap_or(0)),
+                    8,
+                ),
+                reg(
+                    "WRITTEN",
+                    None,
+                    u32::from(self.io.debugcart_exit.is_some()),
+                    1,
+                ),
+            ],
+        }))
+        .collect()
     }
 
     fn devices(&self) -> Vec<DeviceId> {

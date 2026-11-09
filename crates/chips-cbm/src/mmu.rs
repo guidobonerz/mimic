@@ -50,6 +50,10 @@ pub struct Mmu {
     /// Page pointers: (page, bank) of zero page and stack.
     pub p0: (u8, u8),
     pub p1: (u8, u8),
+    /// P0H and P1H as written: they take effect with the next write to
+    /// P0L or P1L (VICE `c128/mmu/p0h-is-set-after-p0l`).
+    pub p0h: u8,
+    pub p1h: u8,
 }
 
 impl Mmu {
@@ -63,6 +67,8 @@ impl Mmu {
             rcr: 0,
             p0: (0, 0),
             p1: (1, 0),
+            p0h: 0,
+            p1h: 0,
         }
     }
 
@@ -87,7 +93,9 @@ impl Mmu {
     /// `$D500–$D50B` read; `keys_80` is the 40/80 key (true = down),
     /// `game`/`exrom` the cartridge lines (true = low).
     pub fn peek(&self, reg: u8, key_4080_down: bool, game: bool, exrom: bool) -> u8 {
-        match reg & 0x0f {
+        // $D50C-$D5FF are not the registers again (VICE
+        // `c128/mmu/mmuregister-should-not-mirror`).
+        match reg {
             0 => self.cr,
             1..=4 => self.pcr[usize::from(reg - 1)],
             5 => {
@@ -114,17 +122,17 @@ impl Mmu {
     }
 
     pub fn write(&mut self, reg: u8, v: u8) {
-        match reg & 0x0f {
+        match reg {
             0 => self.cr = v,
             1..=4 => self.pcr[usize::from(reg - 1)] = v,
             5 => self.mcr = v & 0x49,
             6 => self.rcr = v & 0xcf,
             // The page pointers take effect when the low byte is written;
             // the high byte (bank) is latched first.
-            7 => self.p0.0 = v,
-            8 => self.p0.1 = v & 0x0f,
-            9 => self.p1.0 = v,
-            0xa => self.p1.1 = v & 0x0f,
+            7 => self.p0 = (v, self.p0h),
+            8 => self.p0h = v & 0x0f,
+            9 => self.p1 = (v, self.p1h),
+            0xa => self.p1h = v & 0x0f,
             _ => {}
         }
     }
@@ -146,11 +154,25 @@ impl Mmu {
     /// The RAM bank and address a CPU RAM access lands in: page
     /// relocation, then shared RAM (always bank 0).
     pub fn ram(&self, addr: u16) -> (u8, u16) {
+        self.ram_mapped(addr, true)
+    }
+
+    /// [`Mmu::ram`] in C64 mode: the bank and shared RAM stay, and an
+    /// access to a relocation target page still lands in page 0 or 1, but
+    /// pages 0 and 1 themselves are not moved (VICE `c128/c64modemmu`
+    /// 00-03, 05, 06, confirmed on real hardware there).
+    pub fn ram_c64(&self, addr: u16) -> (u8, u16) {
+        self.ram_mapped(addr, false)
+    }
+
+    fn ram_mapped(&self, addr: u16, forward: bool) -> (u8, u16) {
         let bank = (self.cr >> 6) & 3;
         let page = (addr >> 8) as u8;
         let low = addr & 0xff;
         // Zero page and stack swap with their relocation targets.
-        let (bank, addr) = if page == 0 {
+        let (bank, addr) = if page <= 1 && !forward {
+            (bank, addr)
+        } else if page == 0 {
             (self.p0.1 & 3, (u16::from(self.p0.0) << 8) | low)
         } else if page == 1 {
             (self.p1.1 & 3, (u16::from(self.p1.0) << 8) | low)
@@ -210,7 +232,7 @@ impl Mmu {
 }
 
 const TAG: [u8; 4] = *b"8722";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 impl Savestate for Mmu {
     fn save(&self, w: &mut StateWriter) {
@@ -223,11 +245,14 @@ impl Savestate for Mmu {
             w.u8(self.p0.1);
             w.u8(self.p1.0);
             w.u8(self.p1.1);
+            // Version 2.
+            w.u8(self.p0h);
+            w.u8(self.p1h);
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
         let mut m = Mmu::new();
         m.cr = c.u8()?;
         c.raw_into(&mut m.pcr)?;
@@ -235,6 +260,11 @@ impl Savestate for Mmu {
         m.rcr = c.u8()? & 0xcf;
         m.p0 = (c.u8()?, c.u8()? & 0x0f);
         m.p1 = (c.u8()?, c.u8()? & 0x0f);
+        (m.p0h, m.p1h) = if version >= 2 {
+            (c.u8()? & 0x0f, c.u8()? & 0x0f)
+        } else {
+            (m.p0.1, m.p1.1)
+        };
         *self = m;
         Ok(())
     }

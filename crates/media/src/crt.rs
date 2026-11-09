@@ -2,7 +2,8 @@
 //!
 //! Header (big-endian): a 16-byte signature ("C64 CARTRIDGE   ", "VIC20
 //! CARTRIDGE ", "PLUS4 CARTRIDGE " for the C16/Plus/4, as VICE's test
-//! cartridges have it; "C264 CARTRIDGE  " is read too), the header length
+//! cartridges have it; "C264 CARTRIDGE  " is read too; "C128 CARTRIDGE  "
+//! for a C128 function ROM), the header length
 //! (u32, at least `$40`), the version (u16), the hardware type (u16), the
 //! EXROM and GAME line levels the cartridge sets (0 = low = active), a
 //! sub-type, and the name (32 bytes at `$20`, zero-padded). Then CHIP
@@ -20,6 +21,8 @@ pub enum CrtMachine {
     Vic20,
     /// C16 and Plus/4.
     C264,
+    /// C128 mode function ROM.
+    C128,
 }
 
 impl CrtMachine {
@@ -28,6 +31,7 @@ impl CrtMachine {
             Self::C64 => b"C64 CARTRIDGE   ",
             Self::Vic20 => b"VIC20 CARTRIDGE ",
             Self::C264 => b"PLUS4 CARTRIDGE ",
+            Self::C128 => b"C128 CARTRIDGE  ",
         }
     }
 }
@@ -77,11 +81,16 @@ pub struct Crt {
 impl Crt {
     pub fn parse(bytes: &[u8]) -> Result<Self, MediaError> {
         let err = |m: &str| MediaError::Format(format!("CRT: {m}"));
-        let machine = [CrtMachine::C64, CrtMachine::Vic20, CrtMachine::C264]
-            .into_iter()
-            .find(|m| bytes.get(..16) == Some(&m.signature()[..]))
-            .or_else(|| (bytes.get(..16) == Some(&C264_OLD[..])).then_some(CrtMachine::C264))
-            .ok_or_else(|| err("no CRT signature"))?;
+        let machine = [
+            CrtMachine::C64,
+            CrtMachine::Vic20,
+            CrtMachine::C264,
+            CrtMachine::C128,
+        ]
+        .into_iter()
+        .find(|m| bytes.get(..16) == Some(&m.signature()[..]))
+        .or_else(|| (bytes.get(..16) == Some(&C264_OLD[..])).then_some(CrtMachine::C264))
+        .ok_or_else(|| err("no CRT signature"))?;
         let be32 = |o: usize| -> Option<u32> {
             bytes
                 .get(o..o + 4)

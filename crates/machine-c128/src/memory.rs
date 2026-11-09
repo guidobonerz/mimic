@@ -55,6 +55,9 @@ pub enum Read {
     RomH(u16),
     /// C64 Ultimax mode: nothing drives the bus.
     Open,
+    /// C128 mode: the external function ROM (a cartridge) at this offset
+    /// from `$8000`; `$FF` without one.
+    Function(u16),
 }
 
 /// Where a CPU write goes besides memory.
@@ -166,8 +169,11 @@ impl Memory {
                 .function
                 .as_ref()
                 .map_or(0xff, |f| f[usize::from(offset)]),
-            // No external function ROM (cartridge) fitted.
-            Target::Function { external: true, .. } => 0xff,
+            // The cartridge's, if it has one.
+            Target::Function {
+                external: true,
+                offset,
+            } => return Read::Function(offset),
             Target::Kernal(o) => self.roms.kernal[usize::from(o)],
             Target::Chargen(o) => self.roms.chargen[0x1000 | usize::from(o & 0x0fff)],
             Target::Io(a) => return Read::Io(a),
@@ -189,10 +195,17 @@ impl Memory {
         self.mmu.c64_mode() && !self.game && self.exrom
     }
 
+    /// C64-mode read. RAM is the MMU's as the C128 mode left it: the
+    /// configuration register's RAM bank and shared RAM stay in force, and
+    /// relocation target pages still land in page 0/1 (the MMU registers
+    /// are hidden, not reset; [`chips_cbm::mmu::Mmu::ram_c64`]).
     fn c64_read(&self, a: u16) -> Read {
         let o = usize::from(a & 0x1fff);
         Read::Value(match self.c64_bank(a) {
-            Bank::Ram => self.ram_at(0, a),
+            Bank::Ram => {
+                let (bank, addr) = self.mmu.ram_c64(a);
+                self.ram_at(bank, addr)
+            }
             Bank::Basic => self.roms.c64[o],
             Bank::Kernal => self.roms.c64[0x2000 + o],
             Bank::Char => self.roms.chargen[o & 0x0fff],
@@ -219,7 +232,10 @@ impl Memory {
                 Bank::Io => return Write::Io,
                 Bank::Open => return Write::Done,
                 Bank::RomL | Bank::RomH if self.ultimax() => {}
-                _ => self.set_ram(0, a, v),
+                _ => {
+                    let (bank, addr) = self.mmu.ram_c64(a);
+                    self.set_ram(bank, addr, v);
+                }
             }
             return match bank {
                 Bank::RomL => Write::RomL,

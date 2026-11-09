@@ -6,7 +6,8 @@
 //!     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata \
 //!         cargo test -p emu-tests --release --test vice_testprogs -- --ignored --nocapture
 //!
-//! `EMU_VICE_FILTER=CIA/` runs only entries whose path contains the text.
+//! `EMU_VICE_FILTER=CIA/` runs only entries whose path contains the text,
+//! `EMU_VICE_SKIP=zex128` leaves out those that contain it.
 //! A stocktaking, not a gate: the report (one line per entry, then a
 //! summary per directory) goes to `target/tmp/vice-testprogs.txt`
 //! (`vice-testprogs-filtered.txt` with a filter); `EMU_VICE_DUMP=1` also
@@ -138,6 +139,13 @@ const PLUS4: Target = Target {
     name: "vice-testprogs-plus4",
 };
 
+const C128: Target = Target {
+    machine: "c128",
+    list: "testbench/c128-testlist.in",
+    exit_addr: 0xd7ff,
+    name: "vice-testprogs-c128",
+};
+
 const PET: Target = Target {
     machine: "pet",
     list: "testbench/pet-testlist.in",
@@ -212,6 +220,28 @@ fn config(t: Target, base: &MachineConfig, e: &Entry) -> Result<MachineConfig, S
         for o in &e.options {
             if let Some(u) = UNSUPPORTED.iter().find(|u| o.starts_with(*u)) {
                 return Err(format!("{u} not emulated"));
+            }
+        }
+        return Ok(c);
+    }
+    if t.machine == "c128" {
+        // x128's defaults: PAL, the 8580 is not what x128 has by default
+        // but the entries name the SID they need.
+        for o in &e.options {
+            if let Some(u) = UNSUPPORTED.iter().find(|u| o.starts_with(*u)) {
+                return Err(format!("{u} not emulated"));
+            }
+            match o.as_str() {
+                "vicii-ntsc" | "vicii-ntscold" => {
+                    c.video_format = Some(emu_core::frame::VideoStandard::Ntsc);
+                }
+                "sid-old" => {
+                    c.options.insert("sid".into(), "6581".into());
+                }
+                "sid-new" => {
+                    c.options.insert("sid".into(), "8580".into());
+                }
+                _ => {}
             }
         }
         return Ok(c);
@@ -350,6 +380,7 @@ fn run(t: Target, m: &mut dyn Machine, e: &Entry, data: &Path) -> Result<Option<
         } else if let Some(f) = o
             .strip_prefix("mountd64:")
             .or(o.strip_prefix("mountg64:"))
+            .or(o.strip_prefix("mountd71:"))
             .or(o.strip_prefix("mountp64:"))
         {
             insert(m, MediaKind::Disk, &dir.join(f))?;
@@ -428,7 +459,13 @@ fn run(t: Target, m: &mut dyn Machine, e: &Entry, data: &Path) -> Result<Option<
     });
     while m.now().0 < e.cycles {
         match m.run_frame(&mut dbg) {
-            StopReason::FrameDone => {}
+            // A write the CPU watchpoint does not see (the C128's Z80
+            // writes $D7FF through its I/O space): the register knows.
+            StopReason::FrameDone => {
+                if let Some(code) = exit_code(m) {
+                    return Ok(Some(code));
+                }
+            }
             StopReason::Watchpoint { .. } => {
                 if let Some(code) = exit_code(m) {
                     // The picture of the frame being drawn, completed.
@@ -753,6 +790,12 @@ fn vice_testprogs_plus4() {
 }
 
 #[test]
+#[ignore = "needs EMU_ROM_DIR and EMU_TESTDATA_DIR (tools/fetch_vice_testprogs.py --list c128)"]
+fn vice_testprogs_c128() {
+    suite(C128);
+}
+
+#[test]
 #[ignore = "needs EMU_ROM_DIR and EMU_TESTDATA_DIR (tools/fetch_vice_testprogs.py --list pet)"]
 fn vice_testprogs_pet() {
     suite(PET);
@@ -769,9 +812,11 @@ fn suite(t: Target) {
     let list = std::fs::read_to_string(data.join(t.list))
         .expect("run tools/fetch_vice_testprogs.py (--list vic20 for the VIC-20)");
     let filter = std::env::var("EMU_VICE_FILTER").unwrap_or_default();
+    let skip = std::env::var("EMU_VICE_SKIP").unwrap_or_default();
     let entries: Vec<Entry> = parse(&list)
         .into_iter()
         .filter(|e| e.name().contains(&filter))
+        .filter(|e| skip.is_empty() || !e.name().contains(&skip))
         .collect();
 
     let next = AtomicUsize::new(0);

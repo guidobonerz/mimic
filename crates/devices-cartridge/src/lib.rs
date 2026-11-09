@@ -13,6 +13,7 @@
 pub mod atari;
 pub mod atari2600;
 pub mod banked;
+pub mod c128;
 pub mod coleco;
 pub mod easyflash;
 pub mod expansion;

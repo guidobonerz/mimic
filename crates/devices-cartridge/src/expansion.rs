@@ -86,6 +86,13 @@ pub trait ExpansionCart: Send {
     fn write_io(&mut self, _addr: u16, _v: u8) {}
 
     /// /RESET.
+    /// C128 mode: the external function ROM byte at `offset` (0 = `$8000`,
+    /// up to `$7FFF` = `$FFFF`) where the MMU maps it in; `None` if the
+    /// cartridge has none.
+    fn peek_function(&self, _offset: u16) -> Option<u8> {
+        None
+    }
+
     fn reset(&mut self);
 
     /// One CPU cycle (freezers count, timers run); most carts do nothing.
@@ -116,6 +123,9 @@ pub trait ExpansionCart: Send {
 
 /// The cartridge a C64 CRT describes.
 pub fn from_crt(crt: &Crt) -> Result<Box<dyn ExpansionCart>, MediaError> {
+    if crt.machine == CrtMachine::C128 {
+        return Ok(Box::new(crate::c128::FunctionRom::from_crt(crt)?));
+    }
     if crt.machine != CrtMachine::C64 {
         return Err(MediaError::Format(format!(
             "a {:?} cartridge does not fit the expansion port",

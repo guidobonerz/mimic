@@ -53,6 +53,12 @@ pub struct Io {
     pub port_analog: [[u16; 2]; 2],
     /// Serial bus levels after the last drive update.
     pub iec: IecLines,
+    /// VICE's "debug cartridge" (`options["debugcart"] = "on"`): test
+    /// programs write their exit code to `$D7FF`, unused I/O on the C128
+    /// (`testprogs/testbench/selftest/c128.asm`). Configuration and
+    /// output, not state.
+    pub debugcart: bool,
+    pub debugcart_exit: Option<u8>,
 }
 
 impl Io {
@@ -79,6 +85,8 @@ impl Io {
             port_lines: [0; 2],
             port_analog: [[u16::MAX; 2]; 2],
             iec: IecLines::default(),
+            debugcart: false,
+            debugcart_exit: None,
         }
     }
 
@@ -216,6 +224,7 @@ impl Io {
             }
             0xdc00..=0xdcff => self.cia1.write(reg & 0x0f, v),
             0xdd00..=0xddff => self.cia2.write(reg & 0x0f, v),
+            0xd7ff if self.debugcart => self.debugcart_exit = Some(v),
             _ => {}
         }
     }
