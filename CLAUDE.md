@@ -49,7 +49,7 @@ crates/
   chips-amiga/     Agnus (DMA, Copper, Blitter), Denise, Paula, Gary, CIA
   chips-atari/     ANTIC, GTIA, POKEY, PIA
   chips-amstrad/   CRTC 6845, Gate Array, AY-3-8912, 8255 PPI, FDC 765
-  chips-acorn/     MEMC, IOC, VIDC, PCF8583, WD1772 (Archimedes)
+  chips-acorn/     MEMC, IOC, VIDC, PCF8583, WD1772 (Archimedes), Video ULA and SAA5050 teletext (BBC Micro)
   chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision, TI-99/4A), TMS9901, GROM (TMC0430), TMS5220 speech
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)
@@ -67,7 +67,7 @@ crates/
   emu-cheats/      Cheat files with patches, POKE/VICE/code imports, CRC-32 database, memory search
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
-  machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-nes/  machine-snes/  machine-vectrex/
+  machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-bbc/  machine-nes/  machine-snes/  machine-vectrex/
   machine-apple2/  Apple II, II+, IIe (enhanced and unenhanced) as models; Mockingboard in slot 4
   machine-mac/     Macintosh 128K, 512K, Plus, SE as models: RTC, keyboard, ADB, SCC 8530, SCSI 5380 with hard disks
   machine-archimedes/ Acorn Archimedes A305, A310, A440, A3000 as models
@@ -156,7 +156,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 24, 26, 31 and 32 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 26, 31 and 32 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

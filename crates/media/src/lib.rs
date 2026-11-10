@@ -28,6 +28,7 @@ pub mod prg;
 pub mod t64;
 pub mod tap;
 pub mod ticart;
+pub mod uef;
 pub mod wav;
 pub mod xex;
 

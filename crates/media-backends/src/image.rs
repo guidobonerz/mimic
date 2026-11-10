@@ -270,7 +270,7 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
         // Binaries and Intel HEX for machines loaded straight into memory.
         "bin" | "hex" => Some(MediaKind::Program),
         // "ptp": paper tape.
-        "tap" | "cas" | "cdt" | "tzx" | "p" | "81" | "ptp" => Some(MediaKind::Tape),
+        "tap" | "cas" | "cdt" | "tzx" | "p" | "81" | "ptp" | "uef" => Some(MediaKind::Tape),
         "crt" | "car" | "a26" | "vec" => Some(MediaKind::Cartridge),
         // Punched-card decks: binary columns, text, hex columns.
         "deck" | "crd" | "chx" => Some(MediaKind::Cards),

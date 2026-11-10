@@ -26,6 +26,7 @@ machine-trs80.workspace = true
 machine-spectrum.workspace = true
 machine-coleco.workspace = true
 machine-ti99.workspace = true
+machine-bbc.workspace = true
 machine-nes.workspace = true
 machine-snes.workspace = true
 machine-vectrex.workspace = true

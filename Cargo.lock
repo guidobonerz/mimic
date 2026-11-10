@@ -1192,6 +1192,7 @@ dependencies = [
  "machine-archimedes",
  "machine-atari2600",
  "machine-atari8",
+ "machine-bbc",
  "machine-c128",
  "machine-c64",
  "machine-coleco",
@@ -1254,6 +1255,7 @@ dependencies = [
  "machine-apple2",
  "machine-archimedes",
  "machine-atari8",
+ "machine-bbc",
  "machine-c128",
  "machine-c64",
  "machine-cpc",
@@ -2191,6 +2193,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-bbc"
+version = "0.1.0"
+dependencies = [
+ "chips-acorn",
+ "chips-amstrad",
+ "chips-cbm",
+ "chips-ti",
+ "cpu-6502",
+ "emu-core",
+ "media",
+]
+
+[[package]]
 name = "machine-c128"
 version = "0.1.0"
 dependencies = [
@@ -2435,6 +2450,7 @@ name = "media"
 version = "0.1.0"
 dependencies = [
  "emu-core",
+ "flate2",
 ]
 
 [[package]]

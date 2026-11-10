@@ -448,6 +448,19 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("trdos", &["trdos", "tr-dos"], 0x4000),
     ];
     // ColecoVision: the 8 KB BIOS.
+    // BBC Micro Model B: MOS 1.20 and BASIC II.
+    const BBC: &[RomSpec] = &[
+        rom(
+            "bbc-mos",
+            &["os12", "os-1.2", "os120", "mos12", "bbc-os12"],
+            0x4000,
+        ),
+        rom(
+            "bbc-basic",
+            &["basic2", "basic-2", "bbcbasic2", "basic-ii"],
+            0x4000,
+        ),
+    ];
     // TI-99/4A: the console ROM and GROM 0–2 (three 8 KB windows).
     const TI99: &[RomSpec] = &[
         rom(
@@ -611,6 +624,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "vectrex" => VECTREX,
         "coleco" => COLECO,
         "ti99" => TI99,
+        "bbc" => BBC,
         "snes" => SNES,
         "amiga" => AMIGA,
         "atari8" => ATARI800XL,
@@ -644,6 +658,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
         "ti99" => &["ti99", "ti-99", "ti994a"],
+        "bbc" => &["bbc", "bbcmicro", "bbc-micro"],
         "snes" => &["snes", "sfc", "superfamicom"],
         "vectrex" => &["vectrex"],
         "apple2" => &["apple2", "apple", "appleii"],
