@@ -13,7 +13,7 @@ A cycle-accurate, multi-machine emulator for classic home computers — the whol
 3. **Determinism:** same inputs + same savestate ⇒ identical frames and cycle counts. No wall-clock time, no `HashMap` iteration order, no randomness without an explicit seeded RNG inside machine state. Tests rely on this.
 4. **Cycle granularity:** emulation advances per CPU cycle (and per DMA slot on the Amiga), not per instruction.
 5. **Hot path stays cheap:** breakpoint checks use per-address-space bitmaps; with no active breakpoints the debug overhead must be ~0. Benchmark before/after when touching `tick` paths.
-6. **No ROMs in the repo.** Kernal, BASIC, Kickstart, Atari OS, AMSDOS are user-supplied. Tests that need ROMs are `#[ignore]` unless `EMU_ROM_DIR` is set. Free replacements (AROS Kickstart, Altirra OS) may be supported as optional downloads, never committed.
+6. **No ROMs in the repo.** Kernal, BASIC, Kickstart, Atari OS, AMSDOS are user-supplied. Tests that need ROMs are `#[ignore]`; they find the ROMs in `EMU_ROM_DIR`, else in the user's `~/.mimic/roms`. Free replacements (AROS Kickstart, Altirra OS) may be supported as optional downloads, never committed.
 7. **Licensing:** do not copy code from VICE, WinUAE, FS-UAE, vAmiga, Atari800, Caprice32 or Arnold (GPL/other). Use their documentation and observable behavior only.
 8. **Savestates for everything:** every chip/device struct implements state serialization from day one. A component without savestate support is not done.
 9. **CRT emulation is post-processing.** Machines output raw frames plus signal metadata; CRT/monitor effects run afterwards in `video-crt`. Regression tests and the debugger always compare/see raw frames. Exception: effects that change *what the guest can produce* (NTSC artifact colors, PAL delay-line color blending) are part of the optional composite signal path, still outside the machine crates.
@@ -42,6 +42,7 @@ crates/
   cpu-6809/        Motorola 6809 / 68A09 (Vectrex)
   cpu-arm/         Acorn ARM2 (26-bit, Archimedes)
   cpu-8080/        Intel 8080A (IMSAI 8080), machine cycles reported with their status word
+  cpu-tms9900/     TI TMS9900 (TI-99/4A): workspace registers in memory, CRU, wait states from the bus
   cpu-ada/         Ada, the 16-bit RISC CPU of the fictional Logophor 16 (Phase 31)
   asm-ada/         assembler + linker for Ada (tests, Foundry ROM build, host tool)
   chips-cbm/       VIC, VIC-II(e), TED, VDC 8563, SID, CIA, VIA, PIA, MMU 8722, TIA 6523
@@ -49,12 +50,12 @@ crates/
   chips-atari/     ANTIC, GTIA, POKEY, PIA
   chips-amstrad/   CRTC 6845, Gate Array, AY-3-8912, 8255 PPI, FDC 765
   chips-acorn/     MEMC, IOC, VIDC, PCF8583, WD1772 (Archimedes)
-  chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision)
+  chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision, TI-99/4A), TMS9901, GROM (TMC0430)
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)
   chips-nintendo/  NES: PPU 2C02/2C07 with its palette, APU of the 2A03/2A07; SNES: S-PPU, S-DSP
   drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU), TCBM bus with the 1551
-  drives-other/    Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, ZX Microdrives
+  drives-other/    WD FD1771/FD1793 (TRS-80, TI-99/4A disk card), Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, ZX Microdrives
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX, Kempston), light pens, keypads
   devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts
   devices-net/     Devices that reach outside through emu-core::host: Ultimate 64 command interface (UCI), WiC64
@@ -66,7 +67,7 @@ crates/
   emu-cheats/      Cheat files with patches, POKE/VICE/code imports, CRC-32 database, memory search
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
-  machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-nes/  machine-snes/  machine-vectrex/
+  machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-nes/  machine-snes/  machine-vectrex/
   machine-apple2/  Apple II, II+, IIe (enhanced and unenhanced) as models; Mockingboard in slot 4
   machine-mac/     Macintosh 128K, 512K, Plus, SE as models: RTC, keyboard, ADB, SCC 8530, SCSI 5380 with hard disks
   machine-archimedes/ Acorn Archimedes A305, A310, A440, A3000 as models
@@ -155,7 +156,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 24, 26, 31 and 32 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 24, 26, 31 and 32 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

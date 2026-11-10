@@ -47,7 +47,8 @@ usage: mimic-headless [options]
                         SNES .sfc/.smc; Vectrex .vec/.bin
   --autostart           load and run the disk (C64) or tape (Spectrum) after boot
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
-  --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR)
+  --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR,
+                        then ~/.mimic/roms)
   --option KEY=VALUE    machine option (repeatable)
   --net on|off          the host network for devices that use it (C64 WiC64:
                         --option userport=wic64, Ultimate command interface:

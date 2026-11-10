@@ -56,11 +56,12 @@ Die fertigen Programme liegen danach in `target/release/` (unter Windows mit
 | `mimic-headless` | `emu-headless` | ohne Fenster: Snapshots, Skripte, CI, Debug-Server |
 
 Sie lassen sich direkt starten oder an einen beliebigen Ort kopieren (keine
-weiteren Dateien nötig, ROMs über `--rom-dir` oder `EMU_ROM_DIR`):
+weiteren Dateien nötig, ROMs aus `.mimic\roms` im Benutzerordner, über
+`--rom-dir` oder `EMU_ROM_DIR`):
 
 ```powershell
-.\target\release\mimic-desktop.exe --machine c64 --rom-dir roms --disk spiel.d64 --autostart
-.\target\release\mimic-headless.exe --machine c64 --rom-dir roms --debug
+.\target\release\mimic-desktop.exe --machine c64 --disk spiel.d64 --autostart
+.\target\release\mimic-headless.exe --machine c64 --debug
 ```
 
 `cargo run --release -p emu-desktop -- …` bzw. `-p emu-headless` startet
@@ -77,9 +78,11 @@ python tools/check-deps.py              # Abhängigkeitsrichtung der Crates
 
 ## 3. ROMs
 
-ROMs sind **nicht** im Repository und werden auch nie eingecheckt. Lege sie
-in einen Ordner und gib ihn mit `--rom-dir DIR` an oder setze
-`EMU_ROM_DIR`. Gesucht wird zuerst im Unterordner der Maschine, dann in
+ROMs sind **nicht** im Repository und werden auch nie eingecheckt. Der
+Standardordner ist `.mimic\roms` im Benutzerordner
+(`%USERPROFILE%\.mimic\roms`, unter macOS/Linux `~/.mimic/roms`); einen
+anderen Ordner gibst du mit `--rom-dir DIR` an oder setzt `EMU_ROM_DIR`
+(Vorrang: `--rom-dir`, Profil, `EMU_ROM_DIR`, Standardordner). Gesucht wird zuerst im Unterordner der Maschine, dann in
 `drives/`, dann im Ordner selbst. Dateien werden über den **Namensanfang**
 (ohne Groß-/Kleinschreibung, `.` und `_` zählen als `-`) und die **exakte
 Größe** erkannt.
@@ -98,6 +101,7 @@ Größe** erkannt.
 | `spectrum/` (`zxspectrum/`, `sinclair/`) | ZX Spectrum | `Spec48.rom` (48K, 16 KB), `spec128.rom` (128K, 32 KB: Editor-ROM, dann 48 BASIC), `specp2.rom` (+2, 32 KB); optional `mf128.rom` (Multiface 128, 8 KB) und `specif1.edition2.rom` bzw. `specif1.rom` (Interface 1, 8 KB) |
 | `snes/` (`sfc/`) | SNES | optional die 64 Byte IPL-ROM des Sound-Prozessors, `spc700.rom`; ohne sie lädt ein eigener Bootlader mit demselben Protokoll |
 | `coleco/` (`colecovision/`) | ColecoVision | das BIOS, `coleco.rom` (8 KB); ohne BIOS läuft mit `--option roms=stub` ein eigenes Mini-BIOS, das Module mit dem Header $55AA/$AA55 direkt startet (Spiele, die BIOS-Routinen aufrufen, brauchen das echte BIOS) |
+| `ti99/` | TI-99/4A | Konsolen-ROM `994AROM.BIN` (8 KB) und GROM 0–2 `994AGROM.BIN` (24 KB), optional das DSR-ROM des Diskettencontrollers `DISK.BIN` (8 KB); ohne sie läuft mit `--option roms=stub` ein eigenes Mini-ROM (nur ein Testbild, kein BASIC) |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
 Der Atari 2600 hat kein System-ROM: das Programm kommt vom Modul (`--cart`).
@@ -127,6 +131,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `zx81` | Sinclair ZX81 / Timex Sinclair 1000 | `zx81` (Standard, PAL), `ts1000` (NTSC, 60 Hz) |
 | `spectrum` | Sinclair ZX Spectrum | `48k` (Standard), `128k`, `plus2` (der Amstrad-+2: 128K-Hardware mit eigenen ROMs) |
 | `coleco` | ColecoVision | – (`--videoformat`: `ntsc` Standard, TMS9918A; `pal` TMS9929A) |
+| `ti99` | TI-99/4A | – (`--videoformat`: `ntsc` Standard, TMS9918A; `pal` TMS9929A) |
 | `nes` | Nintendo Entertainment System / Famicom | – (`--videoformat`: `ntsc` Standard, 2C02; `pal` 2C07) |
 | `snes` | Super Nintendo / Super Famicom | – (`--videoformat`: `ntsc` Standard, `pal`) |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
@@ -144,6 +149,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | SNES | `port1`/`port2=pad\|mouse\|superscope\|none` (Super Scope nur in Port 2; zielt mit der Maus, linke Taste = Abzug, rechte = Cursor), `multitap=on` (Multiplayer 5 in Port 2: Ports 2–5 mit Pads), `roms=stub` (eigener Sound-Bootlader statt der IPL-ROM) |
 | NES | `port1`/`port2=controller\|zapper\|arkanoid\|none` (Standard `controller`; `zapper` = Lichtpistole, zielt mit der Maus, linke Taste = Abzug; `arkanoid` = Arkanoid-Controller, die Maus dreht den Knopf), `fourscore=on` (Four Score: Ports 3 und 4 mit Controllern, Ports 1 und 2 müssen Controller sein) |
 | ColecoVision | `port1`/`port2=controller\|superaction\|driving\|roller\|none` (Standard `controller`: Joystick, zwei Feuerknöpfe, Keypad; `superaction` = Super Action Controller mit vier Knöpfen und Speed Roller; `driving` = Expansion Module #2 mit Lenkrad und Gaspedal; `roller` = Roller Controller (Trackball, belegt mit seinem zweiten Kabel auch Port 2)), `roms=stub` |
+| TI-99/4A | `ram=32k\|none` (Standard `32k`: die 32-KB-Speichererweiterung der Peripherie-Box), `port1`/`port2=joystick\|none` (die zwei Joysticks am Joystick-Anschluss), `roms=stub`. Module: `--cart SPIELC.BIN` – liegen `SPIELG.BIN` (GROM) und `SPIELD.BIN` (zweite Bank) daneben, werden sie zusammen geladen. Tasten: Alt = FCTN, Feststelltaste = ALPHA LOCK (beim Start an), Pfeiltasten = FCTN+E/S/D/X, Rücktaste = FCTN+S, Entf = FCTN+1, Esc = FCTN+9 (BACK), F4 = FCTN+4 (CLEAR). Kassette CS1: `--tape band.wav` (WAV; das ROM schaltet den Motor, `SAVE CS1`/`OLD CS1` fragen nach den Rekordertasten PLAY/RECORD/STOP/REWIND). Disketten: `--disk spiel.dsk` legt eine TI-Diskette (Sektorabbild, 90 oder 180 KB) in DSK1; der Diskettencontroller ist dabei, sobald sein DSR-ROM `DISK.BIN` im ROM-Ordner liegt (`--option disk=on\|off`), Laufwerke DSK1–DSK3 |
 | Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`, `dpc`) |
 | ZX81 | `ram=16k\|1k\|2k` (Standard 16k), `traps=on\|off` (LOAD/SAVE der .P-Datei im Bandschacht über ROM-Traps) |
 | ZX Spectrum | `traps=on\|off` (Standard on: `LOAD ""` kopiert Standardblöcke direkt aus TAP/TZX; off spielt das Band in Echtzeit), `autostart=on` (mit Band: tippt `LOAD ""` bzw. wählt im 128K-Menü den Tape Loader), `joystick=kempston\|sinclair1\|sinclair2\|cursor\|none` (Standard kempston), `mouse=kempston\|none`, `issue=3\|2` (Platinen-Ausgabe: EAR-Rückkopplung in Port $FE Bit 6), `multiface=on` (Multiface 128; roter Knopf = Bedienfeld-Taste MULTIFACE), `if1=on` (Interface 1 mit `microdrives=1..8`, Standard 2; Cartridges als MDR), `roms=stub` |
@@ -169,7 +175,7 @@ und nicht für Schnelllader, die den Bus selbst bedienen.
 ## 5. Desktop-Frontend `emu-desktop`
 
 ```bash
-cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms
+cargo run --release -p emu-desktop -- --machine c64
 cargo run --release -p emu-desktop -- --machine c64 --disk spiel.d64 --autostart
 cargo run --release -p emu-desktop -- --machine vic20 --tape spiel.tap
 cargo run --release -p emu-desktop -- --machine atari8 --disk spiel.atr
@@ -178,21 +184,21 @@ cargo run --release -p emu-desktop -- --machine atari8 --model 800 --option port
 cargo run --release -p emu-desktop -- --machine snes --cart spiel.sfc
 cargo run --release -p emu-desktop -- --machine nes --cart spiel.nes
 cargo run --release -p emu-desktop -- --machine nes --videoformat pal --cart spiel.nes --option port2=zapper
-cargo run --release -p emu-desktop -- --machine coleco --rom-dir roms --cart spiel.col
-cargo run --release -p emu-desktop -- --machine coleco --videoformat pal --rom-dir roms --cart spiel.rom --option port1=roller
+cargo run --release -p emu-desktop -- --machine coleco --cart spiel.col
+cargo run --release -p emu-desktop -- --machine coleco --videoformat pal --cart spiel.rom --option port1=roller
 cargo run --release -p emu-desktop -- --machine atari2600 --cart spiel.a26
 cargo run --release -p emu-desktop -- --machine atari2600 --videoformat pal --cart spiel.bin --option port1=paddles
 cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
 cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
-cargo run --release -p emu-desktop -- --machine zx81 --rom-dir roms --tape programm.p
-cargo run --release -p emu-desktop -- --machine spectrum --rom-dir roms --tape spiel.tzx --autostart
-cargo run --release -p emu-desktop -- --machine spectrum --model 128k --rom-dir roms --prg spiel.z80
-cargo run --release -p emu-desktop -- --machine spectrum --rom-dir roms --option if1=on --option multiface=on --disk cartridge.mdr
-cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk workbench13.adf
-cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --disk demo-a.adf --disk demo-b.adf
-cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --option drives=2 --disk demo-a.adf --disk demo-b.adf
-cargo run --release -p emu-desktop -- --machine amiga --model 2000 --rom-dir roms --option fast=8m --disk spiel.dms
-cargo run --release -p emu-desktop -- --machine amiga --rom-dir roms --option kickstart=3.1 --option drivetype=hd --disk gross.adf
+cargo run --release -p emu-desktop -- --machine zx81 --tape programm.p
+cargo run --release -p emu-desktop -- --machine spectrum --tape spiel.tzx --autostart
+cargo run --release -p emu-desktop -- --machine spectrum --model 128k --prg spiel.z80
+cargo run --release -p emu-desktop -- --machine spectrum --option if1=on --option multiface=on --disk cartridge.mdr
+cargo run --release -p emu-desktop -- --machine amiga --disk workbench13.adf
+cargo run --release -p emu-desktop -- --machine amiga --disk demo-a.adf --disk demo-b.adf
+cargo run --release -p emu-desktop -- --machine amiga --option drives=2 --disk demo-a.adf --disk demo-b.adf
+cargo run --release -p emu-desktop -- --machine amiga --model 2000 --option fast=8m --disk spiel.dms
+cargo run --release -p emu-desktop -- --machine amiga --option kickstart=3.1 --option drivetype=hd --disk gross.adf
 ```
 
 Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
@@ -346,19 +352,19 @@ Ohne Fenster und Ton – für Skripte, CI und als Debug-Server.
 
 ```bash
 # 300 Bilder laufen lassen und das letzte als PNG speichern
-cargo run --release -p emu-headless -- --machine c64 --rom-dir roms \
+cargo run --release -p emu-headless -- --machine c64 \
     --prg demo.prg --frames 300 --snapshot out.png
 
 # C128 im 80-Zeichen-Modus, Bild des VDC
 cargo run --release -p emu-headless -- --machine c128 --option display=80 \
-    --rom-dir roms --frames 600 --screen vdc --snapshot c128.png
+    --frames 600 --screen vdc --snapshot c128.png
 
 # Amiga 500: Kickstart 1.3 bis zum Insert-Disk-Bildschirm
-cargo run --release -p emu-headless -- --machine amiga --rom-dir roms \
+cargo run --release -p emu-headless -- --machine amiga \
     --frames 400 --snapshot amiga.png
 
 # Bild durch ein Monitorprofil, Ton als WAV, Savestate schreiben
-cargo run --release -p emu-headless -- --machine cpc --rom-dir roms \
+cargo run --release -p emu-headless -- --machine cpc \
     --frames 150 --crt ctm644 --snapshot cpc.png --wav cpc.wav --save-state cpc.state
 ```
 
@@ -449,7 +455,7 @@ also ohne Schnelllader: eine 1541-Diskette braucht einige Minuten.
 mimic-headless --import-drive kopie.d64                 # Diskette in Laufwerk 8 als D64 (.d71/.d81 für 1571/1581)
 mimic-headless --import-drive kopie.d64 --cbm-tracks 40 # 40-Spur-Diskette
 mimic-headless --export-drive spiel.d64 --cbm-device 9  # Image auf die (formatierte) Diskette in Laufwerk 9 schreiben
-mimic-headless --machine c64 --rom-dir roms --real-drive 8 --frames 600 --snapshot c64.png   # echte Diskette im emulierten Laufwerk 8
+mimic-headless --machine c64 --real-drive 8 --frames 600 --snapshot c64.png   # echte Diskette im emulierten Laufwerk 8
 ```
 
 | Option | Bedeutung |
@@ -539,8 +545,8 @@ kein Netz (Browser erlauben keine Sockets); das UCI sieht dort die
 hochgeladenen Dateien als Ordner (Änderungen bleiben im Speicher).
 
 ```powershell
-cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms --option userport=wic64
-cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --option uci=on --uci-dir C:\c64\ultimate --uci-mount Usb0=E:\c64 --debug
+cargo run --release -p emu-desktop -- --machine c64 --option userport=wic64
+cargo run --release -p emu-headless -- --machine c64 --option uci=on --uci-dir C:\c64\ultimate --uci-mount Usb0=E:\c64 --debug
 ```
 
 **Aufnahme und Wiedergabe:** Läufe mit echtem Netz sind nicht
@@ -574,7 +580,7 @@ Werten (`--crt meinprofil.toml`).
 ## 9. Live-Preview im Browser
 
 ```bash
-cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --preview
+cargo run --release -p emu-headless -- --machine c64 --preview
 # Browser: http://127.0.0.1:6580/
 ```
 
@@ -697,11 +703,11 @@ Starten:
 
 ```bash
 # angehalten starten, Debug-Server auf 127.0.0.1:6510
-cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --debug
+cargo run --release -p emu-headless -- --machine c64 --debug
 # mit Fenster und Ton, Debug-Server zusätzlich
 cargo run --release -p emu-desktop -- --machine c64 --debug
 # alles: nativ + VICE-Monitor + Live-Bild, sofort laufen lassen
-cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --vice --preview --run
+cargo run --release -p emu-headless -- --machine c64 --vice --preview --run
 ```
 
 ### 10.2 Protokoll (nativ, JSON-Zeilen)
@@ -875,7 +881,7 @@ Mit `--vice` spricht mimic zusätzlich das Binärprotokoll des VICE-Monitors
 Lite debuggen damit jede Maschine – nicht nur den C64.
 
 ```bash
-cargo run --release -p emu-headless -- --machine c64 --rom-dir roms --vice --preview --run
+cargo run --release -p emu-headless -- --machine c64 --vice --preview --run
 ```
 
 VS64 `launch.json`:
@@ -893,7 +899,7 @@ ist immer seiteneffektfrei; `LIN`/`CYC` liefern die Strahlposition.
 
 ```bash
 cargo test --workspace                                   # ohne ROMs/Testdaten
-EMU_ROM_DIR=~/roms cargo test --workspace -- --include-ignored   # mit ROMs
+cargo test --workspace -- --include-ignored   # mit ROMs
 bash tools/fetch-testdata.sh                             # Testsuites nach testdata/
 export EMU_TESTDATA_DIR=$PWD/testdata
 ```

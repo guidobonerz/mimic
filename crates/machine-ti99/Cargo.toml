@@ -1,0 +1,17 @@
+[package]
+name = "machine-ti99"
+description = "Texas Instruments TI-99/4A (NTSC and PAL)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-tms9900.workspace = true
+chips-ti.workspace = true
+devices-input.workspace = true
+media.workspace = true
+drives-other.workspace = true

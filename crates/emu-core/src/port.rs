@@ -40,6 +40,9 @@ pub enum PortKind {
     /// ZX Spectrum joystick interfaces (Kempston, the Interface 2's two
     /// Sinclair ports, cursor): 9-pin Atari-style digital joystick.
     SpectrumJoy,
+    /// TI-99/4A joystick port: 9-pin, two Atari-style digital joysticks on
+    /// one connector, selected by the keyboard column lines.
+    Ti99Joy,
     /// Kempston mouse interface on the ZX Spectrum: the mouse's X and Y
     /// counters and buttons, read through ports $FBDF, $FFDF, $FADF.
     KempstonMouse,

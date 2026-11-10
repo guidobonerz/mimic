@@ -1,7 +1,9 @@
 //! Finding user-supplied ROM images in a host directory.
 //!
 //! ROMs are never in the repository (golden rule 6). Users point
-//! `EMU_ROM_DIR` (or `--rom-dir`) at a folder. It is searched in this
+//! `EMU_ROM_DIR` (or `--rom-dir`) at a folder; without either the folder
+//! is `roms` in the user's mimic folder (`~/.mimic/roms`,
+//! [`default_dir`]). It is searched in this
 //! order: the machine's own subfolders (`c64/`, `vic20/`, …), then
 //! `drives/`, then the folder itself, so both a flat folder and one
 //! subfolder per machine work.
@@ -446,6 +448,27 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("trdos", &["trdos", "tr-dos"], 0x4000),
     ];
     // ColecoVision: the 8 KB BIOS.
+    // TI-99/4A: the console ROM and GROM 0–2 (three 8 KB windows).
+    const TI99: &[RomSpec] = &[
+        rom(
+            "ti99rom",
+            &["994arom", "ti99rom", "ti-99-rom", "ti994a-rom", "994a-rom"],
+            0x2000,
+        ),
+        rom(
+            "ti99grom",
+            &[
+                "994agrom",
+                "ti99grom",
+                "ti-99-grom",
+                "ti994a-grom",
+                "994a-grom",
+            ],
+            0x6000,
+        ),
+        // The TI disk controller card's DSR ROM (optional).
+        optional("ti99disk", &["ti99disk", "ti-disk", "disk"], 0x2000),
+    ];
     const COLECO: &[RomSpec] = &[rom(
         "coleco",
         &[
@@ -585,6 +608,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "spectrum" => SPECTRUM,
         "vectrex" => VECTREX,
         "coleco" => COLECO,
+        "ti99" => TI99,
         "snes" => SNES,
         "amiga" => AMIGA,
         "atari8" => ATARI800XL,
@@ -617,6 +641,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "trs80" => &["trs80", "trs-80", "tandy"],
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
+        "ti99" => &["ti99", "ti-99", "ti994a"],
         "snes" => &["snes", "sfc", "superfamicom"],
         "vectrex" => &["vectrex"],
         "apple2" => &["apple2", "apple", "appleii"],
@@ -625,11 +650,23 @@ fn folders(machine: &str) -> &'static [&'static str] {
     }
 }
 
-/// The ROM directory from the environment, if set.
+/// The ROM directory: `EMU_ROM_DIR` if set, else [`default_dir`] if it
+/// exists.
 pub fn env_dir() -> Option<PathBuf> {
     std::env::var_os("EMU_ROM_DIR")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
+        .or_else(|| Some(default_dir()).filter(|d| d.is_dir()))
+}
+
+/// `~/.mimic/roms` (`.mimic` in `USERPROFILE` on Windows, else `HOME`).
+pub fn default_dir() -> PathBuf {
+    ["USERPROFILE", "HOME"]
+        .iter()
+        .find_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()))
+        .map_or_else(PathBuf::new, PathBuf::from)
+        .join(".mimic")
+        .join("roms")
 }
 
 /// The header of an Amiga Forever encrypted ROM file.
@@ -713,7 +750,10 @@ pub fn load(dir: &Path, machine: &str) -> io::Result<BTreeMap<String, Vec<u8>>> 
             search.push(files(&path)?);
         }
     }
-    search.push(files(dir)?);
+    search.push(
+        files(dir)
+            .map_err(|e| io::Error::new(e.kind(), format!("ROM folder {}: {e}", dir.display())))?,
+    );
 
     let mut roms = BTreeMap::new();
     for spec in specs(machine) {

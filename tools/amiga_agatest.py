@@ -25,7 +25,7 @@ at $18; the data starts at the same place for $30 and $38 (on sprite 0's
 left edge) and earlier for $24 and $18, the white lines in the same
 columns in every band.
 
-Compare: cargo run -p emu-headless -- --machine amiga --model 1200 --rom-dir roms --disk agatest.adf --frames 1200 --snapshot aga.png
+Compare: cargo run -p emu-headless -- --machine amiga --model 1200 --disk agatest.adf --frames 1200 --snapshot aga.png
 
 usage: python tools/amiga_agatest.py OUT.adf [FMODE]"""
 import importlib.util

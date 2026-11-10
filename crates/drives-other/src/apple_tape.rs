@@ -23,6 +23,14 @@
 //!
 //! Keys ([`MediaSlot::control`]): "play", "record", "stop", "rewind".
 //! Inserting a tape presses PLAY.
+//!
+//! **With motor control** ([`AppleTape::with_motor_control`], the
+//! TI-99/4A's CS1): the tape moves while a key is down and the computer
+//! switches the motor on ([`AppleTape::set_motor`]); the output is a
+//! level ([`AppleTape::set_output`]), each change an edge. The TI's
+//! cassette interface works the same way otherwise (Texas Instruments,
+//! *TI-99/4A Console and Peripheral Expansion System Technical Data*,
+//! cassette interface).
 
 use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{StateError, StateReader, StateWriter};
@@ -66,6 +74,10 @@ pub struct AppleTape {
     edges: Vec<u64>,
     /// The cycle of the last tick (for the status display only).
     now: u64,
+    /// `Some`: the computer switches the motor (on or off).
+    motor: Option<bool>,
+    /// The last output level ([`AppleTape::set_output`]).
+    out_level: bool,
 }
 
 impl std::fmt::Debug for AppleTape {
@@ -91,6 +103,42 @@ impl AppleTape {
             rec_start: 0,
             edges: Vec::new(),
             now: 0,
+            motor: None,
+            out_level: false,
+        }
+    }
+
+    /// A recorder whose motor the computer switches (TI-99/4A CS1).
+    pub fn with_motor_control(hz: u32) -> Self {
+        Self {
+            motor: Some(false),
+            ..Self::new(hz)
+        }
+    }
+
+    /// The motor control line (recorders with motor control).
+    pub fn set_motor(&mut self, on: bool) {
+        if self.motor.is_some() {
+            self.motor = Some(on);
+        }
+    }
+
+    /// The output as a level: a change is an edge.
+    pub fn set_output(&mut self, level: bool, now: u64) {
+        if level != self.out_level {
+            self.out_level = level;
+            self.toggle_output(now);
+        }
+    }
+
+    /// The tape moves now (a key down and the motor on, or someone
+    /// listening on a recorder without motor control).
+    fn moving(&self, now: u64) -> bool {
+        match (self.keys, self.motor) {
+            (Keys::Stop, _) => false,
+            (_, Some(on)) => on,
+            (Keys::Play, None) => now < self.listened_until,
+            (Keys::Record, None) => true,
         }
     }
 
@@ -125,8 +173,11 @@ impl AppleTape {
     /// One CPU cycle at `now`.
     pub fn tick(&mut self, now: u64) {
         self.now = now;
+        if !self.moving(now) {
+            return;
+        }
         match self.keys {
-            Keys::Play if now < self.listened_until && self.tape.is_some() => {
+            Keys::Play if self.tape.is_some() => {
                 self.pos += 1;
                 if let Some(s) = self.sample_at(self.pos) {
                     if s > THRESHOLD {
@@ -191,7 +242,7 @@ impl AppleTape {
     }
 
     pub fn save(&self, w: &mut StateWriter) {
-        w.chunk(*b"A2TP", 1, |w| {
+        w.chunk(*b"A2TP", 2, |w| {
             w.u8(match self.keys {
                 Keys::Stop => 0,
                 Keys::Play => 1,
@@ -205,12 +256,19 @@ impl AppleTape {
             for &e in &self.edges {
                 w.u64(e);
             }
+            // Version 2.
+            w.u8(match self.motor {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            });
+            w.bool(self.out_level);
         });
     }
 
     /// Atomic: on error the recorder is unchanged. The tape stays.
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(*b"A2TP", 1)?;
+        let (version, mut c) = r.chunk(*b"A2TP", 2)?;
         let keys = match c.u8()? {
             0 => Keys::Stop,
             1 => Keys::Play,
@@ -226,6 +284,22 @@ impl AppleTape {
             return Err(StateError::Invalid("tape recording"));
         }
         let edges = (0..n).map(|_| c.u64()).collect::<Result<Vec<_>, _>>()?;
+        let (motor, out_level) = if version >= 2 {
+            let m = match c.u8()? {
+                0 => None,
+                1 => Some(false),
+                2 => Some(true),
+                _ => return Err(StateError::Invalid("tape motor")),
+            };
+            (m, c.bool()?)
+        } else {
+            (self.motor, false)
+        };
+        if motor.is_some() != self.motor.is_some() {
+            return Err(StateError::Invalid("tape motor control differs"));
+        }
+        self.motor = motor;
+        self.out_level = out_level;
         self.keys = keys;
         self.pos = pos;
         self.level = level;
@@ -327,8 +401,7 @@ impl MediaSlot for AppleTape {
 
     fn status(&self) -> DriveStatus {
         DriveStatus {
-            active: self.keys == Keys::Record
-                || (self.keys == Keys::Play && self.now < self.listened_until),
+            active: self.moving(self.now),
             error: false,
             track: None,
         }
@@ -403,6 +476,41 @@ mod tests {
         }
         // 10 ms of 1 kHz: 20 edges.
         assert!((19..=21).contains(&flips), "{flips}");
+    }
+
+    #[test]
+    fn with_motor_control_the_motor_moves_the_tape() {
+        let wav = Wav {
+            rate: 8000,
+            samples: vec![8000; 8000],
+        };
+        let mut t = AppleTape::with_motor_control(1_000_000);
+        t.insert(tape(wav.to_bytes()).0).unwrap();
+        t.read(0);
+        for now in 0..100 {
+            t.tick(now);
+        }
+        assert_eq!(t.pos, 0, "motor off");
+        t.set_motor(true);
+        for now in 100..200 {
+            t.tick(now);
+        }
+        assert_eq!(t.pos, 100);
+        assert!(t.peek());
+        // Recording a level output.
+        let (m, store) = tape(Vec::new());
+        let mut t = AppleTape::with_motor_control(1_000_000);
+        t.insert(m).unwrap();
+        t.control("record").unwrap();
+        t.set_motor(true);
+        for now in 0..10_000u64 {
+            t.set_output(now / 500 % 2 == 1, now);
+            t.tick(now);
+        }
+        t.control("stop").unwrap();
+        let w = Wav::parse(&store.0.lock().unwrap()).unwrap();
+        let flips = w.samples.windows(2).filter(|p| p[0] != p[1]).count();
+        assert!((18..=20).contains(&flips), "{flips}");
     }
 
     #[test]

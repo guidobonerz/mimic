@@ -13,5 +13,6 @@ pub mod microdrive;
 pub mod recorder;
 pub mod sio;
 pub mod spectrum_tape;
+pub mod wd17xx;
 
 pub use datasette::Datasette;

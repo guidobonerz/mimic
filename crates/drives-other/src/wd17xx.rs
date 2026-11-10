@@ -32,6 +32,7 @@
 //! status bits, write track codes, step rates). The timing model (search,
 //! byte stream from the turning track) is this project's own.
 
+use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use emu_core::{StateError, StateReader, StateWriter};
 use media::dmk::{decode_sectors, Image, Track, SD_TRACK_BYTES};
 use media::mfm::crc16;
@@ -71,6 +72,8 @@ pub struct Drive {
     pub dirty: bool,
     pub media: Option<emu_core::media::Media>,
     pub original: Vec<u8>,
+    /// Images are TI-99/4A sector dumps ([`Image::parse_ti_dsk`]).
+    pub ti_dsk: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -962,6 +965,73 @@ pub fn format_track(raw: &[u8], mfm: bool, len: usize) -> Track {
         data.resize(len, if mfm { 0x4e } else { 0xff });
     }
     Track { data, idam }
+}
+
+/// Write a changed image back into its medium.
+pub fn write_back(d: &mut Drive) -> Result<(), MediaError> {
+    if !std::mem::take(&mut d.dirty) {
+        return Ok(());
+    }
+    let (Some(img), Some(media)) = (&d.image, &mut d.media) else {
+        return Ok(());
+    };
+    let bytes = img.to_bytes(&d.original);
+    if media.backend.len() != bytes.len() as u64 {
+        media.backend.set_len(bytes.len() as u64)?;
+    }
+    media.backend.write(0, &bytes)?;
+    d.original = bytes;
+    Ok(())
+}
+
+/// A drive as a media slot: DMK, JV1 or JV3 images (TRS-80), TI-99/4A
+/// sector dumps when [`Drive::ti_dsk`] is set.
+impl MediaSlot for Drive {
+    fn insert(&mut self, mut media: Media) -> Result<(), MediaError> {
+        if media.kind != MediaKind::Disk {
+            return Err(MediaError::Unsupported(media.kind));
+        }
+        let mut bytes = vec![0; media.backend.len() as usize];
+        media.backend.read(0, &mut bytes)?;
+        let image = if self.ti_dsk {
+            Image::parse_ti_dsk(&bytes)?
+        } else {
+            Image::parse(&bytes)?
+        };
+        let _ = self.eject();
+        self.image = Some(image);
+        self.dirty = false;
+        self.media = Some(media);
+        self.original = bytes;
+        Ok(())
+    }
+
+    fn eject(&mut self) -> Option<Media> {
+        let _ = write_back(self);
+        self.image = None;
+        self.original.clear();
+        self.media.take()
+    }
+
+    fn write_protect(&mut self, on: bool) {
+        self.write_protected = on;
+    }
+
+    fn flush(&mut self) -> Result<(), MediaError> {
+        write_back(self)
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn status(&self) -> DriveStatus {
+        DriveStatus {
+            active: false,
+            error: false,
+            track: Some(self.cylinder.saturating_add(1)),
+        }
+    }
 }
 
 #[cfg(test)]

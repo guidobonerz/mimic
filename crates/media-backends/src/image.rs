@@ -416,7 +416,13 @@ pub fn from_bytes(name: &str, data: Vec<u8>, kind: MediaKind) -> Media {
 /// A cartridge image behind a copy-on-write overlay: a CRT file, or a raw
 /// dump in whatever form the machine's expansion port takes (VIC-20 ROM
 /// with load address, C16/Plus/4 16/32 KB ROM), which its slot checks.
+/// A TI-99/4A dump named `…C`, `…D` or `…G` with at least one of the other
+/// parts next to it is opened as one bundle of all of them
+/// ([`media::ticart`]).
 pub fn open_cart(path: &Path) -> Result<Media, MediaError> {
+    if let Some(bundle) = ti_cart_bundle(path)? {
+        return Ok(bundle);
+    }
     let file = FileBackend::open(path)?;
     Ok(Media {
         name: path
@@ -425,6 +431,57 @@ pub fn open_cart(path: &Path) -> Result<Media, MediaError> {
         kind: MediaKind::Cartridge,
         backend: Box::new(CowOverlay::new(Box::new(file))),
     })
+}
+
+/// The TI-99/4A parts next to `path` (same name but for the last letter
+/// of the stem, any case), bundled; `None` if it has no siblings.
+fn ti_cart_bundle(path: &Path) -> Result<Option<Media>, MediaError> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    if media::ticart::part_of(&name).is_none() {
+        return Ok(None);
+    }
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((&name, ""));
+    let base = &stem[..stem.len() - 1];
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(None);
+    };
+    let mut cart = media::ticart::TiCart::default();
+    let mut found = 0;
+    for e in entries.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        let Some((s, x)) = n.rsplit_once('.').or(Some((&n, ""))) else {
+            continue;
+        };
+        if s.len() != stem.len()
+            || !x.eq_ignore_ascii_case(ext)
+            || !s[..s.len() - 1].eq_ignore_ascii_case(base)
+        {
+            continue;
+        }
+        let data =
+            std::fs::read(e.path()).map_err(|err| MediaError::Backend(format!("{n}: {err}")))?;
+        match media::ticart::part_of(&n) {
+            Some('C') => cart.rom = data,
+            Some('D') => cart.rom2 = data,
+            Some('G') => cart.grom = data,
+            _ => continue,
+        }
+        found += 1;
+    }
+    if found < 2 {
+        return Ok(None);
+    }
+    Ok(Some(Media {
+        name: format!("{base}.ticart"),
+        kind: MediaKind::Cartridge,
+        backend: Box::new(CowOverlay::new(Box::new(MemoryBackend {
+            data: cart.to_bytes(),
+        }))),
+    }))
 }
 
 /// Open an image file as media behind a copy-on-write overlay; a folder

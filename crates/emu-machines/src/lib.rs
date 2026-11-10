@@ -21,6 +21,7 @@ fn joystick_port(kind: PortKind) -> bool {
             | PortKind::VectrexControl
             | PortKind::AppleGame
             | PortKind::SpectrumJoy
+            | PortKind::Ti99Joy
     )
 }
 
@@ -160,6 +161,7 @@ pub fn registry() -> Registry {
     r.register(machine_trs80::entry());
     r.register(machine_spectrum::entry());
     r.register(machine_coleco::entry());
+    r.register(machine_ti99::entry());
     r.register(machine_nes::entry());
     r.register(machine_snes::entry());
     r.register(machine_vectrex::entry());

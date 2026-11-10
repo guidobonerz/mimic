@@ -108,7 +108,7 @@ usage: mimic-desktop [options]
                         SNES .sfc/.smc; Vectrex .vec/.bin
   --autostart           load and run the disk (C64) or tape (Spectrum) after boot
   --rom-dir DIR         ROM folder (default: settings.roms of profiles.yaml,
-                        then $EMU_ROM_DIR)
+                        then $EMU_ROM_DIR, then ~/.mimic/roms)
   --rom ROLE=FILE       a single ROM image for a role (repeatable)
   --speed PERCENT       start at 10, 25, 50, 100, 150, 200, 400 or 800 % speed
   --warp-load on|off    at 100 % run as fast as possible (muted) while a disk
@@ -537,7 +537,8 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             None if specs.iter().all(|s| s.optional) || !explicit.is_empty() => {}
             None => {
                 return Err(
-                    "set EMU_ROM_DIR or --rom-dir to the folder with the machine's ROMs".into(),
+                    "put the machine's ROMs in ~/.mimic/roms, or set EMU_ROM_DIR or --rom-dir"
+                        .into(),
                 )
             }
         }

@@ -7,7 +7,7 @@ COLOR00. WinUAE (OCS A500, 2026-10-23, `docs/sources.md`), and mimic: the
 bar shows on lines 44-99 and 120-123 (the plane pointers did not advance
 while BPU = 0, so the box starts at line 124), nothing on 100-119, 140-159
 and 180-199, and the box hides it elsewhere. Boot it in mimic:
-  cargo run -p emu-headless -- --machine amiga --rom-dir roms --disk sprtest.adf --frames 300 --snapshot spr.png
+  cargo run -p emu-headless -- --machine amiga --disk sprtest.adf --frames 300 --snapshot spr.png
 
 usage: python tools/amiga_sprtest.py OUT.adf"""
 import importlib.util, os, struct, sys

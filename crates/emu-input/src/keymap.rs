@@ -650,6 +650,79 @@ pub static COLECO: Keymap = Keymap {
     entries: COLECO_POSITIONAL,
 };
 
+/// TI-99/4A: column × 8 + row of its matrix (see `machine-ti99::keyboard`).
+/// Alt is FCTN, Caps Lock the latching ALPHA LOCK (48). For convenience
+/// the arrows are FCTN + E/S/D/X, Backspace FCTN + S (left), Delete
+/// FCTN + 1 (DEL), Escape FCTN + 9 (BACK), F4 FCTN + 4 (CLEAR), `-`
+/// SHIFT + `/`.
+const TI99_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Equal", &[0]),
+    ("Space", &[1]),
+    ("Enter", &[2]),
+    ("NumpadEnter", &[2]),
+    ("AltLeft", &[4]),
+    ("AltRight", &[4]),
+    ("ShiftLeft", &[5]),
+    ("ShiftRight", &[5]),
+    ("ControlLeft", &[6]),
+    ("ControlRight", &[6]),
+    ("Period", &[8]),
+    ("KeyL", &[9]),
+    ("KeyO", &[10]),
+    ("Digit9", &[11]),
+    ("Digit2", &[12]),
+    ("KeyS", &[13]),
+    ("KeyW", &[14]),
+    ("KeyX", &[15]),
+    ("Comma", &[16]),
+    ("KeyK", &[17]),
+    ("KeyI", &[18]),
+    ("Digit8", &[19]),
+    ("Digit3", &[20]),
+    ("KeyD", &[21]),
+    ("KeyE", &[22]),
+    ("KeyC", &[23]),
+    ("KeyM", &[24]),
+    ("KeyJ", &[25]),
+    ("KeyU", &[26]),
+    ("Digit7", &[27]),
+    ("Digit4", &[28]),
+    ("KeyF", &[29]),
+    ("KeyR", &[30]),
+    ("KeyV", &[31]),
+    ("KeyN", &[32]),
+    ("KeyH", &[33]),
+    ("KeyY", &[34]),
+    ("Digit6", &[35]),
+    ("Digit5", &[36]),
+    ("KeyG", &[37]),
+    ("KeyT", &[38]),
+    ("KeyB", &[39]),
+    ("Slash", &[40]),
+    ("Semicolon", &[41]),
+    ("KeyP", &[42]),
+    ("Digit0", &[43]),
+    ("Digit1", &[44]),
+    ("KeyA", &[45]),
+    ("KeyQ", &[46]),
+    ("KeyZ", &[47]),
+    ("CapsLock", &[48]),
+    ("ArrowUp", &[4, 22]),
+    ("ArrowLeft", &[4, 13]),
+    ("ArrowRight", &[4, 21]),
+    ("ArrowDown", &[4, 15]),
+    ("Backspace", &[4, 13]),
+    ("Delete", &[4, 44]),
+    ("Escape", &[4, 11]),
+    ("F4", &[4, 28]),
+    ("Minus", &[5, 40]),
+];
+
+pub static TI99: Keymap = Keymap {
+    machine: "ti99",
+    entries: TI99_POSITIONAL,
+};
+
 /// NES: controller 1's buttons (machine keys 0-3, see `machine-nes::keys`):
 /// X = A, Z = B, right Shift = Select, Enter = Start; the cross is the
 /// joystick (cursor keys, Space also A).
@@ -1538,6 +1611,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "atari8" => Some(&ATARI),
         "atari2600" => Some(&ATARI2600),
         "coleco" => Some(&COLECO),
+        "ti99" => Some(&TI99),
         "nes" => Some(&NES),
         "snes" => Some(&SNES),
         "vectrex" => Some(&VECTREX),

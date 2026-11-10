@@ -78,8 +78,8 @@ code("""cargo build --release -p emu-desktop     # the desktop emulator
 cargo build --release -p emu-headless    # the command-line frontend""")
 p("""The programs end up in `target/release/` — on Windows
 `mimic-desktop.exe` and `mimic-headless.exe`. They need no other files and
-can be copied anywhere; ROMs are found through `--rom-dir` or the
-environment variable `EMU_ROM_DIR`.""")
+can be copied anywhere; ROMs live in `.mimic/roms` in your user folder or
+are found through `--rom-dir` or the environment variable `EMU_ROM_DIR`.""")
 note("""Older builds left files called `emu-desktop.exe` and `emu-headless.exe`
 in `target/release/`. They are outdated (they do not know the newer
 machines); use `mimic-desktop.exe` and `mimic-headless.exe`, or start
@@ -87,21 +87,21 @@ through `cargo run` as shown below, which always builds the current
 version first.""", "Watch out")
 h2("Starting a machine")
 p("Two equivalent ways to start the desktop emulator:")
-code("""cargo run --release -p emu-desktop -- --machine c64 --rom-dir roms
-.\\target\\release\\mimic-desktop.exe --machine c64 --rom-dir roms""")
+code("""cargo run --release -p emu-desktop -- --machine c64
+.\\target\\release\\mimic-desktop.exe --machine c64""")
 p("Everything after `--` goes to the emulator. Some first steps:")
 code("""# C64 with a disk, loaded and started automatically
-mimic-desktop --machine c64 --rom-dir roms --disk game.d64 --autostart
+mimic-desktop --machine c64 --disk game.d64 --autostart
 
 # Amiga 500 booting Workbench 1.3 from an ADF
-mimic-desktop --machine amiga --rom-dir roms --disk workbench13.adf
+mimic-desktop --machine amiga --disk workbench13.adf
 
 # NES and SNES need no system ROM
 mimic-desktop --machine nes --cart game.nes
 mimic-desktop --machine snes --cart game.sfc
 
 # Vectrex with a cartridge
-mimic-desktop --machine vectrex --rom-dir roms --cart "Scramble (1982).vec\"""")
+mimic-desktop --machine vectrex --cart "Scramble (1982).vec\"""")
 p("`mimic-desktop --help` lists every option with the key assignments.")
 note("""On Windows `mimic-desktop` is a window program: a double-click or a
 shortcut opens no console window next to the emulator. Started from a
@@ -116,11 +116,13 @@ h1("ROMs")
 p("""Most machines need their original system ROMs (KERNAL, BASIC,
 Kickstart, operating system, BIOS). They are copyrighted and therefore
 **not** part of mimic: you supply them from your own machines. Put them in a
-folder and pass it with `--rom-dir DIR`, or set `EMU_ROM_DIR` once.""")
+folder: `.mimic/roms` in your user folder (on Windows
+`%USERPROFILE%\\.mimic\\roms`), or another one passed with `--rom-dir DIR` or
+set once in `EMU_ROM_DIR`.""")
 h2("How ROMs are found")
 bullets(
-    "mimic looks in the machine's subfolder first (for example `roms/c64/`), "
-    "then in `roms/drives/`, then in the folder itself.",
+    "mimic looks in the machine's subfolder first (for example `~/.mimic/roms/c64/`), "
+    "then in `~/.mimic/roms/drives/`, then in the folder itself.",
     "A file is recognised by the **start of its name** (case does not matter; "
     "`.` and `_` count as `-`) and by its **exact size**.",
     "If a ROM is missing, the error message names the role, the size and the "
@@ -331,7 +333,7 @@ the new disk goes in: programs that only look at the drive now and then
 notice the change only if they find it empty once. The title bar shows the
 disk in the drive.""")
 code("""# a demo on two disks with one drive: press Ctrl+D when it asks for disk B
-mimic-desktop --machine amiga --rom-dir roms --disk demo-a.adf --disk demo-b.adf""")
+mimic-desktop --machine amiga --disk demo-a.adf --disk demo-b.adf""")
 
 # ---- 5 machines ----------------------------------------------------------------
 
@@ -543,9 +545,9 @@ bullets(
     "**3D Imager.** The spinning colour wheel is emulated (motor, index pulse, "
     "colour filters); the picture shows the eye chosen with `eye`.",
 )
-code("""mimic-desktop --machine vectrex --rom-dir roms --cart "Scramble (1982).vec"
-mimic-desktop --machine vectrex --rom-dir roms --option lines=soft --cart game.vec
-mimic-desktop --machine vectrex --rom-dir roms --option port2=imager --cart 3d-game.vec""")
+code("""mimic-desktop --machine vectrex --cart "Scramble (1982).vec"
+mimic-desktop --machine vectrex --option lines=soft --cart game.vec
+mimic-desktop --machine vectrex --option port2=imager --cart 3d-game.vec""")
 
 h2("Apple II")
 p("""The Apple II family as four models: the original II (Integer BASIC),
@@ -583,9 +585,9 @@ bullets(
     "**Sequencer PROM.** With the P6 PROM (341-0028) the Disk II reads and "
     "writes the way the real card does; without it a model of the card stands in.",
 )
-code("""mimic-desktop --machine apple2 --rom-dir roms --disk "Zork I.dsk"
-mimic-desktop --machine apple2 --model iiplus --rom-dir roms --disk game.woz
-mimic-desktop --machine apple2 --model ii --option slot6=none --rom-dir roms""")
+code("""mimic-desktop --machine apple2 --disk "Zork I.dsk"
+mimic-desktop --machine apple2 --model iiplus --disk game.woz
+mimic-desktop --machine apple2 --model ii --option slot6=none""")
 
 h2("Macintosh")
 p("""The compact Macintosh as four models: the 128K and 512K (64 KB ROM,
@@ -617,9 +619,9 @@ bullets(
     "**System software.** System 6.0.8 suits the Plus (1 MB or more) and the "
     "SE; the 128K needs System 1.x/2.x on 400K MFS disks, the 512K up to 3.x.",
 )
-code("""mimic-desktop --machine mac --rom-dir roms --disk "System Tools.image"
-mimic-desktop --machine mac --model se --rom-dir roms --disk system.dsk --disk hd20.img
-mimic-desktop --machine mac --model 128k --rom-dir roms --disk mfs-system.dsk""")
+code("""mimic-desktop --machine mac --disk "System Tools.image"
+mimic-desktop --machine mac --model se --disk system.dsk --disk hd20.img
+mimic-desktop --machine mac --model 128k --disk mfs-system.dsk""")
 
 # ---- 6 media ------------------------------------------------------------------
 
@@ -690,8 +692,8 @@ p("""With `--preview` the emulator serves a viewer page: open
 `http://127.0.0.1:6580/` in a browser to watch the running machine. The
 viewer forwards keyboard, gamepad and mouse input, so the machine can be
 played from the browser, and shows the console panel.""")
-code("""mimic-headless --machine c64 --rom-dir roms --preview
-mimic-desktop  --machine amiga --rom-dir roms --preview      # window and browser""")
+code("""mimic-headless --machine c64 --preview
+mimic-desktop  --machine amiga --preview      # window and browser""")
 table(["Address", "Content"], [
     ["`/`", "the viewer page"],
     ["`/snapshot.png`", "the current frame as PNG"],
@@ -726,9 +728,9 @@ the C128's Z80, the Amiga's Copper and Blitter, the SNES sound CPU) are
 debug targets of their own. Looking at memory never changes it — reading an
 interrupt register in the debugger does not acknowledge the interrupt.""")
 h2("Starting the debug server")
-code("""mimic-headless --machine c64 --rom-dir roms --debug          # paused, port 6510
-mimic-desktop  --machine c64 --rom-dir roms --debug          # with window and sound
-mimic-headless --machine c64 --rom-dir roms --vice --preview --run""")
+code("""mimic-headless --machine c64 --debug          # paused, port 6510
+mimic-desktop  --machine c64 --debug          # with window and sound
+mimic-headless --machine c64 --vice --preview --run""")
 h2("The Python client polydbg")
 p("`tools/polydbg.py` needs only Python's standard library:")
 code("""python tools/polydbg.py info                 # devices and memory spaces
@@ -992,10 +994,10 @@ on the same computer.""")
 # ---- 3 desktop ----------------------------------------------------------------------
 
 h1("mimic-desktop")
-code("""mimic-desktop --machine c64 --rom-dir roms --disk game.d64 --autostart
+code("""mimic-desktop --machine c64 --disk game.d64 --autostart
 mimic-desktop --profile mac-se-755
-mimic-desktop --machine amiga --rom-dir roms --disk demo-a.adf --disk demo-b.adf --crt 1084s
-mimic-desktop --machine c64 --rom-dir roms --option port1=stmouse --option drive8=1541""")
+mimic-desktop --machine amiga --disk demo-a.adf --disk demo-b.adf --crt 1084s
+mimic-desktop --machine c64 --option port1=stmouse --option drive8=1541""")
 h2("Desktop-only flags")
 table(["Flag", "Meaning"], [
     ["`--scale N`", "Initial window size in rows per emulated line (default 2, less if "
@@ -1065,10 +1067,10 @@ for the true drive with its DOS ROM, `drive 8 (virtual)` without one.""")
 # ---- 4 headless ------------------------------------------------------------------
 
 h1("mimic-headless")
-code("""mimic-headless --machine c64 --rom-dir roms --prg demo.prg --frames 300 --snapshot out.png
-mimic-headless --machine c128 --option display=80 --rom-dir roms --frames 600 --screen vdc --snapshot c128.png
-mimic-headless --machine amiga --rom-dir roms --disk wb13.adf --frames 9000 --crt 1084s:2 --wav sound.wav
-mimic-headless --machine c64 --rom-dir roms --vice --preview --run
+code("""mimic-headless --machine c64 --prg demo.prg --frames 300 --snapshot out.png
+mimic-headless --machine c128 --option display=80 --frames 600 --screen vdc --snapshot c128.png
+mimic-headless --machine amiga --disk wb13.adf --frames 9000 --crt 1084s:2 --wav sound.wav
+mimic-headless --machine c64 --vice --preview --run
 mimic-headless --list""")
 h2("Headless-only flags")
 table(["Flag", "Meaning"], [
@@ -1333,7 +1335,7 @@ table(["Key", "Meaning", "Command-line equivalent"], [
 ], [0.3, 0.44, 0.26])
 h2("Precedence")
 p("""The ROM folder comes from the command line, then the profile's `roms`,
-then `settings.roms`, then `EMU_ROM_DIR`. Everything else: a profile is
+then `settings.roms`, then `EMU_ROM_DIR`, then `~/.mimic/roms`. Everything else: a profile is
 turned into a command line and the flags you type are laid over it, so a
 typed value replaces the profile's; options and ROM roles merge by key;
 a typed disk list replaces the profile's disks. The headless program takes

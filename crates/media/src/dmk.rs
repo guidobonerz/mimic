@@ -25,6 +25,16 @@
 //!
 //! JV images are built into tracks on load (gaps, marks and CRCs as the
 //! TRSDOS formatter writes them) and written back sector by sector.
+//!
+//! **TI-99/4A DSK** (V9T9/PC99 sector dumps, [`Image::parse_ti_dsk`]):
+//! 256-byte single-density sectors 0–8 of each track, 40 tracks; a
+//! double-sided image continues with side 1 from track 39 down to track 0
+//! (the TI's logical sector numbering). Its own call, as a single-sided
+//! TI image has the size of a 36-track JV1. On the track the sectors lie
+//! interleaved as the TI disk controller formats them (0 7 5 3 1 8 6 4 2).
+//! [`blank_ti_dsk`] makes an initialised blank disk (the volume information
+//! block and an empty file directory; Thierry Nouspikel, "The TI-99/4A
+//! Tech Pages", disk structure).
 
 use emu_core::media::MediaError;
 
@@ -74,6 +84,19 @@ pub enum Format {
     Dmk,
     Jv1,
     Jv3,
+    TiDsk,
+}
+
+/// TI disks: sectors per track, tracks per side, their order on a track.
+const TI_SECTORS: usize = 9;
+const TI_TRACKS: usize = 40;
+const TI_INTERLEAVE: [u8; 9] = [0, 7, 5, 3, 1, 8, 6, 4, 2];
+const TI_SIDE: usize = TI_SECTORS * TI_TRACKS * 256;
+
+/// Where cylinder `t`, side `side`, sector `s` lies in a TI image.
+fn ti_offset(t: usize, side: usize, s: usize) -> usize {
+    let logical_track = if side == 0 { t } else { 2 * TI_TRACKS - 1 - t };
+    (logical_track * TI_SECTORS + s) * 256
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +143,46 @@ impl Image {
             return Ok(img);
         }
         Self::parse_jv1(bytes)
+    }
+
+    /// A TI-99/4A sector dump: 92 160 bytes single-sided, 184 320
+    /// double-sided (see the module doc).
+    pub fn parse_ti_dsk(bytes: &[u8]) -> Result<Self, MediaError> {
+        let sides = match bytes.len() {
+            TI_SIDE => 1,
+            n if n == 2 * TI_SIDE => 2,
+            n => return Err(err(format!(
+                "not a TI-99/4A single-density disk image: {n} bytes ({TI_SIDE} or {} expected)",
+                2 * TI_SIDE
+            ))),
+        };
+        let mut tracks = Vec::new();
+        for t in 0..TI_TRACKS {
+            for side in 0..sides {
+                let sectors: Vec<SectorSpec> = TI_INTERLEAVE
+                    .iter()
+                    .map(|&n| SectorSpec {
+                        track: t as u8,
+                        side: side as u8,
+                        sector: n,
+                        size: 256,
+                        dam: 0xfb,
+                        data: bytes[ti_offset(t, side, usize::from(n))..][..256].to_vec(),
+                        mfm: false,
+                    })
+                    .collect();
+                tracks.push(build_track(&sectors, false));
+            }
+        }
+        Ok(Self {
+            format: Format::TiDsk,
+            protected: false,
+            sides: sides as u8,
+            tracks,
+            sd_single: true,
+            track_len: DEFAULT_TRACK_LEN,
+            jv3: Vec::new(),
+        })
     }
 
     fn parse_dmk(bytes: &[u8]) -> Result<Option<Self>, MediaError> {
@@ -293,6 +356,22 @@ impl Image {
                             let off = t * 2560 + usize::from(s.sector) * 256;
                             if let Some(dst) = out.get_mut(off..off + 256) {
                                 dst.copy_from_slice(&s.data);
+                            }
+                        }
+                    }
+                }
+                out
+            }
+            Format::TiDsk => {
+                let mut out = original.to_vec();
+                let sides = usize::from(self.sides.max(1));
+                for (i, track) in self.tracks.iter().enumerate() {
+                    let (t, side) = (i / sides, i % sides);
+                    for sec in decode_sectors(track) {
+                        if sec.size == 256 && usize::from(sec.sector) < TI_SECTORS {
+                            let off = ti_offset(t, side, usize::from(sec.sector));
+                            if let Some(dst) = out.get_mut(off..off + 256) {
+                                dst.copy_from_slice(&sec.data);
                             }
                         }
                     }
@@ -503,6 +582,41 @@ pub fn decode_sectors(track: &Track) -> Vec<Sector> {
     out
 }
 
+/// An initialised blank TI-99/4A disk (single density, 40 tracks, one or
+/// two sides) named `name`: sector 0 the volume information block (name,
+/// total sectors, 9 sectors a track, "DSK", tracks and sides, the
+/// allocation bitmap with sectors 0 and 1 in use), sector 1 the empty
+/// file directory.
+pub fn blank_ti_dsk(name: &str, sides: u8) -> Vec<u8> {
+    let sides = usize::from(sides.clamp(1, 2));
+    let total = TI_SECTORS * TI_TRACKS * sides;
+    let mut img = vec![0xe5; total * 256];
+    img[..512].fill(0);
+    let vib = &mut img[..256];
+    let mut n: Vec<u8> = name.bytes().take(10).collect();
+    n.resize(10, b' ');
+    vib[..10].copy_from_slice(&n);
+    vib[10..12].copy_from_slice(&(total as u16).to_be_bytes());
+    vib[12] = TI_SECTORS as u8;
+    vib[13..16].copy_from_slice(b"DSK");
+    vib[16] = b' ';
+    vib[17] = TI_TRACKS as u8;
+    vib[18] = sides as u8;
+    vib[19] = 1;
+    // The bitmap from byte >38: one bit per sector; past the disk: used.
+    for (i, b) in vib[0x38..0x100].iter_mut().enumerate() {
+        let mut v = 0u8;
+        for bit in 0..8 {
+            let sector = i * 8 + bit;
+            if sector < 2 || sector >= total {
+                v |= 1 << bit;
+            }
+        }
+        *b = v;
+    }
+    img
+}
+
 /// A blank JV1-style single-density image of `tracks` tracks (tests).
 pub fn blank_jv1(tracks: usize) -> Vec<u8> {
     vec![0xe5; tracks * 2560]
@@ -511,6 +625,38 @@ pub fn blank_jv1(tracks: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ti_disks_keep_their_sector_order() {
+        let mut bytes = blank_ti_dsk("TEST", 2);
+        assert_eq!(bytes.len(), 184_320);
+        assert_eq!(&bytes[13..16], b"DSK");
+        assert_eq!(bytes[0x38], 0x03, "VIB and FDIR in use");
+        // Logical sector 361 is side 1, track 39, sector 1.
+        bytes[361 * 256] = 0x77;
+        let img = Image::parse_ti_dsk(&bytes).unwrap();
+        assert_eq!((img.sides, img.cylinders()), (2, 40));
+        let t = decode_sectors(img.track(39, 1).unwrap());
+        let s1 = t.iter().find(|s| s.sector == 1).unwrap();
+        assert_eq!((s1.data[0], s1.side, s1.track), (0x77, 1, 39));
+        let order: Vec<u8> = decode_sectors(img.track(0, 0).unwrap())
+            .iter()
+            .map(|s| s.sector)
+            .collect();
+        assert_eq!(order, TI_INTERLEAVE);
+        // Back to the sector dump.
+        let mut img2 = img.clone();
+        let tr = img2.track_mut(2, 0).unwrap();
+        let s = decode_sectors(tr)
+            .into_iter()
+            .find(|s| s.sector == 4)
+            .unwrap();
+        tr.data[s.dam_pos + 1] = 0x55;
+        let out = img2.to_bytes(&bytes);
+        assert_eq!(out[(2 * 9 + 4) * 256], 0x55);
+        assert_eq!(out[361 * 256], 0x77);
+        assert!(Image::parse_ti_dsk(&bytes[..1000]).is_err());
+    }
 
     #[test]
     fn jv1_tracks_decode_back() {

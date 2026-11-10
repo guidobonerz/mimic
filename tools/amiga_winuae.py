@@ -59,7 +59,7 @@ def main():
     seconds = int(args[args.index("--seconds") + 1]) if "--seconds" in args else 300
     exe = os.environ.get("EMU_WINUAE", "winuae64.exe")
     kick = os.environ.get("EMU_KICKSTART") or os.path.join(
-        os.environ.get("EMU_ROM_DIR", "roms"), "amiga", "Kickstart 1.3.rom")
+        os.environ.get("EMU_ROM_DIR", os.path.expanduser("~/.mimic/roms")), "amiga", "Kickstart 1.3.rom")
     with tempfile.TemporaryDirectory() as tmp:
         disk = os.path.join(tmp, "disk.adf")
         shutil.copyfile(src, disk)

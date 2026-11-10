@@ -47,7 +47,7 @@ profiles:
     description: Amiga 500 with 1 MB chip RAM and the debugger
     machine: amiga
     rom:                     # single ROM files by role instead of a folder
-      kick13: roms/amiga/kick13.rom
+      kick13: ~/.mimic/roms/amiga/kick13.rom
     options:
       chip: 1m
       drives: 2

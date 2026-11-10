@@ -2,7 +2,7 @@
 
 Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 2026-10-30 after the VIC-II and CIA work (release build, user ROMs in
-`roms/`, test data from `tools/fetch-testdata.sh` and
+`~/.mimic/roms/`, test data from `tools/fetch-testdata.sh` and
 `tools/fetch_vice_testprogs.py`).
 
 ## Overview

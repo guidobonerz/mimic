@@ -34,7 +34,7 @@
 //! ```
 //!
 //! Precedence for the ROM folder: the command line or the profile, then
-//! `settings.roms`, then `EMU_ROM_DIR`.
+//! `settings.roms`, then `EMU_ROM_DIR`, then `~/.mimic/roms`.
 //!
 //! A profile is applied by turning it into the frontend's command line
 //! ([`Profile::to_args`]); flags given on the real command line override

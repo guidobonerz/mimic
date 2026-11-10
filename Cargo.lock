@@ -866,6 +866,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpu-tms9900"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "cpu-upd7725"
 version = "0.1.0"
 dependencies = [
@@ -1199,6 +1206,7 @@ dependencies = [
  "machine-snes",
  "machine-spectrum",
  "machine-ted",
+ "machine-ti99",
  "machine-trs80",
  "machine-vectrex",
  "machine-vic20",
@@ -2356,10 +2364,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-ti99"
+version = "0.1.0"
+dependencies = [
+ "chips-ti",
+ "cpu-tms9900",
+ "devices-input",
+ "drives-other",
+ "emu-core",
+ "media",
+]
+
+[[package]]
 name = "machine-trs80"
 version = "0.1.0"
 dependencies = [
  "cpu-z80",
+ "drives-other",
  "emu-core",
  "media",
 ]

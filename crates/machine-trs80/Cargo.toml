@@ -12,3 +12,4 @@ workspace = true
 emu-core.workspace = true
 cpu-z80.workspace = true
 media.workspace = true
+drives-other.workspace = true

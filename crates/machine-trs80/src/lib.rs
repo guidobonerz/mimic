@@ -47,7 +47,8 @@
 pub mod cassette;
 pub mod charset;
 pub mod ei;
-pub mod fdc;
+/// The floppy disk controllers (shared with the TI-99/4A's disk card).
+pub use drives_other::wd17xx as fdc;
 pub mod keyboard;
 pub mod m3;
 pub mod memory;

@@ -18,6 +18,7 @@ cpu-65816 = { path = "crates/cpu-65816" }
 cpu-spc700 = { path = "crates/cpu-spc700" }
 cpu-upd7725 = { path = "crates/cpu-upd7725" }
 cpu-8080 = { path = "crates/cpu-8080" }
+cpu-tms9900 = { path = "crates/cpu-tms9900" }
 cpu-ada = { path = "crates/cpu-ada" }
 asm-ada = { path = "crates/asm-ada" }
 brass = { path = "crates/brass" }
@@ -59,6 +60,7 @@ machine-zx81 = { path = "crates/machine-zx81" }
 machine-trs80 = { path = "crates/machine-trs80" }
 machine-spectrum = { path = "crates/machine-spectrum" }
 machine-coleco = { path = "crates/machine-coleco" }
+machine-ti99 = { path = "crates/machine-ti99" }
 machine-nes = { path = "crates/machine-nes" }
 machine-snes = { path = "crates/machine-snes" }
 machine-vectrex = { path = "crates/machine-vectrex" }

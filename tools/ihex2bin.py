@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Intel HEX to a binary ROM image.
 
-    python tools/ihex2bin.py mpu-b-rom.hex roms/imsai/mpu-b.rom
+    python tools/ihex2bin.py mpu-b-rom.hex ~/.mimic/roms/imsai/mpu-b.rom
 
 The image starts at the file's lowest address and ends at its highest.
 """
