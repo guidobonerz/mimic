@@ -43,6 +43,10 @@
 //! - `disk`: "on" or "off" — the TI disk controller card ([`disk`]) with
 //!   drives DSK1–DSK3 (media slots "DSK1"–"DSK3"); on by default when its
 //!   DSR ROM (role "ti99disk") is there.
+//! - `speech`: "on" or "off" — the Speech Synthesizer (TMS5220 with its
+//!   TMS6100 speech ROM, role "ti99speech", 32 KB; `chips_ti::tms5220`),
+//!   read at `>9000`, written at `>9400`; on by default when the ROM is
+//!   there. Its 8 kHz samples are mixed into the sound.
 //!
 //! Media slot "cartridge": a dump `NAMEC.BIN` / `NAMED.BIN` / `NAMEG.BIN`
 //! or the bundle of them ([`media::ticart`]). Inserting or removing one
@@ -71,7 +75,7 @@ pub mod disk;
 pub mod keyboard;
 pub mod stub;
 
-use chips_ti::{vdp, Grom, Sn76489, Tms9901, Tms9918, VdpModel};
+use chips_ti::{vdp, Grom, Sn76489, Tms5220, Tms9901, Tms9918, VdpModel};
 use cpu_tms9900::{Tms9900, Tms9900Bus};
 use devices_input::joystick::pin;
 use disk::DiskCard;
@@ -194,6 +198,11 @@ struct Board {
     vdp: Tms9918,
     psg: Sn76489,
     pio: Tms9901,
+    /// The Speech Synthesizer, its current sample and the cycles to the
+    /// next one.
+    speech: Option<Tms5220>,
+    speech_level: i32,
+    speech_t: u32,
     keyboard: Keyboard,
     /// The joysticks' rows (columns 6 and 7), from the port devices.
     joys: [u8; 2],
@@ -234,7 +243,7 @@ impl Board {
             self.pix_acc -= 2 * CPU_HZ;
             self.field_done |= self.vdp.tick();
             if self.pixels % 3 != 2 {
-                let level = self.psg.tick();
+                let level = self.psg.tick() + self.speech_level;
                 if let Some(s) = self.audio.push(level - 16_382) {
                     let x = i32::from(s) << 16;
                     let y = x - self.dc[0] + ((i64::from(self.dc[1]) * 65_208) >> 16) as i32;
@@ -246,6 +255,13 @@ impl Board {
             self.pixels += 1;
         }
         self.chips_t += 1;
+        if let Some(sp) = &mut self.speech {
+            self.speech_t += 1;
+            if self.speech_t >= CPU_HZ / chips_ti::tms5220::SAMPLE_RATE {
+                self.speech_t = 0;
+                self.speech_level = i32::from(sp.sample()) / 2;
+            }
+        }
     }
 
     fn run_to(&mut self, to: u64) {
@@ -284,6 +300,7 @@ impl Board {
                     self.grom.read_address()
                 }) << 8
             }
+            0x9000..=0x93ff => self.speech.as_mut().map_or(0, |s| u16::from(s.read()) << 8),
             _ => self.mem_peek(a),
         }
     }
@@ -306,6 +323,7 @@ impl Board {
                     (self.grom.address() >> 8) as u8
                 }) << 8
             }
+            0x9000..=0x93ff => self.speech.as_ref().map_or(0, |s| u16::from(s.peek()) << 8),
             _ => match (exp_offset(a), &self.exp) {
                 (Some(o), Some(m)) => word_of(m, o),
                 _ => 0,
@@ -324,6 +342,11 @@ impl Board {
             }
             0x8000..=0x83ff => set_word(&mut self.pad, usize::from(a & 0xfe), v),
             0x8400..=0x87ff => self.psg.write(byte),
+            0x9400..=0x97ff => {
+                if let Some(s) = &mut self.speech {
+                    s.write(byte);
+                }
+            }
             0x8c00..=0x8fff => {
                 if a & 2 == 0 {
                     self.vdp.write_data(byte);
@@ -610,6 +633,26 @@ impl Ti99 {
                 )))
             }
         };
+        let speech = match config.options.get("speech").map(String::as_str) {
+            Some("off") => None,
+            Some("on") => Some(Tms5220::new(
+                config
+                    .roms
+                    .get("ti99speech")
+                    .cloned()
+                    .ok_or_else(|| ConfigError::MissingRom("ti99speech".into()))?,
+            )),
+            None => config
+                .roms
+                .get("ti99speech")
+                .filter(|_| !config.options.contains_key("roms"))
+                .map(|r| Tms5220::new(r.clone())),
+            Some(other) => {
+                return Err(ConfigError::Invalid(format!(
+                    "speech option '{other}' (on or off)"
+                )))
+            }
+        };
         let console_grom: [Vec<u8>; 3] = std::array::from_fn(|i| {
             grom.get(i * 0x2000..(i + 1) * 0x2000)
                 .map_or_else(Vec::new, <[u8]>::to_vec)
@@ -634,6 +677,9 @@ impl Ti99 {
                 vdp: Tms9918::new(vdp_model),
                 psg: Sn76489::new(),
                 pio: Tms9901::new(),
+                speech,
+                speech_level: 0,
+                speech_t: 0,
                 keyboard: Keyboard::default(),
                 joys: [0; 2],
                 chips_t: 0,
@@ -675,6 +721,11 @@ impl Ti99 {
         b.vdp.set_overlays(&self.overlay_ids);
         b.psg = Sn76489::new();
         b.pio = Tms9901::new();
+        if let Some(s) = &mut b.speech {
+            s.reset();
+        }
+        b.speech_level = 0;
+        b.speech_t = 0;
         let mut g = Grom::new();
         for (i, c) in self.console_grom.iter().enumerate() {
             g.chips[i] = c.clone();
@@ -973,6 +1024,21 @@ impl Machine for Ti99 {
                 ],
             },
             ChipInfo {
+                name: "speech",
+                regs: vec![
+                    reg(
+                        "STATUS",
+                        u32::from(b.speech.as_ref().map_or(0, |s| s.peek())),
+                        8,
+                    ),
+                    reg(
+                        "TALKING",
+                        u32::from(b.speech.as_ref().is_some_and(|s| s.talking())),
+                        1,
+                    ),
+                ],
+            },
+            ChipInfo {
                 name: "grom",
                 regs: vec![
                     reg("ADDR", u32::from(b.grom.address()), 16),
@@ -1096,6 +1162,13 @@ impl Machine for Ti99 {
             b.pio.save(w);
             b.keyboard.save(w);
         });
+        if let Some(sp) = &b.speech {
+            w.chunk(*b"TISP", 1, |w| {
+                sp.save(w);
+                w.u32(b.speech_level as u32);
+                w.u32(b.speech_t);
+            });
+        }
         self.cpu.save(&mut w);
         b.vdp.save(&mut w);
         b.psg.save(&mut w);
@@ -1159,6 +1232,12 @@ impl Machine for Ti99 {
         board.pio.load(&mut c)?;
         board.keyboard.load(&mut c)?;
         board.samples.clear();
+        if let Some(sp) = &mut board.speech {
+            let (_, mut c) = StateReader::new(s).chunk(*b"TISP", 1)?;
+            sp.load(&mut c)?;
+            board.speech_level = c.u32()? as i32;
+            board.speech_t = c.u32()? % (CPU_HZ / chips_ti::tms5220::SAMPLE_RATE);
+        }
         let mut cpu = self.cpu.clone();
         let mut sched = self.sched.clone();
         let mut input = self.input.clone();

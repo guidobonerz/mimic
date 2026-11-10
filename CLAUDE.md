@@ -50,7 +50,7 @@ crates/
   chips-atari/     ANTIC, GTIA, POKEY, PIA
   chips-amstrad/   CRTC 6845, Gate Array, AY-3-8912, 8255 PPI, FDC 765
   chips-acorn/     MEMC, IOC, VIDC, PCF8583, WD1772 (Archimedes)
-  chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision, TI-99/4A), TMS9901, GROM (TMC0430)
+  chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision, TI-99/4A), TMS9901, GROM (TMC0430), TMS5220 speech
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)
   chips-nintendo/  NES: PPU 2C02/2C07 with its palette, APU of the 2A03/2A07; SNES: S-PPU, S-DSP

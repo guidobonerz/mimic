@@ -110,6 +110,9 @@ fn keys(c: char) -> Vec<u16> {
     if c == '+' {
         return vec![SHIFT, 0];
     }
+    if c == '*' {
+        return vec![SHIFT, 19];
+    }
     let k = pos.iter().find(|(ch, _)| *ch == c).expect("typable").1;
     vec![k]
 }
@@ -169,6 +172,31 @@ fn ti_basic_starts_and_computes() {
         out.lines().any(|l| l.trim() == "3"),
         "the sum on its own line:\n{out}"
     );
+    // A small program: squares.
+    run(m, 30);
+    for line in [
+        "10 FOR I=1 TO 5\n",
+        "20 PRINT I,I*I\n",
+        "30 NEXT I\n",
+        "RUN\n",
+    ] {
+        type_text(m, line);
+        run(m, 30);
+    }
+    run(m, 120);
+    let out = screen(m);
+    assert!(out.contains(" 5             25"), "{out}");
+    snapshot(m, "ti99-basic.png");
+}
+
+/// With `EMU_SNAPSHOT_DIR` set: the picture through the "lite" monitor
+/// profile (the README's screenshots).
+fn snapshot(m: &dyn Machine, name: &str) {
+    if let Ok(dir) = std::env::var("EMU_SNAPSHOT_DIR") {
+        let profile = video_crt::Profile::preset("lite").unwrap();
+        let png = emu_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
+        std::fs::write(std::path::Path::new(&dir).join(name), png).unwrap();
+    }
 }
 
 /// A cartridge from the ROM folder's `ti99` dumps (C and G next to each
@@ -195,20 +223,11 @@ fn a_cartridge_appears_in_the_menu_and_runs() {
     assert!(menu.contains("2 FOR PARSEC"), "{menu}");
     type_text(m, "2");
     run(m, 300);
-    if let Ok(dir) = std::env::var("EMU_SNAPSHOT_DIR") {
-        let f = m.framebuffer();
-        let png = emu_preview::encode_png(&f);
-        std::fs::write(std::path::Path::new(&dir).join("ti99-parsec.png"), png).unwrap();
-    }
     assert!(!screen(m).contains("FOR PARSEC"), "left the menu");
     // Into the game.
     type_text(m, " ");
     run(m, 400);
-    if let Ok(dir) = std::env::var("EMU_SNAPSHOT_DIR") {
-        let f = m.framebuffer();
-        let png = emu_preview::encode_png(&f);
-        std::fs::write(std::path::Path::new(&dir).join("ti99-parsec-game.png"), png).unwrap();
-    }
+    snapshot(m, "ti99-parsec.png");
 }
 
 /// Bytes shared with the test, writable (a blank cassette).
@@ -383,4 +402,72 @@ fn ti_basic_saves_to_and_loads_from_disk() {
     run(m, 60);
     let list = screen(m);
     assert!(list.contains("10 PRINT 42"), "{list}");
+}
+
+/// The speech synthesizer's TALKING bit (the machine's "speech" chip).
+fn talking(m: &dyn Machine) -> bool {
+    m.chips()
+        .into_iter()
+        .find(|c| c.name == "speech")
+        .and_then(|c| c.regs.into_iter().find(|r| r.name == "TALKING"))
+        .is_some_and(|r| r.value != 0)
+}
+
+/// Parsec speaks through the Speech Synthesizer when the game starts
+/// ("Welcome aboard, Captain"); with `EMU_SNAPSHOT_DIR` the sound is saved
+/// as `ti99-parsec-speech.wav`.
+#[test]
+#[ignore = "needs the TI-99/4A ROMs, the speech ROM and the Parsec dumps"]
+fn parsec_speaks() {
+    let dir = media_backends::roms::env_dir().expect("no ROM folder");
+    let path = ["ti99/PARSECC.BIN", "PARSECC.BIN"]
+        .iter()
+        .map(|p| dir.join(p))
+        .find(|p| p.exists())
+        .expect("PARSECC.BIN");
+    let media = media_backends::image::open_cart(&path).unwrap();
+    let mut m = ti99(&[("speech", "on")]);
+    let m = m.as_mut();
+    let slot = m.media_slots()[0].id;
+    m.media_slot(slot).unwrap().insert(media).unwrap();
+    let mut audio = Vec::new();
+    let mut spoke = 0;
+    let mut dbg = DebugHooks::new();
+    let mut step = |m: &mut dyn Machine, frames: u32, audio: &mut Vec<i16>, spoke: &mut u32| {
+        for _ in 0..frames {
+            m.run_frame(&mut dbg);
+            m.audio(audio);
+            if talking(m) {
+                *spoke += 1;
+            }
+        }
+    };
+    step(m, 120, &mut audio, &mut spoke);
+    type_text(m, " ");
+    step(m, 60, &mut audio, &mut spoke);
+    type_text(m, "2");
+    step(m, 300, &mut audio, &mut spoke);
+    type_text(m, " ");
+    step(m, 600, &mut audio, &mut spoke);
+    if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
+        let mut wav = Vec::new();
+        let data_len = (audio.len() * 2) as u32;
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&48_000u32.to_le_bytes());
+        wav.extend_from_slice(&96_000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        for v in &audio {
+            wav.extend_from_slice(&v.to_le_bytes());
+        }
+        std::fs::write(std::path::Path::new(&d).join("ti99-parsec-speech.wav"), wav).unwrap();
+    }
+    assert!(spoke > 20, "the synthesizer talked for {spoke} fields");
 }

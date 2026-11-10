@@ -371,6 +371,8 @@ table(["Option", "Werte"], [
      "`1m`, `2m`, `4m`, `8m`, `16m`; `off` (Standard)"],
     ["`userport`", "`wic64`: ein WiC64-WLAN-Adapter am User-Port; `none` (Standard)"],
     ["`net`", "`off`: kein Netz für UCI und WiC64, auch wenn das Frontend eines hat"],
+    ["`sd2iec`", "`on`: ein SD2IEC am seriellen Bus (siehe unten); `sd2iec_device` = 4–30 "
+     "(Standard 9); `drive8=sd2iec` setzt es an die Stelle von Laufwerk 8"],
 ], [0.22, 0.78])
 p("""Tasten: Esc = RUN/STOP, Tab = CTRL, linke Strg = C=, Einfg = £, Entf =
 ↑, Bild auf = RESTORE, Pos1 = CLR/HOME, F2/F4/F6/F8 = F1/F3/F5/F7 mit
@@ -381,7 +383,7 @@ h3("Netz: Ultimate Command Interface und WiC64")
 p("""**Ultimate Command Interface** (`--option uci=on`): die vier Register
 des Command Interface von Ultimate 64 / 1541 Ultimate II+ bei $DF1C-$DF1F.
 Die DOS-Ziele 1 und 2 arbeiten auf einem Ordner Ihres Rechners
-(`--uci-dir`, Standard `./ultimate`): öffnen, lesen, schreiben, positionieren,
+(`--uci-dir`, Standard `.mimic/ultimate` im Benutzerordner): öffnen, lesen, schreiben, positionieren,
 Dateiinfo, löschen, umbenennen, kopieren, Verzeichnisse wechseln, anlegen
 und auflisten, die Uhrzeit, REU-Daten in die und aus der offenen Datei, und
 das Einlegen von Disketten-Abbildern aus dem Ordner in Laufwerk 8 (mount,
@@ -420,6 +422,23 @@ Sockets); dort sieht das Command Interface die hochgeladenen Dateien als
 seinen Ordner. Eine Debugger-Aufzeichnung (`record_start`/`record_stop`)
 zeichnet auch jede Antwort aus dem Netz und dem Ordner auf, so dass
 `replay_input` einen Lauf ohne Netz exakt wiederholt.""")
+
+h3("SD2IEC")
+p("""**SD2IEC** (`--option sd2iec=on`, Gerät 9; `--option drive8=sd2iec`
+statt Laufwerk 8): ein Massenspeicher am seriellen Bus, dessen „SD-Karte“
+ein Ordner Ihres Rechners ist (`--sd2iec-dir`, Standard `.mimic/sd2iec` im
+Benutzerordner). Geladen wird im KERNAL-Tempo (keine Schnelllader).
+Verzeichnisse wie bei CMD-Laufwerken (`CD:NAME`, `CD//`, `CD:←`, `MD`,
+`RD`, Pfade wie `LOAD"//SPIELE/:ELITE",9`); D64/D71/D81-Abbilder hängt
+`CD:SPIEL.D64` ein, `CD:←` verlässt sie; `N:NEU.D64,ID` legt ein neues an.
+Namen in beiden Schreibweisen erscheinen als normale Buchstaben, Namen über
+16 Zeichen als 8.3-Kurzname. Direktzugriff im eingehängten Abbild
+(`#`-Puffer, `U1`/`U2`, `B-P`, `B-A`/`B-F`), REL-Dateien mit `P`,
+Swap-Listen (`XS:LISTE.LST`, dann die Bedienfeld-Tasten SD2IEC NEXT und
+PREV; beide zusammen springen zum ersten Eintrag, ohne Liste legen sie
+`AUTOSWAP.GEN` mit den Abbildern des Ordners an), `XI`, `XD`, `XR` und die
+übliche Laufwerkserkennung per `M-R`. Ein Abbild im Medienschacht „sd2iec“
+bleibt eingehängt, bis es ausgeworfen wird.""")
 
 h2("Commodore VIC-20, C16/Plus/4, PET und C128")
 table(["Maschine", "Optionen"], [
@@ -525,6 +544,23 @@ Feuerknöpfe, Tastenfeld), `superaction`, `driving`, `roller`, `none`;
 Controllers, X = rechter Feuerknopf), das von Controller 2 auf dem
 Ziffernblock; Joystick 1 auf den Cursortasten, Leertaste = linker
 Feuerknopf.""")
+
+h2("TI-99/4A")
+p("""ROMs: das Konsolen-ROM (`994AROM.BIN`, 8 KB) und GROM 0–2
+(`994AGROM.BIN`, 24 KB) im Unterordner `ti99` des ROM-Ordners; das DSR-ROM
+des Diskettencontrollers (`DISK.BIN`, 8 KB) fügt die Diskettenkarte hinzu,
+das Sprach-ROM (`SPCHROM.BIN`, 32 KB) den Speech Synthesizer (`speech=on|off`;
+Parsec und andere Spiele sprechen).
+`--videoformat pal` ist der TMS9929A. Optionen: `ram=32k|none` (die
+32-KB-Speichererweiterung, Standard `32k`), `port1`, `port2` = `joystick`
+oder `none`, `disk=on|off`, `roms=stub`. Module: `--cart SPIELC.BIN` — die
+Dateien `G` (GROM) und `D` (zweite Bank) daneben werden mitgeladen.
+Kassette CS1: `--tape band.wav`; `SAVE CS1` und `OLD CS1` fragen nach den
+Rekordertasten, das sind play/record/stop/rewind des Medienschachts.
+Disketten: `--disk spiel.dsk` (TI-Sektorabbilder, 90 oder 180 KB) in DSK1
+des Diskettencontrollers. Tasten: Alt = FCTN, Feststelltaste = ALPHA LOCK
+(beim Start an), Pfeiltasten = FCTN+E/S/D/X, Rücktaste = FCTN+S, Entf =
+FCTN+1, Esc = FCTN+9 (BACK), F4 = FCTN+4 (CLEAR).""")
 
 h2("Nintendo NES / Famicom")
 p("""Optionen: `port1`, `port2` = `controller`, `zapper`, `arkanoid`, `none`;
@@ -999,7 +1035,10 @@ table(["Option", "Bedeutung"], [
     ["`--net on|off`", "Das Netz des Rechners für Geräte, die es nutzen: WiC64 "
      "(`userport=wic64`) und Ultimate Command Interface (`uci=on`) des C64. Standard `on`."],
     ["`--uci-dir DIR`", "Der Ordner, in dem das DOS des Ultimate Command Interface arbeitet "
-     "(Standard `./ultimate`, beim ersten Schreiben angelegt; Pfade können ihn nicht verlassen)."],
+     "(Standard `.mimic/ultimate` im Benutzerordner, beim ersten Schreiben angelegt; "
+     "Pfade können ihn nicht verlassen)."],
+    ["`--sd2iec-dir DIR`", "Die Karte des C64-SD2IEC (`--option sd2iec=on` oder "
+     "`drive8=sd2iec`; Standard `.mimic/sd2iec` im Benutzerordner, beim Start angelegt)."],
     ["`--uci-mount NAME=DIR`", "Ein Ordner des Rechners als UCI-Laufwerk `/NAME`, wie SD, "
      "Usb0, Usb1, Flash, Temp des Ultimate *(wiederholbar)*."],
     ["`--printer-dir DIR`", "Wohin `--option printer=on` seine Aufträge schreibt (Standard "

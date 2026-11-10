@@ -151,10 +151,12 @@ impl Image {
         let sides = match bytes.len() {
             TI_SIDE => 1,
             n if n == 2 * TI_SIDE => 2,
-            n => return Err(err(format!(
+            n => {
+                return Err(err(format!(
                 "not a TI-99/4A single-density disk image: {n} bytes ({TI_SIDE} or {} expected)",
                 2 * TI_SIDE
-            ))),
+            )))
+            }
         };
         let mut tracks = Vec::new();
         for t in 0..TI_TRACKS {

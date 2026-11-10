@@ -468,6 +468,8 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ),
         // The TI disk controller card's DSR ROM (optional).
         optional("ti99disk", &["ti99disk", "ti-disk", "disk"], 0x2000),
+        // The Speech Synthesizer's TMS6100 speech ROM (optional).
+        optional("ti99speech", &["spchrom", "ti99speech", "speech"], 0x8000),
     ];
     const COLECO: &[RomSpec] = &[rom(
         "coleco",
