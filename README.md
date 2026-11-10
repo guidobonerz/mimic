@@ -6,7 +6,7 @@ The user guide — how to use the emulator plus the complete reference of every 
 
 ## Screenshots
 
-Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test, the TI-99/4A pictures from the `ti99_boot` test); the consoles without a start screen show a game. ROMs and software are not part of this repository.
+Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test); the consoles without a start screen show a game. ROMs and software are not part of this repository.
 
 <table>
 <tr>
@@ -55,8 +55,7 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/trs80.png" alt="TRS-80 Model I: Level II BASIC power-on"><br><b>TRS-80 Model I</b><br>Level II BASIC power-on</td>
 </tr>
 <tr>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/ti99-basic.png" alt="TI-99/4A: TI BASIC"><br><b>TI-99/4A</b><br>TI BASIC</td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/ti99-parsec.png" alt="TI-99/4A: Parsec"><br><b>TI-99/4A</b><br><i>Parsec</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/ti99.png" alt="TI-99/4A: Title screen"><br><b>TI-99/4A</b><br>Title screen</td>
 </tr>
 </table>
 
@@ -111,7 +110,7 @@ Where the project stands against test suites and checks, as of 2026-11-10. 🟢 
 | IBM 029 keypunch | own tests, IMSAI reads decks | green | 🟢 | – |
 | Logophor 16 | own tests, Foundry ROM golden images | steps 1–11 accepted | 🟢 | Steampunk machine |
 | TRS-80 Model I / III | Level II and Model III ROMs (`trs80_boot`, 7 tests) | both boot to BASIC and compute; Model I block graphics, CSAVE/CLOAD; both boot and write a test disk (FD1771 SD, FD1793 DD with WAIT/NMI) | 🟡 | a real DOS disk, Model III cassette |
-| TI-99/4A | real ROMs (`ti99_boot`, 4 tests) | title screen, menu, TI BASIC computes; Parsec from its C/G dumps; SAVE/OLD on cassette (WAV) and on disk (TI disk controller); Parsec talks through the Speech Synthesizer | 🟡 | speech excitation by ear against hardware, GROM/VDP access timing, inverted (379) banking |
+| TI-99/4A | real ROMs (`ti99_boot`, 5 tests) | title screen, menu, TI BASIC computes; Parsec from its C/G dumps; SAVE/OLD on cassette (WAV) and on disk (TI disk controller); Parsec talks through the Speech Synthesizer | 🟡 | speech excitation by ear against hardware, GROM/VDP access timing, inverted (379) banking |
 | Colour Genie, CPC Plus, QL, BBC, Atari ST, KC85, KIM-1, HP calculators | – | – | ⚪ | planned phases |
 
 ### Drives, devices and frontends
