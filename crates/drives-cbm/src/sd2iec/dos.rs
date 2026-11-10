@@ -13,6 +13,15 @@ use super::names::{self, PRG, REL, SEQ, USR};
 use crate::dos::status;
 use crate::virtual_drive::IecDos;
 
+mod direct;
+mod memory;
+mod rel;
+mod swap;
+
+pub(crate) use rel::RelFile;
+pub(crate) use swap::Swap;
+pub use swap::SwapButton;
+
 /// What the drive reports at power-on and after `UI`. Programs detect an
 /// SD2IEC by "SD2IEC" in this message (sd2iec README, "Introduction").
 pub const VERSION: &str = "SD2IEC V1.0.0/MIMIC";
@@ -35,6 +44,14 @@ const NO_CHANNEL: DosError = (70, "NO CHANNEL");
 const DISK_FULL: DosError = (72, "DISK FULL");
 const NOT_READY: DosError = (74, "DRIVE NOT READY");
 const PARTITION: DosError = (77, "SELECTED PARTITION ILLEGAL");
+const NO_RECORD: DosError = (50, "RECORD NOT PRESENT");
+const OVERFLOW: DosError = (51, "OVERFLOW IN RECORD");
+const NO_BLOCK: DosError = (65, "NO BLOCK");
+const ILLEGAL_TS: DosError = (66, "ILLEGAL TRACK OR SECTOR");
+
+/// `XD`: the drive slots 0–7. 4 = the primary SD card, 15 = none; all
+/// none means the default (the card in slot 0).
+const DEFAULT_DRIVES: [u8; 8] = [4, 15, 15, 15, 15, 15, 15, 15];
 
 fn fs_error(e: FsError) -> DosError {
     match e {
@@ -75,6 +92,16 @@ pub(crate) enum Channel {
         target: Target,
         data: Vec<u8>,
     },
+    /// A direct access buffer (`#`, `##n`): `data` is 256 bytes (or n ×
+    /// 256), `pos` the read/write pointer, `end` where reading stops (EOI
+    /// on the byte before it).
+    Buffer {
+        data: Vec<u8>,
+        pos: usize,
+        end: usize,
+    },
+    /// A REL file: fixed-length records, positioned with `P`.
+    Rel(RelFile),
 }
 
 /// Where the mounted image comes from.
@@ -134,6 +161,17 @@ pub struct Sd2iecDos {
     pub(crate) star_1581: bool,
     /// The card's write protect switch.
     pub(crate) protected: bool,
+    /// `XI0`–`XI2`: disk images listed with their type, as `DIR`, or both.
+    pub(crate) xi_mode: u8,
+    /// `XD`: the drive slots.
+    pub(crate) drives: [u8; 8],
+    /// `XR:name`: the drive ROM file `M-R` reads `$8000`–`$FFFF` from.
+    pub(crate) xr: Option<Vec<u8>>,
+    /// The `XR` file as last read: directory, name and contents (not state;
+    /// read again when needed).
+    rom_cache: Option<(String, Vec<u8>, Vec<u8>)>,
+    /// The active swap list (`XS`, `AUTOSWAP.LST`).
+    pub(crate) swap: Option<Swap>,
 }
 
 impl Sd2iecDos {
@@ -156,6 +194,11 @@ impl Sd2iecDos {
             hide_ext: false,
             star_1581: true,
             protected: false,
+            xi_mode: 0,
+            drives: DEFAULT_DRIVES,
+            xr: None,
+            rom_cache: None,
+            swap: None,
         }
     }
 
@@ -201,8 +244,9 @@ impl Sd2iecDos {
         }
     }
 
-    /// RESET from the bus or `UJ`: channels close, the status shows the
-    /// version; directory, mounted image and settings stay.
+    /// RESET from the bus or `UJ`: channels and buffers close, the status
+    /// shows the version; directory, mounted image, swap list and settings
+    /// stay.
     pub fn reset(&mut self) {
         self.under_atn = false;
         self.listening = false;
@@ -236,7 +280,12 @@ impl Sd2iecDos {
         self.channels[15] = Channel::Closed;
     }
 
+    /// The card, if there is one and `XD` has not configured it away.
     fn files(&self) -> DosResult<SharedFiles> {
+        let card = self.drives.contains(&4) || self.drives.iter().all(|&d| d == 15);
+        if !card {
+            return Err(NOT_READY);
+        }
         self.files.clone().ok_or(NOT_READY)
     }
 
@@ -585,8 +634,7 @@ impl Sd2iecDos {
             self.directory(&raw[1..])
                 .map(|data| Channel::Read { data, pos: 0 })
         } else if raw.first() == Some(&b'#') {
-            // Direct access buffers are not emulated.
-            Err(NO_CHANNEL)
+            Ok(direct::open_buffer(&raw))
         } else {
             self.open_file(ch, &raw)
         };
@@ -605,6 +653,10 @@ impl Sd2iecDos {
             None => (false, raw),
         };
         let (path, spec) = split_spec(rest);
+        // `name,L,`+CHR$(length): the length byte may be any value, also a
+        // comma, so it is taken off before the split.
+        let rel = rel::rel_spec(spec);
+        let spec = rel.map_or(spec, |(head, _)| head);
         let mut parts = spec.split(|&c| c == b',');
         let name = parts.next().unwrap_or_default().to_vec();
         let mut file_type = None;
@@ -623,6 +675,12 @@ impl Sd2iecDos {
         }
         if name.is_empty() {
             return Err(BAD_NAME);
+        }
+        if rel.is_some() || file_type == Some(REL) {
+            if ch < 2 {
+                return Err(TYPE_MISMATCH);
+            }
+            return self.open_rel(path, &name, rel.and_then(|(_, len)| len));
         }
         let new_type = file_type.unwrap_or(if ch == 1 { PRG } else { SEQ });
         if write && self.protected {
@@ -680,6 +738,11 @@ impl Sd2iecDos {
         let dir = self.resolve(&mut *fs, path)?;
         if !write {
             let e = self.find_file(&mut *fs, &dir, &name)?;
+            if e.file_type == REL && ch >= 2 && file_type.is_none() {
+                // An existing REL file opens as one without `,L`.
+                drop(fs);
+                return self.open_rel(path, &name, None);
+            }
             if file_type.is_some_and(|t| t != e.file_type) {
                 return Err(TYPE_MISMATCH);
             }
@@ -718,6 +781,13 @@ impl Sd2iecDos {
     /// CLOSE: a written file goes to the folder or into the image.
     fn close(&mut self, ch: u8) {
         let channel = std::mem::take(&mut self.channels[usize::from(ch)]);
+        if let Channel::Rel(f) = channel {
+            match self.close_rel(f) {
+                Ok(()) => self.set(OK),
+                Err(e) => self.set(e),
+            }
+            return;
+        }
         let Channel::Write { target, data } = channel else {
             return;
         };
@@ -769,7 +839,7 @@ impl Sd2iecDos {
         let files = self.files()?;
         let mut fs = lock(&files);
         let dir = self.resolve(&mut *fs, path)?;
-        let entries = self.scan(&mut *fs, &dir)?;
+        let entries = mountables_as_dirs(self.scan(&mut *fs, &dir)?, self.xi_mode);
         let star = self.star_1581;
         let include_hidden = filter == Some(b'H');
         let shown = entries.iter().filter(|e| {
@@ -797,6 +867,13 @@ impl Sd2iecDos {
     // ---- commands ------------------------------------------------------
 
     fn run_command(&mut self, raw: &[u8]) {
+        if raw.first() == Some(&b'P') {
+            // Binary arguments: a trailing 13 may be one of them.
+            if let Err(e) = self.position(&raw[1..]) {
+                self.set(e);
+            }
+            return;
+        }
         let mut cmd: Vec<u8> = raw.to_vec();
         while cmd.last() == Some(&b'\r') {
             cmd.pop();
@@ -811,20 +888,26 @@ impl Sd2iecDos {
     /// error.
     fn command_result(&mut self, cmd: &[u8]) -> DosResult<()> {
         match cmd {
-            [b'C', b'D', rest @ ..] => self.cd(rest).map(|()| self.set(OK)),
+            [b'C', b'D', rest @ ..] => {
+                // A swap list the buttons found ends with a CD.
+                if self.swap.as_ref().is_some_and(|s| s.auto) {
+                    self.swap = None;
+                }
+                self.cd(rest).map(|()| self.set(OK))
+            }
             [b'C', b'P', rest @ ..] => self.partition(parse_number(rest)),
             [b'C', 0xd0, p, ..] => self.partition(Some(u32::from(*p))),
             [b'C', rest @ ..] => self.copy(rest).map(|()| self.set(OK)),
             [b'M', b'D', rest @ ..] => self.md(rest).map(|()| self.set(OK)),
             [b'R', b'D', rest @ ..] => self.rd(rest).map(|()| self.set(OK)),
-            [b'M', b'-', b'R', rest @ ..] => {
-                // No drive memory: zeros, as many as asked for (sd2iec
-                // answers unknown addresses with arbitrary data).
-                let n = rest.get(2).copied().unwrap_or(1).max(1);
-                self.channels[15] = Channel::Read {
-                    data: vec![0; usize::from(n)],
-                    pos: 0,
+            [b'M', b'-', b'R', lo, hi, rest @ ..] => {
+                let n = match rest.first() {
+                    None => 1,
+                    Some(0) => 256,
+                    Some(&n) => usize::from(n),
                 };
+                let data = self.memory_read(u16::from_le_bytes([*lo, *hi]), n);
+                self.channels[15] = Channel::Read { data, pos: 0 };
                 Ok(())
             }
             [b'M', b'-', b'W', lo, hi, n, data @ ..] => {
@@ -837,6 +920,18 @@ impl Sd2iecDos {
                 Ok(())
             }
             [b'M', b'-', b'E', ..] => Ok(()),
+            [b'U', b'1' | b'A', rest @ ..] => self.block_read(rest, false),
+            [b'U', b'2' | b'B', rest @ ..] => self.block_write(rest, false),
+            [b'B', b'-', b'R', rest @ ..] => self.block_read(rest, true),
+            [b'B', b'-', b'W', rest @ ..] => self.block_write(rest, true),
+            [b'B', b'-', b'P', rest @ ..] => self.buffer_pointer(rest),
+            [b'B', b'-', b'A', rest @ ..] => self.block_allocate(rest, true),
+            [b'B', b'-', b'F', rest @ ..] => self.block_allocate(rest, false),
+            // Code in the drive does not run (as with M-E).
+            [b'B', b'-', b'E', ..] => {
+                self.set(OK);
+                Ok(())
+            }
             [b'S', rest @ ..] => self.scratch(rest),
             [b'R', rest @ ..] => self.rename(rest).map(|()| self.set(OK)),
             [b'N', rest @ ..] => self.new_disk(rest).map(|()| self.set(OK)),
@@ -1207,10 +1302,68 @@ impl Sd2iecDos {
                 self.set(OK);
             }
             [b'?'] => self.set_status(3, VERSION, 0, 0),
+            [b'S', rest @ ..] => return self.swap_command(rest),
+            [b'R'] => {
+                self.xr = None;
+                self.set(OK);
+            }
+            [b'R', b':', name @ ..] => {
+                if name.is_empty() || name.len() > 16 {
+                    return Err(BAD_NAME);
+                }
+                self.xr = Some(name.to_vec());
+                self.set(OK);
+            }
+            [b'I', d @ b'0'..=b'2'] => {
+                self.xi_mode = d - b'0';
+                self.set(OK);
+            }
+            [b'D', b'?'] => {
+                let slots: String = self
+                    .drives
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &d)| d != 15)
+                    .map(|(i, d)| format!(":{i:02}={d:02}"))
+                    .collect();
+                self.set_status(3, &format!("D{slots}"), self.device, 0);
+            }
+            [b'D', rest @ ..] => return self.drive_config(rest),
             // The settings are not kept beyond the session (no EEPROM).
             [b'W'] => self.set(OK),
             _ => return Err(SYNTAX),
         }
+        Ok(())
+    }
+
+    /// `XDdrv=val`: drive slot `drv` (0–7) gets device `val`: 4 (the
+    /// card) or 15 (none). Other device types (ATA, a second card) do not
+    /// exist here; a device in two slots is refused (sd2iec README, "XD").
+    fn drive_config(&mut self, arg: &[u8]) -> DosResult<()> {
+        let n = numbers(arg);
+        let (&[slot, value], true) = (&n[..], arg.contains(&b'=')) else {
+            return Err(SYNTAX);
+        };
+        let slot = usize::try_from(slot)
+            .ok()
+            .filter(|&s| s < 8)
+            .ok_or(SYNTAX)?;
+        let value = match value {
+            4 => 4,
+            15 => 15,
+            _ => return Err(SYNTAX),
+        };
+        if value == 4
+            && self
+                .drives
+                .iter()
+                .enumerate()
+                .any(|(i, &d)| d == 4 && i != slot)
+        {
+            return Err(SYNTAX);
+        }
+        self.drives[slot] = value;
+        self.set(OK);
         Ok(())
     }
 
@@ -1280,6 +1433,21 @@ impl Sd2iecDos {
     /// directory, an image mounted from the folder (by path), the channels
     /// and the settings are.
     pub fn save(&self, w: &mut StateWriter) {
+        self.save_v1(w);
+        // Added in version 2.
+        w.u8(self.xi_mode);
+        w.raw(&self.drives);
+        match &self.xr {
+            Some(n) => {
+                w.bool(true);
+                w.bytes(n);
+            }
+            None => w.bool(false),
+        }
+        swap::save(self.swap.as_ref(), w);
+    }
+
+    pub(crate) fn save_v1(&self, w: &mut StateWriter) {
         w.u8(self.device);
         for b in [self.under_atn, self.listening, self.talking, self.opening] {
             w.bool(b);
@@ -1334,14 +1502,24 @@ impl Sd2iecDos {
                     }
                     w.bytes(data);
                 }
+                Channel::Buffer { data, pos, end } => {
+                    w.u8(4);
+                    w.bytes(data);
+                    w.u32(*pos as u32);
+                    w.u32(*end as u32);
+                }
+                Channel::Rel(f) => {
+                    w.u8(5);
+                    f.save(w);
+                }
             }
         }
     }
 
-    /// Counterpart of [`Sd2iecDos::save`]; the folder and a disk in the
-    /// media slot stay. An image mounted from the folder is read again when
-    /// next used.
-    pub fn load(&mut self, c: &mut StateReader<'_>) -> Result<(), StateError> {
+    /// Counterpart of [`Sd2iecDos::save`] (chunk `version` 1 or 2); the
+    /// folder and a disk in the media slot stay. An image mounted from the
+    /// folder is read again when next used.
+    pub fn load(&mut self, c: &mut StateReader<'_>, version: u16) -> Result<(), StateError> {
         let mut d = Self::new(c.u8()?);
         d.under_atn = c.bool()?;
         d.listening = c.bool()?;
@@ -1396,8 +1574,24 @@ impl Sd2iecDos {
                     },
                     data: c.bytes()?.to_vec(),
                 },
+                4 => Channel::Buffer {
+                    data: c.bytes()?.to_vec(),
+                    pos: c.u32()? as usize,
+                    end: c.u32()? as usize,
+                },
+                5 => Channel::Rel(RelFile::load(c)?),
                 _ => return Err(StateError::Invalid("sd2iec channel")),
             };
+        }
+        if version >= 2 {
+            d.xi_mode = c.u8()?.min(2);
+            c.raw_into(&mut d.drives)?;
+            d.xr = if c.bool()? {
+                Some(c.bytes()?.to_vec())
+            } else {
+                None
+            };
+            d.swap = swap::load(c)?;
         }
         d.files = self.files.take();
         d.protected = self.protected;
@@ -1441,6 +1635,13 @@ impl IecDos for Sd2iecDos {
                 let text = self.status.as_bytes();
                 text.first().map(|&b| (b, text.len() == 1))
             }
+            Channel::Buffer { data, pos, end } => {
+                let end = (*end).min(data.len());
+                data.get(*pos)
+                    .filter(|_| *pos < end)
+                    .map(|&b| (b, pos + 1 == end))
+            }
+            Channel::Rel(_) => self.rel_next_byte(ch),
             _ => None,
         }
     }
@@ -1474,12 +1675,14 @@ impl IecDos for Sd2iecDos {
             }
             return;
         }
-        if let Channel::Read { pos, .. } = &mut self.channels[ch] {
-            *pos += 1;
+        match &mut self.channels[ch] {
+            Channel::Read { pos, .. } | Channel::Buffer { pos, .. } => *pos += 1,
+            Channel::Rel(f) => f.advance(),
+            _ => {}
         }
     }
 
-    fn received(&mut self, byte: u8, _eoi: bool) {
+    fn received(&mut self, byte: u8, eoi: bool) {
         if self.under_atn {
             self.command_byte(byte);
             return;
@@ -1491,10 +1694,54 @@ impl IecDos for Sd2iecDos {
             self.name.push(byte);
         } else if self.channel == 15 {
             self.command.push(byte);
-        } else if let Channel::Write { data, .. } = &mut self.channels[usize::from(self.channel)] {
-            data.push(byte);
+        } else {
+            match &mut self.channels[usize::from(self.channel)] {
+                Channel::Write { data, .. } => data.push(byte),
+                Channel::Buffer { data, pos, .. } => {
+                    if let Some(b) = data.get_mut(*pos) {
+                        *b = byte;
+                        *pos += 1;
+                    }
+                }
+                Channel::Rel(f) => {
+                    if !f.write(byte, eoi) {
+                        self.set(OVERFLOW);
+                    }
+                }
+                _ => {}
+            }
         }
     }
+}
+
+/// `XI1`: disk images listed as directories; `XI2`: both ways.
+fn mountables_as_dirs(entries: Vec<Entry>, mode: u8) -> Vec<Entry> {
+    if mode == 0 {
+        return entries;
+    }
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        if e.mountable && !e.dir {
+            let mut as_dir = e.clone();
+            as_dir.dir = true;
+            if mode == 2 {
+                out.push(e);
+            }
+            out.push(as_dir);
+        } else {
+            out.push(e);
+        }
+    }
+    out
+}
+
+/// The decimal numbers in a command's ASCII arguments (`U1:2,0,18,0`,
+/// `B-P 2 1`), separated by anything that is not a digit.
+fn numbers(s: &[u8]) -> Vec<u32> {
+    s.split(|c| !c.is_ascii_digit())
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| std::str::from_utf8(p).ok()?.parse().ok())
+        .collect()
 }
 
 /// `[partition][path]:name` → path part (partition digits dropped) and

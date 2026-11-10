@@ -621,6 +621,34 @@ impl D64 {
             .is_some_and(|b| b[bo + usize::from(sector / 8)] & (1 << (sector % 8)) != 0)
     }
 
+    /// Whether a block is free in the BAM (`B-A`/`B-F` of direct access).
+    pub fn block_free(&self, track: u8, sector: u8) -> bool {
+        self.is_free(track, sector)
+    }
+
+    /// Mark a block used in the BAM (`B-A`).
+    pub fn allocate_block(&mut self, track: u8, sector: u8) {
+        self.allocate(track, sector);
+    }
+
+    /// Mark a block free in the BAM (`B-F`).
+    pub fn free_block(&mut self, track: u8, sector: u8) {
+        self.release(track, sector);
+    }
+
+    /// The first free block at or after `track`/`sector` in DOS order
+    /// (rest of the track, then the following tracks), for `65,NO BLOCK`.
+    pub fn next_free_block(&self, track: u8, sector: u8) -> Option<(u8, u8)> {
+        let mut usable: Vec<u8> = self.data_tracks().filter(|&t| t >= track).collect();
+        usable.sort_unstable();
+        usable.into_iter().find_map(|t| {
+            let from = if t == track { sector } else { 0 };
+            (from..self.sectors_in(t))
+                .find(|&s| self.is_free(t, s))
+                .map(|s| (t, s))
+        })
+    }
+
     fn release(&mut self, track: u8, sector: u8) {
         if track == 0 || track > self.tracks || sector >= self.sectors_in(track) {
             return;

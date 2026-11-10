@@ -20,7 +20,8 @@
 //! file area as its card (no folder: `74,DRIVE NOT READY`); its device
 //! number is `options["sd2iec_device"]` (4–30, default 9). `drive8 =
 //! "sd2iec"` puts it in place of drive 8 (device 8). Media slot
-//! [`SLOT_SD2IEC`] mounts a disk image in it.
+//! [`SLOT_SD2IEC`] mounts a disk image in it; panel controls 3 and 4 are
+//! its disk change buttons NEXT and PREV (both: HOME) for swap lists.
 //! `options["fastload"] = "on"`: the virtual drive serves the KERNAL's
 //! serial routines without bus time (see [`fastload`]).
 //!
@@ -1035,6 +1036,12 @@ impl C64 {
             2 => {
                 self.io.keyboard.set(keyboard::RESTORE, value == 1);
             }
+            // The SD2IEC's disk change buttons (swap lists).
+            3 | 4 => {
+                if let Some(sd) = &mut self.sd2iec {
+                    sd.button(id == 4, value == 1);
+                }
+            }
             _ => {}
         }
     }
@@ -1505,11 +1512,16 @@ impl Machine for C64 {
 
     fn controls(&self) -> Vec<emu_core::ControlInfo> {
         use emu_core::ControlInfo;
-        vec![
+        let mut controls = vec![
             ControlInfo::button(0, "POWER", false),
             ControlInfo::button(1, "RESET", false),
             ControlInfo::button(2, "RESTORE", self.io.keyboard.restore),
-        ]
+        ];
+        if let Some(sd) = &self.sd2iec {
+            controls.push(ControlInfo::button(3, "SD2IEC NEXT", sd.button_held(false)));
+            controls.push(ControlInfo::button(4, "SD2IEC PREV", sd.button_held(true)));
+        }
+        controls
     }
 
     fn ports(&self) -> Vec<PortInfo> {

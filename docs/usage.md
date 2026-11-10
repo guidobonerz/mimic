@@ -492,6 +492,35 @@ umbenennen, und Umbenennen zwischen zwei Mounts geht nicht (Kopieren schon).
 Mit `--option uci=on` legt das Frontend alle diese Ordner gleich beim Start
 an, sonst erst beim ersten Schreiben.
 
+**SD2IEC** – `--option sd2iec=on` (Gerät 9, `--option sd2iec_device=4…30`)
+oder `--option drive8=sd2iec` (statt Laufwerk 8): ein Massenspeicher am
+seriellen Bus, dessen „SD-Karte“ ein Ordner des Rechners ist
+(`--sd2iec-dir ORDNER`, Standard `.mimic\sd2iec` im Benutzerordner; wird
+beim Start angelegt). Geladen wird im KERNAL-Tempo (keine Schnelllader).
+
+- Verzeichnisse wie bei CMD-Laufwerken: `CD:NAME`, `CD//` (Wurzel),
+  `CD:←` (zurück), `MD:NAME`, `RD:NAME`; Pfade im Dateinamen, z. B.
+  `LOAD"//SPIELE/:ELITE",9`. Groß- und Kleinbuchstaben im Dateinamen
+  erscheinen beide als normale C64-Buchstaben; Namen über 16 Zeichen als
+  Kurzname (`PICQUI~1.D64`).
+- Disk-Images (D64, D71, D81) hängt `CD:SPIEL.D64` ein, `CD:←` verlässt
+  sie; `N:NEU.D64,ID` legt ein neues an. Ein Image im Medienschacht
+  „sd2iec“ bleibt eingehängt, bis es ausgeworfen wird.
+- Direktzugriff im eingehängten Image: `OPEN2,9,2,"#"`, `U1`/`U2`,
+  `B-R`/`B-W`, `B-P`, `B-A`/`B-F`.
+- REL-Dateien (Datensätze) im Ordner: `OPEN2,9,2,"DATEN,L,"+CHR$(länge)`,
+  Positionieren mit `PRINT#15,"P"CHR$(96+2)CHR$(nr)CHR$(0)CHR$(1)`.
+- Diskwechsel per Swap-Liste: eine Textdatei mit einem Image pro Zeile,
+  aktiviert mit `PRINT#15,"XS:LISTE.LST"`. Die Tasten „SD2IEC NEXT“ und
+  „SD2IEC PREV“ im Bedienfeld blättern (beide zusammen: zurück zum
+  ersten). Ohne Liste nehmen die Tasten `AUTOSWAP.LST` aus dem aktuellen
+  Verzeichnis; gibt es keine, legt „beide zusammen“ `AUTOSWAP.GEN` mit
+  allen Images des Verzeichnisses an.
+- Weitere Befehle: `S`, `R`, `C`, `I`, `UI`, `UJ`, `U0>`, `X`, `XE`, `XI`,
+  `XD`, `XR` (Laufwerks-ROM-Datei für `M-R`), `X*`, `X?`. Ohne `XR`
+  beantwortet `M-R` die üblichen Laufwerkserkennungen (1541, bei einem
+  D71 1571, bei einem D81 1581).
+
 **WiC64** – `--option userport=wic64`: der WLAN-Adapter am Userport
 (PB0–PB7, PA2 als Richtung, PC2/FLAG2 als Handshake), Firmware 2.x mit dem
 Legacy-Protokoll (`W`) und Protokoll 2 (`R`, `E`). Befehle: HTTP-GET (auch

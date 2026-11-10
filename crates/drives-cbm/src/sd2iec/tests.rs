@@ -407,3 +407,5 @@ fn savestate_keeps_directory_and_mount() {
     assert!(h.sd.load(&mut StateReader::new(&state[..20])).is_err());
     assert_eq!(h.sd.dos.cwd(), "/sub");
 }
+
+mod ext;

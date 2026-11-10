@@ -38,7 +38,13 @@ const EOI_ACK: u32 = 60;
 const BIT_LOW: u32 = 90;
 const BIT_VALID: u32 = 90;
 const BYTE_GAP: u32 = 60;
-const TURNAROUND: u32 = 80;
+/// After the turnaround the talker keeps CLK pulled this long before it
+/// signals ready to send. The KERNAL's TKSA (`$EDD6`) waits for the pulled
+/// CLK with the debounced poll above; with a bad line between two polls a
+/// 60 µs pulse can fall between them, and the bus hangs (found with
+/// `INPUT#` right after `PRINT#15`). A 1541 holds CLK while it fetches
+/// the first byte.
+const TALK_HOLD: u32 = 200;
 
 /// Where the protocol stands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -73,6 +79,8 @@ pub(crate) enum State {
     TxBits,
     /// Talker: waiting for the listener to acknowledge the byte.
     TxWaitAck,
+    /// Talker after turnaround: holding CLK pulled ([`TALK_HOLD`]).
+    TurnHold,
 }
 
 /// The DOS behind an [`IecProtocol`]: what the protocol hands over and asks
@@ -233,8 +241,13 @@ impl IecProtocol {
                 if !bus.clk {
                     self.out.clk = true;
                     self.out.data = false;
+                    self.enter(State::TurnHold);
+                }
+            }
+            State::TurnHold => {
+                if self.timer >= TALK_HOLD {
                     self.enter(State::TxNextByte);
-                    self.timer = BYTE_GAP.saturating_sub(TURNAROUND);
+                    self.timer = BYTE_GAP;
                 }
             }
             State::TxNextByte => {
@@ -426,6 +439,7 @@ fn state_from(v: u8) -> Option<State> {
         TxEoiWaitHigh,
         TxBits,
         TxWaitAck,
+        TurnHold,
     ]
     .get(usize::from(v))
     .copied()

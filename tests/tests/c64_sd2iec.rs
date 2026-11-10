@@ -99,6 +99,26 @@ fn type_until(m: &mut dyn Machine, text: &str, until: &str, times: usize, frames
     seen && count(m, "ERROR") == 0
 }
 
+/// The screen as text (for failure messages).
+fn screen_text(m: &mut dyn Machine) -> String {
+    screen(m)
+        .chunks(40)
+        .map(|row| {
+            row.iter()
+                .map(|&c| match c & 0x7f {
+                    c @ 1..=26 => (c + 0x40) as char,
+                    c @ 0x20..=0x3f => c as char,
+                    _ => '~',
+                })
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn boot(m: &mut dyn Machine) {
     let mut dbg = DebugHooks::new();
     for _ in 0..150 {
@@ -251,4 +271,48 @@ fn sd2iec_lists_disk_images_of_the_host_folder() {
     let _ = std::fs::remove_dir_all(&root);
     assert_eq!(names, (1, 1));
     assert!(mounted, "CD:TOOL.D64 and LOAD from it");
+}
+
+/// REL records and a direct access block read from BASIC, with the real
+/// KERNAL (OPEN, PRINT#, INPUT#, GET# on the SD2IEC as drive 8).
+#[test]
+#[ignore = "needs C64 ROMs in EMU_ROM_DIR"]
+fn sd2iec_rel_records_and_block_reads_from_basic() {
+    let (mut m, files) = c64(&[("drive8", "sd2iec")]);
+    let m = m.as_mut();
+    assert!(m.controls().iter().any(|c| c.name == "SD2IEC NEXT"));
+    boot(m);
+    // INPUT# and GET# need program mode, and RUN closes open files: all of
+    // it is one program.
+    for line in [
+        "10 OPEN15,8,15:OPEN2,8,2,\"DATA,L,\"+CHR$(20)\n",
+        "20 PRINT#15,\"P\"CHR$(98)CHR$(3)CHR$(0)CHR$(1):PRINT#2,\"REC THREE\"\n",
+        "30 PRINT#15,\"P\"CHR$(98)CHR$(3)CHR$(0)CHR$(1):INPUT#2,A$:PRINTA$\n",
+        "40 CLOSE2:CLOSE15\n",
+    ] {
+        type_until(m, line, line.split(' ').next().unwrap(), 1, 5);
+    }
+    // Until READY: line 40 closes the file.
+    assert!(
+        type_until(m, "RUN\n", "READY.", 1, 600) && count(m, "REC THREE") == 1,
+        "record read back:\n{}",
+        screen_text(m)
+    );
+    let r00 = read_file(&files, "/SD2IEC/data.r00").unwrap();
+    assert_eq!(r00.len(), 26 + 3 * 20);
+    assert_eq!(&r00[26 + 40..26 + 50], b"REC THREE\r");
+    // U1 on the BAM block of the mounted image: link 18/1, then "A".
+    type_until(m, "NEW\n", "READY.", 1, 50);
+    for line in [
+        "10 OPEN15,8,15,\"CD:DISK.D64\":OPEN2,8,2,\"#\"\n",
+        "20 PRINT#15,\"U1:2,0,18,0\":GET#2,A$,B$,C$:PRINTASC(A$)ASC(B$)C$\n",
+        "30 CLOSE2:CLOSE15\n",
+    ] {
+        type_until(m, line, line.split(' ').next().unwrap(), 1, 5);
+    }
+    assert!(
+        type_until(m, "RUN\n", "READY.", 1, 600) && count(m, " 18  1 A") == 1,
+        "block read:\n{}",
+        screen_text(m)
+    );
 }
