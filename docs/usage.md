@@ -478,7 +478,7 @@ Ultimate-Steuerbefehle (Mount, Reset, REU, Palette …) fehlen bewusst. Ein
 Steckmodul bleibt nutzbar; nur die vier UCI-Register gehören dann dem UCI.
 
 Die DOS-Targets arbeiten in einem Ordner des Rechners: `--uci-dir ORDNER`
-(Standard `./ultimate`) ist die Wurzel `/`. Pfade können den Ordner nicht
+(Standard `.mimic\ultimate` im Benutzerordner, also `%USERPROFILE%\.mimic\ultimate` bzw. `~/.mimic/ultimate`) ist die Wurzel `/`. Pfade können den Ordner nicht
 verlassen (`..`, absolute Pfade, Laufwerksbuchstaben und symbolische Links
 werden abgewiesen).
 

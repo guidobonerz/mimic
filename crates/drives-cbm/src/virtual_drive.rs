@@ -42,7 +42,7 @@ const TURNAROUND: u32 = 80;
 
 /// Where the protocol stands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum State {
+pub(crate) enum State {
     /// Not addressed: lines released.
     #[default]
     Idle,
@@ -75,64 +75,74 @@ enum State {
     TxWaitAck,
 }
 
-pub struct VirtualDrive {
-    /// Channels, files and commands.
-    pub dos: VirtualDos,
-    /// Lines this drive pulls.
-    out: IecLines,
-    state: State,
-    timer: u32,
-    /// Bit number and phase while sending or receiving.
-    bit: u8,
-    phase: u8,
-    byte: u8,
-    eoi: bool,
-    prev_atn: bool,
+/// The DOS behind an [`IecProtocol`]: what the protocol hands over and asks
+/// for, byte by byte.
+pub trait IecDos {
+    /// ATN asserted or released: bytes received meanwhile are commands.
+    fn set_atn(&mut self, asserted: bool);
+    fn listening(&self) -> bool;
+    fn talking(&self) -> bool;
+    /// The talker ran out of data (or found no listener).
+    fn stop_talking(&mut self);
+    /// The next byte of the talk channel, and whether it is the last.
+    fn next_byte(&mut self) -> Option<(u8, bool)>;
+    /// The byte from [`IecDos::next_byte`] was taken.
+    fn advance(&mut self);
+    /// A byte received as listener (a command under ATN).
+    fn received(&mut self, byte: u8, eoi: bool);
 }
 
-impl VirtualDrive {
-    pub fn new(device: u8) -> Self {
-        Self {
-            dos: VirtualDos::new(device, "MIMIC VIRTUAL DRIVE"),
-            out: IecLines::default(),
-            state: State::Idle,
-            timer: 0,
-            bit: 0,
-            phase: 0,
-            byte: 0,
-            eoi: false,
-            prev_atn: false,
-        }
+impl IecDos for VirtualDos {
+    fn set_atn(&mut self, asserted: bool) {
+        VirtualDos::set_atn(self, asserted);
     }
-
-    /// RESET: the bus lines and channels are released, the status shows
-    /// the DOS version.
-    pub fn reset(&mut self) {
-        let dos = std::mem::replace(&mut self.dos, VirtualDos::new(8, ""));
-        *self = Self::new(dos.device());
-        self.dos = dos;
-        self.dos.reset();
+    fn listening(&self) -> bool {
+        VirtualDos::listening(self)
     }
-
-    pub fn has_disk(&self) -> bool {
-        self.dos.has_disk()
+    fn talking(&self) -> bool {
+        VirtualDos::talking(self)
     }
-
-    /// The command channel's current message (for tests and tools).
-    pub fn status_text(&self) -> &str {
-        self.dos.status_text()
+    fn stop_talking(&mut self) {
+        VirtualDos::stop_talking(self);
     }
+    fn next_byte(&mut self) -> Option<(u8, bool)> {
+        VirtualDos::next_byte(self)
+    }
+    fn advance(&mut self) {
+        VirtualDos::advance(self);
+    }
+    fn received(&mut self, byte: u8, eoi: bool) {
+        VirtualDos::received(self, byte, eoi);
+    }
+}
 
-    /// Lines this drive pulls on the bus.
+/// The serial bus protocol of a device without a CPU, at line level; the
+/// bytes go to and come from an [`IecDos`].
+#[derive(Clone, Debug, Default)]
+pub struct IecProtocol {
+    /// Lines this device pulls.
+    pub(crate) out: IecLines,
+    pub(crate) state: State,
+    pub(crate) timer: u32,
+    /// Bit number and phase while sending or receiving.
+    pub(crate) bit: u8,
+    pub(crate) phase: u8,
+    pub(crate) byte: u8,
+    pub(crate) eoi: bool,
+    pub(crate) prev_atn: bool,
+}
+
+impl IecProtocol {
+    /// Lines this device pulls on the bus.
     pub fn iec_out(&self) -> IecLines {
         self.out
     }
 
     /// One microsecond with the bus levels as they are now (`true` = low).
-    pub fn tick(&mut self, bus: IecLines) {
+    pub fn tick(&mut self, bus: IecLines, dos: &mut dyn IecDos) {
         if bus.atn && !self.prev_atn {
             // ATN: every device answers by pulling DATA and listens.
-            self.dos.set_atn(true);
+            dos.set_atn(true);
             self.out = IecLines {
                 atn: false,
                 clk: false,
@@ -141,11 +151,11 @@ impl VirtualDrive {
             };
             self.enter(State::AtnWaitClk);
         } else if !bus.atn && self.prev_atn {
-            self.atn_released();
+            self.atn_released(dos);
         }
         self.prev_atn = bus.atn;
         self.timer = self.timer.saturating_add(1);
-        self.step(bus);
+        self.step(bus, dos);
     }
 
     fn enter(&mut self, state: State) {
@@ -153,11 +163,11 @@ impl VirtualDrive {
         self.timer = 0;
     }
 
-    fn atn_released(&mut self) {
-        self.dos.set_atn(false);
-        if self.dos.talking() {
+    fn atn_released(&mut self, dos: &mut dyn IecDos) {
+        dos.set_atn(false);
+        if dos.talking() {
             self.enter(State::TurnWaitClk);
-        } else if self.dos.listening() {
+        } else if dos.listening() {
             // Keep DATA pulled: ready when the host is.
             self.enter(State::RxWaitReady);
         } else {
@@ -166,7 +176,7 @@ impl VirtualDrive {
         }
     }
 
-    fn step(&mut self, bus: IecLines) {
+    fn step(&mut self, bus: IecLines, dos: &mut dyn IecDos) {
         match self.state {
             State::Idle => {}
             State::AtnWaitClk => {
@@ -213,7 +223,7 @@ impl VirtualDrive {
                         self.out.data = true;
                         let (byte, eoi) = (self.byte, self.eoi);
                         self.enter(State::RxWaitReady);
-                        self.dos.received(byte, eoi);
+                        dos.received(byte, eoi);
                     } else {
                         self.enter(State::RxBitHigh);
                     }
@@ -229,7 +239,7 @@ impl VirtualDrive {
             }
             State::TxNextByte => {
                 if self.timer >= BYTE_GAP {
-                    match self.dos.next_byte() {
+                    match dos.next_byte() {
                         Some((byte, last)) => {
                             self.byte = byte;
                             self.eoi = last;
@@ -240,7 +250,7 @@ impl VirtualDrive {
                         // the bus; the host times out.
                         None => {
                             self.out = IecLines::default();
-                            self.dos.stop_talking();
+                            dos.stop_talking();
                             self.enter(State::Idle);
                         }
                     }
@@ -268,7 +278,7 @@ impl VirtualDrive {
             State::TxBits => self.send_bits(),
             State::TxWaitAck => {
                 if bus.data {
-                    self.dos.advance();
+                    dos.advance();
                     if self.eoi {
                         // Last byte sent: release CLK and wait for UNTALK.
                         self.out = IecLines::default();
@@ -319,6 +329,77 @@ impl VirtualDrive {
             _ => {}
         }
     }
+
+    /// Savestate of every field (inside the caller's chunk).
+    pub fn save(&self, w: &mut StateWriter) {
+        w.u8(state_code(self.state));
+        w.u32(self.timer);
+        for v in [self.bit, self.phase, self.byte] {
+            w.u8(v);
+        }
+        for b in [self.out.clk, self.out.data, self.eoi, self.prev_atn] {
+            w.bool(b);
+        }
+    }
+
+    /// Counterpart of [`IecProtocol::save`].
+    pub fn load(&mut self, c: &mut StateReader<'_>) -> Result<(), StateError> {
+        let mut p = Self {
+            state: state_from(c.u8()?).ok_or(StateError::Invalid("IEC protocol state"))?,
+            timer: c.u32()?,
+            bit: c.u8()?.min(8),
+            phase: c.u8()? % 2,
+            byte: c.u8()?,
+            ..Self::default()
+        };
+        p.out.clk = c.bool()?;
+        p.out.data = c.bool()?;
+        p.eoi = c.bool()?;
+        p.prev_atn = c.bool()?;
+        *self = p;
+        Ok(())
+    }
+}
+
+pub struct VirtualDrive {
+    /// Channels, files and commands.
+    pub dos: VirtualDos,
+    proto: IecProtocol,
+}
+
+impl VirtualDrive {
+    pub fn new(device: u8) -> Self {
+        Self {
+            dos: VirtualDos::new(device, "MIMIC VIRTUAL DRIVE"),
+            proto: IecProtocol::default(),
+        }
+    }
+
+    /// RESET: the bus lines and channels are released, the status shows
+    /// the DOS version.
+    pub fn reset(&mut self) {
+        self.proto = IecProtocol::default();
+        self.dos.reset();
+    }
+
+    pub fn has_disk(&self) -> bool {
+        self.dos.has_disk()
+    }
+
+    /// The command channel's current message (for tests and tools).
+    pub fn status_text(&self) -> &str {
+        self.dos.status_text()
+    }
+
+    /// Lines this drive pulls on the bus.
+    pub fn iec_out(&self) -> IecLines {
+        self.proto.out
+    }
+
+    /// One microsecond with the bus levels as they are now (`true` = low).
+    pub fn tick(&mut self, bus: IecLines) {
+        self.proto.tick(bus, &mut self.dos);
+    }
 }
 
 const TAG: [u8; 4] = *b"VDRV";
@@ -353,19 +434,20 @@ fn state_from(v: u8) -> Option<State> {
 impl Savestate for VirtualDrive {
     /// The image is media, not state; open channels are saved.
     fn save(&self, w: &mut StateWriter) {
+        let p = &self.proto;
         w.chunk(TAG, VERSION, |w| {
-            w.u8(state_code(self.state));
-            w.u32(self.timer);
+            w.u8(state_code(p.state));
+            w.u32(p.timer);
             let dos = &self.dos;
-            for v in [self.bit, self.phase, self.byte, dos.channel] {
+            for v in [p.bit, p.phase, p.byte, dos.channel] {
                 w.u8(v);
             }
             for b in [
-                self.out.clk,
-                self.out.data,
-                self.eoi,
+                p.out.clk,
+                p.out.data,
+                p.eoi,
                 dos.under_atn,
-                self.prev_atn,
+                p.prev_atn,
                 dos.listening,
                 dos.talking,
                 dos.opening,
@@ -382,17 +464,18 @@ impl Savestate for VirtualDrive {
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
         let (_, mut c) = r.chunk(TAG, VERSION)?;
         let mut d = VirtualDrive::new(self.dos.device());
-        d.state = state_from(c.u8()?).ok_or(StateError::Invalid("virtual drive state"))?;
-        d.timer = c.u32()?;
-        d.bit = c.u8()?.min(8);
-        d.phase = c.u8()? % 2;
-        d.byte = c.u8()?;
+        let p = &mut d.proto;
+        p.state = state_from(c.u8()?).ok_or(StateError::Invalid("virtual drive state"))?;
+        p.timer = c.u32()?;
+        p.bit = c.u8()?.min(8);
+        p.phase = c.u8()? % 2;
+        p.byte = c.u8()?;
         d.dos.channel = c.u8()? & 0x0f;
-        d.out.clk = c.bool()?;
-        d.out.data = c.bool()?;
-        d.eoi = c.bool()?;
+        p.out.clk = c.bool()?;
+        p.out.data = c.bool()?;
+        p.eoi = c.bool()?;
         d.dos.under_atn = c.bool()?;
-        d.prev_atn = c.bool()?;
+        p.prev_atn = c.bool()?;
         d.dos.listening = c.bool()?;
         d.dos.talking = c.bool()?;
         d.dos.opening = c.bool()?;

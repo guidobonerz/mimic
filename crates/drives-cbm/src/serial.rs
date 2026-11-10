@@ -311,7 +311,8 @@ impl SerialDrive {
         }
     }
 
-    fn out(&self, atn: bool) -> IecLines {
+    /// Lines the drive pulls, given the bus ATN level.
+    pub fn iec_out(&self, atn: bool) -> IecLines {
         match &self.kind {
             DriveKind::True(d) => d.iec_out(atn),
             DriveKind::Virtual(d) => d.iec_out(),
@@ -342,7 +343,7 @@ impl SerialDrive {
                 }
             }
         }
-        (IecLines::combine(&[host, self.out(host.atn)]), stop)
+        (IecLines::combine(&[host, self.iec_out(host.atn)]), stop)
     }
 
     pub fn save(&self, w: &mut StateWriter) {

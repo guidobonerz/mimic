@@ -119,10 +119,13 @@ usage: mimic-desktop [options]
                         userport=wic64) and Ultimate command interface
                         (--option uci=on); default on, off: no network
   --uci-dir DIR         the Ultimate command interface's DOS folder (default
-                        ./ultimate, created on the first write)
+                        ~/.mimic/ultimate, created on the first write)
   --uci-mount NAME=DIR  hang host folder DIR into the UCI file system as
                         /NAME, like the Ultimate's drives: SD, Usb0, Usb1,
                         Flash, Temp (repeatable)
+  --sd2iec-dir DIR      the C64 SD2IEC's card (--option sd2iec=on or
+                        drive8=sd2iec); default ~/.mimic/sd2iec, created at
+                        start
   --crt PROFILE         monitor: raw, lite, 1702, 1084s, 1084s-rgb, tv, pal-tv,
                         ntsc-tv, pet-white, pet-green, ctm644, gt65, mac or a
                         .toml file, re-read when it changes (default: the
@@ -336,6 +339,9 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
             "--uci-mount" => a
                 .uci_mounts
                 .push(media_backends::parse_mount(&value("--uci-mount")?)?),
+            "--sd2iec-dir" => a
+                .uci_mounts
+                .push(("SD2IEC".into(), PathBuf::from(value("--sd2iec-dir")?))),
             "--joyport" => {
                 let v = value("--joyport")?;
                 let n = v
@@ -543,10 +549,14 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
     // in a journal the debugger's recordings carry.
     // With the Ultimate command interface the folders are there from the
     // start (otherwise they appear on the first write).
-    let uci_dir = args.uci_dir.clone().unwrap_or_else(|| "ultimate".into());
+    let uci_dir = args
+        .uci_dir
+        .clone()
+        .unwrap_or_else(media_backends::default_uci_dir);
     if args.config.options.get("uci").is_some_and(|v| v == "on") {
         media_backends::create_host_folders(Some(&uci_dir), &args.uci_mounts)?;
     }
+    media_backends::create_sd2iec_folder(&args.config.options, &mut args.uci_mounts)?;
     let printer = media_backends::host_print::PrinterOutput::for_options(
         args.config.options.get("printer").map(String::as_str),
         args.printer_dir.clone(),

@@ -1009,3 +1009,58 @@ fn proportional_mouse_and_keypad_read_as_joystick_lines() {
         "ENTER wins while down"
     );
 }
+
+fn stub_with(options: &[(&str, &str)]) -> Result<C64, ConfigError> {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    for (k, v) in options {
+        config.options.insert((*k).into(), (*v).into());
+    }
+    C64::new(&config)
+}
+
+#[test]
+fn sd2iec_options() {
+    let m = stub_with(&[("sd2iec", "on")]).unwrap();
+    assert_eq!(m.sd2iec.as_ref().map(|s| s.device()), Some(9));
+    assert!(m.media_slots().iter().any(|s| s.id == SLOT_SD2IEC));
+    let m = stub_with(&[("drive8", "sd2iec")]).unwrap();
+    assert!(m.drive.is_none());
+    assert_eq!(m.sd2iec.as_ref().map(|s| s.device()), Some(8));
+    let m = stub_with(&[("sd2iec", "on"), ("sd2iec_device", "11")]).unwrap();
+    assert_eq!(m.sd2iec.as_ref().map(|s| s.device()), Some(11));
+    assert!(stub_with(&[("sd2iec", "yes")]).is_err());
+    assert!(stub_with(&[("sd2iec", "on"), ("sd2iec_device", "31")]).is_err());
+    // Device 8 is the (virtual) drive 8's.
+    assert!(stub_with(&[("sd2iec", "on"), ("sd2iec_device", "8")]).is_err());
+    assert!(stub().sd2iec.is_none());
+    assert!(!stub().media_slots().iter().any(|s| s.id == SLOT_SD2IEC));
+}
+
+#[test]
+fn sd2iec_savestate_and_card_folder() {
+    use emu_core::host::{lock, MemFileHost};
+    let mut card = MemFileHost::new();
+    card.insert("/SD2IEC/sub/x", vec![1]).unwrap();
+    let host = HostServices::new(None, Some(Box::new(card)));
+    let shared = host.files.clone().unwrap();
+    let mut a = stub_with(&[("sd2iec", "on")]).unwrap();
+    a.attach_host(host.clone());
+    let mut b = stub_with(&[("sd2iec", "on")]).unwrap();
+    b.attach_host(host);
+    run_cycles(&mut a, 1000);
+    let state = a.save_state();
+    assert!(state.windows(4).any(|w| w == b"SD2I"));
+    b.load_state(&state).unwrap();
+    assert_eq!(b.save_state(), state);
+    // The card is the file area's /SD2IEC.
+    let card = sd2iec_card(&HostServices {
+        net: None,
+        files: Some(shared.clone()),
+    })
+    .unwrap();
+    assert_eq!(lock(&card).list_dir("/").unwrap()[0].name, "sub");
+    // A state without the SD2IEC loads and leaves it alone.
+    let plain = stub().save_state();
+    b.load_state(&plain).unwrap();
+}

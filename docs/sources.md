@@ -78,6 +78,7 @@ own section.
 | 1581, D81, MFM | *Commodore 1581 User's Guide* and service manual (318044); Western Digital WD1770/1772 data sheet | `drives-cbm/src/c1581.rs`, `wd177x.rs`, `media/src/mfm.rs` |
 | 8050/8250, D80/D82 | *CBM 8050/8250 user's manual* | `media/src/d64.rs` |
 | Serial (IEC) bus protocol | *Commodore 64 Programmer's Reference Guide*, serial bus; *Inside the 1541* | `drives-cbm/src/virtual_drive.rs` |
+| SD2IEC | sd2iec firmware README (Ingo Korb et al., sd2iec 1.0, https://www.sd2iec.de; read from the copy at https://github.com/thierer/sd2iec, 2026-11-10): commands (CD/MD/RD, S, R, C, N, U0>, X, XE, X*, M-R/M-W, T-R/T-W without RTC), x00 files, long names, disk images, partitions, directory link bytes. Documentation only; the firmware source is GPL and was not used (golden rule 7). PC64 x00 header layout (`C64File`) | `drives-cbm/src/sd2iec.rs`, `sd2iec/` |
 | KERNAL serial routines (fast loading) | *Commodore 64 Programmer's Reference Guide*, chapter 5 (KERNAL jump table, TALK/LISTEN/SECOND/TKSA/CIOUT/ACPTR/UNTLK/UNLSN); entry addresses and register effects read from the user's KERNAL 901227-03 | `machine-c64/src/fastload.rs` |
 | IEEE-488 on the PET | PET KERNAL behaviour (e.g. `$F0D8`), IEEE-488 three-wire handshake | `drives-cbm/src/ieee_drive.rs` |
 | TAP | TAP format as written by C64S and documented with the VICE tools | `media/src/tap.rs` |

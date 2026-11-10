@@ -13,7 +13,8 @@
 //! - [`FileHost`]: one sandboxed folder. Paths are canonical, `/`-separated
 //!   and relative to the folder's root (see [`join_path`]); no path can
 //!   leave the root. [`MountFileHost`] hangs further folders into it as
-//!   directories of the root (the Ultimate's `/SD`, `/Usb0` …).
+//!   directories of the root (the Ultimate's `/SD`, `/Usb0` …);
+//!   [`SubFileHost`] shows a device one subfolder as its root.
 //!
 //! The frontend implements them (native: `media-backends`; the web
 //! frontend offers a [`MemFileHost`] and no network) and hands them to the
@@ -25,10 +26,12 @@
 mod journal;
 mod memfs;
 mod mount;
+mod sub;
 
 pub use journal::{Journal, JournalMode, ReplayStatus};
 pub use memfs::MemFileHost;
 pub use mount::MountFileHost;
+pub use sub::SubFileHost;
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};

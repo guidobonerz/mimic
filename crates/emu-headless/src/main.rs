@@ -54,8 +54,8 @@ usage: mimic-headless [options]
                         --option uci=on); default on, off: they report \"no
                         network\"
   --uci-dir DIR         the folder the Ultimate command interface's DOS
-                        targets work in (default ./ultimate, created on the
-                        first write; paths cannot leave it)
+                        targets work in (default ~/.mimic/ultimate, created
+                        on the first write; paths cannot leave it)
   --printer-dir DIR     where --option printer=on writes its jobs (default
                         ./printer): print-001.prn, print-001-1.png
   --host-printer NAME   also send each finished page to this printer of
@@ -63,6 +63,9 @@ usage: mimic-headless [options]
   --uci-mount NAME=DIR  hang host folder DIR into the UCI file system as
                         /NAME, like the Ultimate's drives: SD, Usb0, Usb1,
                         Flash, Temp (repeatable)
+  --sd2iec-dir DIR      the C64 SD2IEC's card (--option sd2iec=on or
+                        drive8=sd2iec); default ~/.mimic/sd2iec, created at
+                        start
   --frames N            frames to run (default: 1)
   --snapshot FILE.png   write the last frame as PNG
   --snapshot-every N    with --snapshot: also write FILE-<frame>.png every N frames
@@ -239,6 +242,9 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--uci-mount" => args
                 .uci_mounts
                 .push(media_backends::parse_mount(&value("--uci-mount")?)?),
+            "--sd2iec-dir" => args
+                .uci_mounts
+                .push(("SD2IEC".into(), value("--sd2iec-dir")?.into())),
             "--list" => args.list = true,
             "--help" | "-h" => args.help = true,
             "--version" | "-V" => args.version = true,
@@ -375,7 +381,7 @@ fn cheat_files(args: &Args, main_space: &str) -> Result<Vec<emu_cheats::CheatFil
     Ok(files)
 }
 
-fn run(args: Args) -> Result<ExitCode, String> {
+fn run(mut args: Args) -> Result<ExitCode, String> {
     let registry = emu_machines::registry();
     if args.list {
         for e in registry.entries() {
@@ -493,10 +499,14 @@ fn run(args: Args) -> Result<ExitCode, String> {
     // through a journal so debugger recordings replay exactly.
     // With the Ultimate command interface the folders are there from the
     // start (otherwise they appear on the first write).
-    let uci_dir = std::path::PathBuf::from(args.uci_dir.as_deref().unwrap_or("ultimate"));
+    let uci_dir = args
+        .uci_dir
+        .as_deref()
+        .map_or_else(media_backends::default_uci_dir, std::path::PathBuf::from);
     if args.config.options.get("uci").is_some_and(|v| v == "on") {
         media_backends::create_host_folders(Some(&uci_dir), &args.uci_mounts)?;
     }
+    media_backends::create_sd2iec_folder(&args.config.options, &mut args.uci_mounts)?;
     let printer = media_backends::host_print::PrinterOutput::for_options(
         args.config.options.get("printer").map(String::as_str),
         args.printer_dir.clone(),

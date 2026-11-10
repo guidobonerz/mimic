@@ -90,6 +90,60 @@ pub fn create_host_folders(
         .try_for_each(|d| std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display())))
 }
 
+/// The user's mimic folder for files the machines see: `.mimic` in the
+/// home folder (`USERPROFILE` on Windows, else `HOME`); the working
+/// directory's `.mimic` if neither is set.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn user_files_dir() -> std::path::PathBuf {
+    ["USERPROFILE", "HOME"]
+        .iter()
+        .find_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()))
+        .map_or_else(std::path::PathBuf::new, std::path::PathBuf::from)
+        .join(".mimic")
+}
+
+/// The default folder of the Ultimate command interface's file area
+/// (`--uci-dir`): `~/.mimic/ultimate`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn default_uci_dir() -> std::path::PathBuf {
+    user_files_dir().join("ultimate")
+}
+
+/// The default card folder of the C64 SD2IEC (`--sd2iec-dir`):
+/// `~/.mimic/sd2iec`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn default_sd2iec_dir() -> std::path::PathBuf {
+    user_files_dir().join("sd2iec")
+}
+
+/// The C64 SD2IEC's card folder (`sd2iec=on` or `drive8=sd2iec`): the
+/// `SD2IEC` mount of `--sd2iec-dir` if there is one, else
+/// [`default_sd2iec_dir`], added to `mounts` as `SD2IEC`. Created at start
+/// so the user finds it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn create_sd2iec_folder(
+    options: &std::collections::BTreeMap<String, String>,
+    mounts: &mut Vec<(String, std::path::PathBuf)>,
+) -> Result<(), String> {
+    let on = options.get("sd2iec").is_some_and(|v| v == "on")
+        || options.get("drive8").is_some_and(|v| v == "sd2iec");
+    if !on {
+        return Ok(());
+    }
+    let dir = match mounts
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("SD2IEC"))
+    {
+        Some((_, d)) => d.clone(),
+        None => {
+            let d = default_sd2iec_dir();
+            mounts.push(("SD2IEC".into(), d.clone()));
+            d
+        }
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))
+}
+
 /// A `NAME=FOLDER` mount of `--uci-mount` (split at the first `=`).
 pub fn parse_mount(s: &str) -> Result<(String, std::path::PathBuf), String> {
     match s.split_once('=') {

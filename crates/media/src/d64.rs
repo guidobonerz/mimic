@@ -863,6 +863,37 @@ impl D64 {
         Ok(count)
     }
 
+    /// Give the first file named exactly `old` the name `new` (as `R:new=old`
+    /// does). `Ok(false)`: no such file.
+    pub fn rename(&mut self, old: &[u8], new: &[u8]) -> Result<bool, MediaError> {
+        let (mut t, mut s) = self.dir_start();
+        let mut visited = 0;
+        while t != 0 && visited < 80 {
+            visited += 1;
+            let block = self.sector(t, s).map(<[u8]>::to_vec).unwrap_or_default();
+            if block.len() < SECTOR_SIZE {
+                break;
+            }
+            for i in 0..8 {
+                let e = &block[i * 32..i * 32 + 32];
+                let raw = &e[5..21];
+                let len = raw.iter().position(|&c| c == 0xa0).unwrap_or(16);
+                if e[2] == 0 || raw[..len] != *old {
+                    continue;
+                }
+                if let Some(b) = self.sector_mut(t, s) {
+                    let field = &mut b[i * 32 + 5..i * 32 + 21];
+                    field.fill(0xa0);
+                    let n = new.len().min(16);
+                    field[..n].copy_from_slice(&new[..n]);
+                }
+                return Ok(true);
+            }
+            (t, s) = (block[0], block[1]);
+        }
+        Ok(false)
+    }
+
     /// The first file matching `pattern` (any type): its entry and bytes as
     /// stored.
     pub fn read_file(&self, pattern: &[u8]) -> Result<(DirEntry, Vec<u8>), MediaError> {
@@ -1171,5 +1202,15 @@ mod tests {
         assert_eq!(d82.blocks_free(), 4133);
         assert_eq!(d82.sectors_in(78), 29);
         assert_eq!(d82.sector(38, 9).unwrap()[4..6], [151, 155]);
+    }
+
+    #[test]
+    fn rename_changes_only_the_name() {
+        let mut d = D64::blank(b"T", *b"AB");
+        d.write_file(b"OLD", 2, &[1, 8, 42]).unwrap();
+        assert!(d.rename(b"OLD", b"NEWNAME").unwrap());
+        assert!(!d.rename(b"OLD", b"X").unwrap());
+        let (e, data) = d.read_file(b"NEWNAME").unwrap();
+        assert_eq!((e.file_type & 7, data), (2, vec![1, 8, 42]));
     }
 }

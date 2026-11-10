@@ -4,7 +4,7 @@ Part of the project's instructions for Claude Code; the core is `CLAUDE.md` at t
 
 | Machine | Master clock (PAL) | Gotchas |
 | --- | --- | --- |
-| C64 | CPU 985 248 Hz | Bad lines steal CPU cycles; sprite DMA; `$01` port banking |
+| C64 | CPU 985 248 Hz | Bad lines steal CPU cycles; sprite DMA; `$01` port banking; optional SD2IEC on the serial bus (`sd2iec=on`, device 9, or `drive8=sd2iec`; see `devices.md`) |
 | VIC-20 | CPU 1.108 MHz | VIC 6560 (NTSC) / 6561 (PAL); memory expansion configs |
 | C16/Plus/4 | TED-driven, single/double clock | TED is video+sound+timers; CPU speed changes per line |
 | PET | 1 MHz | Models with/without CRTC (2001 vs 4032/8032); the picture follows HSYNC/VSYNC like a monitor (shifted lines, rows outside the window show), placed from the registers at each VSYNC ([S]); the 6545 compares R1/R6/R9 by equality (`chips-cbm::crtc`) |

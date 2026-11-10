@@ -14,6 +14,13 @@
 //! disks), "virtual" (the default without
 //! DOS ROMs) or "none"; `drive8_ppm` sets the drive crystal's deviation.
 //! `options["autostart"] = "on"` loads and runs the disk in drive 8 after boot.
+//!
+//! SD2IEC (`options["sd2iec"] = "on"`, [`drives_cbm::sd2iec`]): a second
+//! device on the serial bus with the folder `/SD2IEC` of the frontend's
+//! file area as its card (no folder: `74,DRIVE NOT READY`); its device
+//! number is `options["sd2iec_device"]` (4–30, default 9). `drive8 =
+//! "sd2iec"` puts it in place of drive 8 (device 8). Media slot
+//! [`SLOT_SD2IEC`] mounts a disk image in it.
 //! `options["fastload"] = "on"`: the virtual drive serves the KERNAL's
 //! serial routines without bus time (see [`fastload`]).
 //!
@@ -105,9 +112,9 @@ use devices_cartridge::{CartLines, ExpansionCart};
 use devices_net::uci::{is_uci, Uci};
 use devices_printer::CbmPrinter;
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
-use drives_cbm::{DriveModel, DriveRoms};
+use drives_cbm::{DriveModel, DriveRoms, Sd2iec};
 use drives_other::Datasette;
-use emu_core::host::HostServices;
+use emu_core::host::{HostServices, SharedFiles, SubFileHost};
 use emu_core::port::{user_port, PortLines};
 use io::{Io, VicView};
 use loader::{Autostart, ProgramSlot, BOOT_FRAMES};
@@ -504,6 +511,10 @@ pub const SLOT_PROGRAM: SlotId = SlotId(1);
 pub const SLOT_TAPE: SlotId = SlotId(2);
 /// The expansion port (C64 CRT images).
 pub const SLOT_CARTRIDGE: SlotId = SlotId(3);
+/// The SD2IEC (`options["sd2iec"]`): a disk image inserted here is mounted.
+pub const SLOT_SD2IEC: SlotId = SlotId(4);
+/// The SD2IEC's card in the frontend's file area.
+pub const SD2IEC_FOLDER: &str = "/SD2IEC";
 
 pub struct C64 {
     cpu: Cpu6502,
@@ -516,6 +527,8 @@ pub struct C64 {
     drive: Option<Drive8>,
     /// `printer` option: a printer on the serial bus.
     printer: Option<CbmPrinter>,
+    /// `sd2iec` option: an SD2IEC on the serial bus.
+    sd2iec: Option<Sd2iec>,
     program: ProgramSlot,
     /// The datasette on the cassette port.
     tape: Datasette,
@@ -605,8 +618,36 @@ impl C64 {
         } else {
             DriveRoms::from_map(&config.roms)
         };
+        // The SD2IEC: next to drive 8, or as drive 8 (`drive8=sd2iec`).
+        let sd2iec_as_drive8 = option("drive8") == Some("sd2iec");
+        let sd2iec_on = sd2iec_as_drive8
+            || match option("sd2iec") {
+                None | Some("off") => false,
+                Some("on") => true,
+                Some(other) => {
+                    return Err(ConfigError::Invalid(format!("sd2iec option '{other}'")))
+                }
+            };
+        let sd2iec_device = match option("sd2iec_device") {
+            None => {
+                if sd2iec_as_drive8 {
+                    8
+                } else {
+                    9
+                }
+            }
+            Some(v) => v
+                .parse::<u8>()
+                .ok()
+                .filter(|d| (4..=30).contains(d))
+                .ok_or_else(|| ConfigError::Invalid(format!("sd2iec_device '{v}' (4 to 30)")))?,
+        };
         let mut drive = Drive8::from_option(
-            config.options.get("drive8").map(String::as_str),
+            if sd2iec_as_drive8 {
+                Some("none")
+            } else {
+                option("drive8")
+            },
             drive_roms,
             DriveModel::C1541,
             8,
@@ -620,6 +661,12 @@ impl C64 {
             )?;
             d.set_crystal_ppm(ppm, cpu_hz);
         }
+        if sd2iec_on && sd2iec_device == 8 && drive.is_some() {
+            return Err(ConfigError::Invalid(
+                "sd2iec_device 8 is taken by drive 8 (drive8=none or drive8=sd2iec)".into(),
+            ));
+        }
+        let sd2iec = sd2iec_on.then(|| Sd2iec::new(sd2iec_device, cpu_hz));
         let uci = match option("uci") {
             None | Some("off") => None,
             Some("on") => Some(Uci::new()),
@@ -669,6 +716,7 @@ impl C64 {
             ports: [port1, port2],
             drive,
             printer: CbmPrinter::from_config(config),
+            sd2iec,
             program: ProgramSlot::default(),
             tape: Datasette::new(TapMachine::C64, cpu_hz),
             cart: devices_cartridge::slot::expansion_slot(),
@@ -879,15 +927,26 @@ impl C64 {
         if let Some(p) = &self.printer {
             c64.data |= p.iec_data();
         }
+        // The drive sees what the SD2IEC pulled last; the SD2IEC sees
+        // everyone else's lines (its own come from its protocol).
+        let host = c64;
+        if let Some(sd) = &self.sd2iec {
+            c64 = drives_cbm::IecLines::combine(&[c64, sd.iec_out()]);
+        }
         let mut drive_stop = None;
+        let mut others = host;
         self.io.iec = match &mut self.drive {
             Some(d) if self.drive_power => {
                 let (bus, stop) = d.run(c64, dbg.as_deref_mut());
                 drive_stop = stop;
+                others = drives_cbm::IecLines::combine(&[host, d.iec_out(bus.atn)]);
                 bus
             }
             _ => c64,
         };
+        if let Some(sd) = &mut self.sd2iec {
+            self.io.iec = sd.run(others);
+        }
         if let Some(p) = &mut self.printer {
             let bus = self.io.iec;
             p.iec_tick(bus.atn, bus.clk, bus.data);
@@ -1188,6 +1247,9 @@ impl Machine for C64 {
         self.io.reset(hard);
         if let Some(d) = &mut self.drive {
             d.reset(hard);
+        }
+        if let Some(sd) = &mut self.sd2iec {
+            sd.reset(hard);
         }
         self.ints = Interrupts::default();
         if let Some(c) = self.cart.cart_mut() {
@@ -1540,6 +1602,14 @@ impl Machine for C64 {
             kind: MediaKind::Cartridge,
             inserted: self.cart.is_inserted(),
         });
+        if let Some(sd) = &self.sd2iec {
+            slots.push(MediaSlotInfo {
+                id: SLOT_SD2IEC,
+                name: "sd2iec",
+                kind: MediaKind::Disk,
+                inserted: sd.dos.has_media(),
+            });
+        }
         slots
     }
 
@@ -1549,6 +1619,7 @@ impl Machine for C64 {
             SLOT_PROGRAM => Some(&mut self.program),
             SLOT_TAPE => Some(&mut self.tape),
             SLOT_CARTRIDGE => Some(&mut self.cart),
+            SLOT_SD2IEC => self.sd2iec.as_mut().map(|s| s as &mut dyn MediaSlot),
             _ => None,
         }
     }
@@ -1560,6 +1631,9 @@ impl Machine for C64 {
         let host = self.device_host();
         if let Some(p) = &mut self.printer {
             p.printer.attach(&host);
+        }
+        if let Some(sd) = &mut self.sd2iec {
+            sd.attach_files(sd2iec_card(&host));
         }
         if let Some(u) = &mut self.uci {
             u.attach_host(host.clone());
@@ -1627,6 +1701,9 @@ impl Machine for C64 {
                 w.raw(&[c.r, c.g, c.b]);
             }
         });
+        if let Some(sd) = &self.sd2iec {
+            sd.save(&mut w);
+        }
         w.into_bytes()
     }
 
@@ -1641,6 +1718,16 @@ impl Machine for C64 {
             sched: self.sched.clone(),
             input: self.input.clone(),
             field_done_pending: self.field_done_pending,
+        };
+        // The SD2IEC (not clonable): checked on a probe first, loaded last;
+        // a state without it (older ones) leaves it as it is.
+        let sd2iec_in_state = match &self.sd2iec {
+            Some(sd) => match Sd2iec::new(sd.device(), 1_000_000).load(&mut StateReader::new(s)) {
+                Ok(()) => true,
+                Err(StateError::Missing(_)) => false,
+                Err(e) => return Err(e),
+            },
+            None => false,
         };
         let mut r = StateReader::new(s);
         let (version, mut c) = r.chunk(*b"C64S", 7)?;
@@ -1894,8 +1981,18 @@ impl Machine for C64 {
         if let Some(p) = &mut self.printer {
             p.load_chunk(s);
         }
+        if let (Some(sd), true) = (&mut self.sd2iec, sd2iec_in_state) {
+            sd.load(&mut StateReader::new(s))?;
+        }
         Ok(())
     }
+}
+
+/// The SD2IEC's card: the folder [`SD2IEC_FOLDER`] of the file area.
+fn sd2iec_card(host: &HostServices) -> Option<SharedFiles> {
+    let files = host.files.clone()?;
+    let card = SubFileHost::new(files, SD2IEC_FOLDER).ok()?;
+    Some(std::sync::Arc::new(std::sync::Mutex::new(card)) as SharedFiles)
 }
 
 impl DebugTarget for C64 {
