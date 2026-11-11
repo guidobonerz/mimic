@@ -362,3 +362,20 @@ fn journal_replays_a_network_session() {
     assert_eq!(run(&mut v), first);
     assert_eq!(replay.replay_status().diverged, None);
 }
+
+/// An empty folder: OPEN_DIR says "00,OK" (GUI64 shows stale memory after
+/// the documented "01,DIRECTORY EMPTY"), READ_DIR sends no entry.
+#[test]
+fn an_empty_folder_lists_nothing_with_ok() {
+    let mut u = uci();
+    let mut mkdir = vec![1, 0x16];
+    mkdir.extend(b"empty");
+    assert_eq!(command(&mut u, &mkdir).1, "00,OK");
+    let mut cd = vec![1, 0x11];
+    cd.extend(b"empty");
+    assert_eq!(command(&mut u, &cd).1, "00,OK");
+    assert_eq!(command(&mut u, &[1, 0x13]).1, "00,OK");
+    let (p, _) = command(&mut u, &[1, 0x14]);
+    assert!(p.concat().is_empty(), "{p:?}");
+    assert_eq!(u.peek(STATUS) >> 4 & 3, State::Idle as u8);
+}

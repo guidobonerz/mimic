@@ -235,6 +235,9 @@ impl FrameTap {
             .into_iter()
             .filter_map(|s| {
                 let mut frame = OwnedFrame::from_screen(m, s.id, running)?;
+                if s.id == emu_core::ScreenId::MAIN {
+                    frame.vectors = m.vectors().map(|v| emu_core::VectorBuf::from_frame(&v));
+                }
                 let stage = match fields.iter_mut().position(|(n, _)| *n == s.name) {
                     Some(i) => &mut fields[i].1,
                     None => {
@@ -686,6 +689,26 @@ async fn connection(mut stream: TcpStream, ctx: Arc<Context>) {
             let headers = [("Content-Type", "application/json".to_string())];
             respond(&mut stream, "200 OK", &headers, body.as_bytes()).await;
         }
+        // The beam segments of a vector display's last frame (the
+        // debugger's `vectors` in the same form).
+        "/vectors.json" => {
+            let v = ctx
+                .tap
+                .latest()
+                .and_then(|s| s.get(None).and_then(|f| f.vectors.clone()));
+            let Some(v) = v else {
+                return error(
+                    &mut stream,
+                    "404 Not Found",
+                    "no vector display
+",
+                )
+                .await;
+            };
+            let body = crate::vectors_json(&v.as_frame()).to_string();
+            let headers = [("Content-Type", "application/json".to_string())];
+            respond(&mut stream, "200 OK", &headers, body.as_bytes()).await;
+        }
         "/controls" => {
             let controls = ctx.tap.latest().map(|s| controls_json(&s.1));
             let body = controls.unwrap_or_else(|| "[]".into());
@@ -999,8 +1022,12 @@ async fn stream_raw(
 async fn stream_frames(mut ws: WebSocketStream<TcpStream>, ctx: &Context, s: Settings) {
     let _wants = Wants::new(&ctx.tap, &s.overlays);
     let mut rx = ctx.tap.tx.subscribe();
-    // Phosphor persistence: this stream's own history.
-    let mut crt = Some(video_crt::Crt::new());
+    // Phosphor persistence and a vector display's phosphor: this stream's
+    // own history.
+    let mut crt = Some((
+        video_crt::Crt::new(),
+        video_crt::phosphor::VectorPhosphor::new(),
+    ));
     let period = Duration::from_secs(1) / s.fps;
     let mut prev: Option<RgbImage> = None;
     let mut last_sent: Option<Arc<Screens>> = None;
@@ -1024,7 +1051,8 @@ async fn stream_frames(mut ws: WebSocketStream<TcpStream>, ctx: &Context, s: Set
                     .as_ref()
                     .and_then(|l| l.get(s.screen.as_deref()).map(|b| b.running));
                 let job = tokio::task::spawn_blocking(move || {
-                    let img = filter.render_stream(&f, overlays.as_ref(), &mut history);
+                    let img =
+                        filter.render_stream(&f, overlays.as_ref(), &mut history.0, &mut history.1);
                     let full = Rect {
                         x: 0,
                         y: 0,

@@ -920,3 +920,51 @@ fn overlays_frames_and_the_stopped_frame_event() {
     assert_eq!(ev["partial"], true);
     server.shutdown();
 }
+
+/// Protocol 10: a vector display's beam segments (`vectors`), announced in
+/// `capabilities`; machines without one answer with an error.
+#[test]
+fn vector_display_segments() {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    let machine = emu_machines::registry().create("vectrex", &config).unwrap();
+    let server = DebugServer::start(
+        Session::new(machine, "vectrex"),
+        ServerConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            vice: None,
+            run: false,
+            realtime: false,
+        },
+    )
+    .unwrap();
+    let mut c = Client::connect(&server);
+    c.recv();
+    let caps = c.ok(json!({"cmd": "capabilities"}));
+    assert_eq!(caps["vectors"], true);
+    assert!(caps["commands"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("vectors")));
+    for _ in 0..3 {
+        c.ok(json!({"cmd": "step_frame"}));
+    }
+    let v = c.ok(json!({"cmd": "vectors"}));
+    assert_eq!(v["frame_cycles"], 30_000);
+    assert_eq!(v["cycle_hz"], 1_500_000);
+    let segs = v["segments"].as_array().unwrap();
+    assert_eq!(v["count"], segs.len());
+    assert!(!segs.is_empty());
+    // [x0, y0, x1, y1, intensity, r, g, b, cycles, at], in drawing order.
+    let s = segs[0].as_array().unwrap();
+    assert_eq!(s.len(), 10);
+    let ats: Vec<u64> = segs.iter().map(|s| s[9].as_u64().unwrap()).collect();
+    assert!(ats.windows(2).all(|w| w[0] <= w[1]), "{ats:?}");
+    // A raster machine has none.
+    let other = server_with(MachineConfig::default());
+    let mut c = Client::connect(&other);
+    c.recv();
+    assert_eq!(c.ok(json!({"cmd": "capabilities"}))["vectors"], false);
+    let e = c.call(json!({"cmd": "vectors"}));
+    assert_eq!(e["ok"], false);
+}

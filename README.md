@@ -118,7 +118,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | TI-99/4A | real ROMs (`ti99_boot`, 5 tests) | title screen, menu, TI BASIC computes; Parsec from its C/G dumps; SAVE/OLD on cassette (WAV) and on disk (TI disk controller); Parsec talks through the Speech Synthesizer | 🟡 | speech excitation by ear against hardware, GROM/VDP access timing, inverted (379) banking |
 | BBC Micro B / B+ / B+ 128 / Master 128 | real ROMs (`bbc_boot`, 19 tests) | all four boot to BASIC; mode 7 against its reference picture; SAVE/LOAD on tape (UEF), on DFS discs (8271, 1770) and ADFS; SHIFT+BREAK boots a disc; the Master's clock, shadow RAM and keypad | 🟡 | no commercial discs or tapes tried; Tube, Econet, ADC missing |
 | MEGA65 | Open ROMs 2021-08-24 (`mega65_boot`, 4 tests), own 45GS02 tests, Dormann | start screen against its reference, typing, LIST/RUN, LOAD from a true 1541; Dormann passes on the 45GS02 | 🟡 | the official ROM 920xxx and the hypervisor not tried yet (not in the ROM folder); timing approximate |
-| Colour Genie, CPC Plus, QL, Atari ST, KC85, KIM-1, HP calculators | – | – | ⚪ | planned phases |
+| Colour Genie, CPC Plus, QL, Atari ST, KC85, KIM-1 | – | – | ⚪ | planned phases |
 
 ### Drives, devices and frontends
 

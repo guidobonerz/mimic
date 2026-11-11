@@ -97,7 +97,7 @@ onmessage = (e) => {
           reply.bytes = bytes.buffer;
           postMessage(reply, [bytes.buffer]);
           return;
-        } else if (m.cmd === "load_state" || m.cmd === "crt") {
+        } else if (m.cmd === "load_state" || m.cmd === "crt" || m.cmd === "overlay") {
           postFrame();
         }
       } catch (err) {

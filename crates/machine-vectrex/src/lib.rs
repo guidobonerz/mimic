@@ -195,6 +195,8 @@ struct Open {
     z: u8,
     color: Rgb8,
     cycles: u32,
+    /// Cycles from the frame's start when it began.
+    at: u32,
 }
 
 /// Integrators, sample/holds and the beam's path.
@@ -210,6 +212,8 @@ pub struct Analog {
     /// The beam is visible now.
     pub lit: bool,
     open: Option<Open>,
+    /// Cycles into the frame being drawn.
+    t: u32,
     /// Segments of the frame being drawn and of the last complete one.
     segments: Vec<Segment>,
     done: Vec<Segment>,
@@ -231,6 +235,7 @@ impl Analog {
                     intensity: o.z,
                     color: o.color,
                     cycles: o.cycles,
+                    at: o.at,
                 });
             }
         }
@@ -279,6 +284,7 @@ impl Analog {
                         z,
                         color,
                         cycles: 1,
+                        at: self.t,
                     });
                 }
             }
@@ -286,6 +292,7 @@ impl Analog {
         // Far outside the screen the integrators saturate.
         self.x = (self.x + vx).clamp(-4 * HALF_W, 4 * HALF_W);
         self.y = (self.y + vy).clamp(-4 * HALF_H, 4 * HALF_H);
+        self.t += 1;
     }
 
     /// End of a frame: the open segment continues in the next one.
@@ -297,9 +304,11 @@ impl Analog {
                 x0: self.x,
                 y0: self.y,
                 cycles: 0,
+                at: 0,
                 ..o
             });
         }
+        self.t = 0;
         std::mem::swap(&mut self.segments, &mut self.done);
         self.segments.clear();
     }
@@ -831,7 +840,11 @@ impl Vectrex {
             total_pixels: render::WIDTH,
             lines_per_field: render::HEIGHT,
             standard: VideoStandard::Pal,
-            output: OutputType::Monochrome,
+            // The picture is already the colour the viewer sees (the
+            // phosphor's, the 3D Imager's filters): no signal stage, which
+            // for `Monochrome` would keep only luma and lose those colours
+            // and an overlay's (2026-11-11).
+            output: OutputType::Rgb,
             field: FieldParity::Progressive,
         }
     }
@@ -895,7 +908,9 @@ impl Machine for Vectrex {
             segments: &self.board.analog.done,
             phosphor: PHOSPHOR,
             cycle_hz: CPU_HZ,
+            frame_cycles: FRAME_CYCLES as u32,
             frame: self.board.frames,
+            style: self.board.style,
         })
     }
 
@@ -1049,7 +1064,7 @@ impl Machine for Vectrex {
         let mut w = StateWriter::new();
         let b = &self.board;
         let a = &b.analog;
-        w.chunk(*b"VECX", 1, |w| {
+        w.chunk(*b"VECX", 2, |w| {
             w.bool(self.frame_done_pending);
             w.bytes(&b.ram);
             w.u8(b.ay_bus.0);
@@ -1081,9 +1096,11 @@ impl Machine for Vectrex {
                         w.u8(v);
                     }
                     w.u32(o.cycles);
+                    w.u32(o.at);
                 }
                 None => w.bool(false),
             }
+            w.u32(a.t);
             for list in [&a.segments, &a.done] {
                 w.u32(list.len() as u32);
                 for s in list.iter() {
@@ -1095,6 +1112,7 @@ impl Machine for Vectrex {
                         w.u8(v);
                     }
                     w.u32(s.cycles);
+                    w.u32(s.at);
                 }
             }
         });
@@ -1121,7 +1139,7 @@ impl Machine for Vectrex {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"VECX", 1)?;
+        let (_, mut c) = r.chunk(*b"VECX", 2)?;
         let frame_done_pending = c.bool()?;
         let mut b = self.board.clone();
         let ram = c.bytes()?;
@@ -1165,10 +1183,15 @@ impl Machine for Vectrex {
                     b: c.u8()?,
                 },
                 cycles: c.u32()?,
+                at: c.u32()?,
             })
         } else {
             None
         };
+        a.t = c.u32()?;
+        if u64::from(a.t) > FRAME_CYCLES {
+            return Err(StateError::Invalid("frame position"));
+        }
         for n in 0..2 {
             let len = c.u32()? as usize;
             if len > MAX_SEGMENTS {
@@ -1188,6 +1211,7 @@ impl Machine for Vectrex {
                         b: c.u8()?,
                     },
                     cycles: c.u32()?,
+                    at: c.u32()?,
                 });
             }
             if n == 0 {

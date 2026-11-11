@@ -14,6 +14,8 @@
 
 pub mod cpu;
 pub mod field;
+pub mod overlay;
+pub mod phosphor;
 pub mod profile;
 pub mod signal;
 

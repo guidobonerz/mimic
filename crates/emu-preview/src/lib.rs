@@ -71,12 +71,17 @@ pub struct OwnedFrame {
     /// False while a debugger holds the machine: the field may be partial
     /// (lines below the beam are from the previous field).
     pub running: bool,
+    /// The beam segments of a vector display (main screen only), for the
+    /// CRT filter's phosphor stage and `/vectors.json`.
+    pub vectors: Option<emu_core::VectorBuf>,
 }
 
 impl OwnedFrame {
     /// A copy of the machine's main output.
     pub fn from_machine(m: &dyn Machine, running: bool) -> Self {
-        Self::from_frame(&m.framebuffer(), m.beam(), running)
+        let mut f = Self::from_frame(&m.framebuffer(), m.beam(), running);
+        f.vectors = m.vectors().map(|v| emu_core::VectorBuf::from_frame(&v));
+        f
     }
 
     /// A copy of one output; `None` if the machine has no such screen.
@@ -110,6 +115,7 @@ impl OwnedFrame {
             signal: f.signal,
             beam,
             running,
+            vectors: None,
         }
     }
 
@@ -215,16 +221,37 @@ impl Filter {
     }
 
     /// Like [`Filter::render_with`], with phosphor persistence from `crt`'s
-    /// history (one `Crt` per stream).
+    /// history and, for a vector display through a profile with
+    /// `phosphor_ms`, the beam segments' afterglow from `phosphor` (both
+    /// one per stream).
     pub fn render_stream(
         &self,
         frame: &OwnedFrame,
         overlays: Option<&overlay::OverlaySet>,
         crt: &mut video_crt::Crt,
+        phosphor: &mut video_crt::phosphor::VectorPhosphor,
     ) -> RgbImage {
         match self {
             Filter::Crt { profile, scale } => {
-                let img = crt.render(&frame.as_frame_ref(), profile, *scale);
+                let f = frame.as_frame_ref();
+                let glow = match &frame.vectors {
+                    Some(v) if profile.phosphor_ms > 0.0 => Some(
+                        phosphor
+                            .process(&v.as_frame(), f.width, f.height, profile.phosphor_ms)
+                            .2
+                            .to_vec(),
+                    ),
+                    _ => None,
+                };
+                let f = match &glow {
+                    Some(px) => FrameRef {
+                        pixels: PixelData::Rgb(px),
+                        luma_chroma: None,
+                        ..f
+                    },
+                    None => f,
+                };
+                let img = crt.render(&f, profile, *scale);
                 RgbImage {
                     width: img.width,
                     height: img.height,
@@ -388,9 +415,80 @@ pub fn stream_message(
     m
 }
 
+/// A vector frame as JSON (the debugger's `vectors` and the preview's
+/// `/vectors.json`): its size in coordinate units, timing, phosphor colour,
+/// the look the machine draws with, and every segment as
+/// `[x0, y0, x1, y1, intensity, r, g, b, cycles, at]` (coordinates origin
+/// top left, y downwards; `at` the cycle in the frame it began).
+pub fn vectors_json(v: &emu_core::VectorFrame<'_>) -> serde_json::Value {
+    let segs: Vec<serde_json::Value> = v
+        .segments
+        .iter()
+        .map(|s| {
+            serde_json::json!([
+                s.x0,
+                s.y0,
+                s.x1,
+                s.y1,
+                s.intensity,
+                s.color.r,
+                s.color.g,
+                s.color.b,
+                s.cycles,
+                s.at
+            ])
+        })
+        .collect();
+    serde_json::json!({
+        "width": v.width,
+        "height": v.height,
+        "frame": v.frame,
+        "cycle_hz": v.cycle_hz,
+        "frame_cycles": v.frame_cycles,
+        "phosphor": [v.phosphor.r, v.phosphor.g, v.phosphor.b],
+        "style": match v.style {
+            emu_core::vector::Style::Fine => "fine",
+            emu_core::vector::Style::Soft => "soft",
+        },
+        "count": segs.len(),
+        "segments": segs,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vector_frames_as_json() {
+        let seg = emu_core::Segment {
+            x0: 1,
+            y0: 2,
+            x1: 3,
+            y1: 4,
+            intensity: 200,
+            color: Rgb8 { r: 9, g: 8, b: 7 },
+            cycles: 12,
+            at: 345,
+        };
+        let buf = emu_core::VectorBuf {
+            width: 100,
+            height: 125,
+            segments: vec![seg],
+            cycle_hz: 1_500_000,
+            frame_cycles: 30_000,
+            frame: 5,
+            ..Default::default()
+        };
+        let v = vectors_json(&buf.as_frame());
+        assert_eq!(v["count"], 1);
+        assert_eq!(v["style"], "fine");
+        assert_eq!(
+            v["segments"][0],
+            serde_json::json!([1, 2, 3, 4, 200, 9, 8, 7, 12, 345])
+        );
+        assert_eq!(emu_core::VectorBuf::from_frame(&buf.as_frame()), buf);
+    }
     use emu_core::frame::{FieldParity, OutputType, VideoStandard};
 
     fn signal() -> SignalInfo {
@@ -500,6 +598,7 @@ mod tests {
             height: 1,
             pixels: OwnedPixels::Rgb(vec![Rgb8::default(); 2]),
             luma_chroma: None,
+            vectors: None,
             signal: signal(),
             beam: Some(BeamPos {
                 frame: 7,

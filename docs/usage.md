@@ -581,9 +581,22 @@ nachgelagert.
 | `ctm644` | Amstrad-Farbmonitor (CPC-Standard) |
 | `gt65` | Amstrad-Grünmonitor |
 | `logophor`, `logophor-scope` | Logophor 16: RGB-Röhre mit Rasterlinien, grüne Leuchtröhre mit Glühen (das Programm schaltet um) |
+| `vectrex` | die Röhre des Vectrex: leuchtende Linien, jede klingt ab dem Moment nach, in dem der Strahl sie zeichnet (`phosphor_ms`, Standard 6 ms) |
 
 Eigene Profile sind TOML-Dateien mit `base = "<preset>"` und überschriebenen
 Werten (`--crt meinprofil.toml`).
+
+**Overlays** (die farbigen Folien des Vectrex) sind eigene Bilder des Nutzers,
+nie Teil von mimic: ein PNG je Spiel in `~/.mimic/overlays/<maschine>/`
+(`EMU_OVERLAY_DIR` statt `~/.mimic/overlays`), benannt wie die Cartridge-Datei
+(`Scramble.vec` → `scramble.png`, Groß-/Kleinschreibung egal); das eingebaute
+Mine Storm heißt `minestorm.png`. Transparente Stellen lassen das Bild durch,
+farbige färben es, deckende sind die bedruckte Folie (im Raumlicht schwach
+sichtbar). Das Desktop-Programm nimmt das Overlay der eingelegten Cartridge und
+wechselt mit ihr; `--overlay DATEI` wählt eins fest, `--overlay none` keins.
+Headless-Schnappschüsse nur mit `--overlay DATEI|auto`. In der Web-Fassung
+gilt ein hinzugefügtes PNG mit dem Namen der Cartridge, oder die Auswahl
+„Overlay“. Debugger und Rohbild zeigen nie ein Overlay.
 
 ## 9. Live-Preview im Browser
 

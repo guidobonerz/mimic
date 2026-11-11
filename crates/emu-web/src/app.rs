@@ -38,6 +38,13 @@ pub struct Running {
     params: [f32; 20],
     /// Phosphor persistence history of the CRT path (not machine state).
     history: video_crt::Crt,
+    /// The phosphor of vector displays (the Vectrex; not machine state).
+    vectors: video_crt::phosphor::VectorPhosphor,
+    /// The picture in front of the screen (the Vectrex's sheets) and
+    /// whether the `overlay` command chose it (else it follows the
+    /// cartridge).
+    overlay: Option<video_crt::overlay::Overlay>,
+    overlay_fixed: bool,
     /// A light pen/gun takes the pointer; a mouse-like device the captured mouse.
     wants_pointer: bool,
     wants_mouse: bool,
@@ -233,6 +240,11 @@ impl WebEmu {
                 }
             }
         }
+        let cart = media
+            .iter()
+            .find(|(_, k)| *k == MediaKind::Cartridge)
+            .map(|(f, _)| f.clone());
+        let overlay = self.auto_overlay(&id, cart.as_deref());
         let crt = crt_profile(&id, cfg["crt"].as_str().unwrap_or(""))?;
         let profile = Profile::for_options(&id, &config.options);
         let wants_pointer = !profile.pointer.is_empty();
@@ -248,6 +260,9 @@ impl WebEmu {
             gpu: self.gpu,
             params: [0.0; 20],
             history: video_crt::Crt::new(),
+            vectors: video_crt::phosphor::VectorPhosphor::new(),
+            overlay,
+            overlay_fixed: false,
             wants_pointer,
             wants_mouse,
             rgba: Vec::new(),
@@ -473,6 +488,7 @@ impl WebEmu {
         let r = self.running.as_mut().ok_or("no machine running")?;
         insert(r.machine.as_mut(), SlotId(slot), &r.id, path, data.clone())?;
         r.mounted.insert(slot, path.to_string());
+        self.cartridge_changed(slot, Some(path));
         self.cheats_for_image(&data)
     }
 
@@ -483,6 +499,84 @@ impl WebEmu {
             .ok_or("no such slot")?
             .eject();
         r.mounted.remove(&slot);
+        self.cartridge_changed(slot, None);
+        Ok(())
+    }
+
+    /// The overlay among the uploaded files for `machine` with the
+    /// cartridge `cart` (`None`: the built-in game): a PNG named like the
+    /// cartridge (`Scramble.vec` → `scramble.png`) or like the built-in
+    /// game (`minestorm.png`), case does not matter.
+    fn auto_overlay(
+        &self,
+        machine: &str,
+        cart: Option<&str>,
+    ) -> Option<video_crt::overlay::Overlay> {
+        let stem = |p: &str| {
+            std::path::Path::new(p)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_lowercase())
+        };
+        let want = match cart {
+            Some(c) => stem(c)?,
+            None => media_backends::overlays::builtin(machine)?.to_string(),
+        };
+        self.files
+            .iter()
+            .filter(|(p, _)| p.to_lowercase().ends_with(".png"))
+            .find(|(p, _)| stem(p).as_deref() == Some(want.as_str()))
+            .and_then(|(_, d)| video_crt::overlay::Overlay::from_png(d).ok())
+    }
+
+    /// A slot's medium changed: a cartridge's overlay follows it.
+    fn cartridge_changed(&mut self, slot: u8, path: Option<&str>) {
+        let Some(r) = self.running.as_ref() else {
+            return;
+        };
+        let is_cart = r
+            .machine
+            .media_slots()
+            .iter()
+            .any(|s| s.id == SlotId(slot) && s.kind == MediaKind::Cartridge);
+        if !is_cart || r.overlay_fixed {
+            return;
+        }
+        let id = r.id.clone();
+        let o = self.auto_overlay(&id, path);
+        if let Some(r) = self.running.as_mut() {
+            r.overlay = o;
+            r.render();
+        }
+    }
+
+    /// Choose the overlay: an uploaded PNG by its path, `none`, or `auto`
+    /// (follow the cartridge; the default).
+    pub fn set_overlay(&mut self, path: &str) -> Result<(), String> {
+        let r = self.running.as_ref().ok_or("no machine running")?;
+        let (o, fixed) = match path {
+            "none" => (None, true),
+            "auto" => {
+                let cart = r
+                    .machine
+                    .media_slots()
+                    .iter()
+                    .find(|s| s.kind == MediaKind::Cartridge)
+                    .and_then(|s| r.mounted.get(&s.id.0).cloned());
+                let id = r.id.clone();
+                (self.auto_overlay(&id, cart.as_deref()), false)
+            }
+            p => (
+                Some(
+                    video_crt::overlay::Overlay::from_png(&self.file(p)?)
+                        .map_err(|e| format!("{p}: {e}"))?,
+                ),
+                true,
+            ),
+        };
+        let r = self.running.as_mut().ok_or("no machine running")?;
+        r.overlay = o;
+        r.overlay_fixed = fixed;
+        r.render();
         Ok(())
     }
 
@@ -494,6 +588,7 @@ impl WebEmu {
                 ResetKind::Soft
             });
             r.history.reset();
+            r.vectors.reset();
         }
     }
 
@@ -507,6 +602,7 @@ impl WebEmu {
             .load_state(data)
             .map_err(|e| format!("savestate rejected: {e:?}"))?;
         r.history.reset();
+        r.vectors.reset();
         r.render();
         Ok(())
     }
@@ -525,6 +621,39 @@ impl Running {
         }
         let m = self.machine.as_ref();
         let frame = m.framebuffer();
+        // A vector display through the profile's phosphor: the beam
+        // segments with their afterglow, at the picture's size.
+        let glow = match (&self.crt, m.vectors()) {
+            (Some(p), Some(v)) if p.phosphor_ms > 0.0 => Some(
+                self.vectors
+                    .process(&v, frame.width, frame.height, p.phosphor_ms)
+                    .2
+                    .to_vec(),
+            ),
+            _ => None,
+        };
+        // The overlay in front of the screen, before the CRT stage.
+        let glow = match (&self.overlay, glow) {
+            (Some(o), glow) => {
+                let mut px = glow.unwrap_or_else(|| {
+                    (0..frame.height)
+                        .flat_map(|y| (0..frame.width).map(move |x| (x, y)))
+                        .map(|(x, y)| frame.rgb_at(x, y).unwrap_or_default())
+                        .collect()
+                });
+                o.apply(frame.width, frame.height, &mut px);
+                Some(px)
+            }
+            (None, glow) => glow,
+        };
+        let frame = match &glow {
+            Some(px) => FrameRef {
+                pixels: emu_core::frame::PixelData::Rgb(px),
+                luma_chroma: None,
+                ..frame
+            },
+            None => frame,
+        };
         self.aspect = video_crt::cpu::pixel_aspect(&frame);
         if let (Some(profile), true) = (&self.crt, self.gpu) {
             // Signal stage here, CRT stage in the page's shader: the
@@ -710,6 +839,42 @@ mod tests {
             544,
             "the CPU path renders the output"
         );
+    }
+
+    /// A 2 × 1 PNG: left clear, right a red filter.
+    fn red_overlay() -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut e = png::Encoder::new(&mut out, 2, 1);
+        e.set_color(png::ColorType::Rgba);
+        e.set_depth(png::BitDepth::Eight);
+        e.write_header()
+            .unwrap()
+            .write_image_data(&[0, 0, 0, 0, 255, 0, 0, 255])
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn an_uploaded_picture_named_like_the_game_is_the_overlay() {
+        let mut emu = WebEmu::new();
+        emu.add_file("MineStorm.png", red_overlay());
+        emu.start(&json!({"machine": "vectrex", "options": {"roms": "stub"}}))
+            .unwrap();
+        for _ in 0..3 {
+            emu.run_frame().unwrap();
+        }
+        let r = emu.running.as_ref().unwrap();
+        assert!(r.overlay.is_some(), "the built-in game's overlay");
+        // The right half is red: no green there, the room light's red.
+        let (px, w, _) = emu.frame().unwrap();
+        let right = &px[((w as usize) * 3 / 4) * 4..][..4];
+        assert_eq!(right[1], 0);
+        assert!(right[0] > 0);
+        emu.set_overlay("none").unwrap();
+        assert!(emu.running.as_ref().unwrap().overlay.is_none());
+        emu.set_overlay("auto").unwrap();
+        assert!(emu.running.as_ref().unwrap().overlay.is_some());
+        assert!(emu.set_overlay("missing.png").is_err());
     }
 
     #[test]

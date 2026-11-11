@@ -10,11 +10,11 @@ workspace = true
 
 [dependencies]
 emu-core.workspace = true
+png.workspace = true
 serde.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
 naga = { version = "24", features = ["wgsl-in"] }
-png.workspace = true
 pollster.workspace = true
 wgpu.workspace = true

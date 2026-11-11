@@ -28,6 +28,7 @@ pub mod image;
 pub mod net;
 #[cfg(feature = "opencbm")]
 pub mod opencbm;
+pub mod overlays;
 pub mod roms;
 
 /// The host services of a native frontend, in a live journal: the real

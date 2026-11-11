@@ -644,6 +644,15 @@ bullets(
     "seconds before a cartridge starts.",
     "**3D Imager.** The spinning colour wheel is emulated (motor, index pulse, "
     "colour filters); the picture shows the eye chosen with `eye`.",
+    "**Afterglow.** The default monitor `vectrex` draws every line with its glow "
+    "from the moment the beam draws it: moving objects leave a faint trail, a still "
+    "picture stays as bright as without. `--crt raw` shows the machine's picture "
+    "without afterglow.",
+    "**Overlays.** The games' coloured sheets are your own pictures (PNG) in the "
+    "folder `~/.mimic/overlays/vectrex/`, named like the cartridge (`scramble.png` "
+    "for `Scramble.vec`, `minestorm.png` for the built-in game); mimic ships none. "
+    "Transparent parts let the picture through, coloured parts tint it; the overlay "
+    "follows the cartridge, `--overlay FILE` fixes one, `--overlay none` shows none.",
 )
 code("""mimic-desktop --machine vectrex --cart "Scramble (1982).vec"
 mimic-desktop --machine vectrex --option lines=soft --cart game.vec
@@ -890,6 +899,7 @@ table(["Profile", "Use"], [
     ["`gt65`", "Amstrad green monitor"],
     ["`mac`", "the compact Macintosh's built-in black-and-white monitor"],
     ["`logophor`, `logophor-scope`", "the Logophor 16's monitor: an RGB tube with clear raster lines, and its green phosphor tube with glow and afterglow; the program switches between them (Panorama's oscilloscope theme), the monitor follows"],
+    ["`vectrex`", "the Vectrex's tube: glowing lines that fade from the moment the beam draws them (lines drawn early in a frame are brighter at its end than late ones, moving lines leave a trail); `phosphor_ms` sets the decay time (default 6 ms)"],
     ["`lite`", "aspect correction and light scanlines only, for slow computers and the web version"],
 ], [0.30, 0.70])
 p("""Besides the signal (composite, S-Video, RGB, monochrome) a profile sets
@@ -1228,7 +1238,7 @@ table(["Flag", "Meaning"], [
      "the window would not fit the screen)."],
     ["`--crt PROFILE`", "The monitor: `raw`, `lite`, `1702`, `1084s`, `1084s-rgb`, "
      "`tv`, `pal-tv`, `ntsc-tv`, `pet-white`, `pet-green`, `ctm644`, `gt65`, `mac`, "
-     "`logophor`, `logophor-scope` or a `.toml` file, which is re-read when it changes. Default: the machine's own "
+     "`logophor`, `logophor-scope`, `vectrex` or a `.toml` file, which is re-read when it changes. Default: the machine's own "
      "monitor."],
     ["`--deinterlace MODE`", "Interlaced pictures (Amiga LACE): `weave` (default, "
      "both fields interleaved) or `bob` (the current field's lines doubled); Ctrl+I "

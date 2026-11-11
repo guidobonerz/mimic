@@ -67,6 +67,11 @@
 //! after each `stopped`), cheat imports (`format` of `cheats_load`: POKE
 //! lists, VICE monitor commands, address/value codes) and the per-game
 //! cheat database (loaded on `insert_media`, event `cheats_loaded`).
+//! 10 adds `vectors`: a vector display's last complete frame (its size in
+//! coordinate units, `cycle_hz`, `frame_cycles`, `frame`, `phosphor`,
+//! `style` and every segment as `[x0, y0, x1, y1, intensity, r, g, b,
+//! cycles, at]`), and `vectors` in `capabilities` (whether the machine has
+//! a vector display).
 //!
 //! Every change to this message set needs a contract test and a bump of
 //! [`PROTOCOL_VERSION`].
@@ -79,7 +84,7 @@ use serde_json::{json, Value};
 use emu_core::{BeamPos, StopReason};
 
 pub const PROTOCOL_NAME: &str = "mimic-debug";
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Request {
@@ -290,6 +295,9 @@ pub enum Command {
         #[serde(default)]
         overlays: Vec<String>,
     },
+    /// The beam segments of a vector display's last complete frame (the
+    /// Vectrex); an error for machines without one.
+    Vectors,
     /// The graphics data views the machine offers.
     GfxList,
     /// One view decoded. `format`: `png` (default), `qoi` or `indexed`
@@ -421,6 +429,7 @@ pub const COMMANDS: &[&str] = &[
     "overlay_set",
     "overlay_get",
     "frame",
+    "vectors",
     "gfx_list",
     "gfx_get",
     "break_add",

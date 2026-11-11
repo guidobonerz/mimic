@@ -53,6 +53,8 @@
 //! target; "84,EASYFLASH NOT PRESENT"; "90,DRIVE NOT PRESENT" for drive
 //! power; GET_DRVINFO's power byte (1 = on) and the virtual drive's type
 //! (Software IEC); GET_MP3_RAMDISKINFO's answer without RAM disks (zeros);
+//! OPEN_DIR's "00,OK" for an empty folder (the documentation has
+//! "01,DIRECTORY EMPTY", after which GUI64 shows stale memory);
 //! the status texts for file-system errors ("87,…") and failed
 //! connections ("85,CONNECTION FAILED"), unknown commands/targets
 //! ("21,UNKNOWN COMMAND"), bad socket handles ("82,…"); socket handles
@@ -855,12 +857,13 @@ impl Uci {
             0x13 => {
                 let cwd = self.dos[i].cwd.clone();
                 match self.fs(|f| f.list_dir(&cwd)) {
+                    // An empty folder answers "00,OK" too (READ_DIR then
+                    // sends nothing): GUI64, written on real hardware,
+                    // builds no list at all after the documented
+                    // "01,DIRECTORY EMPTY" and shows stale memory
+                    // (2026-11-11, the user's choice; unverified).
                     Ok(list) => {
-                        self.set_status(if list.is_empty() {
-                            "01,DIRECTORY EMPTY"
-                        } else {
-                            "00,OK"
-                        });
+                        self.set_status("00,OK");
                         self.dos[i].dir = Some((list, 0));
                     }
                     Err(_) => {

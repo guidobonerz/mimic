@@ -26,12 +26,13 @@ raw field ─► [signal stage] ─► [deinterlace/field stage] ─► [CRT sta
    - S-video / luma-chroma (C64, C128 40-col, Atari 800XL): reduced crosstalk.
    - RGB (Amiga, CPC, C128 VDC): clean, no signal stage.
    - Monochrome (CPC GT65 green, PET built-in white/green): luma only, phosphor tint.
-2. **Field stage:** interlace handling for Amiga (weave, bob, or phosphor-persistence blend) and 50/60 Hz field pacing.
+2. **Field stage:** interlace handling for Amiga (weave, bob, or phosphor-persistence blend) and 50/60 Hz field pacing. **Vector stage** (`video_crt::phosphor::VectorPhosphor`, 2026-11-11): a vector display (the Vectrex, `Machine::vectors`) through a profile with `phosphor_ms` > 0 is drawn from its beam segments, each with its afterglow from the moment the beam drew it (`Segment::at`): within the frame a segment gives `1 − e^(−(F−t)/τ)` of its energy, the rest glows into the next frames; energy is conserved, so a still picture keeps the machine's brightness and τ → 0 gives the machine's own picture. Same rasteriser and curve as the machine (`emu_core::vector::Raster`). Desktop (emulation thread, `Shared::vectors`), web, headless (`--crt`, every frame) and the preview stream (`filter=crt`, one stage per stream; single snapshots stay stateless) use it.
+- **Overlays** (`video_crt::overlay`, 2026-11-11): a picture in front of the screen (the Vectrex's sheets), the user's PNG from `~/.mimic/overlays/<machine>/<cartridge stem>.png` (`media_backends::overlays`; the built-in game `minestorm.png`), laid over the picture after the vector stage and before the CRT stage: alpha = coverage, colour = what the filter lets through, plus a faint room light (`AMBIENT` 0.06) on the sheet. Desktop follows the cartridge (`--overlay FILE|none`), headless only with `--overlay FILE|auto`, web with an uploaded PNG named like the cartridge or the "Overlay" choice (command `overlay`). Never in the debugger's or the raw preview's picture (golden rule 9). The Vectrex's frames are `OutputType::Rgb` since (as `Monochrome` the signal stage kept only luma and lost the 3D Imager's and an overlay's colours).
 3. **CRT stage:** scanlines (beam width tied to brightness), shadow mask / aperture grille / slot mask, bloom/halation, barrel curvature, vignette, **phosphor decay** across frames, configurable gamma.
 
 ### Monitor profiles
 
-TOML presets, each choosing signal type + CRT parameters: Commodore 1702, 1084S (RGB and composite inputs), Amstrad CTM644 (color) and GT65 (green), Atari via TV RF/composite, PET built-in, plus "generic PAL TV", "generic NTSC TV" and "raw (sharp pixels)". Users can override any parameter; per-machine default profiles live in machine config.
+TOML presets, each choosing signal type + CRT parameters: Commodore 1702, 1084S (RGB and composite inputs), Amstrad CTM644 (color) and GT65 (green), Atari via TV RF/composite, PET built-in, the Vectrex's tube (`vectrex`: glow, slight curvature, `phosphor_ms = 6`, a look, not measured), plus "generic PAL TV", "generic NTSC TV" and "raw (sharp pixels)". Users can override any parameter; per-machine default profiles live in machine config.
 
 ### Implementation notes
 

@@ -45,6 +45,9 @@ usage: mimic-headless [options]
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
                         raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
                         SNES .sfc/.smc; Vectrex .vec/.bin
+  --overlay FILE|auto   snapshots with a picture in front of the screen (PNG;
+                        the Vectrex's sheets); auto: the cartridge's own from
+                        ~/.mimic/overlays/<machine>/<cartridge name>.png
   --autostart           load and run the disk (C64) or tape (Spectrum) after boot
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
   --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR,
@@ -108,6 +111,8 @@ struct Args {
     disk: Vec<String>,
     tape: Option<String>,
     cart: Option<String>,
+    /// `--overlay FILE|auto|none`.
+    overlay: Option<String>,
     frames: u64,
     snapshot: Option<String>,
     snapshot_every: u64,
@@ -171,6 +176,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--disk" => args.disk.push(value("--disk")?),
             "--tape" => args.tape = Some(value("--tape")?),
             "--cart" => args.cart = Some(value("--cart")?),
+            "--overlay" => args.overlay = Some(value("--overlay")?),
             "--autostart" => {
                 args.config.options.insert("autostart".into(), "on".into());
             }
@@ -288,9 +294,43 @@ fn with_rom_dir(args: &Args) -> Result<MachineConfig, String> {
     Ok(config)
 }
 
-fn snapshot_png(machine: &dyn Machine, args: &Args) -> Result<Vec<u8>, String> {
+/// The overlay `--overlay` asks for: a file, `auto` (the cartridge's own
+/// from the overlay folder) or `none`.
+fn load_overlay(args: &Args) -> Result<Option<video_crt::overlay::Overlay>, String> {
+    let path = match args.overlay.as_deref() {
+        None | Some("none") => return Ok(None),
+        Some("auto") => match media_backends::overlays::find(&args.machine, args.cart.as_deref()) {
+            Some(p) => p,
+            None => return Ok(None),
+        },
+        Some(file) => std::path::PathBuf::from(file),
+    };
+    let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    video_crt::overlay::Overlay::from_png(&bytes)
+        .map(Some)
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The snapshot's picture; `glow`: the phosphor stage's picture of a
+/// vector display, in place of the machine's own; `overlay` in front of
+/// the main screen.
+fn snapshot_png(
+    machine: &dyn Machine,
+    args: &Args,
+    glow: Option<&[emu_core::frame::Rgb8]>,
+    overlay: Option<&video_crt::overlay::Overlay>,
+) -> Result<Vec<u8>, String> {
     let frame = match &args.screen {
-        None => machine.framebuffer(),
+        None => {
+            let f = machine.framebuffer();
+            match glow {
+                Some(px) => emu_core::FrameRef {
+                    pixels: emu_core::frame::PixelData::Rgb(px),
+                    ..f
+                },
+                None => f,
+            }
+        }
         Some(name) => {
             let screens = machine.screens();
             let id = screens.iter().find(|s| s.name == name).map(|s| s.id);
@@ -299,6 +339,25 @@ fn snapshot_png(machine: &dyn Machine, args: &Args) -> Result<Vec<u8>, String> {
                 format!("no screen '{name}' (this machine has {})", names.join(", "))
             })?
         }
+    };
+    let covered: Vec<emu_core::frame::Rgb8>;
+    let frame = match overlay.filter(|_| args.screen.is_none()) {
+        Some(o) => {
+            covered = {
+                let mut px: Vec<_> = (0..frame.height)
+                    .flat_map(|y| (0..frame.width).map(move |x| (x, y)))
+                    .map(|(x, y)| frame.rgb_at(x, y).unwrap_or_default())
+                    .collect();
+                o.apply(frame.width, frame.height, &mut px);
+                px
+            };
+            emu_core::FrameRef {
+                pixels: emu_core::frame::PixelData::Rgb(&covered),
+                luma_chroma: None,
+                ..frame
+            }
+        }
+        None => frame,
     };
     Ok(match &args.crt {
         Some((name, scale)) => {
@@ -638,6 +697,16 @@ fn run(mut args: Args) -> Result<ExitCode, String> {
     for file in &cheats {
         emu_cheats::apply(file, machine.as_mut(), &mut dbg)?;
     }
+    // A vector display through a profile with a phosphor decay: every
+    // frame goes through the phosphor stage, so a snapshot shows the
+    // afterglow of the ones before.
+    let decay = match &args.crt {
+        Some((name, _)) => load_profile(name)?.phosphor_ms,
+        None => 0.0,
+    };
+    let mut phosphor = video_crt::phosphor::VectorPhosphor::new();
+    let overlay = load_overlay(&args)?;
+    let mut glow: Option<Vec<emu_core::frame::Rgb8>> = None;
     let mut code = ExitCode::SUCCESS;
     let mut frames = 0;
     let mut audio = Vec::new();
@@ -650,6 +719,13 @@ fn run(mut args: Args) -> Result<ExitCode, String> {
         match stop {
             StopReason::FrameDone => {
                 frames += 1;
+                if decay > 0.0 && args.screen.is_none() {
+                    if let Some(v) = machine.vectors() {
+                        let f = machine.framebuffer();
+                        let px = phosphor.process(&v, f.width, f.height, decay).2;
+                        glow = Some(px.to_vec());
+                    }
+                }
                 if let (Some(path), true) = (&args.snapshot, args.snapshot_every > 0) {
                     if frames % args.snapshot_every == 0 {
                         let p = std::path::Path::new(path);
@@ -657,7 +733,12 @@ fn run(mut args: Args) -> Result<ExitCode, String> {
                             .file_stem()
                             .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
                         let file = p.with_file_name(format!("{stem}-{frames:05}.png"));
-                        let png = snapshot_png(machine.as_ref(), &args)?;
+                        let png = snapshot_png(
+                            machine.as_ref(),
+                            &args,
+                            glow.as_deref(),
+                            overlay.as_ref(),
+                        )?;
                         fs::write(&file, png)
                             .map_err(|e| format!("cannot write {}: {e}", file.display()))?;
                     }
@@ -672,7 +753,7 @@ fn run(mut args: Args) -> Result<ExitCode, String> {
     }
 
     if let Some(path) = &args.snapshot {
-        let png = snapshot_png(machine.as_ref(), &args)?;
+        let png = snapshot_png(machine.as_ref(), &args, glow.as_deref(), overlay.as_ref())?;
         fs::write(path, png).map_err(|e| format!("cannot write {path}: {e}"))?;
     }
     if let (Some(path), Some(format)) = (&args.wav, format) {

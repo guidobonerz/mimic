@@ -23,6 +23,47 @@ use emu_debug::{Endpoint, Service, Session};
 use emu_input::{HostEvent, JoyKeys, Mapper};
 use emu_preview::server::FrameTap;
 use video_crt::field::FieldStage;
+use video_crt::phosphor::VectorPhosphor;
+
+/// The overlay in front of the screen (the Vectrex's sheets): the user's
+/// picture for the cartridge in the port, found again when the cartridge
+/// changes, or the one `--overlay` chose (`fixed`).
+#[derive(Default)]
+pub struct OverlayChoice {
+    pub fixed: bool,
+    pub current: Option<video_crt::overlay::Overlay>,
+}
+
+impl OverlayChoice {
+    /// The overlay for `machine` with the cartridge `cart` (`None`: none in
+    /// the port) from the overlay folder; `None` when there is none or it
+    /// does not load (reported).
+    pub fn find(machine: &str, cart: Option<&str>) -> Option<video_crt::overlay::Overlay> {
+        let path = media_backends::overlays::find(machine, cart)?;
+        match std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| video_crt::overlay::Overlay::from_png(&b))
+        {
+            Ok(o) => {
+                eprintln!("overlay {}", path.display());
+                Some(o)
+            }
+            Err(e) => {
+                eprintln!("overlay {}: {e}", path.display());
+                None
+            }
+        }
+    }
+}
+
+/// The phosphor stage of a vector display (the Vectrex) and the decay time
+/// of the monitor profile shown (`phosphor_ms`; 0: the machine's own
+/// picture).
+#[derive(Default)]
+pub struct VectorStage {
+    pub stage: VectorPhosphor,
+    pub tau_ms: f32,
+}
 
 use std::collections::BTreeMap;
 
@@ -51,6 +92,10 @@ pub struct Shared {
     pub frame_ready: Condvar,
     /// Interlace weaving for [`Shared::frames`].
     pub fields: Mutex<FieldStage>,
+    /// The phosphor of vector displays for [`Shared::frames`].
+    pub vectors: Mutex<VectorStage>,
+    /// The overlay in front of the screen for [`Shared::frames`].
+    pub overlay: Mutex<OverlayChoice>,
     /// Stereo frames (left, right) at 48 kHz; mono machines fill both.
     pub audio: Mutex<VecDeque<[i16; 2]>>,
     /// Set by the audio thread when a device is running.
@@ -209,6 +254,8 @@ impl Shared {
             frames: Mutex::default(),
             frame_ready: Condvar::new(),
             fields: Mutex::default(),
+            vectors: Mutex::default(),
+            overlay: Mutex::default(),
             audio: Mutex::default(),
             audio_live: AtomicBool::new(false),
             quit: AtomicBool::new(false),
@@ -488,11 +535,27 @@ fn finish_mount(
                 names.insert(slot, name.clone());
             }
             if info.kind == emu_core::media::MediaKind::Cartridge {
+                cartridge_overlay(shared, Some(path));
                 return battery_ram(shared, m, path);
             }
             String::new()
         }
         Err(e) => format!("{name}: {e}"),
+    }
+}
+
+/// A cartridge went in (`Some(path)`) or out: its overlay, unless
+/// `--overlay` chose one.
+fn cartridge_overlay(shared: &Shared, cart: Option<&str>) {
+    let machine = shared
+        .machine_id
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    if let Ok(mut o) = shared.overlay.lock() {
+        if !o.fixed {
+            o.current = OverlayChoice::find(&machine, cart);
+        }
     }
 }
 
@@ -572,6 +635,9 @@ fn media_command(
             }
             if let Ok(mut names) = shared.media_names.lock() {
                 names.remove(&slot);
+            }
+            if info.kind == emu_core::media::MediaKind::Cartridge {
+                cartridge_overlay(shared, None);
             }
             (String::new(), None)
         }
@@ -715,10 +781,31 @@ fn next_screen(m: &dyn Machine, current: ScreenId) -> ScreenId {
     screens[(i + 1) % screens.len()].id
 }
 
-fn to_frame(m: &dyn Machine, screen: ScreenId, fields: &mut FieldStage) -> Frame {
+fn to_frame(
+    m: &dyn Machine,
+    screen: ScreenId,
+    fields: &mut FieldStage,
+    vectors: &mut VectorStage,
+) -> Frame {
     let Some(f) = m.screen(screen) else {
-        return to_frame(m, ScreenId::MAIN, fields);
+        return to_frame(m, ScreenId::MAIN, fields, vectors);
     };
+    // A vector display through the profile's phosphor: the beam segments
+    // with their afterglow, at the size of the machine's own picture.
+    if let (true, Some(v)) = (
+        screen == ScreenId::MAIN && vectors.tau_ms > 0.0,
+        m.vectors(),
+    ) {
+        let tau = vectors.tau_ms;
+        let (width, height, px) = vectors.stage.process(&v, f.width, f.height, tau);
+        return Frame {
+            width,
+            height,
+            rgba: px.iter().flat_map(|c| [c.r, c.g, c.b, 255]).collect(),
+            luma_chroma: None,
+            signal: f.signal,
+        };
+    }
     // Interlaced fields (Amiga LACE) are woven into full frames; the
     // field parity stays in the signal, so the aspect counts one row per
     // line.
@@ -1418,10 +1505,18 @@ fn save_snapshot(shared: &Shared, machine: &dyn Machine, screen: ScreenId) -> St
 }
 
 fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {
-    let frame = match shared.fields.lock() {
-        Ok(mut fields) => to_frame(machine, screen, &mut fields),
-        Err(_) => return,
+    let mut frame = match (shared.fields.lock(), shared.vectors.lock()) {
+        (Ok(mut fields), Ok(mut vectors)) => to_frame(machine, screen, &mut fields, &mut vectors),
+        _ => return,
     };
+    // The overlay sits in front of the main screen only.
+    if machine.screen(screen).is_some() && screen == ScreenId::MAIN {
+        if let Ok(o) = shared.overlay.lock() {
+            if let Some(o) = &o.current {
+                o.apply_rgba(frame.width, frame.height, &mut frame.rgba);
+            }
+        }
+    }
     if let Ok(mut q) = shared.frames.lock() {
         q.push_back(frame);
         while q.len() > MAX_QUEUED_FRAMES {

@@ -310,14 +310,24 @@ fn imager_spins_signals_ca1_and_colours_by_eye() {
 /// EMU_ROM_DIR/vectrex/) plays: the mine field appears, button 4 fires
 /// (more segments on the screen), the joystick turns the ship.
 ///
-///     EMU_ROM_DIR=$PWD/roms cargo test -p machine-vectrex --release mine_storm_plays -- --ignored --nocapture
+///     cargo test -p machine-vectrex --release mine_storm_plays -- --ignored --nocapture
 #[test]
-#[ignore = "needs the 8 KB system ROM in EMU_ROM_DIR/vectrex/"]
+#[ignore = "needs the 8 KB system ROM in the ROM folder's vectrex/"]
 fn mine_storm_plays() {
-    let Some(dir) = std::env::var_os("EMU_ROM_DIR") else {
+    // EMU_ROM_DIR, else the user's ROM folder (golden rule 6).
+    let Some(dir) = std::env::var_os("EMU_ROM_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(|h| std::path::PathBuf::from(h).join(".mimic").join("roms"))
+        })
+        .filter(|d| d.join("vectrex").is_dir())
+    else {
+        eprintln!("no vectrex ROM folder; skipped");
         return;
     };
-    let rom_path = std::fs::read_dir(std::path::Path::new(&dir).join("vectrex"))
+    let rom_path = std::fs::read_dir(dir.join("vectrex"))
         .unwrap()
         .filter_map(Result::ok)
         .map(|e| e.path())
@@ -558,4 +568,19 @@ fn trace_cart() {
         }
     }
     println!("regs {:?}", m.regs());
+}
+
+#[test]
+fn segments_carry_when_the_beam_drew_them() {
+    let mut m = stub_with(&[]);
+    frames(&mut m, 3);
+    let v = m.vectors().unwrap();
+    assert_eq!(v.frame_cycles as u64, FRAME_CYCLES);
+    assert!(!v.segments.is_empty());
+    let mut last_end = 0;
+    for s in v.segments {
+        assert!(s.at >= last_end, "in order, not overlapping: {s:?}");
+        last_end = s.at + s.cycles;
+        assert!(u64::from(last_end) <= FRAME_CYCLES, "{s:?}");
+    }
 }

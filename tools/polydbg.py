@@ -413,6 +413,34 @@ def cmd_gfx(c, args):
     ])
 
 
+def cmd_vectors(c, args):
+    """A vector display's beam segments (protocol 10): a summary, or all
+    segments; --svg writes them as an SVG picture."""
+    v = c.call("vectors")
+    segs = v["segments"]
+    text = ["frame %d: %d segments, %dx%d units, %d cycles at %d Hz, %s lines" % (
+        v["frame"], v["count"], v["width"], v["height"], v["frame_cycles"],
+        v["cycle_hz"], v["style"])]
+    for s in segs[: None if args.all else 10]:
+        text.append("  @%6d %4d cyc  (%6d,%6d)-(%6d,%6d)  z=%3d  #%02x%02x%02x" % (
+            s[9], s[8], s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]))
+    if not args.all and len(segs) > 10:
+        text.append("  ... (--all for every segment)")
+    if args.svg:
+        lines = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" '
+                 'style="background:#000">' % (v["width"], v["height"])]
+        for s in segs:
+            lines.append('<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="rgb(%d,%d,%d)" '
+                         'stroke-opacity="%.2f" stroke-width="%d" stroke-linecap="round"/>' % (
+                             s[0], s[1], s[2], s[3], s[5], s[6], s[7], s[4] / 255,
+                             max(1, v["width"] // 400)))
+        lines.append("</svg>")
+        with open(args.svg, "w") as f:
+            f.write("\n".join(lines))
+        text.append("-> %s" % args.svg)
+    out(args, v, text)
+
+
 def cmd_dlist(c, args):
     """Atari 8-bit: the ANTIC display list (from DLISTL/H unless given)."""
     if args.addr:
@@ -798,6 +826,9 @@ def build_parser(shell=False):
     sp.add_argument("--raw", help="also write the raw bytes to this file")
     sp.add_argument("--scale", type=int, default=1)
     sp.add_argument("--format", default="png", choices=["png", "qoi"])
+    sp = add("vectors", cmd_vectors, "vector display (Vectrex): the beam segments of the last frame")
+    sp.add_argument("--all", action="store_true", help="list every segment")
+    sp.add_argument("--svg", help="also write the segments as an SVG picture")
     sp = add("dlist", cmd_dlist, "Atari: decode the ANTIC display list (default: at DLIST)")
     sp.add_argument("addr", nargs="?")
     sp = add("break", cmd_break, "add a breakpoint: address/symbol, raster line, or irq/nmi")

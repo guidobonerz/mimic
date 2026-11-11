@@ -1299,6 +1299,7 @@ dependencies = [
  "emu-preview",
  "emu-profile",
  "media-backends",
+ "png",
  "serde_json",
  "video-crt",
 ]

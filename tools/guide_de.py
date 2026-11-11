@@ -669,6 +669,16 @@ bullets(
     "Titel, bevor ein Modul startet.",
     "**3D Imager.** Die rotierende Farbscheibe wird emuliert (Motor, Indeximpuls, "
     "Farbfilter); das Bild zeigt das mit `eye` gewählte Auge.",
+    "**Nachleuchten.** Der Standardmonitor `vectrex` zeichnet jede Linie mit ihrem "
+    "Nachglühen ab dem Moment, in dem der Strahl sie zieht: bewegte Objekte ziehen "
+    "eine schwache Spur, ein stehendes Bild bleibt so hell wie ohne. `--crt raw` "
+    "zeigt das Bild der Maschine ohne Nachleuchten.",
+    "**Overlays.** Die farbigen Folien der Spiele sind eigene Bilder (PNG) im Ordner "
+    "`~/.mimic/overlays/vectrex/`, benannt wie die Cartridge (`scramble.png` zu "
+    "`Scramble.vec`, `minestorm.png` für das eingebaute Spiel); mimic liefert keine "
+    "mit. Transparente Stellen lassen das Bild durch, farbige färben es; das Overlay "
+    "wechselt mit der Cartridge, `--overlay DATEI` wählt eins fest, `--overlay none` "
+    "keins.",
 )
 code("""mimic-desktop --machine vectrex --cart "Scramble (1982).vec"
 mimic-desktop --machine vectrex --option lines=soft --cart game.vec
@@ -928,6 +938,7 @@ table(["Profil", "Verwendung"], [
     ["`gt65`", "Amstrad-Grünmonitor"],
     ["`mac`", "der eingebaute Schwarzweißmonitor des kompakten Macintosh"],
     ["`logophor`, `logophor-scope`", "der Monitor des Logophor 16: eine RGB-Röhre mit deutlichen Rasterlinien und seine grüne Leuchtröhre mit Glühen und Nachleuchten; das Programm schaltet um (Panoramas Oszilloskop-Theme), der Monitor folgt"],
+    ["`vectrex`", "die Röhre des Vectrex: leuchtende Linien, die ab dem Moment nachglimmen, in dem der Strahl sie zeichnet (früh gezeichnete Linien sind beim Bildende heller als späte, bewegte Linien ziehen eine Spur); `phosphor_ms` legt die Abklingzeit fest (Standard 6 ms)"],
     ["`lite`", "nur Seitenverhältnis und leichte Zeilen, für langsame Rechner und die Web-Fassung"],
 ], [0.30, 0.70])
 p("""Neben dem Signal (Composite, S-Video, RGB, monochrom) legt ein Profil
@@ -1271,7 +1282,7 @@ table(["Option", "Bedeutung"], [
      "weniger, wenn das Fenster nicht auf den Bildschirm passt)."],
     ["`--crt PROFIL`", "Der Monitor: `raw`, `lite`, `1702`, `1084s`, `1084s-rgb`, "
      "`tv`, `pal-tv`, `ntsc-tv`, `pet-white`, `pet-green`, `ctm644`, `gt65`, `mac`, "
-     "`logophor`, `logophor-scope` oder eine `.toml`-Datei, die bei Änderung neu gelesen wird. Standard: der eigene "
+     "`logophor`, `logophor-scope`, `vectrex` oder eine `.toml`-Datei, die bei Änderung neu gelesen wird. Standard: der eigene "
      "Monitor der Maschine."],
     ["`--deinterlace MODUS`", "Zeilensprungbilder (Amiga LACE): `weave` (Standard, beide "
      "Halbbilder verschränkt) oder `bob` (die Zeilen des aktuellen Halbbilds verdoppelt); "

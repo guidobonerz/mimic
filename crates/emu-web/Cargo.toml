@@ -23,3 +23,6 @@ emu-profile.workspace = true
 media-backends.workspace = true
 emu-cheats.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+png.workspace = true

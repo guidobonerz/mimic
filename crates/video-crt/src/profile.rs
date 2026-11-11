@@ -9,6 +9,7 @@
 //! mask_strength = 0.3
 //! curvature = 0.05
 //! persistence = 0.4     # desktop and stateful renderers only
+//! phosphor_ms = 6.0     # vector displays: the phosphor's decay time
 //! ```
 
 use serde::Deserialize;
@@ -111,6 +112,12 @@ pub struct Profile {
     /// ([`crate::Crt`], the desktop) keep a frame history;
     /// [`crate::render`] ignores it.
     pub persistence: f32,
+    /// Vector displays (the Vectrex): the phosphor's decay time constant
+    /// in milliseconds; above 0 the stateful vector stage
+    /// ([`crate::phosphor`]) draws the machine's beam segments with each
+    /// one's afterglow from the moment it was drawn. 0 = the machine's
+    /// own picture.
+    pub phosphor_ms: f32,
 }
 
 impl Default for Profile {
@@ -134,6 +141,7 @@ impl Default for Profile {
             curvature: 0.0,
             vignette: 0.0,
             persistence: 0.0,
+            phosphor_ms: 0.0,
         }
     }
 }
@@ -296,11 +304,22 @@ impl Profile {
                 vignette: 0.1,
                 ..base
             },
+            // The Vectrex's own tube: a vector display with a white
+            // phosphor, glowing lines, a slightly curved face; the decay
+            // time is a look, not a measurement (no data on the tube's
+            // phosphor found).
+            "vectrex" => Self {
+                glow: 0.35,
+                curvature: 0.02,
+                vignette: 0.15,
+                phosphor_ms: 6.0,
+                ..base
+            },
             _ => return None,
         })
     }
 
-    pub const PRESETS: [&'static str; 15] = [
+    pub const PRESETS: [&'static str; 16] = [
         "raw",
         "lite",
         "1702",
@@ -316,6 +335,7 @@ impl Profile {
         "mac",
         "logophor",
         "logophor-scope",
+        "vectrex",
     ];
 
     /// Parse a TOML profile; `base = "<preset>"` starts from a preset.
@@ -363,6 +383,7 @@ impl Profile {
             // fringes on its hard edges: `--crt tv`).
             "amiga" | "snes" | "archimedes" | "bbc" => "1084s-rgb",
             "mac" => "mac",
+            "vectrex" => "vectrex",
             "logophor16" => "logophor",
             // Digital video (HDMI/VGA) on a flat panel: the 576p pixel
             // aspect, light scanlines as its PALEMU option.
@@ -408,6 +429,7 @@ struct Serialized<'a> {
     curvature: f32,
     vignette: f32,
     persistence: f32,
+    phosphor_ms: f32,
 }
 
 impl<'a> From<&'a Profile> for Serialized<'a> {
@@ -436,6 +458,7 @@ impl<'a> From<&'a Profile> for Serialized<'a> {
             curvature: p.curvature,
             vignette: p.vignette,
             persistence: p.persistence,
+            phosphor_ms: p.phosphor_ms,
         }
     }
 }

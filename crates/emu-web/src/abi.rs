@@ -160,6 +160,7 @@ fn dispatch(a: &mut Abi, req: &Value) -> Result<Value, String> {
         }
         "eject" => a.emu.eject(n("slot") as u8).map(|()| Value::Null),
         "crt" => a.emu.set_crt(&s("name")).map(|()| Value::Null),
+        "overlay" => a.emu.set_overlay(&s("path")).map(|()| Value::Null),
         "gpu" => {
             a.emu.set_gpu(req["on"].as_bool().unwrap_or(true));
             Ok(Value::Null)

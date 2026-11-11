@@ -106,6 +106,9 @@ usage: mimic-desktop [options]
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
                         raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
                         SNES .sfc/.smc; Vectrex .vec/.bin
+  --overlay FILE|none   picture in front of the screen (PNG; the Vectrex's
+                        sheets); default: the cartridge's own from
+                        ~/.mimic/overlays/<machine>/<cartridge name>.png
   --autostart           load and run the disk (C64) or tape (Spectrum) after boot
   --rom-dir DIR         ROM folder (default: settings.roms of profiles.yaml,
                         then $EMU_ROM_DIR, then ~/.mimic/roms)
@@ -240,6 +243,8 @@ struct Args {
     mounted: Vec<(u8, String)>,
     tape: Option<String>,
     cart: Option<String>,
+    /// `--overlay FILE|none`.
+    overlay: Option<String>,
     crt: Option<String>,
     deinterlace: Deinterlace,
     rewind_mb: u32,
@@ -288,6 +293,7 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         mounted: Vec::new(),
         tape: None,
         cart: None,
+        overlay: None,
         crt: None,
         deinterlace: Deinterlace::Weave,
         rewind_mb: emu_debug::session::DEFAULT_BUDGET_MB,
@@ -327,6 +333,7 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
             "--disk" => a.disk.push(value("--disk")?),
             "--tape" => a.tape = Some(value("--tape")?),
             "--cart" => a.cart = Some(value("--cart")?),
+            "--overlay" => a.overlay = Some(value("--overlay")?),
             "--footer" => a.footer = true,
             "--no-panel" => a.panel = false,
             "--media-panel" => a.media_panel = true,
@@ -1159,6 +1166,9 @@ impl App {
                 if let Some(r) = &self.render {
                     r.set_profile(p.clone());
                 }
+                if let Ok(mut v) = self.shared.vectors.lock() {
+                    v.tau_ms = p.phosphor_ms;
+                }
                 self.profile = p;
             }
             // Keep the last good profile while the file does not parse.
@@ -1880,6 +1890,23 @@ fn start(mut args: Args, settings: &emu_profile::Settings) -> Result<Started, St
     }
     if let Ok(mut fields) = shared.fields.lock() {
         fields.mode = args.deinterlace;
+    }
+    if let Ok(mut v) = shared.vectors.lock() {
+        v.tau_ms = profile.phosphor_ms;
+    }
+    if let Ok(mut o) = shared.overlay.lock() {
+        match args.overlay.as_deref() {
+            Some("none") => o.fixed = true,
+            Some(file) => {
+                let bytes = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+                o.current = Some(
+                    video_crt::overlay::Overlay::from_png(&bytes)
+                        .map_err(|e| format!("{file}: {e}"))?,
+                );
+                o.fixed = true;
+            }
+            None => o.current = emu::OverlayChoice::find(&args.machine, args.cart.as_deref()),
+        }
     }
     shared.rewind_mb.store(args.rewind_mb, Ordering::Relaxed);
     shared.footer_on.store(args.footer, Ordering::Relaxed);

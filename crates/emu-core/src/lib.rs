@@ -47,4 +47,4 @@ pub use machine::{
 };
 pub use savestate::{Savestate, StateError, StateReader, StateWriter};
 pub use scheduler::{ClockDivider, Event, EventId, Scheduler};
-pub use vector::{Segment, VectorFrame};
+pub use vector::{Segment, VectorBuf, VectorFrame};

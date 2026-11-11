@@ -138,6 +138,12 @@ async function showFiles() {
     li.append(name, size, del);
     return li;
   }));
+  // The overlay choice: by cartridge, none, or one of the PNG files.
+  const keep = $("overlay").value;
+  $("overlay").replaceChildren(
+    new Option("by cartridge", "auto"), new Option("none", "none"),
+    ...files.filter((f) => f.path.toLowerCase().endsWith(".png")).map((f) => new Option(f.path, f.path)));
+  $("overlay").value = [...$("overlay").options].some((o) => o.value === keep) ? keep : "auto";
   showSlots();
 }
 
@@ -189,6 +195,9 @@ async function start(config) {
   if ($("machine").value !== config.machine) { $("machine").value = config.machine; showModels(); }
   running = true;
   paused = false;
+  if ($("overlay").value !== "auto") {
+    try { await call("overlay", { path: $("overlay").value }); } catch (e) { say(e.message, true); }
+  }
   for (const id of ["pause", "reset", "stop", "save", "load"]) $(id).disabled = false;
   $("pause").textContent = "Pause";
   showSlots();
@@ -808,6 +817,11 @@ function wire() {
   $("crt").onchange = async () => {
     if (!running) return;
     try { await call("crt", { name: crtValue() }); }
+    catch (e) { say(e.message, true); }
+  };
+  $("overlay").onchange = async () => {
+    if (!running) return;
+    try { await call("overlay", { path: $("overlay").value }); }
     catch (e) { say(e.message, true); }
   };
   $("addfiles").onclick = () => $("fileinput").click();

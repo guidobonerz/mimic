@@ -781,6 +781,11 @@ impl Session {
                 scale,
                 overlays,
             } => self.frame_image(screen.as_deref(), format.as_deref(), scale, &overlays),
+            Command::Vectors => self
+                .machine
+                .vectors()
+                .map(|v| emu_preview::vectors_json(&v))
+                .ok_or_else(|| format!("{} has no vector display", self.machine_id)),
             Command::GfxList => Ok(self.gfx_list()),
             Command::GfxGet {
                 view,
@@ -1269,6 +1274,7 @@ impl Session {
             "events": protocol::EVENTS,
             "optional_events": protocol::OPTIONAL_EVENTS,
             "beam": self.machine.beam().is_some(),
+            "vectors": self.machine.vectors().is_some(),
             // Machine-specific extensions (none yet); generic clients ignore them.
             "extensions": [],
         })
