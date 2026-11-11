@@ -104,6 +104,7 @@ Größe** erkannt.
 | `ti99/` | TI-99/4A | Konsolen-ROM `994AROM.BIN` (8 KB) und GROM 0–2 `994AGROM.BIN` (24 KB), optional das DSR-ROM des Diskettencontrollers `DISK.BIN` (8 KB) und das Sprach-ROM `SPCHROM.BIN` (32 KB); ohne sie läuft mit `--option roms=stub` ein eigenes Mini-ROM (nur ein Testbild, kein BASIC) |
 | `bbc/` | BBC Micro | Model B: MOS 1.20 `os12.rom` und BASIC II `basic2.rom` (je 16 KB), optional Acorn DFS 1.20 `dfs-1.20.rom` (mit ihm der Diskettencontroller 8271); B+: `bplus-mos.rom` (MOS 2.00) und `dfs-2.26.rom` (1770-DFS); Master 128: die MOS 3.20 in 16-KB-Stücken im Unterordner `bbc/master320` (`mos.rom`, `dfs.rom`, `viewsht.rom`, `edit.rom`, `basic4.rom`, `adfs.rom`, `view.rom`, `terminal.rom`); ohne ROMs läuft mit `--option roms=stub` ein eigenes Test-ROM (nur ein Bild) |
 | `mega65/` (`m65/`) | MEGA65 | `mega65.rom` (128 KB: die Open ROMs oder das offizielle ROM 920xxx); ohne es läuft mit `--option roms=stub` ein eigenes Test-ROM |
+| `vectrex/` | Vectrex | das 8-KB-System-ROM (Executive und Mine Storm), Name beginnt mit `vectrex`, `system`, `bios`, `exec`, `minestorm` oder `mine storm` (z. B. `Mine Storm (1982).vec`); es hat Vorrang vor einem 4-KB-Abbild nur des Executive, mit dem ohne Cartridge nach dem Titel kein Spiel kommt |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
 Der Atari 2600 hat kein System-ROM: das Programm kommt vom Modul (`--cart`).

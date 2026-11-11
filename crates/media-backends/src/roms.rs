@@ -569,6 +569,8 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
                 "exec",
                 "mine-storm",
                 "minestorm",
+                // "Mine Storm (1982).vec": names keep their spaces.
+                "mine storm",
             ],
             0x2000,
         ),
@@ -1049,6 +1051,19 @@ mod tests {
         assert_eq!(roms["basic664"][0], 6);
         assert_eq!(roms["rom664"][0], 7);
         assert!(!roms.contains_key("os664"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The 8 KB system ROM under its game's name wins over a 4 KB
+    /// executive in the same folder (the 4 KB one has no Mine Storm).
+    #[test]
+    fn vectrex_takes_the_8k_system_rom_named_mine_storm() {
+        let dir = temp_dir("vectrex");
+        fs::create_dir_all(dir.join("vectrex")).unwrap();
+        fs::write(dir.join("vectrex/Mine Storm (1982).vec"), vec![8; 0x2000]).unwrap();
+        fs::write(dir.join("vectrex/Vectrex BIOS (1982).vec"), vec![4; 0x1000]).unwrap();
+        let roms = load(&dir, "vectrex").unwrap();
+        assert_eq!(roms["vectrex"].len(), 0x2000);
         fs::remove_dir_all(&dir).unwrap();
     }
 
