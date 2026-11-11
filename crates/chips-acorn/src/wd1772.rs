@@ -6,6 +6,8 @@
 //! formats are accepted and thrown away, and copy protection is out of
 //! reach.
 //!
+//! Single density (FM, [`Wd1772::single_density`]) halves the byte rate.
+//!
 //! Source: Western Digital, "WD1770/1772/1773 Floppy Disk Controller" data
 //! sheet: command set, status bits, DRQ/INTRQ.
 
@@ -74,7 +76,7 @@ impl Floppy {
     }
 
     /// Byte offset of a sector, if it exists.
-    fn offset(&self, track: u32, side: u32, sector: u32) -> Option<usize> {
+    pub fn offset(&self, track: u32, side: u32, sector: u32) -> Option<usize> {
         let sector = sector.checked_sub(self.first_sector)?;
         if track >= self.tracks || side >= self.sides || sector >= self.sectors {
             return None;
@@ -129,6 +131,9 @@ pub struct Wd1772 {
     wd1793: bool,
     /// The selected drive holds a disc (WD1793, set by the board).
     pub ready: bool,
+    /// Single density (FM, set by the board; the BBC B+ and Master's
+    /// density select): a byte every 64 µs instead of 32.
+    pub single_density: bool,
 }
 
 impl Default for Wd1772 {
@@ -162,6 +167,7 @@ impl Wd1772 {
             index: false,
             wd1793: false,
             ready: false,
+            single_density: false,
         }
     }
 
@@ -175,8 +181,9 @@ impl Wd1772 {
 
     pub fn reset(&mut self) {
         let (head, drive, side) = (self.head, self.drive, self.side);
-        let (wd1793, ready) = (self.wd1793, self.ready);
+        let (wd1793, ready, fm) = (self.wd1793, self.ready, self.single_density);
         *self = Self::new();
+        self.single_density = fm;
         self.head = head;
         self.drive = drive;
         self.side = side;
@@ -453,7 +460,11 @@ impl Wd1772 {
         }
         self.drq = true;
         self.status |= ST_DRQ;
-        self.timer = BYTE_CLOCKS;
+        self.timer = if self.single_density {
+            2 * BYTE_CLOCKS
+        } else {
+            BYTE_CLOCKS
+        };
     }
 
     fn event(&mut self, disks: &mut [Option<Floppy>]) {

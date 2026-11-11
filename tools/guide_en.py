@@ -425,16 +425,45 @@ together go to the first entry, and without a list they write an
 mounted until ejected.""")
 
 h2("Commodore VIC-20, C16/Plus/4, PET and C128")
-table(["Machine", "Options"], [
-    ["VIC-20", "`ram=none|3k|8k|16k|24k|all`, `port1=joystick|none`, `drive8=…`, `autostart=on`"],
-    ["C16/Plus/4", "`ram=16k|64k`, `drive8=1541|1571|1581|1551|virtual|none` (`1551`: the "
-     "parallel TCBM drive with its interface cartridge, needs `dos1551`), "
-     "`sidcard=6581|8580|off` (a SID card at `$FD40`, for demos and games with SID "
-     "music), `port1=joystick|none`, `autostart=on`"],
-    ["PET", "`ram=8k|16k|32k`, `keyboard=graphics|business`, `hz=50|60`, `drive8=virtual|none`"],
-    ["C128", "`display=40|80`, `vdc_ram=16k|64k`, `sid=…`, "
-     "`drive8=1571|1541|1581|virtual|none`, `port2=…`, `autostart=on`"],
-], [0.18, 0.82])
+h3("VIC-20")
+table(["Option", "Values"], [
+    ["`ram`", "memory expansion: `none` (default), `3k`, `8k`, `16k`, `24k`, `all`"],
+    ["`port1`", "`joystick` (default), `paddles`, `mouse1351`, `none`; also the mice "
+     "and keypads of the Commodore ports (Part II)"],
+    ["`drive8`", "`1541`, `1571`, `1581`, `virtual`, `none`"],
+    ["`autostart`", "`on`: load and run the disk's first program"],
+    ["`roms`", "`stub`: a test ROM without the Commodore ROMs"],
+], [0.22, 0.78])
+h3("C16 and Plus/4")
+table(["Option", "Values"], [
+    ["`ram`", "`16k` (default on the C16) or `64k` (default on the Plus/4)"],
+    ["`port1`", "`joystick` (default) or `none`; also the mice and keypads of the "
+     "Commodore ports that need no paddle lines (Part II)"],
+    ["`drive8`", "`1541`, `1571`, `1581`, `1551` (the parallel TCBM drive with its "
+     "interface cartridge, needs `dos1551`), `virtual`, `none`"],
+    ["`sidcard`", "`6581`, `8580`, `off` (default): a SID card at `$FD40`, for demos "
+     "and games with SID music"],
+    ["`autostart`", "`on`: load and run the disk's first program"],
+    ["`roms`", "`stub`: a test ROM without the Commodore ROMs"],
+], [0.22, 0.78])
+h3("PET")
+table(["Option", "Values"], [
+    ["`ram`", "`8k` (default on the 2001), `16k`, `32k` (default otherwise)"],
+    ["`keyboard`", "`graphics` (default) or `business` (default on the 8032)"],
+    ["`hz`", "`50` (default) or `60`"],
+    ["`drive8`", "`virtual` (default; an IEEE-488 drive at file level) or `none`"],
+    ["`roms`", "`stub`: a test ROM without the Commodore ROMs"],
+], [0.22, 0.78])
+h3("C128")
+table(["Option", "Values"], [
+    ["`display`", "`40` (default) or `80`: the screen the machine starts in"],
+    ["`vdc_ram`", "`16k` (default) or `64k`"],
+    ["`sid`", "`8580` (default) or `6581`"],
+    ["`drive8`", "`1571`, `1541`, `1581`, `virtual`, `none`"],
+    ["`port1`, `port2`", "as on the C64 (defaults: port 1 `none`, port 2 `joystick`)"],
+    ["`autostart`", "`on`: load and run the disk's first program"],
+    ["`roms`", "`stub`: a test ROM without the Commodore ROMs"],
+], [0.22, 0.78])
 p("""The C128 has two screens: F12 switches between the 40-column VIC and the
 80-column VDC; the window starts on the one the 40/80 key selects.""")
 
@@ -495,17 +524,32 @@ both Ctrl = CTRL, Insert = HELP, Delete = DEL; **Ctrl + both Windows keys**
 resets like the real keyboard. Sound is stereo with the A500's filters.""")
 
 h2("Sinclair ZX81")
-p("""Options: `ram=16k|1k|2k` (default 16k), `traps=on|off`. Programs are
+table(["Option", "Values"], [
+    ["`ram`", "`16k` (default), `1k` or `2k`"],
+    ["`traps`", "`on` (default) or `off`: LOAD and SAVE of the `.p` file through traps "
+     "in the ROM"],
+    ["`roms`", "`stub`: a test ROM without the Sinclair ROM"],
+], [0.22, 0.78])
+p("""Models `zx81` (PAL) and `ts1000` (NTSC, 60 Hz). Programs are
 `.p` files given with `--tape`: `LOAD ""` loads the program from the tape
 slot and `SAVE "NAME"` writes it, through traps in the ROM.""")
 
 h2("Sinclair ZX Spectrum")
-p("""Models `48k`, `128k` and `plus2`. Options: `traps=on|off` (default on:
-`LOAD ""` copies standard tape blocks at once; off plays the tape in real
-time), `autostart=on` (with a tape: types `LOAD ""`, or picks the 128K
-menu's Tape Loader), `joystick=kempston|sinclair1|sinclair2|cursor|none`,
-`mouse=kempston`, `issue=3|2`, `multiface=on`, `if1=on` with
-`microdrives=1..8`, `roms=stub`.""")
+p("""Models `48k`, `128k` and `plus2`.""")
+table(["Option", "Values"], [
+    ["`traps`", "`on` (default: `LOAD \"\"` copies standard tape blocks at once) or "
+     "`off` (the tape plays in real time)"],
+    ["`autostart`", "`on`: with a tape, types `LOAD \"\"` or picks the 128K menu's "
+     "Tape Loader"],
+    ["`joystick`", "`kempston` (default), `sinclair1`, `sinclair2`, `cursor`, `none`"],
+    ["`mouse`", "`kempston` or `none` (default)"],
+    ["`issue`", "board issue `3` (default) or `2`: the EAR feedback in port $FE bit 6"],
+    ["`multiface`", "`on`: a Multiface 128 (needs its ROM)"],
+    ["`if1`", "`on`: an Interface 1 (needs its ROM) with `microdrives` = `1` to `8` "
+     "Microdrives (default 2)"],
+    ["`beta`", "`on`: a Beta Disk interface with TR-DOS (needs its ROM)"],
+    ["`roms`", "`stub`: a test ROM without the Sinclair ROMs"],
+], [0.22, 0.78])
 p("""Tapes are TAP or TZX files (`--tape`); `LOAD ""` presses PLAY, and
 the tape stops at TZX "stop" blocks. Snapshots (SNA, Z80) go in with
 `--prg` and take over at once. Keys: Shift = CAPS SHIFT, right Ctrl or
@@ -518,9 +562,15 @@ cartridges (`--disk`, `FORMAT "m";1;"name"`, `SAVE *"m";1;"file"`,
 yet.""")
 
 h2("ColecoVision")
-p("""Options: `port1`, `port2` = `controller` (default: joystick, two fire
-buttons, keypad), `superaction`, `driving`, `roller`, `none`;
-`roms=stub`. Keys: controller 1's keypad on the digit row (1–9, 0, - = *,
+table(["Option", "Values"], [
+    ["`port1`, `port2`", "`controller` (default: joystick, two fire buttons, keypad), "
+     "`superaction` (Super Action Controller), `driving` (Expansion Module #2: wheel "
+     "and pedal), `roller` (Roller Controller, a trackball; its second cable takes "
+     "port 2 as well), `none`"],
+    ["`roms`", "`stub`: a small BIOS of mimic's own that starts cartridges directly "
+     "(games that call BIOS routines need the real BIOS)"],
+], [0.22, 0.78])
+p("""Keys: controller 1's keypad on the digit row (1–9, 0, - = *,
 = = #, [ ] = the Super Action Controller's purple and blue buttons, X = right
 fire), controller 2's keypad on the numeric keypad; joystick 1 on the cursor
 keys, Space = left fire.""")
@@ -529,11 +579,17 @@ h2("TI-99/4A")
 p("""ROMs: the console ROM (`994AROM.BIN`, 8 KB) and GROM 0–2
 (`994AGROM.BIN`, 24 KB) in the `ti99` folder of the ROM folder; the disk
 controller's DSR ROM (`DISK.BIN`, 8 KB) adds the disk card, the speech ROM
-(`SPCHROM.BIN`, 32 KB) the Speech Synthesizer (`speech=on|off`; Parsec and
+(`SPCHROM.BIN`, 32 KB) the Speech Synthesizer (Parsec and
 other games talk). `--videoformat
-pal` is the TMS9929A. Options: `ram=32k|none` (the 32 KB memory expansion,
-default `32k`), `port1`, `port2` = `joystick` or `none`, `disk=on|off`,
-`roms=stub`. Cartridges: `--cart GAMEC.BIN` — the `G` (GROM) and `D`
+pal` is the TMS9929A.""")
+table(["Option", "Values"], [
+    ["`ram`", "`32k` (default: the 32 KB memory expansion) or `none`"],
+    ["`port1`, `port2`", "`joystick` (default) or `none`"],
+    ["`disk`", "`on` or `off`: the disk controller (default: on when its DSR ROM is there)"],
+    ["`speech`", "`on` or `off`: the Speech Synthesizer (default: on when its ROM is there)"],
+    ["`roms`", "`stub`: a small ROM of mimic's own (a test picture only, no BASIC)"],
+], [0.22, 0.78])
+p("""Cartridges: `--cart GAMEC.BIN` — the `G` (GROM) and `D`
 (second bank) dumps next to it are loaded with it. Cassette CS1:
 `--tape tape.wav`; `SAVE CS1` and `OLD CS1` ask for the recorder keys,
 which are the media slot's play/record/stop/rewind. Disks: `--disk game.dsk`
@@ -543,14 +599,24 @@ Backspace = FCTN+S, Delete = FCTN+1, Escape = FCTN+9 (BACK), F4 = FCTN+4
 (CLEAR).""")
 
 h2("Nintendo NES / Famicom")
-p("""Options: `port1`, `port2` = `controller`, `zapper`, `arkanoid`, `none`;
-`fourscore=on` (ports 3 and 4). Keys: the D-pad on the cursor keys, Space
+table(["Option", "Values"], [
+    ["`port1`, `port2`", "`controller` (default), `zapper` (light gun: the mouse aims, "
+     "left button = trigger), `arkanoid` (the mouse turns the knob), `none`"],
+    ["`fourscore`", "`on`: a Four Score with controllers in ports 3 and 4 (ports 1 "
+     "and 2 must be controllers)"],
+], [0.22, 0.78])
+p("""Keys: the D-pad on the cursor keys, Space
 and X = A, Z = B, right Shift = Select, Enter = Start. Cartridges are iNES
 or NES 2.0 files with mappers 0–4 (NROM, MMC1, UxROM, CNROM, MMC3).""")
 
 h2("Super Nintendo / Super Famicom")
-p("""Options: `port1`, `port2` = `pad`, `mouse`, `superscope` (port 2 only),
-`none`; `multitap=on` (Multiplayer 5 in port 2); `roms=stub`. Keys: the
+table(["Option", "Values"], [
+    ["`port1`, `port2`", "`pad` (default), `mouse`, `superscope` (port 2 only: the "
+     "mouse aims, left button = trigger, right = cursor), `none`"],
+    ["`multitap`", "`on`: a Multiplayer 5 in port 2 (pads in ports 2 to 5)"],
+    ["`roms`", "`stub`: mimic's own sound boot loader instead of the IPL ROM"],
+], [0.22, 0.78])
+p("""Keys: the
 D-pad on the cursor keys, Z = B (also Space), X = A, A = Y, S = X, Q = L,
 W = R, right Shift = Select, Enter = Start. Cartridges are `.sfc`/`.smc`
 (LoROM, HiROM, ExHiROM, with or without copier header); games with
@@ -658,6 +724,90 @@ bullets(
 code("""mimic-desktop --machine mac --disk "System Tools.image"
 mimic-desktop --machine mac --model se --disk system.dsk --disk hd20.img
 mimic-desktop --machine mac --model 128k --disk mfs-system.dsk""")
+
+h2("Tandy TRS-80")
+p("""Models `1` (Model I, default) and `3` (Model III with its FD1793 disk
+controller, 48 KB and lower case built in).""")
+table(["Option", "Values"], [
+    ["`level`", "Model I: BASIC ROM `2` (Level II, default) or `1` (Level I)"],
+    ["`ram`", "`4k`, `16k` (default on the Model I), `48k` (default on the Model III)"],
+    ["`lowercase`", "Model I: `on` or `off` (default): the lower-case modification"],
+    ["`ei`", "Model I: `on` or `off` (default): the Expansion Interface with its "
+     "FD1771 and drives 0–3"],
+    ["`roms`", "`stub`: a test ROM without the Tandy ROMs"],
+], [0.22, 0.78])
+p("""Disks are DMK, JV1 or JV3 images (`--disk`); the machine boots drive 0,
+and BREAK held at power-on skips the disk. On the Model I a cassette is a
+CAS file (`--tape`): `CLOAD` plays it, `CSAVE` appends to it. Keys: Home or
+Delete = CLEAR, Escape or End = BREAK, Backspace = ←.""")
+
+h2("BBC Micro")
+p("""The Model B. With the DFS ROM in the ROM folder the machine has the
+8271 disk controller: `--disk` takes SSD and DSD images for drive 0, and
+Shift+BREAK boots. Tapes are UEF or WAV files (`--tape`; type `*TAPE` first
+when DFS is in).""")
+table(["Option", "Values"], [
+    ["`roms`", "`stub`: a test ROM without the Acorn ROMs"],
+], [0.22, 0.78])
+
+h2("Acorn Archimedes")
+p("""Models `a310` (default), `a305`, `a440` and `a3000`.""")
+table(["Option", "Values"], [
+    ["`os`", "RISC OS `3.11`, `3.10`, `3.00`, `2.00` or Arthur `1.20` (default: the "
+     "newest one in the ROM folder)"],
+    ["`ram`", "`512k`, `1m`, `2m`, `4m` (default: A305 512k, A310 and A3000 1m, A440 4m)"],
+    ["`roms`", "`stub`: a test ROM without the Acorn ROMs"],
+], [0.22, 0.78])
+
+h2("IMSAI 8080")
+p("""The picture is the front panel: the paddles are clicked with the mouse,
+the lamps show the bus. The serial terminal is the second screen (F12), and
+the keyboard types on it. The machine needs no ROM.""")
+table(["Option", "Values"], [
+    ["`ram`", "`1k` to `64k` (default `64k`)"],
+    ["`baud`", "the serial lines' speed, `50` to `115200` (default `9600`)"],
+    ["`mpu`", "`a` or `b`: the MPU-A or MPU-B monitor ROM (2 KB); `none` (default)"],
+    ["`load`", "the address (hex) a binary program is loaded to (default `0`)"],
+    ["`autostart`", "`on`: run a loaded program, the ROM or the disk at power-on"],
+    ["`reader`", "`card` (default: the tape reader on its own serial card) or "
+     "`console` (the tape plays into the terminal's line, as on a Teletype)"],
+    ["`cardreader`", "`text` (default: a card deck plays into the reader line) or "
+     "`raw` (its columns at ports $20–$22)"],
+], [0.22, 0.78])
+p("""Disks are raw 8-inch images in drives A: to D: of the FIF floppy
+interface (`--disk`); with a disk in drive A, RESET and RUN boot it
+(CP/M 2.2).""")
+
+h2("IBM 029 card punch")
+p("""A machine for typing card decks (`.deck`, `.crd`, `.chx`), which the
+IMSAI's card reader reads back. The picture is the card at the punch
+station.""")
+table(["Option", "Values"], [
+    ["`autofeed`", "`on` (default) or `off`: the AUTO FEED switch"],
+    ["`print`", "`on` (default) or `off`: the PRINT switch (characters along the "
+     "card's top edge)"],
+    ["`program`", "the card format for Tab (SKIP) and the field lines: `free` "
+     "(default), `fortran`, `cobol`, `assembler`"],
+    ["`seq`", "`on` or `off` (default): punch sequence numbers into released cards"],
+], [0.22, 0.78])
+p("""Keys: Enter = FEED without a card, REL with one; Tab = SKIP; Backspace
+moves the card back a column; Space or → moves on without punching.""")
+
+h2("Logophor 16")
+p("""mimic's own steampunk computer; its ROM is built in. The profile
+`logophor16` boots the desktop Panorama.""")
+table(["Option", "Values"], [
+    ["`card`", "`system`: the built-in system card (Boiler and Panorama; writes are "
+     "lost at the end, `--disk` takes its place); `none` (default)"],
+    ["`port0`, `port1`", "`mouse`, `joystick`, `none` (defaults: mouse in port 0, "
+     "joystick in port 1)"],
+    ["`net`", "`host`: the gateway in the machine (DHCP, DNS and the Internet through "
+     "the host's network); `HOST:PORT`: join the network of an `ada-asm hub`"],
+    ["`mac`", "the network address, six hex bytes (default `02:4c:31:36:00:01`)"],
+    ["`rtc`", "the clock's start in seconds since 2000-01-01 (default 2026-01-01)"],
+], [0.22, 0.78])
+p("""The SD card is a FAT32 image given with `--disk`; Foundry starts
+`BOOT/BOILER.BIN` from it.""")
 
 # ---- 6 media ------------------------------------------------------------------
 

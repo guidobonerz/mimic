@@ -49,7 +49,7 @@ crates/
   chips-amiga/     Agnus (DMA, Copper, Blitter), Denise, Paula, Gary, CIA
   chips-atari/     ANTIC, GTIA, POKEY, PIA
   chips-amstrad/   CRTC 6845, Gate Array, AY-3-8912, 8255 PPI, FDC 765
-  chips-acorn/     MEMC, IOC, VIDC, PCF8583, WD1772 (Archimedes), Video ULA and SAA5050 teletext (BBC Micro)
+  chips-acorn/     MEMC, IOC, VIDC, PCF8583, WD1772 (Archimedes), Video ULA, SAA5050 teletext, Intel 8271 FDC and MC146818 clock (BBC Micro, Master)
   chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision, TI-99/4A), TMS9901, GROM (TMC0430), TMS5220 speech
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)

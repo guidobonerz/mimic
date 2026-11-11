@@ -265,6 +265,9 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
         | "hfv" => Some(MediaKind::Disk),
         // ZX Microdrive cartridges, TR-DOS disks.
         "mdr" | "trd" => Some(MediaKind::Disk),
+        // Acorn DFS (BBC Micro): single- and double-sided; ADFS L (BBC
+        // Master; ADFS S/M as .adf like the Amiga's).
+        "ssd" | "dsd" | "adl" => Some(MediaKind::Disk),
         // ZX Spectrum snapshots.
         "prg" | "p00" | "t64" | "xex" | "com" | "exe" | "sna" | "z80" => Some(MediaKind::Program),
         // Binaries and Intel HEX for machines loaded straight into memory.

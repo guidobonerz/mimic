@@ -441,16 +441,45 @@ PREV; beide zusammen springen zum ersten Eintrag, ohne Liste legen sie
 bleibt eingehängt, bis es ausgeworfen wird.""")
 
 h2("Commodore VIC-20, C16/Plus/4, PET und C128")
-table(["Maschine", "Optionen"], [
-    ["VIC-20", "`ram=none|3k|8k|16k|24k|all`, `port1=joystick|none`, `drive8=…`, `autostart=on`"],
-    ["C16/Plus/4", "`ram=16k|64k`, `drive8=1541|1571|1581|1551|virtual|none` (`1551`: das "
-     "parallele TCBM-Laufwerk mit seinem Interface-Modul, braucht `dos1551`), "
-     "`sidcard=6581|8580|off` (eine SID-Karte bei `$FD40`, für Demos und Spiele mit "
-     "SID-Musik), `port1=joystick|none`, `autostart=on`"],
-    ["PET", "`ram=8k|16k|32k`, `keyboard=graphics|business`, `hz=50|60`, `drive8=virtual|none`"],
-    ["C128", "`display=40|80`, `vdc_ram=16k|64k`, `sid=…`, "
-     "`drive8=1571|1541|1581|virtual|none`, `port2=…`, `autostart=on`"],
-], [0.18, 0.82])
+h3("VIC-20")
+table(["Option", "Werte"], [
+    ["`ram`", "Speichererweiterung: `none` (Standard), `3k`, `8k`, `16k`, `24k`, `all`"],
+    ["`port1`", "`joystick` (Standard), `paddles`, `mouse1351`, `none`; außerdem die "
+     "Mäuse und Tastenfelder der Commodore-Ports (Teil II)"],
+    ["`drive8`", "`1541`, `1571`, `1581`, `virtual`, `none`"],
+    ["`autostart`", "`on`: das erste Programm der Diskette laden und starten"],
+    ["`roms`", "`stub`: ein Test-ROM ohne die Commodore-ROMs"],
+], [0.22, 0.78])
+h3("C16 und Plus/4")
+table(["Option", "Werte"], [
+    ["`ram`", "`16k` (Standard beim C16) oder `64k` (Standard beim Plus/4)"],
+    ["`port1`", "`joystick` (Standard) oder `none`; außerdem die Mäuse und Tastenfelder "
+     "der Commodore-Ports, die keine Paddle-Leitungen brauchen (Teil II)"],
+    ["`drive8`", "`1541`, `1571`, `1581`, `1551` (das parallele TCBM-Laufwerk mit seinem "
+     "Interface-Modul, braucht `dos1551`), `virtual`, `none`"],
+    ["`sidcard`", "`6581`, `8580`, `off` (Standard): eine SID-Karte bei `$FD40`, für "
+     "Demos und Spiele mit SID-Musik"],
+    ["`autostart`", "`on`: das erste Programm der Diskette laden und starten"],
+    ["`roms`", "`stub`: ein Test-ROM ohne die Commodore-ROMs"],
+], [0.22, 0.78])
+h3("PET")
+table(["Option", "Werte"], [
+    ["`ram`", "`8k` (Standard beim 2001), `16k`, `32k` (sonst Standard)"],
+    ["`keyboard`", "`graphics` (Standard) oder `business` (Standard beim 8032)"],
+    ["`hz`", "`50` (Standard) oder `60`"],
+    ["`drive8`", "`virtual` (Standard; ein IEEE-488-Laufwerk auf Dateiebene) oder `none`"],
+    ["`roms`", "`stub`: ein Test-ROM ohne die Commodore-ROMs"],
+], [0.22, 0.78])
+h3("C128")
+table(["Option", "Werte"], [
+    ["`display`", "`40` (Standard) oder `80`: der Bildschirm, in dem die Maschine startet"],
+    ["`vdc_ram`", "`16k` (Standard) oder `64k`"],
+    ["`sid`", "`8580` (Standard) oder `6581`"],
+    ["`drive8`", "`1571`, `1541`, `1581`, `virtual`, `none`"],
+    ["`port1`, `port2`", "wie beim C64 (Standard: Port 1 `none`, Port 2 `joystick`)"],
+    ["`autostart`", "`on`: das erste Programm der Diskette laden und starten"],
+    ["`roms`", "`stub`: ein Test-ROM ohne die Commodore-ROMs"],
+], [0.22, 0.78])
 p("""Der C128 hat zwei Bildschirme: F12 wechselt zwischen dem 40-Zeichen-VIC
 und dem 80-Zeichen-VDC; das Fenster beginnt auf dem, den die 40/80-Taste
 wählt.""")
@@ -514,17 +543,33 @@ Windows-Tasten** löst einen Reset aus wie die echte Tastatur. Der Ton ist
 stereo mit den Filtern des A500.""")
 
 h2("Sinclair ZX81")
-p("""Optionen: `ram=16k|1k|2k` (Standard 16k), `traps=on|off`. Programme
+table(["Option", "Werte"], [
+    ["`ram`", "`16k` (Standard), `1k` oder `2k`"],
+    ["`traps`", "`on` (Standard) oder `off`: LOAD und SAVE der `.p`-Datei über Traps "
+     "im ROM"],
+    ["`roms`", "`stub`: ein Test-ROM ohne das Sinclair-ROM"],
+], [0.22, 0.78])
+p("""Modelle `zx81` (PAL) und `ts1000` (NTSC, 60 Hz). Programme
 sind `.p`-Dateien, angegeben mit `--tape`: `LOAD ""` lädt das Programm aus
 dem Bandschacht und `SAVE "NAME"` schreibt es, über Traps im ROM.""")
 
 h2("Sinclair ZX Spectrum")
-p("""Modelle `48k`, `128k` und `plus2`. Optionen: `traps=on|off` (Standard
-on: `LOAD ""` kopiert Standard-Bandblöcke auf einmal; off spielt das Band in
-Echtzeit), `autostart=on` (mit einem Band: tippt `LOAD ""` oder wählt den
-Tape Loader des 128K-Menüs), `joystick=kempston|sinclair1|sinclair2|cursor|none`,
-`mouse=kempston`, `issue=3|2`, `multiface=on`, `if1=on` mit
-`microdrives=1..8`, `roms=stub`.""")
+p("""Modelle `48k`, `128k` und `plus2`.""")
+table(["Option", "Werte"], [
+    ["`traps`", "`on` (Standard: `LOAD \"\"` kopiert Standard-Bandblöcke auf einmal) "
+     "oder `off` (das Band läuft in Echtzeit)"],
+    ["`autostart`", "`on`: tippt mit einem Band `LOAD \"\"` oder wählt den Tape Loader "
+     "des 128K-Menüs"],
+    ["`joystick`", "`kempston` (Standard), `sinclair1`, `sinclair2`, `cursor`, `none`"],
+    ["`mouse`", "`kempston` oder `none` (Standard)"],
+    ["`issue`", "Platinen-Ausgabe `3` (Standard) oder `2`: die EAR-Rückkopplung in "
+     "Port $FE Bit 6"],
+    ["`multiface`", "`on`: ein Multiface 128 (braucht sein ROM)"],
+    ["`if1`", "`on`: ein Interface 1 (braucht sein ROM) mit `microdrives` = `1` bis `8` "
+     "Microdrives (Standard 2)"],
+    ["`beta`", "`on`: ein Beta-Disk-Interface mit TR-DOS (braucht sein ROM)"],
+    ["`roms`", "`stub`: ein Test-ROM ohne die Sinclair-ROMs"],
+], [0.22, 0.78])
 p("""Bänder sind TAP- oder TZX-Dateien (`--tape`); `LOAD ""` drückt PLAY,
 und das Band hält an TZX-"Stop"-Blöcken an. Schnappschüsse (SNA, Z80) gehen
 mit `--prg` hinein und übernehmen sofort. Tasten: Umschalt = CAPS SHIFT,
@@ -537,9 +582,15 @@ Microdrives des Interface 1 nehmen MDR-Kassetten (`--disk`,
 Der RS-232-Anschluss hat noch kein Gerät auf der Rechnerseite.""")
 
 h2("ColecoVision")
-p("""Optionen: `port1`, `port2` = `controller` (Standard: Joystick, zwei
-Feuerknöpfe, Tastenfeld), `superaction`, `driving`, `roller`, `none`;
-`roms=stub`. Tasten: das Tastenfeld von Controller 1 auf der Ziffernreihe
+table(["Option", "Werte"], [
+    ["`port1`, `port2`", "`controller` (Standard: Joystick, zwei Feuerknöpfe, "
+     "Tastenfeld), `superaction` (Super Action Controller), `driving` (Expansion "
+     "Module #2: Lenkrad und Pedal), `roller` (Roller Controller, ein Trackball; sein "
+     "zweites Kabel belegt auch Port 2), `none`"],
+    ["`roms`", "`stub`: ein eigenes Mini-BIOS, das Module direkt startet (Spiele, die "
+     "BIOS-Routinen aufrufen, brauchen das echte BIOS)"],
+], [0.22, 0.78])
+p("""Tasten: das Tastenfeld von Controller 1 auf der Ziffernreihe
 (1–9, 0, - = *, = = #, [ ] = die lila und blauen Knöpfe des Super Action
 Controllers, X = rechter Feuerknopf), das von Controller 2 auf dem
 Ziffernblock; Joystick 1 auf den Cursortasten, Leertaste = linker
@@ -549,11 +600,19 @@ h2("TI-99/4A")
 p("""ROMs: das Konsolen-ROM (`994AROM.BIN`, 8 KB) und GROM 0–2
 (`994AGROM.BIN`, 24 KB) im Unterordner `ti99` des ROM-Ordners; das DSR-ROM
 des Diskettencontrollers (`DISK.BIN`, 8 KB) fügt die Diskettenkarte hinzu,
-das Sprach-ROM (`SPCHROM.BIN`, 32 KB) den Speech Synthesizer (`speech=on|off`;
-Parsec und andere Spiele sprechen).
-`--videoformat pal` ist der TMS9929A. Optionen: `ram=32k|none` (die
-32-KB-Speichererweiterung, Standard `32k`), `port1`, `port2` = `joystick`
-oder `none`, `disk=on|off`, `roms=stub`. Module: `--cart SPIELC.BIN` — die
+das Sprach-ROM (`SPCHROM.BIN`, 32 KB) den Speech Synthesizer
+(Parsec und andere Spiele sprechen).
+`--videoformat pal` ist der TMS9929A.""")
+table(["Option", "Werte"], [
+    ["`ram`", "`32k` (Standard: die 32-KB-Speichererweiterung) oder `none`"],
+    ["`port1`, `port2`", "`joystick` (Standard) oder `none`"],
+    ["`disk`", "`on` oder `off`: der Diskettencontroller (Standard: an, wenn sein "
+     "DSR-ROM da ist)"],
+    ["`speech`", "`on` oder `off`: der Speech Synthesizer (Standard: an, wenn sein "
+     "ROM da ist)"],
+    ["`roms`", "`stub`: ein eigenes Mini-ROM (nur ein Testbild, kein BASIC)"],
+], [0.22, 0.78])
+p("""Module: `--cart SPIELC.BIN` — die
 Dateien `G` (GROM) und `D` (zweite Bank) daneben werden mitgeladen.
 Kassette CS1: `--tape band.wav`; `SAVE CS1` und `OLD CS1` fragen nach den
 Rekordertasten, das sind play/record/stop/rewind des Medienschachts.
@@ -563,15 +622,25 @@ des Diskettencontrollers. Tasten: Alt = FCTN, Feststelltaste = ALPHA LOCK
 FCTN+1, Esc = FCTN+9 (BACK), F4 = FCTN+4 (CLEAR).""")
 
 h2("Nintendo NES / Famicom")
-p("""Optionen: `port1`, `port2` = `controller`, `zapper`, `arkanoid`, `none`;
-`fourscore=on` (Anschlüsse 3 und 4). Tasten: das Steuerkreuz auf den
+table(["Option", "Werte"], [
+    ["`port1`, `port2`", "`controller` (Standard), `zapper` (Lichtpistole: die Maus "
+     "zielt, linke Taste = Abzug), `arkanoid` (die Maus dreht den Knopf), `none`"],
+    ["`fourscore`", "`on`: ein Four Score mit Controllern in den Anschlüssen 3 und 4 "
+     "(1 und 2 müssen Controller sein)"],
+], [0.22, 0.78])
+p("""Tasten: das Steuerkreuz auf den
 Cursortasten, Leertaste und X = A, Z = B, rechte Umschalt = Select, Enter =
 Start. Module sind iNES- oder NES-2.0-Dateien mit den Mappern 0–4 (NROM,
 MMC1, UxROM, CNROM, MMC3).""")
 
 h2("Super Nintendo / Super Famicom")
-p("""Optionen: `port1`, `port2` = `pad`, `mouse`, `superscope` (nur Port 2),
-`none`; `multitap=on` (Multiplayer 5 in Port 2); `roms=stub`. Tasten: das
+table(["Option", "Werte"], [
+    ["`port1`, `port2`", "`pad` (Standard), `mouse`, `superscope` (nur Port 2: die Maus "
+     "zielt, linke Taste = Abzug, rechte = Cursor), `none`"],
+    ["`multitap`", "`on`: ein Multiplayer 5 in Port 2 (Pads in den Anschlüssen 2 bis 5)"],
+    ["`roms`", "`stub`: mimics eigener Sound-Bootlader statt der IPL-ROM"],
+], [0.22, 0.78])
+p("""Tasten: das
 Steuerkreuz auf den Cursortasten, Z = B (auch Leertaste), X = A, A = Y, S =
 X, Q = L, W = R, rechte Umschalt = Select, Enter = Start. Module sind
 `.sfc`/`.smc` (LoROM, HiROM, ExHiROM, mit oder ohne Copier-Header); Spiele
@@ -681,6 +750,97 @@ bullets(
 code("""mimic-desktop --machine mac --disk "System Tools.image"
 mimic-desktop --machine mac --model se --disk system.dsk --disk hd20.img
 mimic-desktop --machine mac --model 128k --disk mfs-system.dsk""")
+
+h2("Tandy TRS-80")
+p("""Modelle `1` (Model I, Standard) und `3` (Model III mit seinem
+Diskettencontroller FD1793, 48 KB und Kleinbuchstaben eingebaut).""")
+table(["Option", "Werte"], [
+    ["`level`", "Model I: BASIC-ROM `2` (Level II, Standard) oder `1` (Level I)"],
+    ["`ram`", "`4k`, `16k` (Standard beim Model I), `48k` (Standard beim Model III)"],
+    ["`lowercase`", "Model I: `on` oder `off` (Standard): der Kleinbuchstaben-Umbau"],
+    ["`ei`", "Model I: `on` oder `off` (Standard): das Expansion Interface mit seinem "
+     "FD1771 und den Laufwerken 0–3"],
+    ["`roms`", "`stub`: ein Test-ROM ohne die Tandy-ROMs"],
+], [0.22, 0.78])
+p("""Disketten sind DMK-, JV1- oder JV3-Abbilder (`--disk`); die Maschine
+bootet Laufwerk 0, und BREAK beim Einschalten gehalten überspringt die
+Diskette. Beim Model I ist eine Kassette eine CAS-Datei (`--tape`): `CLOAD`
+spielt sie ab, `CSAVE` hängt an. Tasten: Pos1 oder Entf = CLEAR, Escape oder
+Ende = BREAK, Rücktaste = ←.""")
+
+h2("BBC Micro")
+p("""Das Model B. Mit dem DFS-ROM im ROM-Ordner hat die Maschine den
+Diskettencontroller 8271: `--disk` nimmt SSD- und DSD-Abbilder für Laufwerk
+0, und Shift+BREAK bootet. Bänder sind UEF- oder WAV-Dateien (`--tape`; mit
+DFS zuerst `*TAPE` eingeben).""")
+table(["Option", "Werte"], [
+    ["`roms`", "`stub`: ein Test-ROM ohne die Acorn-ROMs"],
+], [0.22, 0.78])
+
+h2("Acorn Archimedes")
+p("""Modelle `a310` (Standard), `a305`, `a440` und `a3000`.""")
+table(["Option", "Werte"], [
+    ["`os`", "RISC OS `3.11`, `3.10`, `3.00`, `2.00` oder Arthur `1.20` (Standard: das "
+     "neueste im ROM-Ordner)"],
+    ["`ram`", "`512k`, `1m`, `2m`, `4m` (Standard: A305 512k, A310 und A3000 1m, A440 4m)"],
+    ["`roms`", "`stub`: ein Test-ROM ohne die Acorn-ROMs"],
+], [0.22, 0.78])
+
+h2("IMSAI 8080")
+p("""Das Bild ist die Frontplatte: die Schalter werden mit der Maus
+geklickt, die Lampen zeigen den Bus. Das serielle Terminal ist der zweite
+Bildschirm (F12), und die Tastatur tippt darauf. Die Maschine braucht kein
+ROM.""")
+table(["Option", "Werte"], [
+    ["`ram`", "`1k` bis `64k` (Standard `64k`)"],
+    ["`baud`", "die Geschwindigkeit der seriellen Leitungen, `50` bis `115200` "
+     "(Standard `9600`)"],
+    ["`mpu`", "`a` oder `b`: das Monitor-ROM MPU-A bzw. MPU-B (2 KB); `none` (Standard)"],
+    ["`load`", "die Adresse (hex), an die ein Binärprogramm geladen wird (Standard `0`)"],
+    ["`autostart`", "`on`: ein geladenes Programm, das ROM oder die Diskette beim "
+     "Einschalten starten"],
+    ["`reader`", "`card` (Standard: der Lochstreifenleser an seiner eigenen seriellen "
+     "Karte) oder `console` (der Streifen läuft in die Leitung des Terminals, wie "
+     "bei einem Fernschreiber)"],
+    ["`cardreader`", "`text` (Standard: ein Kartenstapel läuft in die Leserleitung) "
+     "oder `raw` (seine Spalten an den Ports $20–$22)"],
+], [0.22, 0.78])
+p("""Disketten sind rohe 8-Zoll-Abbilder in den Laufwerken A: bis D: des
+FIF-Disketteninterfaces (`--disk`); mit einer Diskette in Laufwerk A booten
+RESET und RUN sie (CP/M 2.2).""")
+
+h2("Lochkartenstanzer IBM 029")
+p("""Eine Maschine zum Tippen von Kartenstapeln (`.deck`, `.crd`, `.chx`),
+die der Kartenleser des IMSAI wieder einliest. Das Bild ist die Karte an der
+Stanzstation.""")
+table(["Option", "Werte"], [
+    ["`autofeed`", "`on` (Standard) oder `off`: der Schalter AUTO FEED"],
+    ["`print`", "`on` (Standard) oder `off`: der Schalter PRINT (Zeichen am oberen "
+     "Kartenrand)"],
+    ["`program`", "das Kartenformat für Tab (SKIP) und die Feldlinien: `free` "
+     "(Standard), `fortran`, `cobol`, `assembler`"],
+    ["`seq`", "`on` oder `off` (Standard): Folgenummern in ausgegebene Karten stanzen"],
+], [0.22, 0.78])
+p("""Tasten: Enter = FEED ohne Karte, REL mit Karte; Tab = SKIP; die
+Rücktaste schiebt die Karte eine Spalte zurück; Leertaste oder → geht ohne
+Stanzen weiter.""")
+
+h2("Logophor 16")
+p("""mimics eigener Steampunk-Rechner; sein ROM ist eingebaut. Das Profil
+`logophor16` bootet den Desktop Panorama.""")
+table(["Option", "Werte"], [
+    ["`card`", "`system`: die eingebaute Systemkarte (Boiler und Panorama; "
+     "Geschriebenes geht am Ende verloren, `--disk` tritt an ihre Stelle); `none` "
+     "(Standard)"],
+    ["`port0`, `port1`", "`mouse`, `joystick`, `none` (Standard: Maus in Port 0, "
+     "Joystick in Port 1)"],
+    ["`net`", "`host`: das Gateway in der Maschine (DHCP, DNS und das Internet über "
+     "das Netz des Rechners); `HOST:PORT`: dem Netz eines `ada-asm hub` beitreten"],
+    ["`mac`", "die Netzadresse, sechs Hex-Bytes (Standard `02:4c:31:36:00:01`)"],
+    ["`rtc`", "der Start der Uhr in Sekunden seit 2000-01-01 (Standard 2026-01-01)"],
+], [0.22, 0.78])
+p("""Die SD-Karte ist ein FAT32-Abbild, angegeben mit `--disk`; Foundry
+startet daraus `BOOT/BOILER.BIN`.""")
 
 # ---- 6 Medien ------------------------------------------------------------------
 

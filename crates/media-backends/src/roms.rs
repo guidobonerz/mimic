@@ -448,7 +448,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("trdos", &["trdos", "tr-dos"], 0x4000),
     ];
     // ColecoVision: the 8 KB BIOS.
-    // BBC Micro Model B: MOS 1.20 and BASIC II.
+    // BBC Micro Model B: MOS 1.20, BASIC II and (optional) DFS 1.20.
     const BBC: &[RomSpec] = &[
         rom(
             "bbc-mos",
@@ -460,6 +460,41 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             &["basic2", "basic-2", "bbcbasic2", "basic-ii"],
             0x4000,
         ),
+        // Acorn DFS 1.20 for the 8271 (sideways ROM; without it no discs).
+        optional(
+            "bbc-dfs",
+            &["dfs-1-2", "dfs120", "dfs12", "dfs-120"],
+            0x4000,
+        ),
+        // B+: MOS 2.00 and the 1770 DFS 2.26 (only `--model bplus` needs
+        // them).
+        optional(
+            "bbc-bplus-mos",
+            &[
+                "bplus-mos",
+                "bplusmos",
+                "b+mos",
+                "os200",
+                "mos200",
+                "os-2-00",
+            ],
+            0x4000,
+        ),
+        optional("bbc-dfs226", &["dfs-2-26", "dfs226", "dfs-226"], 0x4000),
+        // Master 128: MOS 3.20 as its 16 KB pieces (the MOS at &C000 and
+        // the banks 9–15), usually in the folder bbc/master320.
+        optional(
+            "master-mos",
+            &["mos-rom", "mos320", "mos-3-20", "master-mos"],
+            0x4000,
+        ),
+        optional("master-dfs", &["dfs-rom", "dfs224", "dfs-2-24"], 0x4000),
+        optional("master-viewsheet", &["viewsht", "viewsheet"], 0x4000),
+        optional("master-edit", &["edit"], 0x4000),
+        optional("master-basic", &["basic4", "basic-4", "basiciv"], 0x4000),
+        optional("master-adfs", &["adfs"], 0x4000),
+        optional("master-view", &["view-rom", "view3", "view-3"], 0x4000),
+        optional("master-terminal", &["terminal"], 0x4000),
     ];
     // TI-99/4A: the console ROM and GROM 0–2 (three 8 KB windows).
     const TI99: &[RomSpec] = &[
@@ -658,7 +693,13 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
         "ti99" => &["ti99", "ti-99", "ti994a"],
-        "bbc" => &["bbc", "bbcmicro", "bbc-micro"],
+        "bbc" => &[
+            "bbc",
+            "bbcmicro",
+            "bbc-micro",
+            "bbc/master320",
+            "bbc/master",
+        ],
         "snes" => &["snes", "sfc", "superfamicom"],
         "vectrex" => &["vectrex"],
         "apple2" => &["apple2", "apple", "appleii"],

@@ -40,11 +40,15 @@
 //! horizontal sync and 24 lines after the vertical sync (the MOS's modes
 //! sit in the middle). A field ends at the 6845's vertical sync.
 //!
-//! Options: `roms`: "stub" ([`stub`]). No models yet (the Model B; B+ and
-//! Master later).
+//! Models ([`Model`]): "b" (default), "bplus", "bplus128", "master".
+//! Options: `roms`: "stub" ([`stub`]); Master: `rtc` (the clock's start,
+//! `YYYY-MM-DD[THH:MM[:SS]]`), `cmos` ("configured", the default, or
+//! "blank").
 //!
 //! ROMs (user-supplied): role "bbc-mos" (MOS 1.20, 16 KB), "bbc-basic"
-//! (BASIC II, 16 KB).
+//! (BASIC II, 16 KB, sideways slot 15), optional "bbc-dfs" (DFS 1.20,
+//! slot 14): with it the 8271 disc interface and its two drives
+//! ([`disc`]).
 //!
 //! Sources: Acorn, *BBC Microcomputer Advanced User Guide* (1983): the
 //! memory map, SHEILA, the 1 MHz bus, the system VIA and addressable
@@ -54,6 +58,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod disc;
 pub mod keyboard;
 pub mod serial;
 pub mod stub;
@@ -63,6 +68,7 @@ use chips_amstrad::crtc::{Crtc, CrtcOut, CrtcType};
 use chips_cbm::via::Via;
 use chips_ti::Sn76489;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
+use disc::Disc;
 use emu_core::audio::Decimator;
 use emu_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
@@ -83,6 +89,10 @@ use serial::{Acia, Cassette};
 
 pub const CPU: DeviceId = DeviceId("cpu");
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
+/// B+: the shadow RAM (addresses `&3000`–`&7FFF` as the CPU sees them) and
+/// the private RAM (`&8000`–`&AFFF`).
+pub const SHADOW_SPACE: MemSpaceId = MemSpaceId(1);
+pub const PRIVATE_SPACE: MemSpaceId = MemSpaceId(2);
 pub const CPU_HZ: u32 = 2_000_000;
 /// The SN76489's input clock.
 const PSG_HZ: u32 = 4_000_000;
@@ -122,11 +132,90 @@ pub const PALETTE: [Rgb8; 8] = [
     },
 ];
 
+/// The models (`--model`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Model {
+    /// Model B (default, "b"): 32 KB, the 8271.
+    B,
+    /// Model B+ ("bplus"): 64 KB (20 KB shadow, 12 KB private RAM), the
+    /// 1770.
+    BPlus,
+    /// Model B+ 128 ("bplus128"): the B+ with 64 KB sideways RAM in slots
+    /// 0, 1, 12 and 13.
+    BPlus128,
+    /// Master 128 ("master"): 65SC12, MOS 3.20 (BASIC IV, DFS, ADFS, View,
+    /// ViewSheet, Edit, Terminal in banks 9–15), LYNNE/HAZEL/ANDY, sideways
+    /// RAM in banks 4–7, the CMOS RAM and clock, the 1770 at `&FE24`.
+    Master,
+}
+
+impl Model {
+    fn parse(name: Option<&str>) -> Result<Self, ConfigError> {
+        Ok(match name {
+            None | Some("b") => Model::B,
+            Some("bplus" | "b+") => Model::BPlus,
+            Some("bplus128" | "b+128") => Model::BPlus128,
+            Some("master" | "master128") => Model::Master,
+            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        })
+    }
+
+    /// The B+ family (shadow and private RAM after the B+'s rules).
+    fn plus(self) -> bool {
+        matches!(self, Model::BPlus | Model::BPlus128)
+    }
+
+    fn master(self) -> bool {
+        self == Model::Master
+    }
+}
+
+/// The clock's registers and the CMOS RAM for the debugger (0–13, then
+/// RAM bytes by their CMOS offset, 0 = address 14).
+const RTC_REGS: [&str; 64] = [
+    "SEC", "SECALM", "MIN", "MINALM", "HOUR", "HOURALM", "WDAY", "DATE", "MONTH", "YEAR", "A", "B",
+    "C", "D", "CMOS0", "CMOS1", "CMOS2", "CMOS3", "CMOS4", "CMOS5", "CMOS6", "CMOS7", "CMOS8",
+    "CMOS9", "CMOS10", "CMOS11", "CMOS12", "CMOS13", "CMOS14", "CMOS15", "CMOS16", "CMOS17",
+    "CMOS18", "CMOS19", "CMOS20", "CMOS21", "CMOS22", "CMOS23", "CMOS24", "CMOS25", "CMOS26",
+    "CMOS27", "CMOS28", "CMOS29", "CMOS30", "CMOS31", "CMOS32", "CMOS33", "CMOS34", "CMOS35",
+    "CMOS36", "CMOS37", "CMOS38", "CMOS39", "CMOS40", "CMOS41", "CMOS42", "CMOS43", "CMOS44",
+    "CMOS45", "CMOS46", "CMOS47", "CMOS48", "CMOS49",
+];
+
+/// The Master's sideways RAM banks.
+const MASTER_SWRAM: [usize; 4] = [4, 5, 6, 7];
+/// The Master's ROM banks from MOS 3.20 (role, bank).
+const MASTER_BANKS: [(&str, usize); 7] = [
+    ("master-dfs", 9),
+    ("master-viewsheet", 10),
+    ("master-edit", 11),
+    ("master-basic", 12),
+    ("master-adfs", 13),
+    ("master-view", 14),
+    ("master-terminal", 15),
+];
+/// The CMOS RAM of a new Master (bytes 0–49, RTC addresses 14–63): what
+/// MOS 3.20's own `*CONFIGURE` writes for LANG 12 (BASIC), FILE 9 (DFS),
+/// MODE 7, DELAY 50, REPEAT 8, CAPS, LOUD, NOBOOT, SCROLL, NODIR, FLOPPY,
+/// FDRIVE 0, BAUD 7, DATA 4, PRINT 1, NOTUBE and TV 0,1, starting from the
+/// blank RAM its "R power-on" leaves (all 0, the ROM frugal bits 6–7
+/// &FF). Acorn shipped Masters configured; the MOS 3.20 R power-on does
+/// not restore settings (MOS 3.50's does).
+const DEFAULT_CMOS: [u8; 50] = [
+    0x00, 0x00, 0x00, 0x00, 0x00, 0xc9, 0xff, 0xff, 0x00, 0x00, 0x17, 0xe0, 0x32, 0x08, 0x00, 0x38,
+    0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00,
+];
+
+/// The sideways RAM banks of the B+ 128.
+const SWRAM_SLOTS: [usize; 4] = [0, 1, 12, 13];
+
 pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "bbc",
         name: "BBC Micro",
-        models: &[],
+        models: &["b", "bplus", "bplus128", "master"],
         video_formats: &[],
         create: |config| Ok(Box::new(Bbc::new(config)?)),
     }
@@ -177,10 +266,33 @@ impl Video {
 /// Everything on the bus but the CPU.
 #[derive(Clone, Debug)]
 struct Board {
+    model: Model,
     ram: Vec<u8>,
+    /// B+: 20 KB shadow RAM behind `&3000`–`&7FFF` and 12 KB private RAM
+    /// at `&8000`–`&AFFF` (empty on the Model B).
+    shadow: Vec<u8>,
+    private: Vec<u8>,
+    /// ROMSEL bit 7 (B+): the private RAM is paged in.
+    private_on: bool,
+    /// ACCCON at `&FE34`. B+: bit 7 shadow RAM on (display and the VDU
+    /// driver's accesses). Master: IRR TST IFJ ITU Y X E D (bit 7 to 0):
+    /// IRR pulls IRQ, Y pages HAZEL at `&C000`–`&DFFF`, X sends every
+    /// access to `&3000`–`&7FFF` to LYNNE, E only the VDU driver's, D
+    /// displays LYNNE.
+    acccon: u8,
+    /// Master: 8 KB HAZEL (filing system workspace over the VDU driver).
+    hazel: Vec<u8>,
+    /// Master: the clock with the CMOS RAM.
+    rtc: Option<chips_acorn::Mc146818>,
+
+    /// The instruction running was fetched from the VDU driver's area
+    /// (`&C000`–`&DFFF`, or `&A000`–`&AFFF` with the private RAM in).
+    vdu: bool,
     mos: Vec<u8>,
     /// The sideways ROMs (empty: an empty socket).
     roms: [Vec<u8>; 16],
+    /// Slots that are RAM (B+ 128).
+    swram: [bool; 16],
     romsel: u8,
     crtc: Crtc,
     ula: VideoUla,
@@ -221,6 +333,64 @@ impl Board {
             a = a.wrapping_sub(size);
         }
         a & 0x7fff
+    }
+
+    /// A byte of screen memory: from the shadow RAM while it is on.
+    fn screen_byte(&self, a: u16) -> u8 {
+        let on = if self.model.master() {
+            self.acccon & 0x01 != 0
+        } else {
+            self.acccon & 0x80 != 0
+        };
+        if on && a >= 0x3000 && !self.shadow.is_empty() {
+            self.shadow[usize::from(a - 0x3000)]
+        } else {
+            self.ram[usize::from(a)]
+        }
+    }
+
+    /// The CPU reaches the shadow RAM at `&3000`–`&7FFF` now.
+    fn cpu_shadow(&self) -> bool {
+        if self.model.master() {
+            self.acccon & 0x04 != 0 || (self.vdu && self.acccon & 0x02 != 0)
+        } else {
+            self.vdu && self.acccon & 0x80 != 0 && !self.shadow.is_empty()
+        }
+    }
+
+    /// Master: HAZEL is paged in.
+    fn hazel_on(&self) -> bool {
+        self.model.master() && self.acccon & 0x08 != 0
+    }
+
+    /// The Master's IRR bit pulls the IRQ line.
+    fn irr(&self) -> bool {
+        self.model.master() && self.acccon & 0x80 != 0
+    }
+
+    /// The Master's clock sees the slow data bus: CE PB6, AS PB7, R/W
+    /// latch bit 1, DS latch bit 2, the data on port A.
+    fn rtc_bus(&mut self) {
+        let pb = self.sysvia.port_b_out();
+        let pa = self.sysvia.port_a_out();
+        let (latch, rtc) = (self.latch, &mut self.rtc);
+        if let Some(rtc) = rtc {
+            rtc.bus(
+                pb & 0x40 != 0,
+                pb & 0x80 != 0,
+                latch & 4 != 0,
+                latch & 2 != 0,
+                pa,
+            );
+        }
+    }
+
+    /// The byte the clock drives onto port A now.
+    fn rtc_driving(&self) -> Option<u8> {
+        let pb = self.sysvia.port_b_out();
+        self.rtc
+            .as_ref()
+            .and_then(|r| r.driving(pb & 0x40 != 0, self.latch & 4 != 0, self.latch & 2 != 0))
     }
 
     /// The 6845's cursor is on this character.
@@ -266,14 +436,14 @@ impl Board {
                 self.saa
                     .new_line(if interlaced { out.ra } else { out.ra * 2 });
             }
-            let byte = self.ram[usize::from(self.screen_addr(out.ma, out.ra))];
+            let byte = self.screen_byte(self.screen_addr(out.ma, out.ra));
             let mut half = [0u8; 12];
             self.saa.character(byte, &mut half);
             for (i, p) in px[..n].iter_mut().enumerate() {
                 *p = half[i * 12 / n];
             }
         } else if out.disp && out.ra & 8 == 0 {
-            let byte = self.ram[usize::from(self.screen_addr(out.ma, out.ra))];
+            let byte = self.screen_byte(self.screen_addr(out.ma, out.ra));
             self.ula.pixels(byte, &mut px[..n]);
         }
         if self.cursor_here(&out) {
@@ -297,13 +467,19 @@ impl Board {
             self.sysvia.tick();
             self.uservia.tick();
         }
-        // CA1: vertical sync; CA2: the keyboard.
+        // CA1: vertical sync; CA2: the keyboard. Autoscanning (latch bit 3
+        // high) a counter steps through the 16 columns at 1 MHz and CA2 is
+        // high while it is on a column with a key down: a key held from
+        // power-on still makes edges after the MOS has cleared the flags.
         let pa = self.sysvia.port_a_out();
         self.sysvia.set_ca1(self.video.vsync, pa);
         let scanning = self.latch & 0x08 != 0;
-        let any = self
-            .keyboard
-            .any(if scanning { None } else { Some(pa & 15) });
+        let column = if scanning {
+            (self.cycles >> 1) as u8 & 15
+        } else {
+            pa & 15
+        };
+        let any = self.keyboard.any(Some(column));
         self.sysvia.set_ca2(any);
         for _ in 0..PSG_HZ / CPU_HZ {
             let level = self.psg.tick();
@@ -313,11 +489,18 @@ impl Board {
                 }
             }
         }
+        if let Some(rtc) = &mut self.rtc {
+            rtc.tick();
+        }
+
         self.cycles += 1;
     }
 
     /// The system VIA's port A as the pins carry it.
     fn sysvia_pa(&self) -> u8 {
+        if let Some(v) = self.rtc_driving() {
+            return v;
+        }
         let out = self.sysvia.port_a_out();
         if self.latch & 0x08 == 0 && self.keyboard.down(out & 0x7f) {
             out | 0x80
@@ -339,6 +522,7 @@ impl Board {
         if was & 1 != 0 && self.latch & 1 == 0 {
             self.psg.write(self.sysvia.port_a_out());
         }
+        self.rtc_bus();
     }
 
     fn io_read(&mut self, addr: u16) -> u8 {
@@ -368,6 +552,9 @@ impl Board {
             ),
             0xfe60..=0xfe7f => self.uservia.peek((addr & 15) as u8, 0xff, 0xff),
             0xfe08..=0xfe0f => self.acia.peek(addr),
+            // The Master's ACCCON reads back (MOS 3.20 changes it with TSB
+            // and TRB).
+            0xfe34..=0xfe37 if self.model.master() => self.acccon,
             0xfc00..=0xfdff => 0xff,
             _ => 0xfe,
         }
@@ -384,13 +571,27 @@ impl Board {
             }
             0xfe08..=0xfe0f => self.acia.write(addr, v),
             0xfe10..=0xfe1f => self.serproc = v,
+            // Master: the video ULA at &FE20–&FE23 only (the drive control
+            // and the 1770 follow, decoded with the disc interface).
+            0xfe20..=0xfe23 if self.model.master() => self.ula.write(addr, v),
+            0xfe24..=0xfe2f if self.model.master() => {}
             0xfe20..=0xfe2f => self.ula.write(addr, v),
-            0xfe30..=0xfe3f => self.romsel = v & 15,
+            0xfe30..=0xfe3f if self.model.master() && addr & 0x0c == 0x04 => self.acccon = v,
+            0xfe38..=0xfe3f if self.model.master() => {}
+            // B+: ACCCON at &FE34–&FE37, ROMSEL (bit 7 the private RAM)
+            // at &FE30–&FE33 and the mirrors.
+            0xfe30..=0xfe3f if self.model.plus() && addr & 0x0c == 0x04 => self.acccon = v & 0x80,
+            0xfe30..=0xfe3f => {
+                self.romsel = v & 15;
+                self.private_on = self.model != Model::B && v & 0x80 != 0;
+            }
             0xfe40..=0xfe5f => {
                 let reg = (addr & 15) as u8;
                 self.sysvia.write(reg, v);
                 if matches!(reg, 0 | 2) {
                     self.latch_update();
+                } else {
+                    self.rtc_bus();
                 }
             }
             0xfe60..=0xfe7f => self.uservia.write((addr & 15) as u8, v),
@@ -407,11 +608,18 @@ impl Board {
 
     fn peek(&self, addr: u16) -> u8 {
         match addr {
+            0x3000..=0x7fff if self.cpu_shadow() => self.shadow[usize::from(addr - 0x3000)],
             0x0000..=0x7fff => self.ram[usize::from(addr)],
+            0x8000..=0xafff
+                if self.private_on && usize::from(addr - 0x8000) < self.private.len() =>
+            {
+                self.private[usize::from(addr - 0x8000)]
+            }
             0x8000..=0xbfff => self.roms[usize::from(self.romsel)]
                 .get(usize::from(addr - 0x8000))
                 .copied()
                 .unwrap_or(0xff),
+            0xc000..=0xdfff if self.hazel_on() => self.hazel[usize::from(addr - 0xc000)],
             0xfc00..=0xfeff => self.io_peek(addr),
             _ => self.mos[usize::from(addr - 0xc000)],
         }
@@ -419,51 +627,89 @@ impl Board {
 
     fn write(&mut self, addr: u16, v: u8) {
         match addr {
+            0x3000..=0x7fff if self.cpu_shadow() => self.shadow[usize::from(addr - 0x3000)] = v,
             0x0000..=0x7fff => self.ram[usize::from(addr)] = v,
+            0x8000..=0xafff
+                if self.private_on && usize::from(addr - 0x8000) < self.private.len() =>
+            {
+                self.private[usize::from(addr - 0x8000)] = v;
+            }
+            0x8000..=0xbfff if self.swram[usize::from(self.romsel)] => {
+                self.roms[usize::from(self.romsel)][usize::from(addr - 0x8000)] = v;
+            }
+            0xc000..=0xdfff if self.hazel_on() => self.hazel[usize::from(addr - 0xc000)] = v,
             0xfc00..=0xfeff => self.io_write(addr, v),
             _ => {}
         }
     }
 }
 
-/// The 1 MHz devices.
-fn slow(addr: u16) -> bool {
-    matches!(addr, 0xfc00..=0xfdff | 0xfe00..=0xfe1f | 0xfe40..=0xfe7f | 0xfec0..=0xfedf)
+/// The 1 MHz devices (the Master: the 1 MHz bus and the system VIA).
+fn slow(model: Model, addr: u16) -> bool {
+    if model.master() {
+        matches!(addr, 0xfc00..=0xfdff | 0xfe40..=0xfe5f)
+    } else {
+        matches!(addr, 0xfc00..=0xfdff | 0xfe00..=0xfe1f | 0xfe40..=0xfe7f | 0xfec0..=0xfedf)
+    }
 }
 
-/// The CPU's bus for one cycle: notes a 1 MHz access.
+/// The disc controller's addresses: the 8271 or the B+'s 1770 at
+/// `&FE80`–`&FE9F`, the Master's 1770 at `&FE24`–`&FE2F`.
+fn fdc_addr(model: Model, a: u16) -> bool {
+    if model.master() {
+        (0xfe24..=0xfe2f).contains(&a)
+    } else {
+        (0xfe80..=0xfe9f).contains(&a)
+    }
+}
+
 struct BbcBus<'a> {
     b: &'a mut Board,
+    disc: Option<&'a mut Disc>,
     slow: bool,
 }
 
 impl Bus for BbcBus<'_> {
     fn read(&mut self, addr: u32, _size: Size) -> u32 {
         let a = addr as u16;
-        self.slow |= slow(a);
-        u32::from(self.b.read(a))
+        self.slow |= slow(self.b.model, a);
+        match &mut self.disc {
+            Some(d) if fdc_addr(self.b.model, a) => u32::from(d.read(a)),
+            _ => u32::from(self.b.read(a)),
+        }
     }
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(self.b.peek(addr as u16))
+        u32::from(peek_byte(self.b, self.disc.as_deref(), addr as u16))
     }
     fn write(&mut self, addr: u32, _size: Size, v: u32) {
         let a = addr as u16;
-        self.slow |= slow(a);
-        self.b.write(a, v as u8);
+        self.slow |= slow(self.b.model, a);
+        match &mut self.disc {
+            Some(d) if fdc_addr(self.b.model, a) => d.write(a, v as u8),
+            _ => self.b.write(a, v as u8),
+        }
     }
     fn addr_bits(&self) -> u8 {
         16
     }
 }
 
-struct PeekBus<'a>(&'a Board);
+/// A byte without side effects, the disc interface included.
+fn peek_byte(b: &Board, disc: Option<&Disc>, a: u16) -> u8 {
+    match disc {
+        Some(d) if fdc_addr(b.model, a) => d.peek(a),
+        _ => b.peek(a),
+    }
+}
+
+struct PeekBus<'a>(&'a Board, Option<&'a Disc>);
 
 impl Bus for PeekBus<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
         self.peek(addr, size)
     }
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(self.0.peek(addr as u16))
+        u32::from(peek_byte(self.0, self.1, addr as u16))
     }
     fn write(&mut self, _addr: u32, _size: Size, _v: u32) {}
     fn addr_bits(&self) -> u8 {
@@ -478,10 +724,15 @@ pub struct Bbc {
     input: InputQueue,
     field_done_pending: bool,
     cassette: Cassette,
+    /// The 8271 and its drives (with the DFS ROM).
+    disc: Option<Disc>,
 }
 
 /// The cassette's media slot.
 pub const SLOT_CASSETTE: SlotId = SlotId(0);
+/// The disc drives' media slots (DFS drives 0/2 and 1/3).
+pub const SLOT_DRIVE0: SlotId = SlotId(1);
+pub const SLOT_DRIVE1: SlotId = SlotId(2);
 
 fn rom(config: &MachineConfig, role: &str) -> Result<Vec<u8>, ConfigError> {
     let r = config
@@ -499,29 +750,103 @@ fn rom(config: &MachineConfig, role: &str) -> Result<Vec<u8>, ConfigError> {
 
 impl Bbc {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        if let Some(other) = config.model.as_deref() {
-            return Err(ConfigError::UnknownModel(other.into()));
-        }
+        let model = Model::parse(config.model.as_deref())?;
         let mut roms: [Vec<u8>; 16] = Default::default();
+        let (mos_role, dfs_role) = if model.plus() {
+            ("bbc-bplus-mos", "bbc-dfs226")
+        } else {
+            ("bbc-mos", "bbc-dfs")
+        };
         let mos = match config.options.get("roms").map(String::as_str) {
             Some("stub") => stub::rom(),
             Some(other) => return Err(ConfigError::Invalid(format!("roms option '{other}'"))),
+            None if model.master() => {
+                for (role, bank) in MASTER_BANKS {
+                    if config.roms.contains_key(role) {
+                        roms[bank] = rom(config, role)?;
+                    }
+                }
+                rom(config, "master-mos")?
+            }
             None => {
                 roms[15] = rom(config, "bbc-basic")?;
-                rom(config, "bbc-mos")?
+                if config.roms.contains_key(dfs_role) {
+                    roms[14] = rom(config, dfs_role)?;
+                }
+                rom(config, mos_role)?
             }
         };
+        let mut swram = [false; 16];
+        let slots: &[usize] = match model {
+            Model::BPlus128 => &SWRAM_SLOTS,
+            Model::Master => &MASTER_SWRAM,
+            _ => &[],
+        };
+        for &s in slots {
+            swram[s] = true;
+            roms[s] = vec![0; 0x4000];
+        }
+        // The Model B and B+ have a disc interface with their DFS ROM; the
+        // Master always has its 1770.
+        let disc = (model.master() || !roms[14].is_empty()).then(|| match model {
+            Model::B => Disc::new(),
+            Model::Master => Disc::new_master(),
+            _ => Disc::new_1770(),
+        });
+        let (shadow, private, hazel) = match model {
+            Model::B => (Vec::new(), Vec::new(), Vec::new()),
+            Model::Master => (vec![0; 0x5000], vec![0; 0x1000], vec![0; 0x2000]),
+            _ => (vec![0; 0x5000], vec![0; 0x3000], Vec::new()),
+        };
+        let rtc = if model.master() {
+            let start = match config.options.get("rtc") {
+                Some(t) => chips_acorn::mc146818::DateTime::parse(t).ok_or_else(|| {
+                    ConfigError::Invalid(format!("rtc '{t}' (YYYY-MM-DD[THH:MM[:SS]])"))
+                })?,
+                None => chips_acorn::mc146818::DateTime::default(),
+            };
+            let mut rtc = chips_acorn::Mc146818::new(start, CPU_HZ);
+            match config.options.get("cmos").map(String::as_str) {
+                None | Some("configured") => rtc.regs[14..].copy_from_slice(&DEFAULT_CMOS),
+                Some("blank") => {
+                    rtc.regs[14 + 6] = 0xff;
+                    rtc.regs[14 + 7] = 0xff;
+                }
+                Some(other) => {
+                    return Err(ConfigError::Invalid(format!(
+                        "cmos '{other}' (configured or blank)"
+                    )))
+                }
+            }
+            Some(rtc)
+        } else {
+            None
+        };
+        let keyboard = Keyboard::default();
         let mut cpu = Cpu6502::new(CpuConfig {
-            variant: Variant::Nmos6502,
+            variant: if model.master() {
+                Variant::Cmos65C02
+            } else {
+                Variant::Nmos6502
+            },
             ..CpuConfig::default()
         });
         cpu.reset();
         Ok(Self {
             cpu,
             board: Board {
+                model,
                 ram: vec![0; 0x8000],
+                shadow,
+                private,
+                private_on: false,
+                acccon: 0,
+                hazel,
+                rtc,
+                vdu: false,
                 mos,
                 roms,
+                swram,
                 romsel: 0,
                 crtc: Crtc::new(CrtcType::T0),
                 ula: VideoUla::new(),
@@ -533,7 +858,7 @@ impl Bbc {
                 acia: Acia::new(),
                 serproc: 0,
                 psg: Sn76489::new(),
-                keyboard: Keyboard::default(),
+                keyboard,
                 video: Video::new(),
                 cycles: 0,
                 field_done: false,
@@ -545,6 +870,7 @@ impl Bbc {
             input: InputQueue::new(),
             field_done_pending: false,
             cassette: Cassette::new(),
+            disc,
         })
     }
 
@@ -562,6 +888,9 @@ impl Bbc {
     /// ULA's bit 7; RS423 selected disconnects the tape from the ACIA).
     fn board_tick(&mut self) {
         self.board.tick();
+        if let Some(d) = &mut self.disc {
+            d.tick();
+        }
         let b = &mut self.board;
         if b.serproc & 0x40 == 0 {
             self.cassette.tick(b.serproc & 0x80 != 0, &mut b.acia);
@@ -575,14 +904,28 @@ impl Bbc {
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
         }
+        // B+: an instruction fetched from the VDU driver's area reaches
+        // the shadow RAM.
+        if self.board.model != Model::B && self.cpu.at_instruction_boundary() {
+            let pc = self.cpu.pc();
+            self.board.vdu = (0xc000..=0xdfff).contains(&pc)
+                || (self.board.model.plus()
+                    && self.board.private_on
+                    && (0xa000..=0xafff).contains(&pc));
+        }
         self.board_tick();
         let b = &self.board;
         self.cpu
-            .set_irq(b.sysvia.irq() || b.uservia.irq() || b.acia.irq());
+            .set_irq(b.sysvia.irq() || b.uservia.irq() || b.acia.irq() || b.irr());
+        // The 8271's INT on NMI (edge-triggered: every data byte raises it
+        // anew).
+        self.cpu
+            .set_nmi(self.disc.as_ref().is_some_and(|d| d.fdc.nmi()));
         let beam = self.beam_pos();
         let (result, slow_access) = {
             let mut bus = BbcBus {
                 b: &mut self.board,
+                disc: self.disc.as_mut(),
                 slow: false,
             };
             let r = {
@@ -659,7 +1002,7 @@ impl Bbc {
 
 /// A byte as the CPU sees it (tests and tools).
 pub fn peek_cpu(m: &Bbc, addr: u16) -> u8 {
-    m.board.peek(addr)
+    peek_byte(&m.board, m.disc.as_ref(), addr)
 }
 
 impl Machine for Bbc {
@@ -687,6 +1030,17 @@ impl Machine for Bbc {
         if kind == ResetKind::Hard {
             let b = &mut self.board;
             b.ram.fill(0);
+            b.shadow.fill(0);
+            b.private.fill(0);
+            b.hazel.fill(0);
+            b.private_on = false;
+            b.acccon = 0;
+            b.vdu = false;
+            for s in 0..16 {
+                if b.swram[s] {
+                    b.roms[s].fill(0);
+                }
+            }
             b.sysvia.reset();
             b.uservia.reset();
             b.crtc = Crtc::new(CrtcType::T0);
@@ -697,6 +1051,9 @@ impl Machine for Bbc {
             b.romsel = 0;
             b.acia = Acia::new();
             b.serproc = 0;
+            if let Some(d) = &mut self.disc {
+                d.fdc = d.fdc.power_on();
+            }
         }
         self.cpu.reset();
         self.input.clear();
@@ -737,13 +1094,25 @@ impl Machine for Bbc {
     }
 
     fn memory_spaces(&self) -> Vec<MemSpace> {
-        vec![MemSpace {
+        let mut spaces = vec![MemSpace {
             id: CPU_SPACE,
             name: "cpu",
             device: CPU,
             addr_bits: 16,
             big_endian: false,
-        }]
+        }];
+        if self.board.model != Model::B {
+            for (id, name) in [(SHADOW_SPACE, "shadow"), (PRIVATE_SPACE, "private")] {
+                spaces.push(MemSpace {
+                    id,
+                    name,
+                    device: CPU,
+                    addr_bits: 16,
+                    big_endian: false,
+                });
+            }
+        }
+        spaces
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -763,7 +1132,7 @@ impl Machine for Bbc {
             .zip(b.crtc.regs)
             .map(|(n, v)| reg(*n, u32::from(v), 8))
             .collect();
-        vec![
+        let mut chips = vec![
             ChipInfo {
                 name: "crtc",
                 regs: crtc,
@@ -784,7 +1153,22 @@ impl Machine for Bbc {
                     reg("SERPROC", u32::from(b.serproc), 8),
                 ],
             },
-        ]
+        ];
+        if let Some(rtc) = &b.rtc {
+            chips.push(ChipInfo {
+                name: "rtc",
+                regs: RTC_REGS
+                    .iter()
+                    .zip(rtc.regs)
+                    .map(|(n, v)| reg(n, u32::from(v), 8))
+                    .collect(),
+            });
+            chips.push(ChipInfo {
+                name: "acccon",
+                regs: vec![reg("ACCCON", u32::from(b.acccon), 8)],
+            });
+        }
+        chips
     }
 
     fn devices(&self) -> Vec<DeviceId> {
@@ -823,24 +1207,57 @@ impl Machine for Bbc {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        vec![MediaSlotInfo {
+        let mut slots = vec![MediaSlotInfo {
             id: SLOT_CASSETTE,
             name: "cassette",
             kind: MediaKind::Tape,
             inserted: self.cassette.has_tape(),
-        }]
+        }];
+        if let Some(d) = &self.disc {
+            for (id, name, drive) in [(SLOT_DRIVE0, "drive 0", 0), (SLOT_DRIVE1, "drive 1", 1)] {
+                slots.push(MediaSlotInfo {
+                    id,
+                    name,
+                    kind: MediaKind::Disk,
+                    inserted: d.inserted(drive),
+                });
+            }
+        }
+        slots
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
-        (slot == SLOT_CASSETTE).then_some(&mut self.cassette as &mut dyn MediaSlot)
+        match slot {
+            SLOT_CASSETTE => Some(&mut self.cassette as &mut dyn MediaSlot),
+            SLOT_DRIVE0 | SLOT_DRIVE1 => self.disc.as_mut().map(|d| {
+                d.selected = usize::from(slot == SLOT_DRIVE1);
+                d as &mut dyn MediaSlot
+            }),
+            _ => None,
+        }
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         let b = &self.board;
-        w.chunk(*b"BBCB", 2, |w| {
+        w.chunk(*b"BBCB", 4, |w| {
             w.bool(self.field_done_pending);
             w.bytes(&b.ram);
+            w.bytes(&b.shadow);
+            w.bytes(&b.private);
+            w.bool(b.private_on);
+            w.u8(b.acccon);
+            w.bytes(&b.hazel);
+
+            if let Some(rtc) = &b.rtc {
+                rtc.save(w);
+            }
+            w.bool(b.vdu);
+            for s in 0..16 {
+                if b.swram[s] {
+                    w.bytes(&b.roms[s]);
+                }
+            }
             w.u8(b.romsel);
             w.u8(b.latch);
             b.acia.save(w);
@@ -868,13 +1285,19 @@ impl Machine for Bbc {
         b.psg.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
+        w.chunk(*b"BBCF", 1, |w| {
+            w.bool(self.disc.is_some());
+            if let Some(d) = &self.disc {
+                d.save(w);
+            }
+        });
         w.into_bytes()
     }
 
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (_, mut c) = r.chunk(*b"BBCB", 2)?;
+        let (_, mut c) = r.chunk(*b"BBCB", 4)?;
         let field_done_pending = c.bool()?;
         let mut b = self.board.clone();
         let ram = c.bytes()?;
@@ -882,6 +1305,40 @@ impl Machine for Bbc {
             return Err(StateError::Invalid("RAM size"));
         }
         b.ram = ram.to_vec();
+        for (name, mem) in [
+            ("shadow RAM size", &mut b.shadow),
+            ("private RAM size", &mut b.private),
+        ] {
+            let bytes = c.bytes()?;
+            if bytes.len() != mem.len() {
+                return Err(StateError::Invalid(name));
+            }
+            mem.copy_from_slice(bytes);
+        }
+        b.private_on = c.bool()?;
+        b.acccon = c.u8()?;
+        if !b.model.master() {
+            b.acccon &= 0x80;
+        }
+        let hazel = c.bytes()?;
+        if hazel.len() != b.hazel.len() {
+            return Err(StateError::Invalid("HAZEL size"));
+        }
+        b.hazel.copy_from_slice(hazel);
+
+        if let Some(rtc) = &mut b.rtc {
+            rtc.load(&mut c)?;
+        }
+        b.vdu = c.bool()?;
+        for s in 0..16 {
+            if b.swram[s] {
+                let bytes = c.bytes()?;
+                if bytes.len() != 0x4000 {
+                    return Err(StateError::Invalid("sideways RAM size"));
+                }
+                b.roms[s].copy_from_slice(bytes);
+            }
+        }
         b.romsel = c.u8()? & 15;
         b.latch = c.u8()?;
         b.acia.load(&mut c)?;
@@ -912,6 +1369,17 @@ impl Machine for Bbc {
         b.psg.load(&mut r)?;
         sched.load(&mut r)?;
         input.load(&mut r)?;
+        let (_, mut c) = r.chunk(*b"BBCF", 1)?;
+        if c.bool()? != self.disc.is_some() {
+            return Err(StateError::Invalid("disc interface present or not"));
+        }
+        let disc = match &self.disc {
+            Some(d) => Some(d.load(&mut c)?),
+            None => None,
+        };
+        if let (Some(d), Some(parsed)) = (&mut self.disc, disc) {
+            d.commit(parsed);
+        }
         self.cpu = cpu;
         self.board = b;
         self.cassette.adopt(tape);
@@ -932,9 +1400,31 @@ impl DebugTarget for Bbc {
     }
 
     fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
+        let b = &self.board;
+        let extra = |mem: &[u8], base: u32| {
+            (0..size.bytes()).try_fold(0u32, |v, i| {
+                let a = addr.wrapping_add(i).checked_sub(base)? as usize;
+                Some(v | u32::from(*mem.get(a)?) << (8 * i))
+            })
+        };
+        if b.model != Model::B && space == SHADOW_SPACE {
+            return extra(&b.shadow, 0x3000);
+        }
+        if b.model != Model::B && space == PRIVATE_SPACE {
+            return extra(&b.private, 0x8000);
+        }
+        // The CPU space as code outside the VDU driver sees it: main RAM
+        // at &3000–&7FFF whatever runs at the moment (the shadow RAM has
+        // its own space).
         (space == CPU_SPACE).then(|| {
             (0..size.bytes()).fold(0, |v, i| {
-                v | u32::from(self.board.peek(addr.wrapping_add(i) as u16)) << (8 * i)
+                let a = addr.wrapping_add(i) as u16;
+                let byte = if (0x3000..0x8000).contains(&a) {
+                    b.ram[usize::from(a)]
+                } else {
+                    peek_byte(b, self.disc.as_ref(), a)
+                };
+                v | u32::from(byte) << (8 * i)
             })
         })
     }
@@ -954,7 +1444,8 @@ impl DebugTarget for Bbc {
     }
 
     fn disassemble(&self, addr: u32) -> Instr {
-        self.cpu.disassemble(&PeekBus(&self.board), addr)
+        self.cpu
+            .disassemble(&PeekBus(&self.board, self.disc.as_ref()), addr)
     }
 }
 

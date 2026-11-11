@@ -95,3 +95,130 @@ fn the_latch_takes_pb0_to_pb3_and_strobes_sound() {
     assert_eq!(b.latch & 1, 0);
     assert_eq!(b.psg.atten[0], 15);
 }
+
+fn stub_model(model: &str) -> Bbc {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.model = Some(model.into());
+    Bbc::new(&config).unwrap()
+}
+
+#[test]
+fn bplus_shadow_ram_serves_only_the_vdu_driver() {
+    let mut m = stub_model("bplus");
+    let b = &mut m.board;
+    b.write(0x3000, 0x11);
+    b.io_write(0xfe34, 0x80);
+    // Code outside &C000–&DFFF: main RAM.
+    b.vdu = false;
+    assert_eq!(b.peek(0x3000), 0x11);
+    // The VDU driver: the shadow RAM.
+    b.vdu = true;
+    b.write(0x3000, 0x22);
+    assert_eq!(b.peek(0x3000), 0x22);
+    assert_eq!(b.ram[0x3000], 0x11);
+    // The display reads the shadow RAM while it is on.
+    assert_eq!(b.screen_byte(0x3000), 0x22);
+    b.io_write(0xfe34, 0x00);
+    assert_eq!(b.peek(0x3000), 0x11, "shadow off");
+    assert_eq!(b.screen_byte(0x3000), 0x11);
+}
+
+#[test]
+fn bplus_private_ram_pages_in_with_romsel_bit_7() {
+    let mut m = stub_model("bplus");
+    let b = &mut m.board;
+    b.io_write(0xfe30, 0x8f);
+    b.write(0x8000, 0x5a);
+    b.write(0xafff, 0xa5);
+    assert_eq!((b.peek(0x8000), b.peek(0xafff)), (0x5a, 0xa5));
+    b.io_write(0xfe30, 0x0f);
+    assert_ne!(b.peek(0x8000), 0x5a, "the ROM again");
+    // The Model B has neither.
+    let mut m = stub();
+    m.board.io_write(0xfe30, 0x8f);
+    m.board.write(0x8000, 0x5a);
+    assert_ne!(m.board.peek(0x8000), 0x5a);
+}
+
+#[test]
+fn bplus128_sideways_ram_is_writable_and_saved() {
+    let mut m = stub_model("bplus128");
+    m.board.io_write(0xfe30, 12);
+    m.board.write(0x8123, 0x77);
+    assert_eq!(m.board.peek(0x8123), 0x77);
+    let state = m.save_state();
+    m.board.write(0x8123, 0);
+    m.load_state(&state).unwrap();
+    assert_eq!(m.board.peek(0x8123), 0x77);
+    // A ROM slot stays read-only.
+    m.board.io_write(0xfe30, 2);
+    m.board.write(0x8123, 0x77);
+    assert_ne!(m.board.peek(0x8123), 0x77);
+}
+
+#[test]
+fn master_paging_lynne_hazel_andy_and_sideways_ram() {
+    let mut m = stub_model("master");
+    let b = &mut m.board;
+    b.write(0x3000, 0x11);
+    // X: every access to &3000–&7FFF goes to LYNNE.
+    b.io_write(0xfe34, 0x04);
+    b.write(0x3000, 0x22);
+    assert_eq!((b.peek(0x3000), b.ram[0x3000]), (0x22, 0x11));
+    // E: only the VDU driver's.
+    b.io_write(0xfe34, 0x02);
+    b.vdu = false;
+    assert_eq!(b.peek(0x3000), 0x11);
+    b.vdu = true;
+    assert_eq!(b.peek(0x3000), 0x22);
+    // D: the display.
+    assert_eq!(b.screen_byte(0x3000), 0x11);
+    b.io_write(0xfe34, 0x01);
+    assert_eq!(b.screen_byte(0x3000), 0x22);
+    // ACCCON reads back.
+    assert_eq!(b.io_peek(0xfe34), 0x01);
+    // Y: HAZEL over the VDU driver.
+    let rom = b.peek(0xc000);
+    b.io_write(0xfe34, 0x08);
+    b.write(0xc000, rom ^ 0xff);
+    assert_eq!(b.peek(0xc000), rom ^ 0xff);
+    b.io_write(0xfe34, 0x00);
+    assert_eq!(b.peek(0xc000), rom);
+    // ROMSEL bit 7: ANDY at &8000–&8FFF only.
+    b.io_write(0xfe30, 0x80 | 9);
+    b.write(0x8000, 0x33);
+    assert_eq!(b.peek(0x8000), 0x33);
+    b.write(0x9000, 0x44);
+    assert_ne!(b.peek(0x9000), 0x44, "&9000 is the ROM's");
+    // Banks 4–7 are sideways RAM.
+    b.io_write(0xfe30, 5);
+    b.write(0x9000, 0x44);
+    assert_eq!(b.peek(0x9000), 0x44);
+    // IRR pulls the IRQ line.
+    b.io_write(0xfe34, 0x80);
+    assert!(b.irr());
+}
+
+#[test]
+fn master_savestates_keep_the_cmos_ram_and_the_clock() {
+    let mut m = stub_model("master");
+    frames(&mut m, 3);
+    m.board.rtc.as_mut().unwrap().regs[20] = 0x5a;
+    m.board.io_write(0xfe34, 0x0a);
+    let state = m.save_state();
+    frames(&mut m, 60);
+    let later = m.board.rtc.as_ref().unwrap().regs[0];
+    m.board.rtc.as_mut().unwrap().regs[20] = 0;
+    m.load_state(&state).unwrap();
+    assert_eq!(m.board.rtc.as_ref().unwrap().regs[20], 0x5a);
+    assert_eq!(m.board.acccon, 0x0a);
+    frames(&mut m, 60);
+    assert_eq!(
+        m.board.rtc.as_ref().unwrap().regs[0],
+        later,
+        "deterministic"
+    );
+    // A new Master comes configured: LANG 12, FILE 9.
+    assert_eq!(stub_model("master").board.rtc.unwrap().regs[14 + 5], 0xc9);
+}

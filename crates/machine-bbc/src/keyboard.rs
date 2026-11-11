@@ -47,7 +47,8 @@ pub struct Keyboard {
 impl Keyboard {
     pub fn key(&mut self, key: u16, down: bool) {
         let (row, col) = (usize::from(key >> 4 & 7), usize::from(key & 15));
-        if col >= 10 {
+        // Columns 10–12: the Master's keypad.
+        if col >= 13 {
             return;
         }
         if down {
