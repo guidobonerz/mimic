@@ -364,6 +364,9 @@ impl Profile {
             "amiga" | "snes" | "archimedes" | "bbc" => "1084s-rgb",
             "mac" => "mac",
             "logophor16" => "logophor",
+            // Digital video (HDMI/VGA) on a flat panel: the 576p pixel
+            // aspect, light scanlines as its PALEMU option.
+            "mega65" => "lite",
             _ => "raw",
         };
         Self::preset(name).unwrap_or_default()

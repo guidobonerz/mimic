@@ -824,6 +824,104 @@ const BBC_POSITIONAL: &[(&str, &[u16])] = &[
     ("NumpadEnter", &[0x3c]),
 ];
 
+/// MEGA65: the C65 matrix (column × 8 + row, see
+/// `machine-mega65::keyboard`; columns 0–7 the C64's). Backspace INST/DEL,
+/// Home CLR/HOME, Insert £, Delete ↑, Page Up RESTORE, End RUN/STOP,
+/// Escape ESC, Tab TAB, left Ctrl CTRL, left Windows key MEGA, left Alt
+/// ALT, Caps Lock CAPS LOCK, Page Down HELP, Scroll Lock NO SCROLL; the
+/// four arrows are the four cursor keys; F1–F11 the odd function keys
+/// with SHIFT for the even ones, Print Screen F13.
+const MEGA65_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Backquote", &[k(7, 1)]), // ←
+    ("Digit1", &[k(7, 0)]),
+    ("Digit2", &[k(7, 3)]),
+    ("Digit3", &[k(1, 0)]),
+    ("Digit4", &[k(1, 3)]),
+    ("Digit5", &[k(2, 0)]),
+    ("Digit6", &[k(2, 3)]),
+    ("Digit7", &[k(3, 0)]),
+    ("Digit8", &[k(3, 3)]),
+    ("Digit9", &[k(4, 0)]),
+    ("Digit0", &[k(4, 3)]),
+    ("Minus", &[k(5, 0)]),  // +
+    ("Equal", &[k(5, 3)]),  // -
+    ("Insert", &[k(6, 0)]), // £
+    ("Home", &[k(6, 3)]),
+    ("Backspace", &[k(0, 0)]), // INST/DEL
+    ("Tab", &[k(8, 1)]),
+    ("KeyQ", &[k(7, 6)]),
+    ("KeyW", &[k(1, 1)]),
+    ("KeyE", &[k(1, 6)]),
+    ("KeyR", &[k(2, 1)]),
+    ("KeyT", &[k(2, 6)]),
+    ("KeyY", &[k(3, 1)]),
+    ("KeyU", &[k(3, 6)]),
+    ("KeyI", &[k(4, 1)]),
+    ("KeyO", &[k(4, 6)]),
+    ("KeyP", &[k(5, 1)]),
+    ("BracketLeft", &[k(5, 6)]),  // @
+    ("BracketRight", &[k(6, 1)]), // *
+    ("Delete", &[k(6, 6)]),       // ↑
+    ("PageUp", &[72]),            // RESTORE
+    ("End", &[k(7, 7)]),          // RUN/STOP
+    ("Escape", &[k(8, 7)]),       // ESC
+    ("CapsLock", &[73]),          // CAPS LOCK
+    ("KeyA", &[k(1, 2)]),
+    ("KeyS", &[k(1, 5)]),
+    ("KeyD", &[k(2, 2)]),
+    ("KeyF", &[k(2, 5)]),
+    ("KeyG", &[k(3, 2)]),
+    ("KeyH", &[k(3, 5)]),
+    ("KeyJ", &[k(4, 2)]),
+    ("KeyK", &[k(4, 5)]),
+    ("KeyL", &[k(5, 2)]),
+    ("Semicolon", &[k(5, 5)]), // :
+    ("Quote", &[k(6, 2)]),     // ;
+    ("Backslash", &[k(6, 5)]), // =
+    ("Enter", &[k(0, 1)]),
+    ("NumpadEnter", &[k(0, 1)]),
+    ("ControlLeft", &[k(7, 2)]),  // CTRL
+    ("ControlRight", &[k(7, 2)]), // CTRL
+    ("MetaLeft", &[k(7, 5)]),     // MEGA
+    ("AltLeft", &[k(8, 2)]),      // ALT
+    ("ShiftLeft", &[C64_LSHIFT]),
+    ("KeyZ", &[k(1, 4)]),
+    ("KeyX", &[k(2, 7)]),
+    ("KeyC", &[k(2, 4)]),
+    ("KeyV", &[k(3, 7)]),
+    ("KeyB", &[k(3, 4)]),
+    ("KeyN", &[k(4, 7)]),
+    ("KeyM", &[k(4, 4)]),
+    ("Comma", &[k(5, 7)]),
+    ("Period", &[k(5, 4)]),
+    ("Slash", &[k(6, 7)]),
+    ("ShiftRight", &[C64_RSHIFT]),
+    ("ArrowDown", &[k(0, 7)]),
+    ("ArrowRight", &[k(0, 2)]),
+    ("ArrowUp", &[75]),
+    ("ArrowLeft", &[74]),
+    ("Space", &[k(7, 4)]),
+    ("PageDown", &[k(8, 3)]),   // HELP
+    ("ScrollLock", &[k(8, 0)]), // NO SCROLL
+    ("F1", &[k(0, 4)]),
+    ("F2", &[C64_LSHIFT, k(0, 4)]),
+    ("F3", &[k(0, 5)]),
+    ("F4", &[C64_LSHIFT, k(0, 5)]),
+    ("F5", &[k(0, 6)]),
+    ("F6", &[C64_LSHIFT, k(0, 6)]),
+    ("F7", &[k(0, 3)]),
+    ("F8", &[C64_LSHIFT, k(0, 3)]),
+    ("F9", &[k(8, 4)]),
+    ("F10", &[C64_LSHIFT, k(8, 4)]),
+    ("F11", &[k(8, 5)]),
+    ("PrintScreen", &[k(8, 6)]), // F13
+];
+
+pub static MEGA65: Keymap = Keymap {
+    machine: "mega65",
+    entries: MEGA65_POSITIONAL,
+};
+
 pub static BBC: Keymap = Keymap {
     machine: "bbc",
     entries: BBC_POSITIONAL,
@@ -1719,6 +1817,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "coleco" => Some(&COLECO),
         "ti99" => Some(&TI99),
         "bbc" => Some(&BBC),
+        "mega65" => Some(&MEGA65),
         "nes" => Some(&NES),
         "snes" => Some(&SNES),
         "vectrex" => Some(&VECTREX),

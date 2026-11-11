@@ -34,6 +34,7 @@ A cycle-accurate, multi-machine emulator for classic home computers — the whol
 crates/
   emu-core/        Traits (Cpu, Bus, Machine), scheduler, savestates, DebugHooks, FrameRef
   cpu-6502/        6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 2A03 (NES), CMOS 65C02 (Apple IIe) via variant flags
+  cpu-45gs02/      MEGA65 45GS02 (4510/65CE02 core, MAP, flat [zp],Z, 32-bit Q instructions; C65 4510 as a speed)
   cpu-z80/         Z80 (C128, CPC, ZX81, Spectrum; internal T-states reported with their bus address for the Spectrum's contention)
   cpu-m68k/        68000 (Amiga, Macintosh) and 68020 (A1200)
   cpu-65816/       WDC 65C816 (SNES 5A22 core)
@@ -67,7 +68,7 @@ crates/
   emu-cheats/      Cheat files with patches, POKE/VICE/code imports, CRC-32 database, memory search
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
-  machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-bbc/  machine-nes/  machine-snes/  machine-vectrex/
+  machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-bbc/  machine-mega65/  machine-nes/  machine-snes/  machine-vectrex/
   machine-apple2/  Apple II, II+, IIe (enhanced and unenhanced) as models; Mockingboard in slot 4
   machine-mac/     Macintosh 128K, 512K, Plus, SE as models: RTC, keyboard, ADB, SCC 8530, SCSI 5380 with hard disks
   machine-archimedes/ Acorn Archimedes A305, A310, A440, A3000 as models
@@ -156,7 +157,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 26, 31 and 32 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 26, 31, 32 and 33 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

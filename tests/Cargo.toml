@@ -30,6 +30,7 @@ machine-imsai.workspace = true
 machine-keypunch.workspace = true
 machine-archimedes.workspace = true
 machine-bbc.workspace = true
+machine-mega65.workspace = true
 
 [dev-dependencies]
 machine-logophor16.workspace = true

@@ -800,6 +800,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpu-45gs02"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "cpu-6502"
 version = "0.1.0"
 dependencies = [
@@ -1201,6 +1208,7 @@ dependencies = [
  "machine-keypunch",
  "machine-logophor16",
  "machine-mac",
+ "machine-mega65",
  "machine-nes",
  "machine-pet",
  "machine-sim6502",
@@ -1263,6 +1271,7 @@ dependencies = [
  "machine-keypunch",
  "machine-logophor16",
  "machine-mac",
+ "machine-mega65",
  "machine-pet",
  "machine-snes",
  "machine-spectrum",
@@ -2299,6 +2308,18 @@ dependencies = [
  "devices-input",
  "devices-printer",
  "drives-other",
+ "emu-core",
+ "media",
+]
+
+[[package]]
+name = "machine-mega65"
+version = "0.1.0"
+dependencies = [
+ "chips-cbm",
+ "cpu-45gs02",
+ "devices-input",
+ "drives-cbm",
  "emu-core",
  "media",
 ]

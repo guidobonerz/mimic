@@ -6,7 +6,7 @@ The user guide — how to use the emulator plus the complete reference of every 
 
 ## Screenshots
 
-Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test, the BBC Micro's teletext test page and the Master's `*TIME` from the `bbc_boot` tests); the consoles without a start screen show a game. ROMs and software are not part of this repository.
+Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test, the BBC Micro's teletext test page and the Master's `*TIME` from the `bbc_boot` tests, the MEGA65's Open ROMs with `--crt lite`); the consoles without a start screen show a game. ROMs and software are not part of this repository.
 
 <table>
 <tr>
@@ -58,6 +58,9 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/ti99.png" alt="TI-99/4A: Title screen"><br><b>TI-99/4A</b><br>Title screen</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/bbc.png" alt="BBC Micro Model B: Mode 7 teletext test page"><br><b>BBC Micro Model B</b><br>Mode 7 teletext test page</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/bbc-master.png" alt="BBC Master 128: MOS 3.20, *TIME from the clock"><br><b>BBC Master 128</b><br>MOS 3.20, <code>*TIME</code> from the clock</td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/mega65.png" alt="MEGA65: Open ROMs start screen"><br><b>MEGA65</b><br>Open ROMs start screen</td>
 </tr>
 </table>
 
@@ -114,6 +117,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | TRS-80 Model I / III | Level II and Model III ROMs (`trs80_boot`, 7 tests) | both boot to BASIC and compute; Model I block graphics, CSAVE/CLOAD; both boot and write a test disk (FD1771 SD, FD1793 DD with WAIT/NMI) | 🟡 | a real DOS disk, Model III cassette |
 | TI-99/4A | real ROMs (`ti99_boot`, 5 tests) | title screen, menu, TI BASIC computes; Parsec from its C/G dumps; SAVE/OLD on cassette (WAV) and on disk (TI disk controller); Parsec talks through the Speech Synthesizer | 🟡 | speech excitation by ear against hardware, GROM/VDP access timing, inverted (379) banking |
 | BBC Micro B / B+ / B+ 128 / Master 128 | real ROMs (`bbc_boot`, 19 tests) | all four boot to BASIC; mode 7 against its reference picture; SAVE/LOAD on tape (UEF), on DFS discs (8271, 1770) and ADFS; SHIFT+BREAK boots a disc; the Master's clock, shadow RAM and keypad | 🟡 | no commercial discs or tapes tried; Tube, Econet, ADC missing |
+| MEGA65 | Open ROMs 2021-08-24 (`mega65_boot`, 4 tests), own 45GS02 tests, Dormann | start screen against its reference, typing, LIST/RUN, LOAD from a true 1541; Dormann passes on the 45GS02 | 🟡 | the official ROM 920xxx and the hypervisor not tried yet (not in the ROM folder); timing approximate |
 | Colour Genie, CPC Plus, QL, Atari ST, KC85, KIM-1, HP calculators | – | – | ⚪ | planned phases |
 
 ### Drives, devices and frontends
@@ -147,6 +151,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | CPU | Crate | Used in | Verification | Completeness |
 | --- | --- | --- | --- | --- |
 | MOS 6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 6507, Ricoh 2A03/2A07, CMOS 65C02 | `cpu-6502` | PET, VIC-20, C64, C128, C16/Plus/4, 1541/1571/1581, Atari 8-bit, Atari 2600, NES, Apple II, BBC Micro (Master: 65SC12) | Tom Harte (6502, nes6502, synertek65c02), Klaus Dormann, Lorenz 264/264 | 97 % (no Rockwell/WDC bit instructions, WAI/STP) |
+| MEGA65 45GS02 (4510/65CE02) | `cpu-45gs02` | MEGA65 | own per-instruction tests after the MEGA65 guide (MAP, flat, Q examples), Klaus Dormann | 75 % (no 6502 personality; decimal flags and long-branch base unmeasured) |
 | Zilog Z80 | `cpu-z80` | C128, CPC, ZX81, ColecoVision | Tom Harte, ZEXDOC, ZEXALL | 97 % |
 | Motorola 68000 | `cpu-m68k` | Amiga 500/1000/2000/500+, Macintosh | Tom Harte (all but three contradictory cases) | 97 % |
 | Motorola 68020 / 68EC020 | `cpu-m68k` | Amiga 1200 | unit tests only; timing approximate, no cache | 60 % |
@@ -180,6 +185,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | Tandy TRS-80 Model I/III | `machine-trs80` | Model I, Model III | both boot to BASIC with real ROMs; Model I cassette (CSAVE/CLOAD) and Expansion Interface with FD1771, Model III FD1793 with WAIT and NMI (DMK/JV1/JV3; test disks boot and are written); no real DOS tried, no Model III cassette | 65 % |
 | Texas Instruments TI-99/4A | `machine-ti99` | NTSC, PAL | TI BASIC, cartridges (ROM + GROM, banking), 32 KB expansion, joysticks, cassette (WAV), TI disk controller with DSK1–DSK3, Speech Synthesizer; access timing simplified (chips catch up after each instruction) | 70 % |
 | Acorn BBC Micro | `machine-bbc` | B, B+, B+ 128, Master 128 | MOS 1.20/2.00/3.20 to BASIC; modes 0–7 (SAA5050 teletext), sound, cassette (UEF/WAV), 8271 and 1770 discs (SSD/DSD, ADFS), shadow/private/sideways RAM, the Master's ACCCON paging, CMOS RAM and clock; no Tube, Econet, ADC, speech | 70 % |
+| MEGA65 | `machine-mega65` | MEGA65 (R1–R15 model ID) | direct start of the ROM; 45GS02 at 1/2/3.5/40 MHz, MAP, DMAgic, VIC-IV (VIC-II/III/IV text and bitmap modes, 16-bit and full-colour characters, bitplanes, VIC-II sprites, palettes, hot registers), four SIDs in stereo, CIAs, keyboard with the typing queue, control ports, math unit, hypervisor services, F011 with D81, SD card, serial bus with a 1541; no hypervisor boot, NTSC, VIC-IV sprite extensions, freezer | 55 % |
 | Apple II / II+ / IIe | `machine-apple2` | II, II+, IIe, enhanced IIe | all four boot with real ROMs; Zork I boots from DSK; a disk built by the tests boots through the Disk II PROMs; cassette save/load through the monitor; colours checked through the composite stage; DOS 3.3/ProDOS disks, Mockingboard software and WOZ copy protections not yet tried | 70 % |
 | Apple Macintosh 128K–SE | `machine-mac` | 128K, 512K, Plus, SE | all four reach the disk icon with real ROMs (startup sound, RTC, memory test); a disk built by the tests boots through the IWM (400K with the 128K's speed control, 800K); SCSI disks, ADB, SCC and keyboard only unit-tested; System 6 not yet tried | 55 % |
 
@@ -216,6 +222,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | TMS9918A/TMS9929A VDP | `chips-ti` | ColecoVision, TI-99/4A | 80 % (VRAM access timing, reference pictures open) |
 | SN76489 | `chips-ti` | ColecoVision, TI-99/4A, BBC Micro | 90 % |
 | Video ULA, SAA5050 teletext | `chips-acorn` | BBC Micro | 85 % (SAA5050 checked against its data sheet; ULA timing at character level) |
+| VIC-IV, DMAgic (MEGA65) | `machine-mega65` | MEGA65 | 60 % (position registers in visible-frame coordinates, to be compared with hardware; no NTSC, no VIC-IV sprite extensions, line-precise splits) |
 | Intel 8271 FDC, MC146818 clock | `chips-acorn` | BBC Micro, Master | 75 % (8271 at sector level, non-DMA; no clock alarm interrupt) |
 | TMS9901 systems interface | `chips-ti` | TI-99/4A | 85 % |
 | TMC0430 GROM | `chips-ti` | TI-99/4A | 85 % (no access wait states beyond the multiplexer's) |

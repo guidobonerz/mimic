@@ -449,6 +449,18 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
     ];
     // ColecoVision: the 8 KB BIOS.
     // BBC Micro Model B: MOS 1.20, BASIC II and (optional) DFS 1.20.
+    // The 128 KB ROM: the MEGA65 Open ROMs or the official 920xxx ROM
+    // (both named MEGA65.ROM on the SD card).
+    const MEGA65: &[RomSpec] = &[
+        rom(
+            "mega65-rom",
+            &["mega65", "openroms", "open-roms", "920"],
+            0x2_0000,
+        ),
+        DOS1541,
+        DOS1571,
+        DOS1581,
+    ];
     const BBC: &[RomSpec] = &[
         rom(
             "bbc-mos",
@@ -660,6 +672,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "coleco" => COLECO,
         "ti99" => TI99,
         "bbc" => BBC,
+        "mega65" => MEGA65,
         "snes" => SNES,
         "amiga" => AMIGA,
         "atari8" => ATARI800XL,
@@ -700,6 +713,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
             "bbc/master320",
             "bbc/master",
         ],
+        "mega65" => &["mega65", "m65"],
         "snes" => &["snes", "sfc", "superfamicom"],
         "vectrex" => &["vectrex"],
         "apple2" => &["apple2", "apple", "appleii"],

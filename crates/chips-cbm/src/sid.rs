@@ -499,6 +499,11 @@ impl Sid {
         self.model
     }
 
+    /// Switch the chip model (the MEGA65 selects it per SID at run time).
+    pub fn set_model(&mut self, model: SidModel) {
+        self.model = model;
+    }
+
     /// Filter cutoff in Hz for the current register value.
     fn cutoff_hz(&self) -> f32 {
         let x = f32::from(self.cutoff) / 2047.0;

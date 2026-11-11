@@ -10,7 +10,7 @@ Every machine delivers, per field:
 - **signal metadata**: pixel clock, active/total pixels per line, lines per field, field parity (interlace), video standard (PAL/NTSC), output type (composite, S-video/luma-chroma, RGB, monochrome);
 - optionally **per-line luma/chroma values** instead of palette indices, so the composite path can reproduce colors palettes cannot express.
 
-Cropping, aspect ratio and pixel-aspect correction (e.g. C64 PAL 0.9365, CPC mode 2 half-width pixels) are applied downstream from this metadata, never inside the machine.
+Cropping, aspect ratio and pixel-aspect correction (e.g. C64 PAL 0.9365, CPC mode 2 half-width pixels) are applied downstream from this metadata, never inside the machine. A progressive signal above 24 kHz line rate (576p/480p, the MEGA65) shows each line once: its pixel aspect is 2 × the square-pixel clock / the pixel clock (`video_crt::cpu::pixel_aspect`, 2026-11-11).
 
 ### Pipeline in `video-crt`
 

@@ -163,6 +163,7 @@ pub fn registry() -> Registry {
     r.register(machine_coleco::entry());
     r.register(machine_ti99::entry());
     r.register(machine_bbc::entry());
+    r.register(machine_mega65::entry());
     r.register(machine_nes::entry());
     r.register(machine_snes::entry());
     r.register(machine_vectrex::entry());

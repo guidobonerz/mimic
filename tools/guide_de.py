@@ -792,6 +792,28 @@ erhalten, nicht zwischen Sitzungen. Die Grafikansichten des Debuggers:
 `screen` (das Bild aus dem Speicher), `palette`, `charset` (die Zeichen des
 SAA5050).""")
 
+h2("MEGA65")
+p("""Der MEGA65 startet sein ROM direkt (noch ohne Hypervisor): die 128 KB
+große `mega65.rom` im Ordner `mega65` des ROM-Ordners, die MEGA65 Open ROMs
+oder das offizielle ROM 920xxx (bisher sind nur die Open ROMs von 2021
+erprobt; ihr BASIC beantwortet Zahlen mit „?NOT IMPLEMENTED ERROR“).
+`--disk` nimmt ein D64 für Laufwerk 8 am seriellen Bus (eine echte 1541 mit
+dem 1541-DOS-ROM in `drives`), ein D81 für das interne Laufwerk, ein rohes
+SD-Kartenabbild für die SD-Karte.""")
+table(["Option", "Werte"], [
+    ["`board`", "`r1` bis `r15`: die Modellnummer, die das ROM liest (Standard `r3`)"],
+    ["`port1`, `port2`", "`joystick` (Standard in Port 2), `paddles`, `mouse1351`, "
+     "`amigamouse`, `stmouse`, `cx22`, die Keypads, `none`"],
+    ["`drive8`", "`1541`, `1571`, `1581` (echtes Laufwerk, braucht sein DOS-ROM), `virtual`, `none`"],
+    ["`roms`", "`stub`: ein kleines Test-ROM von mimic"],
+], [0.22, 0.78])
+p("""Tasten: die Pfeiltasten sind die vier Cursortasten, Esc = ESC, Tab = TAB,
+linke Strg = CTRL, linke Windows-Taste = MEGA, linke Alt = ALT, Ende =
+RUN/STOP, Bild↑ = RESTORE, Bild↓ = HELP, Rollen = NO SCROLL, Feststelltaste =
+CAPS LOCK, F1–F11 die ungeraden Funktionstasten (Umschalt für die geraden),
+Druck = F13. Die Grafikansichten des Debuggers: `screen`, `charset`,
+`sprites`, `palette`.""")
+
 h2("Acorn Archimedes")
 p("""Modelle `a310` (Standard), `a305`, `a440` und `a3000`.""")
 table(["Option", "Werte"], [

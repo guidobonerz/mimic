@@ -763,6 +763,28 @@ type the main keys. The CMOS RAM is kept in savestates, not between
 sessions. The debugger's graphics views: `screen` (the picture from
 memory), `palette`, `charset` (the SAA5050's characters).""")
 
+h2("MEGA65")
+p("""The MEGA65 starts its ROM directly (no hypervisor yet): the 128 KB
+`mega65.rom` in the `mega65` folder of the ROM folder, the MEGA65 Open ROMs
+or the official 920xxx ROM (so far only the Open ROMs of 2021 are tried;
+their BASIC answers numbers with "?NOT IMPLEMENTED ERROR"). `--disk` takes
+a D64 for drive 8 on the serial bus (a true 1541 with the 1541 DOS ROM in
+`drives`), a D81 for the internal drive, a raw SD card image for the SD
+card.""")
+table(["Option", "Values"], [
+    ["`board`", "`r1` to `r15`: the model ID the ROM reads (default `r3`)"],
+    ["`port1`, `port2`", "`joystick` (port 2 by default), `paddles`, `mouse1351`, "
+     "`amigamouse`, `stmouse`, `cx22`, the keypads, `none`"],
+    ["`drive8`", "`1541`, `1571`, `1581` (true drive, needs its DOS ROM), `virtual`, `none`"],
+    ["`roms`", "`stub`: a small test ROM of mimic's own"],
+], [0.22, 0.78])
+p("""Keys: the arrows are the four cursor keys, Escape = ESC, Tab = TAB,
+left Ctrl = CTRL, left Windows key = MEGA, left Alt = ALT, End = RUN/STOP,
+Page Up = RESTORE, Page Down = HELP, Scroll Lock = NO SCROLL, Caps Lock =
+CAPS LOCK, F1–F11 the odd function keys (Shift for the even ones), Print
+Screen = F13. The debugger's graphics views: `screen`, `charset`, `sprites`,
+`palette`.""")
+
 h2("Acorn Archimedes")
 p("""Models `a310` (default), `a305`, `a440` and `a3000`.""")
 table(["Option", "Values"], [

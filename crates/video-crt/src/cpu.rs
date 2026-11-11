@@ -68,20 +68,28 @@ impl Image {
 }
 
 /// Pixel aspect ratio (width / height of one source pixel, with a field
-/// line counted as two screen lines) from the signal timing.
+/// line counted as two screen lines) from the signal timing. A progressive
+/// signal at twice the TV line rate (above 24 kHz: 576p/480p, the MEGA65's
+/// VIC-IV) shows each line once and has twice the square-pixel clock.
 pub fn pixel_aspect(frame: &FrameRef<'_>) -> f64 {
     let square_hz = match frame.signal.standard {
         VideoStandard::Pal => 14_750_000.0,
         VideoStandard::Ntsc => 12_272_727.0,
     };
-    let lines_per_pixel = match frame.signal.field {
-        FieldParity::Progressive => 2.0,
-        FieldParity::Even | FieldParity::Odd => 1.0,
-    };
     if frame.signal.pixel_clock_hz == 0 {
         return 1.0;
     }
-    square_hz / f64::from(frame.signal.pixel_clock_hz) / lines_per_pixel
+    let pixel_hz = f64::from(frame.signal.pixel_clock_hz);
+    let line_hz = if frame.signal.total_pixels > 0 {
+        pixel_hz / f64::from(frame.signal.total_pixels)
+    } else {
+        0.0
+    };
+    match frame.signal.field {
+        FieldParity::Progressive if line_hz > 24_000.0 => 2.0 * square_hz / pixel_hz,
+        FieldParity::Progressive => square_hz / pixel_hz / 2.0,
+        FieldParity::Even | FieldParity::Odd => square_hz / pixel_hz,
+    }
 }
 
 /// Output size for a frame at vertical `scale` (rows per field line).
@@ -561,6 +569,22 @@ mod tests {
 
     fn sum(img: &Image) -> u64 {
         img.rgb.iter().map(|&v| u64::from(v)).sum()
+    }
+
+    #[test]
+    fn double_rate_progressive_frames_keep_their_lines() {
+        // 720 x 576 at 27 MHz, 864 a line (31.25 kHz): about 4:3.
+        let px = vec![0u8; 720 * 576];
+        let mut f = frame(&px, 720, 576);
+        f.signal.pixel_clock_hz = 27_000_000;
+        f.signal.total_pixels = 864;
+        f.signal.lines_per_field = 625;
+        let mut p = Profile::preset("lite").unwrap();
+        p.aspect = true;
+        let (w, h) = output_size(&f, &p, 1);
+        assert_eq!(h, 576);
+        let ratio = f64::from(w) / f64::from(h);
+        assert!((1.33..1.39).contains(&ratio), "{w} x {h}: {ratio}");
     }
 
     #[test]
