@@ -61,8 +61,10 @@
 //! one powers the console up again.
 //!
 //! ROM: role "vectrex", the 8 KB system ROM; a 4 KB image (the executive
-//! alone) is accepted and appears in both halves, so without a cartridge
-//! the console has no Mine Storm. User-supplied, never in the repository.
+//! alone) is accepted: its lower half is then this project's own "no
+//! game" block ([`stub::no_game`]), so without a cartridge the console
+//! shows "NO GAME / INSERT CARTRIDGE" instead of Mine Storm.
+//! User-supplied, never in the repository.
 //!
 //! Sources: roadsidethoughts.com, "Vectrex Programmer Notes": "Hardware
 //! Description", "Memory Map", "6522 Interface Adapter", "Programmable
@@ -660,7 +662,9 @@ impl Vectrex {
                     .ok_or_else(|| ConfigError::MissingRom("vectrex".into()))?;
                 match r.len() {
                     0x2000 => r.clone(),
-                    0x1000 => [r.as_slice(), r.as_slice()].concat(),
+                    // The executive alone: a "no game" block of our own
+                    // where Mine Storm would be.
+                    0x1000 => [stub::no_game().as_slice(), r.as_slice()].concat(),
                     n => {
                         return Err(ConfigError::Invalid(format!(
                             "vectrex system ROM must be 8192 (or 4096) bytes, got {n}"

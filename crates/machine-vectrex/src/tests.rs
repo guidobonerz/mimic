@@ -584,3 +584,75 @@ fn segments_carry_when_the_beam_drew_them() {
         assert!(u64::from(last_end) <= FRAME_CYCLES, "{s:?}");
     }
 }
+
+#[test]
+fn the_no_game_block_is_a_built_in_game_header() {
+    let b = stub::no_game();
+    assert_eq!(b.len(), 0x1000);
+    // Music pointer into the executive, one title line, the end mark.
+    assert_eq!(&b[..2], &[0xfd, 0x0d]);
+    assert_eq!(&b[2..6], &[0xf8, 0x50, 0x20, 0xd8]);
+    assert_eq!(&b[6..14], b"NO GAME\x80");
+    assert_eq!(b[14], 0);
+    // The code: JSR Wait_Recal first, the loop ends with BRA back to it.
+    assert_eq!(&b[15..18], &[0xbd, 0xf1, 0x92]);
+    let bra = 15 + 6 + 2 * 10;
+    assert_eq!(b[bra], 0x20);
+    assert_eq!(bra as i32 + 2 + i32::from(b[bra + 1] as i8), 15);
+    // The texts follow the code where the LDUs point.
+    assert_eq!(&b[bra + 2..bra + 10], b"NO GAME\x80");
+}
+
+/// With the executive alone (a 4 KB system ROM) and no cartridge the
+/// console shows "NO GAME / INSERT CARTRIDGE" after its title and stays
+/// there, instead of running into its own mirrored code.
+///
+///     cargo test -p machine-vectrex --release executive_alone -- --ignored --nocapture
+#[test]
+#[ignore = "needs a 4 KB executive in the ROM folder's vectrex/"]
+fn executive_alone_says_no_game() {
+    let Some(dir) = std::env::var_os("EMU_ROM_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(|h| std::path::PathBuf::from(h).join(".mimic").join("roms"))
+        })
+        .filter(|d| d.join("vectrex").is_dir())
+    else {
+        eprintln!("no vectrex ROM folder; skipped");
+        return;
+    };
+    let Some(path) = std::fs::read_dir(dir.join("vectrex"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| std::fs::metadata(p).is_ok_and(|m| m.len() == 0x1000))
+    else {
+        eprintln!("no 4 KB executive; skipped");
+        return;
+    };
+    let mut config = MachineConfig::default();
+    config
+        .roms
+        .insert("vectrex".into(), std::fs::read(path).unwrap());
+    let mut m = Vectrex::new(&config).unwrap();
+    frames(&mut m, 700);
+    let counts: Vec<usize> = (0..20)
+        .map(|_| {
+            frames(&mut m, 1);
+            m.vectors().unwrap().segments.len()
+        })
+        .collect();
+    assert!(
+        counts.iter().all(|&n| n > 20),
+        "the text is drawn: {counts:?}"
+    );
+    let (lo, hi) = (counts.iter().min().unwrap(), counts.iter().max().unwrap());
+    assert!(hi - lo <= hi / 4, "a steady picture: {counts:?}");
+    frames(&mut m, 500);
+    assert!(
+        m.vectors().unwrap().segments.len() > 20,
+        "still there later"
+    );
+}

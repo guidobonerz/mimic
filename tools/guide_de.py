@@ -662,8 +662,8 @@ oder Cursortasten und Steuerkreuz (Vollausschlag); Knöpfe 1–4 auf Z X C V
 oder A B X Y des Gamepads; Leertaste = Knopf 1.""")
 bullets(
     "**System-ROM.** Das echte ROM hat 8 KB: das Executive und das eingebaute Spiel "
-    "Mine Storm. Ein 4-KB-Abbild nur des Executive startet Module, aber ohne Modul "
-    "gibt es kein Mine Storm, und Module, die Mine Storms Routinen aufrufen (etwa "
+    "Mine Storm. Ein 4-KB-Abbild nur des Executive startet Module; ohne Modul "
+    "zeigt mimic dann nach dem Titel „NO GAME / INSERT CARTRIDGE“ statt Mine Storm, und Module, die Mine Storms Routinen aufrufen (etwa "
     "3-D Mine Storm), bleiben hängen.",
     "**Start.** Nach dem Einschalten zeigt das Executive etwa zehn Sekunden seinen "
     "Titel, bevor ein Modul startet.",

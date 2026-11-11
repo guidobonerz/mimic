@@ -6,6 +6,9 @@
 //! The figure, from the centre at intensity $7F: a square of four lines
 //! (+Y, +X, −Y, −X, each $30 for $40 cycles: about 3 100 units) and a dot
 //! at the centre. This project's own code.
+//!
+//! [`no_game`]: the lower half of a 4 KB system ROM, a stand-in for the
+//! missing Mine Storm that tells the user to insert a cartridge.
 
 /// 8 KB image for $E000–$FFFF.
 pub fn rom() -> Vec<u8> {
@@ -70,6 +73,57 @@ pub fn rom() -> Vec<u8> {
     rom
 }
 
+/// The executive's routines the "no game" block calls (Vectrex BIOS entry
+/// points, as homebrew programs use them).
+const WAIT_RECAL: u16 = 0xf192;
+const INTENSITY_5F: u16 = 0xf2a5;
+const PRINT_STR_D: u16 = 0xf37a;
+/// A tune of the executive's (the music pointer of a game's header).
+const BIOS_MUSIC: u16 = 0xfd0d;
+
+/// $E000–$EFFF for a 4 KB system ROM (the executive alone): in place of
+/// Mine Storm, a game of this project's own that says there is none. The
+/// executive takes it as the built-in game when no cartridge is in:
+/// after its own title it shows this block's title "NO GAME", then runs
+/// the code, which prints "NO GAME" and "INSERT CARTRIDGE" every frame
+/// through the executive's routines. Without it the executive would jump
+/// into its own mirrored code and draw noise.
+///
+/// The header layout is the built-in game's as the 8 KB system ROM has it
+/// at $E000 (read off the user's ROM, 2026-11-11): the music pointer, the
+/// title lines (height, width, y, x, text, `$80`), `$00`, then the code.
+pub fn no_game() -> Vec<u8> {
+    let mut a = Asm::new(0xe000);
+    a.emit(&BIOS_MUSIC.to_be_bytes());
+    a.emit(&[0xf8, 0x50, 0x20, 0xd8]);
+    a.emit(b"NO GAME\x80");
+    a.emit(&[0x00]);
+    let lines: [(&[u8], u8, u8); 2] = [
+        (b"NO GAME\x80", 0x20, 0xc8),
+        (b"INSERT CARTRIDGE\x80", 0xf0, 0xa0),
+    ];
+    // The text after the code: its address is known once the code is.
+    let code_len = 6 + lines.len() * 10 + 2;
+    let mut text_at = a.here() + code_len as u16;
+    let top = a.here();
+    a.jsr(WAIT_RECAL);
+    a.jsr(INTENSITY_5F);
+    for (text, y, x) in lines {
+        a.ldu(text_at);
+        a.emit(&[0x86, y, 0xc6, x]);
+        a.jsr(PRINT_STR_D);
+        text_at += text.len() as u16;
+    }
+    a.branch(0x20, top);
+    for (text, _, _) in lines {
+        a.emit(text);
+    }
+    let mut block = a.bytes;
+    assert!(block.len() <= 0x1000);
+    block.resize(0x1000, 0xff);
+    block
+}
+
 /// Just enough of a 6809 assembler for the stub.
 struct Asm {
     org: u16,
@@ -128,6 +182,16 @@ impl Asm {
 
     fn beq(&mut self, to: u16) {
         self.branch(0x27, to);
+    }
+
+    fn jsr(&mut self, to: u16) {
+        let [hi, lo] = to.to_be_bytes();
+        self.emit(&[0xbd, hi, lo]);
+    }
+
+    fn ldu(&mut self, v: u16) {
+        let [hi, lo] = v.to_be_bytes();
+        self.emit(&[0xce, hi, lo]);
     }
 
     fn jmp(&mut self, to: u16) {

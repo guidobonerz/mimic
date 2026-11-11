@@ -637,8 +637,8 @@ cursor keys and D-pad (full deflection); buttons 1–4 on Z X C V or A B X Y
 of the gamepad; Space = button 1.""")
 bullets(
     "**System ROM.** The real ROM is 8 KB: the executive and the built-in game "
-    "Mine Storm. A 4 KB image of the executive alone starts cartridges, but "
-    "without a cartridge there is no Mine Storm, and cartridges that call Mine "
+    "Mine Storm. A 4 KB image of the executive alone starts cartridges; without a "
+    "cartridge mimic then shows “NO GAME / INSERT CARTRIDGE” after the title instead of Mine Storm, and cartridges that call Mine "
     "Storm's routines (such as 3-D Mine Storm) hang.",
     "**Start-up.** After power-on the executive shows its title for about ten "
     "seconds before a cartridge starts.",
