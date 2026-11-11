@@ -79,8 +79,6 @@ pub struct Shared {
     /// Set by the window (F12): show the machine's next screen (C128: VIC
     /// and VDC).
     pub next_screen: AtomicBool,
-    /// Set by the window (F9–F11): a datasette key ([`TapeKey`]), 0 = none.
-    pub tape_key: AtomicU8,
     /// The disks the first drive swaps through (from `--disk`), the first
     /// one inserted at start.
     pub disk_swap: Mutex<Vec<String>>,
@@ -165,7 +163,7 @@ pub struct Shared {
     pub snapshot_done: Mutex<Option<(String, Instant)>>,
 }
 
-/// Datasette keys from the window.
+/// Datasette keys: the buttons of a tape slot in the media panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TapeKey {
@@ -176,14 +174,16 @@ pub enum TapeKey {
 }
 
 impl TapeKey {
-    fn from_u8(v: u8) -> Option<Self> {
-        Some(match v {
-            1 => Self::Play,
-            2 => Self::Record,
-            3 => Self::Stop,
-            4 => Self::Rewind,
-            _ => return None,
-        })
+    pub const ALL: [TapeKey; 4] = [Self::Play, Self::Record, Self::Stop, Self::Rewind];
+
+    /// The button's label in the media panel.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Play => "Play",
+            Self::Record => "Rec",
+            Self::Stop => "Stop",
+            Self::Rewind => "Rew",
+        }
     }
 
     fn command(self) -> &'static str {
@@ -221,7 +221,6 @@ impl Shared {
             rate_ppm: AtomicI64::new(0),
             status: Mutex::default(),
             next_screen: AtomicBool::new(false),
-            tape_key: AtomicU8::new(0),
             disk_swap: Mutex::default(),
             next_disk: AtomicBool::new(false),
             dropped_disks: Mutex::default(),
@@ -404,6 +403,11 @@ pub enum MediaCommand {
     Save {
         slot: u8,
     },
+    /// A tape slot's key (play, record, stop, rewind).
+    Tape {
+        slot: u8,
+        key: TapeKey,
+    },
 }
 
 /// An image opened the way a slot of `kind` takes it.
@@ -579,6 +583,18 @@ fn media_command(
             let msg = match done {
                 Some(Ok(())) => format!("{}: saved to its file", info.name),
                 Some(Err(e)) => format!("{}: not saved: {e}", info.name),
+                None => "no such slot".into(),
+            };
+            (msg, None)
+        }
+        MediaCommand::Tape { slot, key } => {
+            let Some(info) = slot_info(m, slot) else {
+                return ("no such slot".into(), None);
+            };
+            let done = m.media_slot(info.id).map(|t| t.control(key.command()));
+            let msg = match done {
+                Some(Ok(())) => String::new(),
+                Some(Err(e)) => format!("{}: {e}", info.name),
                 None => "no such slot".into(),
             };
             (msg, None)
@@ -874,19 +890,6 @@ pub fn spawn(
                 return;
             }
 
-            if let Some(key) = TapeKey::from_u8(shared.tape_key.swap(0, Ordering::Relaxed)) {
-                let m = session.machine_mut();
-                let tape = m
-                    .media_slots()
-                    .into_iter()
-                    .find(|s| s.kind == emu_core::media::MediaKind::Tape);
-                if let Some(slot) = tape.and_then(|s| m.media_slot(s.id)) {
-                    if let Err(e) = slot.control(key.command()) {
-                        *shared.status.lock().unwrap_or_else(|p| p.into_inner()) =
-                            Some(format!("tape: {e}"));
-                    }
-                }
-            }
             let commands = shared
                 .media_commands
                 .lock()

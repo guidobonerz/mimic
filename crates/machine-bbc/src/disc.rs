@@ -278,6 +278,26 @@ impl Disc {
         }
     }
 
+    /// The controller's registers for the debugger (side-effect free).
+    pub fn regs(&self) -> Vec<(&'static str, u8)> {
+        match &self.fdc {
+            Fdc::I8271(f) => vec![
+                ("STATUS", f.peek(0xfe80)),
+                ("RESULT", f.peek(0xfe81)),
+                ("INT", u8::from(f.int)),
+            ],
+            Fdc::Wd1770 { fdc, control } | Fdc::Master { fdc, control } => vec![
+                ("STATUS", fdc.peek(0)),
+                ("TRACK", fdc.peek(1)),
+                ("SECTOR", fdc.peek(2)),
+                ("DATA", fdc.peek(3)),
+                ("CONTROL", *control),
+                ("INTRQ", u8::from(fdc.intrq)),
+                ("DRQ", u8::from(fdc.drq)),
+            ],
+        }
+    }
+
     pub fn peek(&self, addr: u16) -> u8 {
         match &self.fdc {
             Fdc::I8271(f) => f.peek(addr),

@@ -292,7 +292,7 @@ fn mode_7_test_page_matches_its_reference() {
     run(m, 2);
     let hash = picture_hash(m);
     if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
-        let profile = video_crt::Profile::preset("lite").unwrap();
+        let profile = video_crt::Profile::preset("1084s-rgb").unwrap();
         let png = emu_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
         std::fs::write(std::path::Path::new(&d).join("bbc-mode7-test.png"), png).unwrap();
         eprintln!("picture hash {hash:016x}");
@@ -866,5 +866,67 @@ fn master_time_comes_from_the_clock() {
     type_text(m, "*TIME\n");
     run(m, 20);
     let t = teletext(m);
+    if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
+        let profile = video_crt::Profile::preset("1084s-rgb").unwrap();
+        let png = emu_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
+        std::fs::write(std::path::Path::new(&d).join("bbc-master.png"), png).unwrap();
+    }
     assert!(t.contains("Mon,15 Jun 1987.10:20"), "{t}");
+}
+
+/// Press and release machine keys one after the other.
+fn press(m: &mut dyn Machine, keys: &[u16]) {
+    for &k in keys {
+        for down in [true, false] {
+            let now = m.now().0;
+            m.input(TimedInput {
+                at: emu_core::Cycle(now),
+                target: InputTarget::Keyboard,
+                event: InputEvent::Key {
+                    machine_key: MachineKey(k),
+                    down,
+                },
+            });
+            run(m, 3);
+        }
+    }
+}
+
+/// The Master's keypad (columns 10–12): `PRINT 12+3*4` typed on it, its
+/// RETURN enters the line.
+#[test]
+#[ignore = "needs the BBC Master ROMs (bbc/master320)"]
+fn master_keypad_types_digits_and_operators() {
+    let mut m = bbc_model(Some("master"));
+    let m = m.as_mut();
+    run(m, 200);
+    type_text(m, "PRINT ");
+    // 1 2 + 3 * 4 RETURN
+    press(m, &[0x6b, 0x7c, 0x3a, 0x6c, 0x5b, 0x7a, 0x3c]);
+    run(m, 20);
+    let t = teletext(m);
+    assert!(t.contains("PRINT 12+3*4"), "{t}");
+    assert!(t.contains("        24"), "{t}");
+    // 5 6 7 8 9 0 - 8 / 4 RETURN
+    type_text(m, "PRINT ");
+    press(
+        m,
+        &[
+            0x7b, 0x1a, 0x1b, 0x2a, 0x2b, 0x6a, 0x3b, 0x2a, 0x4a, 0x7a, 0x3c,
+        ],
+    );
+    run(m, 20);
+    let t = teletext(m);
+    assert!(t.contains("PRINT 567890-8/4"), "{t}");
+    assert!(t.contains("    567888"), "{t}");
+    // 0 . 5 , #, then DELETE takes the # back; 6 RETURN
+    type_text(m, "PRINT ");
+    press(m, &[0x6a, 0x4c, 0x7b, 0x5c, 0x5a]);
+    run(m, 5);
+    // The MOS stores # as &5F in mode 7 (where the SAA5050 has its #).
+    assert!(teletext(m).contains("PRINT 0.5,_"), "{}", teletext(m));
+    press(m, &[0x4b, 0x1a, 0x3c]);
+    run(m, 20);
+    let t = teletext(m);
+    assert!(t.contains("PRINT 0.5,6"), "{t}");
 }

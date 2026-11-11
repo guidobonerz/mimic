@@ -181,15 +181,13 @@ reach the machine, so a Ctrl or SYMBOL SHIFT on the emulated keyboard
 works with any letter.""")
 table(["Key", "Action"], [
     ["Shift+Alt+Left", "open or close the console panel at the left edge"],
-    ["Shift+Alt+Right", "open or close the media panel at the right edge: mount, eject and save disks, tapes and cartridges"],
+    ["Shift+Alt+Right", "open or close the media panel at the right edge: mount, eject and save disks, tapes and cartridges; the tape keys"],
     ["Ctrl+Space", "show or hide the status footer"],
     ["Ctrl+D", "put the next disk of the `--disk` list into the first drive"],
     ["Ctrl+I", "Amiga: switch the deinterlacing between weave and bob"],
     ["Ctrl+R (held)", "run backwards at twice real speed through the last frames; "
      "on release the machine runs on from there"],
     ["F12", "switch between the machine's screens (C128: 40-column VIC and 80-column VDC)"],
-    ["F9 / Shift+F9", "datasette or cassette: PLAY / RECORD"],
-    ["F10 / F11", "datasette or cassette: STOP / REWIND"],
     ["Middle mouse button", "release a captured mouse"],
 ], [0.28, 0.72])
 p("Dropping an image file onto the window inserts it into the first drive "
@@ -682,7 +680,7 @@ bullets(
     "it waits with the drive running, like the real one.",
     "**Cassette.** WAV recordings (`--tape`). The tape moves while a program "
     "listens to it, so type `LOAD` (or the monitor's `R`) at any time. To save, "
-    "insert an empty file, press Shift+F9 (RECORD), `SAVE`, then F10 (STOP): "
+    "insert an empty file, press Rec in the media panel, `SAVE`, then Stop: "
     "the recording is written as a WAV file.",
     "**Sequencer PROM.** With the P6 PROM (341-0028) the Disk II reads and "
     "writes the way the real card does; without it a model of the card stands in.",
@@ -742,13 +740,28 @@ CAS file (`--tape`): `CLOAD` plays it, `CSAVE` appends to it. Keys: Home or
 Delete = CLEAR, Escape or End = BREAK, Backspace = ←.""")
 
 h2("BBC Micro")
-p("""The Model B. With the DFS ROM in the ROM folder the machine has the
-8271 disk controller: `--disk` takes SSD and DSD images for drive 0, and
-Shift+BREAK boots. Tapes are UEF or WAV files (`--tape`; type `*TAPE` first
-when DFS is in).""")
+p("""Models `b` (default: the Model B), `bplus` (B+, 64 KB with shadow
+RAM), `bplus128` (B+ 128, sideways RAM in slots 0, 1, 12 and 13) and
+`master` (Master 128). ROMs in the `bbc` folder of the ROM folder: the
+Model B needs `os12.rom` and `basic2.rom`, `dfs-1.20.rom` adds the 8271
+disk controller; the B+ takes `bplus-mos.rom` and `dfs-2.26.rom` (the
+1770); the Master its MOS 3.20 in sixteen-kilobyte pieces in
+`bbc/master320`. `--disk` takes SSD and DSD images, on the Master also ADFS
+images (`.adf`, `.adl`); Shift+BREAK boots a disk. Tapes are UEF or WAV
+files (`--tape`; type `*TAPE` first when a disk filing system is in).""")
 table(["Option", "Values"], [
+    ["`rtc`", "Master: the clock's start, `YYYY-MM-DD[THH:MM[:SS]]` (default "
+     "2000-01-01; MOS 3.20 shows the year without its century)"],
+    ["`cmos`", "Master: `configured` (default: BASIC, DFS, MODE 7 as a new Master "
+     "came) or `blank` (empty CMOS RAM)"],
     ["`roms`", "`stub`: a test ROM without the Acorn ROMs"],
 ], [0.22, 0.78])
+p("""Keys: F1–F9 = f1–f9, F10 = f0, Backspace = DELETE,
+End = COPY, left Alt = SHIFT LOCK, Pause = BREAK. The numeric keypad is the
+Master's keypad; on the Model B and B+ its digits, `-`, `/`, `.` and Enter
+type the main keys. The CMOS RAM is kept in savestates, not between
+sessions. The debugger's graphics views: `screen` (the picture from
+memory), `palette`, `charset` (the SAA5050's characters).""")
 
 h2("Acorn Archimedes")
 p("""Models `a310` (default), `a305`, `a440` and `a3000`.""")
@@ -1228,7 +1241,6 @@ table(["Key", "Effect"], [
     ["Ctrl+Space", "Show or hide the status footer: speed slider (10–800 %), snapshot "
      "button (`<machine>-NNN.png`), emulated time, pointer position, joystick "
      "directions, drive activity."],
-    ["F9 / Shift+F9 / F10 / F11", "Datasette: play, record, stop, rewind."],
     ["F12", "Switch between a machine's screens: C128 VIC/VDC, IMSAI front panel "
      "and terminal."],
     ["F1–F7", "Console keys of the Atari 8-bit (F1 START, F2 OPTION … F5 RESET, F6 HELP, "
@@ -1250,7 +1262,9 @@ h2("The media panel")
 p("""The panel at the right edge lists every drive, datasette and cartridge
 slot of the machine with one button that mounts (a native file dialog) or
 ejects, and **Save**, which writes the copy-on-write overlay back to the
-image file. On the C64 the drive's line names its mode: `drive 8 (1541)`
+image file. A datasette or cassette has a second line with its keys
+**Play**, **Rec**, **Stop** and **Rew** (there are no hotkeys for them, so
+F9–F11 reach the machine). On the C64 the drive's line names its mode: `drive 8 (1541)`
 for the true drive with its DOS ROM, `drive 8 (virtual)` without one.""")
 
 # ---- 4 headless ------------------------------------------------------------------

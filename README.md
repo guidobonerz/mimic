@@ -6,7 +6,7 @@ The user guide — how to use the emulator plus the complete reference of every 
 
 ## Screenshots
 
-Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test); the consoles without a start screen show a game. ROMs and software are not part of this repository.
+Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test, the BBC Micro's teletext test page and the Master's `*TIME` from the `bbc_boot` tests); the consoles without a start screen show a game. ROMs and software are not part of this repository.
 
 <table>
 <tr>
@@ -56,12 +56,14 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/ti99.png" alt="TI-99/4A: Title screen"><br><b>TI-99/4A</b><br>Title screen</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/bbc.png" alt="BBC Micro Model B: Mode 7 teletext test page"><br><b>BBC Micro Model B</b><br>Mode 7 teletext test page</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/bbc-master.png" alt="BBC Master 128: MOS 3.20, *TIME from the clock"><br><b>BBC Master 128</b><br>MOS 3.20, <code>*TIME</code> from the clock</td>
 </tr>
 </table>
 
 ## Test overview
 
-Where the project stands against test suites and checks, as of 2026-11-10. 🟢 everything passes (or every remaining case is a known reference problem), 🟡 most passes with open cases, 🔴 not verified or largely failing, ⚪ not started. Details and trends: `docs/claude/testing.md`, `docs/test-results-c64.md` and the phase files in `docs/claude/phases/`.
+Where the project stands against test suites and checks, as of 2026-11-11. 🟢 everything passes (or every remaining case is a known reference problem), 🟡 most passes with open cases, 🔴 not verified or largely failing, ⚪ not started. Details and trends: `docs/claude/testing.md`, `docs/test-results-c64.md` and the phase files in `docs/claude/phases/`.
 
 ### CPUs
 
@@ -111,7 +113,8 @@ Where the project stands against test suites and checks, as of 2026-11-10. 🟢 
 | Logophor 16 | own tests, Foundry ROM golden images | steps 1–11 accepted | 🟢 | Steampunk machine |
 | TRS-80 Model I / III | Level II and Model III ROMs (`trs80_boot`, 7 tests) | both boot to BASIC and compute; Model I block graphics, CSAVE/CLOAD; both boot and write a test disk (FD1771 SD, FD1793 DD with WAIT/NMI) | 🟡 | a real DOS disk, Model III cassette |
 | TI-99/4A | real ROMs (`ti99_boot`, 5 tests) | title screen, menu, TI BASIC computes; Parsec from its C/G dumps; SAVE/OLD on cassette (WAV) and on disk (TI disk controller); Parsec talks through the Speech Synthesizer | 🟡 | speech excitation by ear against hardware, GROM/VDP access timing, inverted (379) banking |
-| Colour Genie, CPC Plus, QL, BBC, Atari ST, KC85, KIM-1, HP calculators | – | – | ⚪ | planned phases |
+| BBC Micro B / B+ / B+ 128 / Master 128 | real ROMs (`bbc_boot`, 19 tests) | all four boot to BASIC; mode 7 against its reference picture; SAVE/LOAD on tape (UEF), on DFS discs (8271, 1770) and ADFS; SHIFT+BREAK boots a disc; the Master's clock, shadow RAM and keypad | 🟡 | no commercial discs or tapes tried; Tube, Econet, ADC missing |
+| Colour Genie, CPC Plus, QL, Atari ST, KC85, KIM-1, HP calculators | – | – | ⚪ | planned phases |
 
 ### Drives, devices and frontends
 
@@ -143,7 +146,7 @@ Where the project stands against test suites and checks, as of 2026-11-10. 🟢 
 
 | CPU | Crate | Used in | Verification | Completeness |
 | --- | --- | --- | --- | --- |
-| MOS 6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 6507, Ricoh 2A03/2A07, CMOS 65C02 | `cpu-6502` | PET, VIC-20, C64, C128, C16/Plus/4, 1541/1571/1581, Atari 8-bit, Atari 2600, NES, Apple II | Tom Harte (6502, nes6502, synertek65c02), Klaus Dormann, Lorenz 264/264 | 97 % (no Rockwell/WDC bit instructions, WAI/STP) |
+| MOS 6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 6507, Ricoh 2A03/2A07, CMOS 65C02 | `cpu-6502` | PET, VIC-20, C64, C128, C16/Plus/4, 1541/1571/1581, Atari 8-bit, Atari 2600, NES, Apple II, BBC Micro (Master: 65SC12) | Tom Harte (6502, nes6502, synertek65c02), Klaus Dormann, Lorenz 264/264 | 97 % (no Rockwell/WDC bit instructions, WAI/STP) |
 | Zilog Z80 | `cpu-z80` | C128, CPC, ZX81, ColecoVision | Tom Harte, ZEXDOC, ZEXALL | 97 % |
 | Motorola 68000 | `cpu-m68k` | Amiga 500/1000/2000/500+, Macintosh | Tom Harte (all but three contradictory cases) | 97 % |
 | Motorola 68020 / 68EC020 | `cpu-m68k` | Amiga 1200 | unit tests only; timing approximate, no cache | 60 % |
@@ -176,6 +179,7 @@ Where the project stands against test suites and checks, as of 2026-11-10. 🟢 
 | Test machine (6502 + RAM + raster chip) | `machine-sim6502` | – | reference for debugger tests | 100 % |
 | Tandy TRS-80 Model I/III | `machine-trs80` | Model I, Model III | both boot to BASIC with real ROMs; Model I cassette (CSAVE/CLOAD) and Expansion Interface with FD1771, Model III FD1793 with WAIT and NMI (DMK/JV1/JV3; test disks boot and are written); no real DOS tried, no Model III cassette | 65 % |
 | Texas Instruments TI-99/4A | `machine-ti99` | NTSC, PAL | TI BASIC, cartridges (ROM + GROM, banking), 32 KB expansion, joysticks, cassette (WAV), TI disk controller with DSK1–DSK3, Speech Synthesizer; access timing simplified (chips catch up after each instruction) | 70 % |
+| Acorn BBC Micro | `machine-bbc` | B, B+, B+ 128, Master 128 | MOS 1.20/2.00/3.20 to BASIC; modes 0–7 (SAA5050 teletext), sound, cassette (UEF/WAV), 8271 and 1770 discs (SSD/DSD, ADFS), shadow/private/sideways RAM, the Master's ACCCON paging, CMOS RAM and clock; no Tube, Econet, ADC, speech | 70 % |
 | Apple II / II+ / IIe | `machine-apple2` | II, II+, IIe, enhanced IIe | all four boot with real ROMs; Zork I boots from DSK; a disk built by the tests boots through the Disk II PROMs; cassette save/load through the monitor; colours checked through the composite stage; DOS 3.3/ProDOS disks, Mockingboard software and WOZ copy protections not yet tried | 70 % |
 | Apple Macintosh 128K–SE | `machine-mac` | 128K, 512K, Plus, SE | all four reach the disk icon with real ROMs (startup sound, RTC, memory test); a disk built by the tests boots through the IWM (400K with the 128K's speed control, 800K); SCSI disks, ADB, SCC and keyboard only unit-tested; System 6 not yet tried | 55 % |
 
@@ -189,7 +193,7 @@ Where the project stands against test suites and checks, as of 2026-11-10. 🟢 
 | MOS 8563 VDC | `chips-cbm` | C128 | 80 % |
 | MOS 6581/8580 SID | `chips-cbm` | C64, C128 | 85 % |
 | MOS 6526 CIA / 8520 | `chips-cbm` | C64, C128, 1571, 1581, Amiga | 95 % |
-| MOS 6522 VIA | `chips-cbm` | VIC-20, PET, 1541, Vectrex, Macintosh | 90 % (shift-in at the φ2 rate, PB6 pulse counting missing) |
+| MOS 6522 VIA | `chips-cbm` | VIC-20, PET, 1541, Vectrex, Macintosh, BBC Micro | 90 % (shift-in at the φ2 rate, PB6 pulse counting missing) |
 | Zilog Z8530 SCC | `machine-mac` | Macintosh | 50 % (DCD interrupts, vector, loopback; no baud rates or sync modes) |
 | NCR 5380 SCSI | `machine-mac` | Macintosh Plus, SE | 70 % (no timing, no arbitration with other initiators) |
 | Apple IWM | `drives-other` | Macintosh | 80 % |
@@ -204,13 +208,15 @@ Where the project stands against test suites and checks, as of 2026-11-10. 🟢 
 | POKEY | `chips-atari` | Atari 8-bit | 85 % |
 | TIA | `chips-atari` | Atari 2600 | 90 % |
 | RIOT 6532 | `chips-atari` | Atari 2600 | 95 % |
-| CRTC 6845 (types 0–2) | `chips-amstrad` | CPC | 85 % |
+| CRTC 6845 (types 0–2) | `chips-amstrad` | CPC, BBC Micro | 85 % |
 | Gate Array | `chips-amstrad` | CPC | 90 % |
 | AY-3-8912 | `chips-amstrad` | CPC, Vectrex, Apple II Mockingboard | 90 % |
 | 8255 PPI | `chips-amstrad` | CPC | 85 % |
 | µPD765 FDC | `chips-amstrad` | CPC 664/6128 | 80 % |
 | TMS9918A/TMS9929A VDP | `chips-ti` | ColecoVision, TI-99/4A | 80 % (VRAM access timing, reference pictures open) |
-| SN76489 | `chips-ti` | ColecoVision, TI-99/4A | 90 % |
+| SN76489 | `chips-ti` | ColecoVision, TI-99/4A, BBC Micro | 90 % |
+| Video ULA, SAA5050 teletext | `chips-acorn` | BBC Micro | 85 % (SAA5050 checked against its data sheet; ULA timing at character level) |
+| Intel 8271 FDC, MC146818 clock | `chips-acorn` | BBC Micro, Master | 75 % (8271 at sector level, non-DMA; no clock alarm interrupt) |
 | TMS9901 systems interface | `chips-ti` | TI-99/4A | 85 % |
 | TMC0430 GROM | `chips-ti` | TI-99/4A | 85 % (no access wait states beyond the multiplexer's) |
 | TMS5220 speech synthesizer (with TMS6100) | `chips-ti` | TI-99/4A | 65 % (coding table from the data manual; excitation and interpolation modelled) |
@@ -238,7 +244,7 @@ Where the project stands against test suites and checks, as of 2026-11-10. 🟢 
 | CPC disc drives and tape | `drives-other` | 85 % |
 | Apple Disk II (P6 sequencer or functional model, quarter tracks, write-back), cassette (WAV) | `drives-other` | 80 % |
 | Sony 400K/800K drives (GCR zones, tachometer, PWM speed control, write-back), SCSI hard disks | `drives-other`, `machine-mac` | 75 % |
-| Image formats: PRG, D64/D71/D81, T64, TAP, CRT, ADF/extended ADF, DMS, ATR, XEX, CAS, CAR, DSK/EDSK, CDT/TZX, DMK, Apple DSK/DO/PO/NIB, WOZ 1/2, Mac DSK/DiskCopy 4.2, WAV, TI-99/4A DSK and cartridge dumps (C/D/G) | `media` | 90 % |
+| Image formats: PRG, D64/D71/D81, T64, TAP, CRT, ADF/extended ADF, DMS, ATR, XEX, CAS, CAR, DSK/EDSK, CDT/TZX, DMK, Apple DSK/DO/PO/NIB, WOZ 1/2, Mac DSK/DiskCopy 4.2, WAV, TI-99/4A DSK and cartridge dumps (C/D/G), BBC SSD/DSD, ADFS ADF/ADL, UEF | `media` | 90 % |
 | Backends: image file, copy-on-write overlay, host directory | `media-backends` | 90 % |
 | Real-hardware backends (OpenCBM, flux readers) | – | 0 % |
 

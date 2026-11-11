@@ -184,15 +184,13 @@ AltGr erreichen die Maschine, so dass ein Ctrl oder SYMBOL SHIFT der
 emulierten Tastatur mit jedem Buchstaben geht.""")
 table(["Taste", "Wirkung"], [
     ["Umschalt+Alt+Links", "Konsolenpanel am linken Rand öffnen oder schließen"],
-    ["Umschalt+Alt+Rechts", "Medienpanel am rechten Rand öffnen oder schließen: Disketten, Kassetten und Module einlegen, auswerfen und speichern"],
+    ["Umschalt+Alt+Rechts", "Medienpanel am rechten Rand öffnen oder schließen: Disketten, Kassetten und Module einlegen, auswerfen und speichern; die Kassettentasten"],
     ["Strg+Leertaste", "Statusfußzeile zeigen oder verbergen"],
     ["Strg+D", "die nächste Diskette der `--disk`-Liste ins erste Laufwerk legen"],
     ["Strg+I", "Amiga: Deinterlacing zwischen weave und bob umschalten"],
     ["Strg+R (gehalten)", "mit doppelter Geschwindigkeit rückwärts durch die letzten Bilder; "
      "beim Loslassen läuft die Maschine von dort weiter"],
     ["F12", "zwischen den Bildschirmen der Maschine wechseln (C128: 40-Zeichen-VIC und 80-Zeichen-VDC)"],
-    ["F9 / Umschalt+F9", "Datasette oder Kassette: PLAY / RECORD"],
-    ["F10 / F11", "Datasette oder Kassette: STOP / REWIND"],
     ["Mittlere Maustaste", "eine eingefangene Maus freigeben"],
 ], [0.28, 0.72])
 p("Eine auf das Fenster gezogene Abbilddatei kommt ins erste Laufwerk "
@@ -708,8 +706,8 @@ bullets(
     "ohne Diskette wartet sie mit laufendem Laufwerk, wie die echte.",
     "**Kassette.** WAV-Aufnahmen (`--tape`). Das Band läuft, während ein Programm "
     "darauf hört, also jederzeit `LOAD` (oder das `R` des Monitors) tippen. Zum "
-    "Speichern eine leere Datei einlegen, Umschalt+F9 (RECORD), `SAVE`, dann F10 "
-    "(STOP): die Aufnahme wird als WAV-Datei geschrieben.",
+    "Speichern eine leere Datei einlegen, im Medienpanel Rec drücken, `SAVE`, dann "
+    "Stop: die Aufnahme wird als WAV-Datei geschrieben.",
     "**Sequencer-PROM.** Mit dem P6-PROM (341-0028) liest und schreibt die Disk II "
     "wie die echte Karte; ohne es steht ein Modell der Karte ein.",
 )
@@ -769,13 +767,30 @@ spielt sie ab, `CSAVE` hängt an. Tasten: Pos1 oder Entf = CLEAR, Escape oder
 Ende = BREAK, Rücktaste = ←.""")
 
 h2("BBC Micro")
-p("""Das Model B. Mit dem DFS-ROM im ROM-Ordner hat die Maschine den
-Diskettencontroller 8271: `--disk` nimmt SSD- und DSD-Abbilder für Laufwerk
-0, und Shift+BREAK bootet. Bänder sind UEF- oder WAV-Dateien (`--tape`; mit
-DFS zuerst `*TAPE` eingeben).""")
+p("""Modelle `b` (Standard: das Model B), `bplus` (B+, 64 KB mit
+Shadow-RAM), `bplus128` (B+ 128, Sideways-RAM in den Bänken 0, 1, 12 und
+13) und `master` (Master 128). ROMs im Ordner `bbc` des ROM-Ordners: das
+Model B braucht `os12.rom` und `basic2.rom`, `dfs-1.20.rom` fügt den
+Diskettencontroller 8271 hinzu; der B+ nimmt `bplus-mos.rom` und
+`dfs-2.26.rom` (den 1770); der Master seine MOS 3.20 in Stücken zu 16 KB
+in `bbc/master320`. `--disk` nimmt SSD- und DSD-Abbilder, beim Master auch
+ADFS-Abbilder (`.adf`, `.adl`); Shift+BREAK bootet eine Diskette. Bänder
+sind UEF- oder WAV-Dateien (`--tape`; mit einem Disketten-Dateisystem
+zuerst `*TAPE` eingeben).""")
 table(["Option", "Werte"], [
+    ["`rtc`", "Master: Startzeit der Uhr, `JJJJ-MM-TT[THH:MM[:SS]]` (Standard "
+     "2000-01-01; die MOS 3.20 zeigt das Jahr ohne Jahrhundert)"],
+    ["`cmos`", "Master: `configured` (Standard: BASIC, DFS, MODE 7 wie ein neuer "
+     "Master) oder `blank` (leeres CMOS-RAM)"],
     ["`roms`", "`stub`: ein Test-ROM ohne die Acorn-ROMs"],
 ], [0.22, 0.78])
+p("""Tasten: F1–F9 = f1–f9, F10 = f0, Rücktaste = DELETE,
+Ende = COPY, linke Alt-Taste = SHIFT LOCK, Pause = BREAK. Der Ziffernblock
+ist der Ziffernblock des Master; beim Model B und B+ tippen seine Ziffern,
+`-`, `/`, `.` und Enter die Haupttasten. Das CMOS-RAM bleibt im Savestate
+erhalten, nicht zwischen Sitzungen. Die Grafikansichten des Debuggers:
+`screen` (das Bild aus dem Speicher), `palette`, `charset` (die Zeichen des
+SAA5050).""")
 
 h2("Acorn Archimedes")
 p("""Modelle `a310` (Standard), `a305`, `a440` und `a3000`.""")
@@ -1269,7 +1284,6 @@ table(["Taste", "Wirkung"], [
     ["Strg+Leertaste", "Statusfußzeile zeigen oder verbergen: Geschwindigkeitsregler "
      "(10–800 %), Schnappschuss-Knopf (`<maschine>-NNN.png`), emulierte Zeit, "
      "Zeigerposition, Joystick-Richtungen, Laufwerksaktivität."],
-    ["F9 / Umschalt+F9 / F10 / F11", "Datasette: Play, Record, Stop, Rewind."],
     ["F12", "Zwischen den Bildschirmen einer Maschine wechseln: C128 VIC/VDC, IMSAI "
      "Frontplatte und Terminal."],
     ["F1–F7", "Konsolentasten der Atari 8-Bit (F1 START, F2 OPTION … F5 RESET, F6 HELP, "
@@ -1291,7 +1305,9 @@ h2("Das Medienpanel")
 p("""Das Panel am rechten Rand listet jedes Laufwerk, jede Datasette und
 jeden Modulschacht der Maschine mit einem Knopf, der einlegt (nativer
 Dateidialog) oder auswirft, und **Save**, das die Copy-on-Write-Schicht in
-die Abbilddatei zurückschreibt. Beim C64 nennt die Laufwerkszeile die
+die Abbilddatei zurückschreibt. Eine Datasette oder Kassette hat eine
+zweite Zeile mit ihren Tasten **Play**, **Rec**, **Stop** und **Rew** (dafür
+gibt es keine Tastenkürzel, F9–F11 gehen an die Maschine). Beim C64 nennt die Laufwerkszeile die
 Betriebsart: `drive 8 (1541)` für das echte Laufwerk mit DOS-ROM, `drive 8
 (virtual)` ohne.""")
 

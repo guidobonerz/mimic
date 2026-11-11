@@ -59,6 +59,7 @@
 #![forbid(unsafe_code)]
 
 pub mod disc;
+mod gfx;
 pub mod keyboard;
 pub mod serial;
 pub mod stub;
@@ -131,6 +132,41 @@ pub const PALETTE: [Rgb8; 8] = [
         b: 255,
     },
 ];
+
+/// The ULA's logical colours in the debugger's register list (their
+/// physical colours now).
+const ULA_PAL: [&str; 16] = [
+    "COL0", "COL1", "COL2", "COL3", "COL4", "COL5", "COL6", "COL7", "COL8", "COL9", "COL10",
+    "COL11", "COL12", "COL13", "COL14", "COL15",
+];
+
+/// A 6522's registers for the debugger; `pins` the port A and B inputs.
+fn via_regs(name: &'static str, base: u32, v: &Via, pins: (u8, u8)) -> ChipInfo {
+    let reg = |name, addr: u32, value: u32, bits| ChipReg {
+        name,
+        addr: Some(addr),
+        value,
+        bits,
+    };
+    let byte = |r: u8| u32::from(v.peek(r, pins.0, pins.1));
+    ChipInfo {
+        name,
+        regs: vec![
+            reg("ORB", base, u32::from(v.orb), 8),
+            reg("ORA", base + 1, u32::from(v.ora), 8),
+            reg("DDRB", base + 2, u32::from(v.ddrb), 8),
+            reg("DDRA", base + 3, u32::from(v.ddra), 8),
+            reg("T1", base + 4, u32::from(v.t1_counter), 16),
+            reg("T1_LATCH", base + 6, u32::from(v.t1_latch), 16),
+            reg("T2", base + 8, u32::from(v.t2_counter), 16),
+            reg("SR", base + 10, u32::from(v.sr), 8),
+            reg("ACR", base + 11, u32::from(v.acr), 8),
+            reg("PCR", base + 12, u32::from(v.pcr), 8),
+            reg("IFR", base + 13, byte(13), 8),
+            reg("IER", base + 14, byte(14), 8),
+        ],
+    }
+}
 
 /// The models (`--model`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -822,7 +858,10 @@ impl Bbc {
         } else {
             None
         };
-        let keyboard = Keyboard::default();
+        let keyboard = Keyboard {
+            keypad: model.master(),
+            ..Keyboard::default()
+        };
         let mut cpu = Cpu6502::new(CpuConfig {
             variant: if model.master() {
                 Variant::Cmos65C02
@@ -988,7 +1027,13 @@ impl Bbc {
     fn apply_input(&mut self, ev: TimedInput) {
         match (ev.target, ev.event) {
             (InputTarget::Keyboard, InputEvent::Key { machine_key, down }) => {
-                self.board.keyboard.key(machine_key.0, down);
+                if machine_key.0 == keyboard::keys::BREAK {
+                    if down {
+                        self.reset(ResetKind::Soft);
+                    }
+                } else {
+                    self.board.keyboard.key(machine_key.0, down);
+                }
             }
             (InputTarget::Panel, InputEvent::Control { id, value: 1 }) => match id.0 {
                 0 => self.reset(ResetKind::Hard),
@@ -1154,6 +1199,40 @@ impl Machine for Bbc {
                 ],
             },
         ];
+        chips[1]
+            .regs
+            .extend((0..16u8).map(|l| reg(ULA_PAL[usize::from(l)], u32::from(b.ula.colour(l)), 3)));
+        let sys_pins = (b.sysvia_pa(), 0xf0 | (b.sysvia.port_b_out() & 0x0f));
+        chips.push(via_regs("sysvia", 0xfe40, &b.sysvia, sys_pins));
+        chips.push(via_regs("uservia", 0xfe60, &b.uservia, (0xff, 0xff)));
+        let p = &b.psg;
+        chips.push(ChipInfo {
+            name: "sn76489",
+            regs: vec![
+                reg("TONE0", u32::from(p.period[0]), 10),
+                reg("TONE1", u32::from(p.period[1]), 10),
+                reg("TONE2", u32::from(p.period[2]), 10),
+                reg("NOISE", u32::from(p.noise), 3),
+                reg("ATT0", u32::from(p.atten[0]), 4),
+                reg("ATT1", u32::from(p.atten[1]), 4),
+                reg("ATT2", u32::from(p.atten[2]), 4),
+                reg("ATT3", u32::from(p.atten[3]), 4),
+            ],
+        });
+        if let Some(d) = &self.disc {
+            chips.push(ChipInfo {
+                name: if matches!(d.fdc, disc::Fdc::I8271(_)) {
+                    "i8271"
+                } else {
+                    "wd1770"
+                },
+                regs: d
+                    .regs()
+                    .into_iter()
+                    .map(|(n, v)| reg(n, u32::from(v), 8))
+                    .collect(),
+            });
+        }
         if let Some(rtc) = &b.rtc {
             chips.push(ChipInfo {
                 name: "rtc",
@@ -1169,6 +1248,16 @@ impl Machine for Bbc {
             });
         }
         chips
+    }
+
+    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+        gfx::views()
+    }
+
+    /// The 6845/Video ULA screen, the palette and the SAA5050's
+    /// characters ([`gfx`]).
+    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+        gfx::view(&self.board, id, opts)
     }
 
     fn devices(&self) -> Vec<DeviceId> {

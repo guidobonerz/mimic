@@ -48,7 +48,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Icon, Window, WindowId};
 
-use emu::{Shared, TapeKey};
+use emu::Shared;
 use render::{Renderer, Strip};
 
 /// The mimic logo (16×14 RGBA), shown as the window icon.
@@ -180,9 +180,13 @@ Atari 2600 console: F1 SELECT, F2 RESET, F3 colour/black-and-white,
 F4/F5 left/right difficulty A/B. Keypads (--option port1=keypad, port2):
 left 1 2 3 / Q W E / A S D / Z X C, right 8 9 0 / I O P / K L ; / , . /.
 
+BBC Micro: F1–F9 = f1–f9, F10 = f0, Pause = BREAK (Shift+Pause boots a
+disc), End = COPY, Backspace = DELETE, left Alt = SHIFT LOCK; the numeric
+keypad is the Master's keypad.
+
 F12 switches between a machine's screens (C128: 40-column VIC and
 80-column VDC; the window starts on the one the 40/80 key selects).
-Datasette: F9 PLAY, Shift+F9 RECORD, F10 STOP, F11 REWIND.
+Datasette: the Play, Rec, Stop and Rew buttons of its slot in the media panel.
 Ctrl+R (held) runs the machine backwards at twice real speed through the
 last frames kept in memory (--rewind-mb); on release it runs on from there.
 Disks: Ctrl+D puts the next disk of the --disk list into the first drive;
@@ -686,7 +690,7 @@ struct App {
     /// The render thread, once there is a window.
     render: Option<Renderer>,
     error: Option<String>,
-    /// A shift key is down (Shift+F9 = RECORD).
+    /// A shift key is down (Shift+Alt+arrows open the panels).
     shift: bool,
     /// A port device wants the host mouse.
     wants_mouse: bool,
@@ -1198,6 +1202,7 @@ impl App {
             Some(side::Action::Mount(slot, kind)) => return self.choose_image(slot, kind),
             Some(side::Action::Eject(slot)) => emu::MediaCommand::Eject { slot },
             Some(side::Action::Save(slot)) => emu::MediaCommand::Save { slot },
+            Some(side::Action::Tape(slot, key)) => emu::MediaCommand::Tape { slot, key },
             None => return,
         };
         if let Ok(mut c) = self.shared.media_commands.lock() {
@@ -1759,20 +1764,6 @@ impl ApplicationHandler for App {
                     _ => {}
                 }
                 self.ctrl = self.ctrl_left && !self.alt_gr;
-                // F9–F11 operate the datasette.
-                let tape_key = match event.physical_key {
-                    PhysicalKey::Code(KeyCode::F9) if self.shift => Some(TapeKey::Record),
-                    PhysicalKey::Code(KeyCode::F9) => Some(TapeKey::Play),
-                    PhysicalKey::Code(KeyCode::F10) => Some(TapeKey::Stop),
-                    PhysicalKey::Code(KeyCode::F11) => Some(TapeKey::Rewind),
-                    _ => None,
-                };
-                if let Some(key) = tape_key {
-                    if event.state == ElementState::Pressed && !event.repeat {
-                        self.shared.tape_key.store(key as u8, Ordering::Relaxed);
-                    }
-                    return;
-                }
                 if let PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) =
                     event.physical_key
                 {

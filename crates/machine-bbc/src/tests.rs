@@ -222,3 +222,62 @@ fn master_savestates_keep_the_cmos_ram_and_the_clock() {
     // A new Master comes configured: LANG 12, FILE 9.
     assert_eq!(stub_model("master").board.rtc.unwrap().regs[14 + 5], 0xc9);
 }
+
+#[test]
+fn keypad_keys_fall_back_to_the_main_keys_without_a_keypad() {
+    let mut b = keyboard::Keyboard::default();
+    b.key(0x6b, true); // keypad 1 → 1 (row 3, column 0)
+    assert_eq!(b.cols[0], 1 << 3);
+    b.key(0x6b, false);
+    b.key(0x5b, true); // keypad * needs SHIFT on the main keyboard: nothing
+    assert_eq!(b.cols, [0; 16]);
+    let mut m = keyboard::Keyboard {
+        keypad: true,
+        ..keyboard::Keyboard::default()
+    };
+    m.key(0x5b, true);
+    assert_eq!(m.cols[11], 1 << 5);
+}
+
+#[test]
+fn gfx_views_decode_the_screen_palette_and_charset() {
+    let mut m = stub_model("b");
+    frames(&mut m, 20);
+    let views = m.gfx_views();
+    assert_eq!(views.len(), 3);
+    let opts = emu_core::GfxOptions::new();
+    for v in &views {
+        let g = m.gfx_view(v.id, &opts).unwrap();
+        assert!(g.width > 0 && g.height > 0, "{}", v.id);
+    }
+    let charset = m.gfx_view("charset", &opts).unwrap();
+    assert_eq!((charset.width, charset.height), (16 * 13 - 1, 12 * 21 - 1));
+    let before = m.save_state();
+    let _ = m.gfx_view("screen", &opts);
+    assert_eq!(m.save_state(), before, "views do not change the machine");
+}
+
+#[test]
+fn the_break_key_resets_the_cpu_and_leaves_the_matrix_alone() {
+    let mut m = stub();
+    frames(&mut m, 3);
+    let reset = u16::from(m.board.peek(0xfffc)) | u16::from(m.board.peek(0xfffd)) << 8;
+    m.board.ram[0x1234] = 0x5a;
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Keyboard,
+        event: InputEvent::Key {
+            machine_key: emu_core::input::MachineKey(keyboard::keys::BREAK),
+            down: true,
+        },
+    });
+    let mut seen = false;
+    for _ in 0..20 {
+        m.step_cycle();
+        seen |= m.cpu.pc() == reset;
+    }
+    assert!(seen, "the CPU went through its reset vector");
+    assert_eq!(m.board.keyboard.cols, [0; 16], "BREAK is not SHIFT");
+    assert_eq!(m.board.ram[0x1234], 0x5a, "BREAK keeps the RAM");
+}

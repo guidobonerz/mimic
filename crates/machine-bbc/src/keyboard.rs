@@ -19,12 +19,29 @@
 //! | 6 | TAB | Z | SPACE | V | B | M | , | . | / | COPY |
 //! | 7 | ESCAPE | f1 | f2 | f3 | f5 | f6 | f8 | f9 | \ | → |
 //!
+//! The Master adds a keypad in columns 10–12 (`A`–`C`):
+//!
+//! | row | A | B | C |
+//! | --- | --- | --- | --- |
+//! | 1 | 6 | 7 | |
+//! | 2 | 8 | 9 | |
+//! | 3 | + | - | RETURN |
+//! | 4 | / | DELETE | . |
+//! | 5 | # | * | , |
+//! | 6 | 0 | 1 | 3 |
+//! | 7 | 4 | 5 | 2 |
+//!
+//! The Model B and B+ have no columns there: a keypad key types the
+//! main keyboard's key with the same character where one exists without
+//! SHIFT (digits, `-`, `/`, `.`, `,`, RETURN, DELETE), else nothing.
+//!
 //! BREAK is not in the matrix: it resets the CPU ([`BREAK`] as a panel
 //! control).
 //!
 //! Source: Acorn, *BBC Microcomputer Advanced User Guide* (1983), the
 //! keyboard (chapter 19, the system VIA's port A, the internal key
-//! numbers).
+//! numbers); the Master's keypad: Acorn, *Master Reference Manual* part 1
+//! (the INKEY numbers of the keypad keys).
 
 use emu_core::{StateError, StateReader, StateWriter};
 
@@ -36,16 +53,48 @@ pub mod keys {
     pub const CTRL: u16 = 0x01;
     pub const RETURN: u16 = 0x49;
     pub const SPACE: u16 = 0x62;
+    /// BREAK as a key (outside the matrix): pressing it resets the CPU
+    /// like the panel control [`super::BREAK`].
+    pub const BREAK: u16 = 0x100;
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Keyboard {
     /// Keys down per column (bit = row).
     pub cols: [u8; 16],
+    /// The keyboard has the Master's keypad (columns 10–12).
+    pub keypad: bool,
 }
 
+/// Keypad key → the main keyboard's key with that character (Model B,
+/// B+).
+const KEYPAD_FALLBACK: [(u16, u16); 15] = [
+    (0x6a, 0x27), // 0
+    (0x6b, 0x30), // 1
+    (0x7c, 0x31), // 2
+    (0x6c, 0x11), // 3
+    (0x7a, 0x12), // 4
+    (0x7b, 0x13), // 5
+    (0x1a, 0x34), // 6
+    (0x1b, 0x24), // 7
+    (0x2a, 0x15), // 8
+    (0x2b, 0x26), // 9
+    (0x3b, 0x17), // -
+    (0x4a, 0x68), // /
+    (0x4c, 0x67), // .
+    (0x5c, 0x66), // ,
+    (0x3c, 0x49), // RETURN
+];
+
 impl Keyboard {
-    pub fn key(&mut self, key: u16, down: bool) {
+    pub fn key(&mut self, mut key: u16, down: bool) {
+        if !self.keypad && (10..13).contains(&(key & 15)) {
+            key = match KEYPAD_FALLBACK.iter().find(|&&(k, _)| k == key) {
+                Some(&(_, main)) => main,
+                None if key == 0x4b => 0x59,
+                None => return,
+            };
+        }
         let (row, col) = (usize::from(key >> 4 & 7), usize::from(key & 15));
         // Columns 10–12: the Master's keypad.
         if col >= 13 {

@@ -102,6 +102,7 @@ Größe** erkannt.
 | `snes/` (`sfc/`) | SNES | optional die 64 Byte IPL-ROM des Sound-Prozessors, `spc700.rom`; ohne sie lädt ein eigener Bootlader mit demselben Protokoll |
 | `coleco/` (`colecovision/`) | ColecoVision | das BIOS, `coleco.rom` (8 KB); ohne BIOS läuft mit `--option roms=stub` ein eigenes Mini-BIOS, das Module mit dem Header $55AA/$AA55 direkt startet (Spiele, die BIOS-Routinen aufrufen, brauchen das echte BIOS) |
 | `ti99/` | TI-99/4A | Konsolen-ROM `994AROM.BIN` (8 KB) und GROM 0–2 `994AGROM.BIN` (24 KB), optional das DSR-ROM des Diskettencontrollers `DISK.BIN` (8 KB) und das Sprach-ROM `SPCHROM.BIN` (32 KB); ohne sie läuft mit `--option roms=stub` ein eigenes Mini-ROM (nur ein Testbild, kein BASIC) |
+| `bbc/` | BBC Micro | Model B: MOS 1.20 `os12.rom` und BASIC II `basic2.rom` (je 16 KB), optional Acorn DFS 1.20 `dfs-1.20.rom` (mit ihm der Diskettencontroller 8271); B+: `bplus-mos.rom` (MOS 2.00) und `dfs-2.26.rom` (1770-DFS); Master 128: die MOS 3.20 in 16-KB-Stücken im Unterordner `bbc/master320` (`mos.rom`, `dfs.rom`, `viewsht.rom`, `edit.rom`, `basic4.rom`, `adfs.rom`, `view.rom`, `terminal.rom`); ohne ROMs läuft mit `--option roms=stub` ein eigenes Test-ROM (nur ein Bild) |
 | `drives/` | Laufwerke | `dos1541`, `dos1571`, `dos1581` |
 
 Der Atari 2600 hat kein System-ROM: das Programm kommt vom Modul (`--cart`).
@@ -132,6 +133,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `spectrum` | Sinclair ZX Spectrum | `48k` (Standard), `128k`, `plus2` (der Amstrad-+2: 128K-Hardware mit eigenen ROMs) |
 | `coleco` | ColecoVision | – (`--videoformat`: `ntsc` Standard, TMS9918A; `pal` TMS9929A) |
 | `ti99` | TI-99/4A | – (`--videoformat`: `ntsc` Standard, TMS9918A; `pal` TMS9929A) |
+| `bbc` | Acorn BBC Micro | `b` (Standard: Model B, 32 KB, 8271), `bplus` (B+: 64 KB mit Shadow- und Private-RAM, 1770), `bplus128` (B+ 128: dazu Sideways-RAM in den Bänken 0, 1, 12, 13), `master` (Master 128: 65SC12, MOS 3.20, ADFS, CMOS-RAM und Uhr) |
 | `nes` | Nintendo Entertainment System / Famicom | – (`--videoformat`: `ntsc` Standard, 2C02; `pal` 2C07) |
 | `snes` | Super Nintendo / Super Famicom | – (`--videoformat`: `ntsc` Standard, `pal`) |
 | `sim6502` | 6502-Referenzmaschine (Tests) | `default` |
@@ -150,6 +152,7 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | NES | `port1`/`port2=controller\|zapper\|arkanoid\|none` (Standard `controller`; `zapper` = Lichtpistole, zielt mit der Maus, linke Taste = Abzug; `arkanoid` = Arkanoid-Controller, die Maus dreht den Knopf), `fourscore=on` (Four Score: Ports 3 und 4 mit Controllern, Ports 1 und 2 müssen Controller sein) |
 | ColecoVision | `port1`/`port2=controller\|superaction\|driving\|roller\|none` (Standard `controller`: Joystick, zwei Feuerknöpfe, Keypad; `superaction` = Super Action Controller mit vier Knöpfen und Speed Roller; `driving` = Expansion Module #2 mit Lenkrad und Gaspedal; `roller` = Roller Controller (Trackball, belegt mit seinem zweiten Kabel auch Port 2)), `roms=stub` |
 | TI-99/4A | `ram=32k\|none` (Standard `32k`: die 32-KB-Speichererweiterung der Peripherie-Box), `port1`/`port2=joystick\|none` (die zwei Joysticks am Joystick-Anschluss), `roms=stub`. Module: `--cart SPIELC.BIN` – liegen `SPIELG.BIN` (GROM) und `SPIELD.BIN` (zweite Bank) daneben, werden sie zusammen geladen. Tasten: Alt = FCTN, Feststelltaste = ALPHA LOCK (beim Start an), Pfeiltasten = FCTN+E/S/D/X, Rücktaste = FCTN+S, Entf = FCTN+1, Esc = FCTN+9 (BACK), F4 = FCTN+4 (CLEAR). Kassette CS1: `--tape band.wav` (WAV; das ROM schaltet den Motor, `SAVE CS1`/`OLD CS1` fragen nach den Rekordertasten PLAY/RECORD/STOP/REWIND). Disketten: `--disk spiel.dsk` legt eine TI-Diskette (Sektorabbild, 90 oder 180 KB) in DSK1; der Diskettencontroller ist dabei, sobald sein DSR-ROM `DISK.BIN` im ROM-Ordner liegt (`--option disk=on\|off`), Laufwerke DSK1–DSK3. Sprachausgabe: der Speech Synthesizer (TMS5220) ist dabei, sobald das Sprach-ROM `SPCHROM.BIN` (32 KB) im ROM-Ordner liegt (`--option speech=on\|off`); Spiele wie Parsec sprechen damit |
+| BBC Micro | `roms=stub`; Master: `rtc=JJJJ-MM-TT[THH:MM[:SS]]` (Startzeit der Uhr, Standard 2000-01-01; die MOS 3.20 zeigt das Jahr ohne Jahrhundert), `cmos=configured\|blank` (Standard `configured`: BASIC, DFS, MODE 7 wie ein neuer Master; `blank` leeres CMOS-RAM). Disketten: `--disk` nimmt SSD/DSD (DFS), beim Master auch ADFS-Abbilder `.adf`/`.adl`; Shift+BREAK bootet. Bänder: `--tape` UEF (auch gzip) oder WAV; mit einem Disketten-Dateisystem zuerst `*TAPE`. Tasten: F1–F9 = f1–f9, F10 = f0, Pause = BREAK, Ende = COPY, Rücktaste = DELETE, linke Alt = SHIFT LOCK; der Ziffernblock ist der des Master (beim B/B+ tippen Ziffern, `-`, `/`, `.` und Enter die Haupttasten). Das CMOS-RAM bleibt nur im Savestate erhalten |
 | Atari 2600 | `port1`/`port2=joystick\|paddles\|keypad\|driving\|none`, `tv=color\|bw`, `left`/`right=b\|a` (Difficulty), `bank=…` (Bankswitching erzwingen: `2k`, `4k`, `f8`, `f6`, `f4`, `f8sc`, `f6sc`, `f4sc`, `fa`, `fe`, `e0`, `e7`, `3f`, `dpc`) |
 | ZX81 | `ram=16k\|1k\|2k` (Standard 16k), `traps=on\|off` (LOAD/SAVE der .P-Datei im Bandschacht über ROM-Traps) |
 | ZX Spectrum | `traps=on\|off` (Standard on: `LOAD ""` kopiert Standardblöcke direkt aus TAP/TZX; off spielt das Band in Echtzeit), `autostart=on` (mit Band: tippt `LOAD ""` bzw. wählt im 128K-Menü den Tape Loader), `joystick=kempston\|sinclair1\|sinclair2\|cursor\|none` (Standard kempston), `mouse=kempston\|none`, `issue=3\|2` (Platinen-Ausgabe: EAR-Rückkopplung in Port $FE Bit 6), `multiface=on` (Multiface 128; roter Knopf = Bedienfeld-Taste MULTIFACE), `if1=on` (Interface 1 mit `microdrives=1..8`, Standard 2; Cartridges als MDR), `roms=stub` |
@@ -283,8 +286,10 @@ normal weiter); die Statuszeile zeigt dann
 die Mausposition, die Joystick-Richtungen und der Zustand der Laufwerke.
 
 **Weitere Tasten:** F12 wechselt zwischen den Bildschirmen einer Maschine
-(C128: VIC und VDC). Datasette/Kassette: F9 PLAY, Shift+F9 RECORD, F10 STOP,
-F11 REWIND. **Ctrl+R** (gedrückt halten) spult zurück: die Maschine läuft
+(C128: VIC und VDC). Datasette/Kassette: die Knöpfe **Play**, **Rec**,
+**Stop** und **Rew** in der Zeile des Bandschachts im Medien-Panel
+(Shift+Alt+→); F9–F11 sind keine Hotkeys, sie gehen an die Maschine.
+**Ctrl+R** (gedrückt halten) spult zurück: die Maschine läuft
 mit doppelter Geschwindigkeit rückwärts durch die letzten Bilder im
 Speicher (`--rewind-mb N`, Standard 128 MB, 0 = aus) und läuft beim
 Loslassen von dort weiter.
@@ -386,8 +391,8 @@ cargo run --release -p emu-headless -- --machine cpc \
 
 | Art | Formate | Frontend-Option |
 | --- | --- | --- |
-| Diskette (mehrfach: weitere Laufwerke, Rest per Strg+D) | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga: DD 880 KB, HD 1,76 MB mit `--option drivetype=hd`; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF), extended ADF (`UAE-1ADF`/`UAE--ADF` mit Rohspuren, die bitgenau erhalten und zurückgeschrieben werden), DMS (DISK-Masher-Archiv, wird beim Einlegen entpackt, nur lesen); ein **Ordner** als virtuelle Diskette | `--disk` |
-| Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81: der Programmspeicher ab $4009, geladen und gesichert über ROM-Traps mit `LOAD ""`/`SAVE "NAME"`), TAP/TZX (ZX Spectrum: `LOAD ""` drückt PLAY; mit `traps=on` werden Standardblöcke direkt kopiert, Turbo- und Sonderblöcke laufen in Echtzeit; TZX-Stoppblöcke halten das Band an); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
+| Diskette (mehrfach: weitere Laufwerke, Rest per Strg+D) | D64, D71, D81, G64, D80/D82 (PET), ATR (Atari), DSK/EDSK (CPC), ADF (Amiga: DD 880 KB, HD 1,76 MB mit `--option drivetype=hd`; wird beim Einlegen in MFM-Spuren gewandelt und beim Zurückschreiben wieder zur ADF), extended ADF (`UAE-1ADF`/`UAE--ADF` mit Rohspuren, die bitgenau erhalten und zurückgeschrieben werden), DMS (DISK-Masher-Archiv, wird beim Einlegen entpackt, nur lesen), SSD/DSD (BBC-DFS), ADF/ADL (BBC-Master-ADFS); ein **Ordner** als virtuelle Diskette | `--disk` |
+| Band | TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81: der Programmspeicher ab $4009, geladen und gesichert über ROM-Traps mit `LOAD ""`/`SAVE "NAME"`), TAP/TZX (ZX Spectrum: `LOAD ""` drückt PLAY; mit `traps=on` werden Standardblöcke direkt kopiert, Turbo- und Sonderblöcke laufen in Echtzeit; TZX-Stoppblöcke halten das Band an), UEF/WAV (BBC Micro: der Motor schaltet über die MOS, Einlegen drückt PLAY); eine PRG wird beim Einlegen in das Bandformat der Maschine aufgenommen | `--tape` |
 | Snapshot | ZX Spectrum: SNA (48K, 128K) und Z80 (Version 1–3; 48K/128K/+2) — wird beim nächsten Befehl geladen | `--prg` |
 | Microdrive | ZX Spectrum mit Interface 1: MDR-Cartridges (254 Sektoren, Schreibschutzbyte), Schacht „microdrive 1“ … | `--disk` |
 | Modul | CRT (C64/C128), Roh-Dumps VIC-20 und C16/Plus/4, CAR bzw. 8/16-KB-ROM (Atari), Roh-Dumps `.a26`/`.bin` 2 KB–512 KB (Atari 2600; Bankswitching wird erkannt, auch DPC von Pitfall II mit 10 240 oder 10 495 Bytes), `.col`/`.rom`/`.bin` bis 32 KB oder MegaCart 64 KB–1 MB (ColecoVision), iNES/NES 2.0 `.nes` mit Mapper 0–4 (NROM, MMC1, UxROM, CNROM, MMC3), SNES `.sfc`/`.smc` (LoROM, HiROM, ExHiROM, mit oder ohne Kopierer-Header; noch ohne Koprozessoren) | `--cart` |

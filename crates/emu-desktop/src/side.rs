@@ -1,7 +1,8 @@
 //! Media side panel (Shift+Alt+→ or a click on its handle): the machine's disk
 //! drives, datasette and cartridge slot at the window's right edge, each
 //! with its state, its image, one button that mounts an empty slot (green)
-//! or ejects a full one (red), and one to save.
+//! or ejects a full one (red), and one to save; a tape slot has a second
+//! line with its keys (Play, Rec, Stop, Rew).
 //!
 //! The list comes from the core traits only (`media_slots`, through
 //! [`crate::footer::Slot`]), so every machine gets the panel without a line
@@ -12,6 +13,7 @@
 use emu_core::media::MediaKind;
 use noto_sans_mono_bitmap::{get_raster_width, FontWeight, RasterHeight};
 
+use crate::emu::TapeKey;
 use crate::footer::{self, Rgb, Slot, Strip, BACKGROUND, BUSY, BUTTON, DIM, ERROR, TEXT};
 
 /// Characters a line of the open panel holds.
@@ -33,6 +35,7 @@ pub enum Action {
     Mount(u8, MediaKind),
     Eject(u8),
     Save(u8),
+    Tape(u8, TapeKey),
 }
 
 /// A clickable area in panel pixels.
@@ -150,6 +153,31 @@ fn buttons(strip: &mut Strip, x: usize, line: usize, s: &Slot, hits: &mut Vec<(u
     }
 }
 
+/// A tape slot's keys, grey and without hit areas while it is empty.
+fn tape_buttons(strip: &mut Strip, x: usize, line: usize, s: &Slot, hits: &mut Vec<(usize, Hit)>) {
+    let mut x = x;
+    for key in TapeKey::ALL {
+        let text = format!(" {} ", key.label());
+        let w = strip.text_width(&text);
+        strip.fill(x, x + w, 2, BUTTON);
+        strip.text(x, &text, if s.inserted { TEXT } else { DIM });
+        if s.inserted {
+            let action = Action::Tape(s.id, key);
+            hits.push((
+                line,
+                Hit {
+                    x0: x,
+                    x1: x + w,
+                    y0: 0,
+                    y1: 0,
+                    action,
+                },
+            ));
+        }
+        x += w + char_width(strip.size);
+    }
+}
+
 /// Draw the panel, `height` window pixels high, from line `scroll` on.
 pub fn render(
     slots: &[Slot],
@@ -190,6 +218,11 @@ pub fn render(
             let mut row = Strip::new(width, size);
             buttons(&mut row, x, lines.len(), s, &mut areas);
             lines.push(row);
+            if s.kind == MediaKind::Tape {
+                let mut keys = Strip::new(width, size);
+                tape_buttons(&mut keys, x, lines.len(), s, &mut areas);
+                lines.push(keys);
+            }
         }
     }
     let max_scroll = lines.len().saturating_sub(visible);
@@ -358,6 +391,32 @@ mod tests {
             .hits
             .iter()
             .any(|h| matches!(h.action, Action::Eject(10) | Action::Save(10))));
+    }
+
+    #[test]
+    fn a_tape_slot_has_its_keys_on_a_line_of_their_own() {
+        let tape = Slot {
+            kind: MediaKind::Tape,
+            ..slot(0, "cassette", Some("game.uef"))
+        };
+        let p = render(std::slice::from_ref(&tape), true, 0, 400, SIZE);
+        let x = handle_width(SIZE) as usize + char_width(SIZE) + 2;
+        // Title, state, image, Eject/Save, then the keys.
+        assert_eq!(
+            hit(&p.hits, x, line_y(4)),
+            Some(Action::Tape(0, TapeKey::Play))
+        );
+        assert!(p
+            .hits
+            .iter()
+            .any(|h| h.action == Action::Tape(0, TapeKey::Rewind)));
+        let empty = Slot {
+            inserted: false,
+            file: None,
+            ..tape
+        };
+        let p = render(&[empty], true, 0, 400, SIZE);
+        assert!(!p.hits.iter().any(|h| matches!(h.action, Action::Tape(..))));
     }
 
     #[test]

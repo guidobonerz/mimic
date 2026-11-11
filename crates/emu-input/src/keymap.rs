@@ -726,7 +726,9 @@ pub static TI99: Keymap = Keymap {
 /// BBC Micro: the internal key number, row × 16 + column (see
 /// `machine-bbc::keyboard`). F10 is f0, Backspace DELETE, End COPY, the
 /// grave accent key `_`/£, `[` `@`, `]` `[`, `'` `:`, `#` `]`, `=` `^`,
-/// left Alt SHIFT LOCK.
+/// left Alt SHIFT LOCK, Pause BREAK (machine key 0x100). The numeric keypad is the Master's keypad (on
+/// the Model B and B+ its digits, `-`, `/`, `.` and Enter type the main
+/// keys).
 const BBC_POSITIONAL: &[(&str, &[u16])] = &[
     ("ShiftLeft", &[0x00]),
     ("ShiftRight", &[0x00]),
@@ -743,6 +745,7 @@ const BBC_POSITIONAL: &[(&str, &[u16])] = &[
     ("F7", &[0x16]),
     ("F8", &[0x76]),
     ("F9", &[0x77]),
+    ("Pause", &[0x100]),
     ("Digit1", &[0x30]),
     ("Digit2", &[0x31]),
     ("Digit3", &[0x11]),
@@ -785,7 +788,6 @@ const BBC_POSITIONAL: &[(&str, &[u16])] = &[
     ("Quote", &[0x48]),
     ("Backslash", &[0x58]),
     ("Enter", &[0x49]),
-    ("NumpadEnter", &[0x49]),
     ("KeyZ", &[0x61]),
     ("KeyX", &[0x42]),
     ("KeyC", &[0x52]),
@@ -803,6 +805,23 @@ const BBC_POSITIONAL: &[(&str, &[u16])] = &[
     ("ArrowRight", &[0x79]),
     ("ArrowUp", &[0x39]),
     ("ArrowDown", &[0x29]),
+    ("Numpad0", &[0x6a]),
+    ("Numpad1", &[0x6b]),
+    ("Numpad2", &[0x7c]),
+    ("Numpad3", &[0x6c]),
+    ("Numpad4", &[0x7a]),
+    ("Numpad5", &[0x7b]),
+    ("Numpad6", &[0x1a]),
+    ("Numpad7", &[0x1b]),
+    ("Numpad8", &[0x2a]),
+    ("Numpad9", &[0x2b]),
+    ("NumpadAdd", &[0x3a]),
+    ("NumpadSubtract", &[0x3b]),
+    ("NumpadDivide", &[0x4a]),
+    ("NumpadMultiply", &[0x5b]),
+    ("NumpadDecimal", &[0x4c]),
+    ("NumpadComma", &[0x5c]),
+    ("NumpadEnter", &[0x3c]),
 ];
 
 pub static BBC: Keymap = Keymap {
