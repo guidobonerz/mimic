@@ -2,7 +2,8 @@
 //! drives, datasette and cartridge slot at the window's right edge, each
 //! with its state, its image, one button that mounts an empty slot (green)
 //! or ejects a full one (red), and one to save; a tape slot has a second
-//! line with its keys (Play, Rec, Stop, Rew).
+//! line with its keys (Play, Rec, Stop, Rew). A thin rule on a line of its
+//! own separates one slot from the next.
 //!
 //! The list comes from the core traits only (`media_slots`, through
 //! [`crate::footer::Slot`]), so every machine gets the panel without a line
@@ -26,6 +27,8 @@ const EJECT: Rgb = [0xa8, 0x2c, 0x2c];
 const DIRTY: Rgb = [0xff, 0x30, 0x30];
 const PILL_WIDTH: usize = 8;
 const PILL_HEIGHT: usize = 5;
+/// The rule between two slots.
+const SEPARATOR: Rgb = [0x50, 0x50, 0x50];
 const TITLE: &str = "MEDIA";
 
 /// What a click on the panel does.
@@ -178,6 +181,19 @@ fn tape_buttons(strip: &mut Strip, x: usize, line: usize, s: &Slot, hits: &mut V
     }
 }
 
+/// A line with a thin rule across the panel's text columns, between two
+/// slots.
+fn separator(width: u32, x: usize, size: RasterHeight) -> Strip {
+    let mut strip = Strip::new(width, size);
+    let y = footer::height(size) as usize / 2;
+    let end = strip.width.saturating_sub(char_width(size));
+    for px in x..end {
+        let i = (y * strip.width + px) * 4;
+        strip.px[i..i + 3].copy_from_slice(&SEPARATOR);
+    }
+    strip
+}
+
 /// Draw the panel, `height` window pixels high, from line `scroll` on.
 pub fn render(
     slots: &[Slot],
@@ -202,7 +218,10 @@ pub fn render(
         let mut title = Strip::new(width, size);
         title.text(x, TITLE, DIM);
         lines.push(title);
-        for s in slots {
+        for (n, s) in slots.iter().enumerate() {
+            if n > 0 {
+                lines.push(separator(width, x, size));
+            }
             let mut head = Strip::new(width, size);
             let after = head.text(x, s.name, TEXT);
             let (text, colour) = state(s);
@@ -369,7 +388,7 @@ mod tests {
         let p = render(&slots, true, 0, 400, SIZE);
         assert_eq!(p.rgba.len(), (p.width * 400 * 4) as usize);
         let x = handle_width(SIZE) as usize + char_width(SIZE) + 2;
-        // Title, then three lines a slot.
+        // Title, then three lines a slot and a rule between two slots.
         // A full slot's one button ejects, in red.
         assert_eq!(hit(&p.hits, x, line_y(3)), Some(Action::Eject(3)));
         assert_eq!(pixel(&p, x, line_y(3) + 3), EJECT);
@@ -383,10 +402,20 @@ mod tests {
         );
         // An empty slot's mounts, in green; there is nothing to save.
         assert_eq!(
-            hit(&p.hits, x, line_y(6)),
+            hit(&p.hits, x, line_y(7)),
             Some(Action::Mount(10, MediaKind::Disk))
         );
-        assert_eq!(pixel(&p, x, line_y(6) + 3), MOUNT);
+        assert_eq!(pixel(&p, x, line_y(7) + 3), MOUNT);
+        // The rule between the two: one pixel row in the middle of line 4,
+        // nothing to click.
+        let rule = 4 * footer::height(SIZE) as usize + footer::height(SIZE) as usize / 2;
+        assert_eq!(pixel(&p, x, rule), SEPARATOR);
+        assert_eq!(pixel(&p, x, rule - 1), BACKGROUND);
+        assert_eq!(pixel(&p, x, rule + 1), BACKGROUND);
+        assert_eq!(hit(&p.hits, x, rule), None);
+        // A single slot has none.
+        let one = render(&slots[..1], true, 0, 400, SIZE);
+        assert_eq!(pixel(&one, x, rule), BACKGROUND);
         assert!(!p
             .hits
             .iter()
@@ -437,13 +466,14 @@ mod tests {
         let slots: Vec<Slot> = (0..9).map(|i| slot(i, "SCSI", None)).collect();
         let height = 10 * footer::height(SIZE);
         let p = render(&slots, true, 0, height, SIZE);
-        assert_eq!(p.max_scroll, 1 + 9 * SLOT_LINES - 10);
+        // The title, nine slots and the eight rules between them.
+        assert_eq!(p.max_scroll, 1 + 9 * SLOT_LINES + 8 - 10);
         let x = handle_width(SIZE) as usize + char_width(SIZE) + 2;
         assert_eq!(
             hit(&render(&slots, true, 0, height, SIZE).hits, x, line_y(3)),
             Some(Action::Mount(0, MediaKind::Disk))
         );
-        let down = render(&slots, true, 3, height, SIZE);
+        let down = render(&slots, true, 4, height, SIZE);
         assert_eq!(
             hit(&down.hits, x, line_y(3)),
             Some(Action::Mount(1, MediaKind::Disk))

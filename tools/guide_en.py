@@ -921,7 +921,7 @@ table(["Profile", "Use"], [
     ["`raw`", "sharp pixels, no effects (default for the NES, ColecoVision and Vectrex)"],
     ["`1702`, `1084s`", "Commodore monitors over S-Video (C64, VIC-20, C16/Plus/4, C128)"],
     ["`1084s-rgb`", "the 1084S on its RGB input (Amiga, SNES, C128 VDC)"],
-    ["`tv`, `pal-tv`, `ntsc-tv`", "a television over composite (Atari, ZX81, ZX Spectrum, Apple II)"],
+    ["`tv`, `pal-tv`, `ntsc-tv`", "a television over composite (Atari, ZX81, ZX Spectrum, Apple II, MSX)"],
     ["`pet-white`, `pet-green`", "the PET's built-in monitors"],
     ["`ctm644`", "Amstrad colour monitor (CPC)"],
     ["`gt65`", "Amstrad green monitor"],

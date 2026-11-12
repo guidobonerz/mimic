@@ -588,7 +588,7 @@ nachgelagert.
 | `raw` | scharfe Pixel, keine Effekte (Regressionstests) |
 | `1702`, `1084s` | Commodore-Monitore (S-Video) |
 | `1084s-rgb` | RGB-Eingang des 1084S (C128-VDC) |
-| `tv`, `pal-tv`, `ntsc-tv` | Fernseher über Composite (Atari-Standard) |
+| `tv`, `pal-tv`, `ntsc-tv` | Fernseher über Composite (Standard bei Atari, ZX81, Spectrum, Apple II und MSX) |
 | `pet-white`, `pet-green` | PET-Monitore |
 | `ctm644` | Amstrad-Farbmonitor (CPC-Standard) |
 | `gt65` | Amstrad-Grünmonitor |
