@@ -61,6 +61,7 @@ machine-zx81 = { path = "crates/machine-zx81" }
 machine-trs80 = { path = "crates/machine-trs80" }
 machine-spectrum = { path = "crates/machine-spectrum" }
 machine-coleco = { path = "crates/machine-coleco" }
+machine-msx = { path = "crates/machine-msx" }
 machine-ti99 = { path = "crates/machine-ti99" }
 machine-bbc = { path = "crates/machine-bbc" }
 machine-mega65 = { path = "crates/machine-mega65" }

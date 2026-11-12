@@ -2,7 +2,7 @@
 
 Part of the project's instructions for Claude Code; the core is `CLAUDE.md` at the repository root, the index of these files is its section "Further documentation".
 
-Work in phase order; each phase ends at a verifiable gate. **Current phase: 8** (open, see `phases/phase-08-expansion.md`). Also in progress, each begun on the user's request: Phase 10 (ZX81 done, TRS-80 open), 14 (Vectrex; gate met, last open items done 2026-11-11), 15 (ZX Spectrum), 16 (Apple II), 17 (Macintosh), 20 (TI-99/4A, begun 2026-11-10, gate met the same day), 22 (BBC Micro, begun 2026-11-10, gate met 2026-11-11), 24 (Archimedes), 26 (IMSAI 8080), 31 (Logophor 16; steps 1–11 accepted, the gate met 2026-11-06) and 32 (IBM 029 card punch, gate met 2026-11-08) and 33 (MEGA65, begun 2026-11-11). Done: Phases 1–7, 6b and 9 (Phase 9 before Phase 8's blocks). Phase 13 dropped; Phases 28–30 (HP calculators) dropped 2026-11-11. Every phase has its own file under `phases/` with its gate, decisions, results and open items; **update that file, not this one, when a phase moves.**
+Work in phase order; each phase ends at a verifiable gate. **Current phase: 8** (open, see `phases/phase-08-expansion.md`). Also in progress, each begun on the user's request: Phase 10 (ZX81 done, TRS-80 open), 14 (Vectrex; gate met, last open items done 2026-11-11), 15 (ZX Spectrum), 16 (Apple II), 17 (Macintosh), 20 (TI-99/4A, begun 2026-11-10, gate met the same day), 22 (BBC Micro, begun 2026-11-10, gate met 2026-11-11), 24 (Archimedes), 26 (IMSAI 8080), 31 (Logophor 16; steps 1–11 accepted, the gate met 2026-11-06) and 32 (IBM 029 card punch, gate met 2026-11-08) and 33 (MEGA65, begun 2026-11-11) and 34 (MSX, begun 2026-11-12, gate met the same day: BASIC, a cartridge, cassette, MSX-DOS from disk; MSX2 and more cartridge checks open). Done: Phases 1–7, 6b and 9 (Phase 9 before Phase 8's blocks). Phase 13 dropped; Phases 28–30 (HP calculators) dropped 2026-11-11. Every phase has its own file under `phases/` with its gate, decisions, results and open items; **update that file, not this one, when a phase moves.**
 
 ## Phase table
 
@@ -43,6 +43,7 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 8** 
 | 31 | Logophor 16 (`machine-logophor16`, added and begun 2026-11-05 on the user's request): the user's own fictional steampunk computer — CPU Ada (16-bit RISC, segments), Babbage (Jacquard, Lithograph, 3D unit Stereoscope), Lumière (chunky modes, 256 sprites), Calliope (8 DMA sample channels), Telegraph (network over a UDP tunnel, timers, input, SD card), ROM Foundry, OS Boiler with the desktop Panorama; spec `docs/logophor16/SPEC.md` is the single source of truth; the user's brief has its own steps 1–12 (spec; CPU + assembler; framebuffer + text; Copper; Blitter; sprites; 3D; sound; I/O + ROM; network; Boiler + Panorama + compiler; FPGA optional), each accepted by the user before the next | 40 wk | boots from its built-in ROM into Panorama; a small game in a high-level language runs; shipped as a built-in profile |
 | 32 | IBM 029 card punch (`machine-keypunch`, begun 2026-11-08 on the user's request, from the backlog item "card punch for the user"): a machine of its own the user types on; the card drawn as the picture; decks as files in three formats; a card reader on the IMSAI reads them | 2 wk | a deck typed on the punch is read by CP/M on the IMSAI (`PIP FILE=RDR:`) |
 | 33 | MEGA65 (`machine-mega65`, added and begun 2026-11-11 on the user's request) with the Commodore 65 as a model: new `cpu-45gs02`, 28-bit memory map with MAP, VIC-IV (with its VIC-II/VIC-III modes), four SIDs, CIAs, DMAgic, math unit, F011 with D81, SD card, C64 mode; Open ROMs first, then the official ROM; ROMs user-supplied | 14 wk | the Open ROMs and the official ROM boot to BASIC; a D81 loads and runs a program; C64 mode runs a C64 program; measurements on the user's MEGA65 agree |
+| 34 | MSX (`machine-msx`, added and begun 2026-11-12 on the user's request): MSX1 first — Z80 (reuse `cpu-z80`), TMS9918A/TMS9929A (reuse `chips-ti`), AY-3-8910 and 8255 PPI (reuse `chips-amstrad`), four primary slots, keyboard matrix, joystick ports, cartridges with the MegaROM schemes (Konami, Konami SCC, ASCII 8/16), cassette (CAS), disk interface (WD2793, DSK); C-BIOS as a free optional download, real BIOS ROMs user-supplied; MSX2 later as a model | 6 wk | C-BIOS and a real MSX1 BIOS boot (the real one to BASIC); user-supplied cartridges run, MegaROMs among them; a CAS program loads; a DSK boots with a real disk ROM |
 
 ## Phase files
 
@@ -81,6 +82,7 @@ Work in phase order; each phase ends at a verifiable gate. **Current phase: 8** 
 - [Phase 31: Logophor 16](phases/phase-31-logophor16.md)
 - [Phase 32: IBM 029 card punch](phases/phase-32-keypunch.md)
 - [Phase 33: MEGA65](phases/phase-33-mega65.md)
+- [Phase 34: MSX](phases/phase-34-msx.md)
 
 Device work by phase (part of each gate):
 

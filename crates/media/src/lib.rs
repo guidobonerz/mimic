@@ -24,6 +24,7 @@ pub mod gcr;
 pub mod macdisk;
 pub mod mdr;
 pub mod mfm;
+pub mod msx_cas;
 pub mod prg;
 pub mod t64;
 pub mod tap;

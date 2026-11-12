@@ -1804,6 +1804,93 @@ pub static MAC: Keymap = Keymap {
     entries: MAC_POSITIONAL,
 };
 
+/// MSX (international layout): `row * 8 + bit` of the 11 × 8 matrix (see
+/// `machine-msx`). GRAPH is the left Alt key, CODE the right one, STOP is
+/// End, SELECT Page Up and the dead key Page Down. The numeric keypad stays
+/// the joystick; the MSX's keypad (rows 9 and 10) is not mapped.
+const MSX_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Digit0", &[k(0, 0)]),
+    ("Digit1", &[k(0, 1)]),
+    ("Digit2", &[k(0, 2)]),
+    ("Digit3", &[k(0, 3)]),
+    ("Digit4", &[k(0, 4)]),
+    ("Digit5", &[k(0, 5)]),
+    ("Digit6", &[k(0, 6)]),
+    ("Digit7", &[k(0, 7)]),
+    ("Digit8", &[k(1, 0)]),
+    ("Digit9", &[k(1, 1)]),
+    ("Minus", &[k(1, 2)]),
+    ("Equal", &[k(1, 3)]),
+    ("Backslash", &[k(1, 4)]),
+    ("BracketLeft", &[k(1, 5)]),
+    ("BracketRight", &[k(1, 6)]),
+    ("Semicolon", &[k(1, 7)]),
+    ("Quote", &[k(2, 0)]),
+    ("Backquote", &[k(2, 1)]),
+    ("Comma", &[k(2, 2)]),
+    ("Period", &[k(2, 3)]),
+    ("Slash", &[k(2, 4)]),
+    ("PageDown", &[k(2, 5)]), // dead key
+    ("KeyA", &[k(2, 6)]),
+    ("KeyB", &[k(2, 7)]),
+    ("KeyC", &[k(3, 0)]),
+    ("KeyD", &[k(3, 1)]),
+    ("KeyE", &[k(3, 2)]),
+    ("KeyF", &[k(3, 3)]),
+    ("KeyG", &[k(3, 4)]),
+    ("KeyH", &[k(3, 5)]),
+    ("KeyI", &[k(3, 6)]),
+    ("KeyJ", &[k(3, 7)]),
+    ("KeyK", &[k(4, 0)]),
+    ("KeyL", &[k(4, 1)]),
+    ("KeyM", &[k(4, 2)]),
+    ("KeyN", &[k(4, 3)]),
+    ("KeyO", &[k(4, 4)]),
+    ("KeyP", &[k(4, 5)]),
+    ("KeyQ", &[k(4, 6)]),
+    ("KeyR", &[k(4, 7)]),
+    ("KeyS", &[k(5, 0)]),
+    ("KeyT", &[k(5, 1)]),
+    ("KeyU", &[k(5, 2)]),
+    ("KeyV", &[k(5, 3)]),
+    ("KeyW", &[k(5, 4)]),
+    ("KeyX", &[k(5, 5)]),
+    ("KeyY", &[k(5, 6)]),
+    ("KeyZ", &[k(5, 7)]),
+    ("ShiftLeft", &[k(6, 0)]),
+    ("ShiftRight", &[k(6, 0)]),
+    ("ControlLeft", &[k(6, 1)]),
+    ("ControlRight", &[k(6, 1)]),
+    ("AltLeft", &[k(6, 2)]),  // GRAPH
+    ("CapsLock", &[k(6, 3)]), // CAPS
+    ("AltRight", &[k(6, 4)]), // CODE
+    ("F1", &[k(6, 5)]),
+    ("F2", &[k(6, 6)]),
+    ("F3", &[k(6, 7)]),
+    ("F4", &[k(7, 0)]),
+    ("F5", &[k(7, 1)]),
+    ("Escape", &[k(7, 2)]),
+    ("Tab", &[k(7, 3)]),
+    ("End", &[k(7, 4)]), // STOP
+    ("Backspace", &[k(7, 5)]),
+    ("PageUp", &[k(7, 6)]), // SELECT
+    ("Enter", &[k(7, 7)]),
+    ("NumpadEnter", &[k(7, 7)]),
+    ("Space", &[k(8, 0)]),
+    ("Home", &[k(8, 1)]),
+    ("Insert", &[k(8, 2)]),
+    ("Delete", &[k(8, 3)]),
+    ("ArrowLeft", &[k(8, 4)]),
+    ("ArrowUp", &[k(8, 5)]),
+    ("ArrowDown", &[k(8, 6)]),
+    ("ArrowRight", &[k(8, 7)]),
+];
+
+pub static MSX: Keymap = Keymap {
+    machine: "msx",
+    entries: MSX_POSITIONAL,
+};
+
 /// The positional keymap for a machine id.
 pub fn positional(machine: &str) -> Option<&'static Keymap> {
     match machine {
@@ -1815,6 +1902,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "atari8" => Some(&ATARI),
         "atari2600" => Some(&ATARI2600),
         "coleco" => Some(&COLECO),
+        "msx" => Some(&MSX),
         "ti99" => Some(&TI99),
         "bbc" => Some(&BBC),
         "mega65" => Some(&MEGA65),

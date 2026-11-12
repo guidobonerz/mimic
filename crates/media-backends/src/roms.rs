@@ -542,6 +542,37 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         ],
         0x2000,
     )];
+    // MSX: the 32 KB BIOS and BASIC ROM of an MSX1 machine, or C-BIOS in
+    // its place (free; `tools/fetch_cbios.py`), the European 50 Hz build
+    // first, with its 16 KB logo ROM.
+    const MSX: &[RomSpec] = &[
+        rom(
+            "msx-bios",
+            &[
+                "msx-bios",
+                "msxbios",
+                "msx1-bios",
+                "msx-rom",
+                "msx1",
+                "bios",
+                // Any other name starting with "msx" ("MSX System v1.0 + MSX
+                // BASIC … [MSX.ROM].rom"): the size picks the 32 KB image.
+                "msx",
+                "cbios-main-msx1-eu",
+                "cbios-main-msx1-rom",
+                "cbios-main-msx1",
+            ],
+            0x8000,
+        ),
+        optional("msx-logo", &["cbios-logo-msx1"], 0x4000),
+        // The disk ROM of the Spectravideo SVI-738 (its controller is
+        // reached through $7FB8–$7FBC; other interfaces differ).
+        optional(
+            "msx-disk-svi738",
+            &["svi-738-disk", "svi738-disk", "svi-738"],
+            0x4000,
+        ),
+    ];
     // SNES: the sound CPU's 64-byte boot ROM (optional: an own loader
     // stands in); the programs of the NEC DSP cartridges (program and
     // data ROM in one 8 KB file), needed only by their games.
@@ -672,6 +703,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "spectrum" => SPECTRUM,
         "vectrex" => VECTREX,
         "coleco" => COLECO,
+        "msx" => MSX,
         "ti99" => TI99,
         "bbc" => BBC,
         "mega65" => MEGA65,
@@ -707,6 +739,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "trs80" => &["trs80", "trs-80", "tandy"],
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
+        "msx" => &["msx", "msx1"],
         "ti99" => &["ti99", "ti-99", "ti994a"],
         "bbc" => &[
             "bbc",

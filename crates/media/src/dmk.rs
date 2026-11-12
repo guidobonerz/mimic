@@ -85,6 +85,7 @@ pub enum Format {
     Jv1,
     Jv3,
     TiDsk,
+    MsxDsk,
 }
 
 /// TI disks: sectors per track, tracks per side, their order on a track.
@@ -178,6 +179,48 @@ impl Image {
         }
         Ok(Self {
             format: Format::TiDsk,
+            protected: false,
+            sides: sides as u8,
+            tracks,
+            sd_single: true,
+            track_len: DEFAULT_TRACK_LEN,
+            jv3: Vec::new(),
+        })
+    }
+
+    /// An MSX (MS-DOS style) sector dump: 512-byte sectors in double
+    /// density, numbered from 1, cylinder by cylinder and side by side.
+    /// The geometry comes from the boot sector's parameter block (total
+    /// sectors at $13, sectors per track at $18, sides at $1A) when that
+    /// fits the image's size, else from the size: 720 KB and 360 KB are 80
+    /// cylinders of 9 sectors with two sides and one, 640 KB and 320 KB
+    /// the same with 8 sectors, 180 KB and 160 KB 40 cylinders, one side.
+    pub fn parse_msx_dsk(bytes: &[u8]) -> Result<Self, MediaError> {
+        let (cylinders, sides, spt) = msx_geometry(bytes).ok_or_else(|| {
+            err(format!(
+                "not an MSX disk image: {} bytes (720, 360, 640, 320, 180 or 160 KB expected)",
+                bytes.len()
+            ))
+        })?;
+        let mut tracks = Vec::new();
+        for t in 0..cylinders {
+            for side in 0..sides {
+                let sectors: Vec<SectorSpec> = (0..spt)
+                    .map(|n| SectorSpec {
+                        track: t as u8,
+                        side: side as u8,
+                        sector: n as u8 + 1,
+                        size: 512,
+                        dam: 0xfb,
+                        data: bytes[((t * sides + side) * spt + n) * 512..][..512].to_vec(),
+                        mfm: true,
+                    })
+                    .collect();
+                tracks.push(build_track(&sectors, true));
+            }
+        }
+        Ok(Self {
+            format: Format::MsxDsk,
             protected: false,
             sides: sides as u8,
             tracks,
@@ -380,6 +423,22 @@ impl Image {
                 }
                 out
             }
+            Format::MsxDsk => {
+                let mut out = original.to_vec();
+                let spt = out.len() / 512 / self.tracks.len().max(1);
+                for (i, track) in self.tracks.iter().enumerate() {
+                    for sec in decode_sectors(track) {
+                        let n = usize::from(sec.sector);
+                        if sec.size == 512 && (1..=spt).contains(&n) {
+                            let off = (i * spt + n - 1) * 512;
+                            if let Some(dst) = out.get_mut(off..off + 512) {
+                                dst.copy_from_slice(&sec.data);
+                            }
+                        }
+                    }
+                }
+                out
+            }
             Format::Jv3 => {
                 let mut out = original.to_vec();
                 let header = JV3_SECTORS * 3 + 1;
@@ -427,6 +486,30 @@ impl Image {
         }
         out
     }
+}
+
+/// Cylinders, sides and sectors per track of an MSX sector dump.
+fn msx_geometry(bytes: &[u8]) -> Option<(usize, usize, usize)> {
+    let len = bytes.len();
+    if len >= 512 {
+        let word = |at: usize| usize::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]));
+        let (total, spt, sides) = (word(0x13), word(0x18), word(0x1a));
+        if total * 512 == len && matches!(spt, 8 | 9) && matches!(sides, 1 | 2) {
+            let cylinders = total / (spt * sides);
+            if matches!(cylinders, 40 | 80) && cylinders * spt * sides == total {
+                return Some((cylinders, sides, spt));
+            }
+        }
+    }
+    Some(match len {
+        737_280 => (80, 2, 9),
+        368_640 => (80, 1, 9),
+        655_360 => (80, 2, 8),
+        327_680 => (80, 1, 8),
+        184_320 => (40, 1, 9),
+        163_840 => (40, 1, 8),
+        _ => return None,
+    })
 }
 
 fn jv3_size(flags: u8) -> usize {
@@ -627,6 +710,44 @@ pub fn blank_jv1(tracks: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn msx_sector_dumps_round_trip() {
+        let mut bytes = vec![0u8; 737_280];
+        for (i, s) in bytes.chunks_mut(512).enumerate() {
+            s[0] = i as u8;
+            s[511] = (i >> 8) as u8;
+        }
+        let mut img = Image::parse_msx_dsk(&bytes).unwrap();
+        assert_eq!(
+            (img.format, img.sides, img.cylinders()),
+            (Format::MsxDsk, 2, 80)
+        );
+        // Cylinder 1, side 1, sector 3 is the 30th sector of the image.
+        let secs = decode_sectors(img.track(1, 1).unwrap());
+        assert_eq!(secs.len(), 9);
+        let s = secs.iter().find(|s| s.sector == 3).unwrap();
+        assert_eq!((s.size, s.data[0], s.track, s.side), (512, 29, 1, 1));
+        assert_eq!(img.to_bytes(&bytes), bytes);
+        // A changed sector goes back to its place.
+        let t = img.track_mut(1, 1).unwrap();
+        let idam = usize::from(t.idam[2] & 0x3fff);
+        let dam = find_dam(t, idam, true).unwrap();
+        t.data[dam + 1] = 0xee;
+        let out = img.to_bytes(&bytes);
+        assert_eq!(out[29 * 512], 0xee);
+        assert_eq!(out.len(), bytes.len());
+        // The parameter block decides between 40 double-sided and 80
+        // single-sided cylinders; without one the size does.
+        let mut small = vec![0u8; 368_640];
+        assert_eq!(Image::parse_msx_dsk(&small).unwrap().sides, 1);
+        small[0x13..0x15].copy_from_slice(&720u16.to_le_bytes());
+        small[0x18] = 9;
+        small[0x1a] = 2;
+        let img = Image::parse_msx_dsk(&small).unwrap();
+        assert_eq!((img.sides, img.cylinders()), (2, 40));
+        assert!(Image::parse_msx_dsk(&bytes[..1000]).is_err());
+    }
 
     #[test]
     fn ti_disks_keep_their_sector_order() {

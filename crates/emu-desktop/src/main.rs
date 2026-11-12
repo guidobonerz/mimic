@@ -104,7 +104,7 @@ usage: mimic-desktop [options]
                         recorded in the machine's tape format)
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
-                        raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
+                        raw 8/16 KB ROM; ColecoVision or MSX ROM; NES iNES file;
                         SNES .sfc/.smc; Vectrex .vec/.bin
   --overlay FILE|none   picture in front of the screen (PNG; the Vectrex's
                         sheets); default: the cartridge's own from

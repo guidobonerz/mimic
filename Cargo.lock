@@ -1209,6 +1209,7 @@ dependencies = [
  "machine-logophor16",
  "machine-mac",
  "machine-mega65",
+ "machine-msx",
  "machine-nes",
  "machine-pet",
  "machine-sim6502",
@@ -2323,6 +2324,19 @@ dependencies = [
  "drives-cbm",
  "emu-core",
  "media",
+]
+
+[[package]]
+name = "machine-msx"
+version = "0.1.0"
+dependencies = [
+ "chips-amstrad",
+ "chips-ti",
+ "cpu-z80",
+ "devices-cartridge",
+ "devices-input",
+ "drives-other",
+ "emu-core",
 ]
 
 [[package]]

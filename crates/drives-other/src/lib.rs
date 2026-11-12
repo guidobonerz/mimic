@@ -10,6 +10,7 @@ pub mod datasette;
 pub mod disk2;
 pub mod iwm;
 pub mod microdrive;
+pub mod msx_tape;
 pub mod recorder;
 pub mod sio;
 pub mod spectrum_tape;

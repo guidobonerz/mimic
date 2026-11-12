@@ -43,6 +43,9 @@ pub enum PortKind {
     /// TI-99/4A joystick port: 9-pin, two Atari-style digital joysticks on
     /// one connector, selected by the keyboard column lines.
     Ti99Joy,
+    /// MSX general-purpose port: 9-pin, pins 1–4 the directions, 6 and 7
+    /// triggers A and B (also outputs), 8 an output strobe.
+    MsxJoy,
     /// Kempston mouse interface on the ZX Spectrum: the mouse's X and Y
     /// counters and buttons, read through ports $FBDF, $FFDF, $FADF.
     KempstonMouse,

@@ -38,6 +38,7 @@ table(["Machine id", "Machine", "Models (`--model`)", "Video (`--videoformat`)"]
     ["`zx81`", "Sinclair ZX81 / Timex Sinclair 1000", "`zx81` (default, PAL), `ts1000` (NTSC)", "–"],
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (default), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (default), `pal`"],
+    ["`msx`", "MSX (MSX1)", "–", "by the BIOS if not given; `ntsc`, `pal`"],
     ["`nes`", "Nintendo Entertainment System / Famicom", "–", "`ntsc` (default), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (default), `pal`"],
     ["`vectrex`", "Vectrex (vector display)", "`vectrex`", "–"],
@@ -148,6 +149,7 @@ table(["Folder", "Machine", "ROMs (example names and sizes)"], [
     ["`spectrum/`", "ZX Spectrum", "`Spec48.rom` (16 KB), `spec128.rom`, `specp2.rom` (32 KB each); "
      "optional `mf128.rom` (Multiface 128), `specif1.rom` (Interface 1)"],
     ["`coleco/`", "ColecoVision", "`coleco.rom` (8 KB BIOS)"],
+    ["`msx/`", "MSX", "a 32 KB MSX1 BIOS or C-BIOS (`python tools/fetch_cbios.py`)"],
     ["`snes/`", "SNES", "optional: the 64-byte sound boot ROM `spc700.rom`"],
     ["`vectrex/`", "Vectrex", "the 8 KB system ROM (executive and Mine Storm); a 4 KB "
      "image of the executive alone also works, see the Vectrex section"],
@@ -573,6 +575,32 @@ p("""Keys: controller 1's keypad on the digit row (1–9, 0, - = *,
 fire), controller 2's keypad on the numeric keypad; joystick 1 on the cursor
 keys, Space = left fire.""")
 
+h2("MSX")
+p("""MSX1 with the TMS9918A/9929A, the PSG and two cartridge slots. ROMs in the
+`msx` folder of the ROM folder: an MSX1 BIOS with BASIC (32 KB, its name
+starting with `msx`) or the free C-BIOS (`python tools/fetch_cbios.py`; it
+starts cartridges and has no BASIC). With the disk ROM of the Spectravideo
+SVI-738 (`svi-738_disk.rom`, 16 KB) the machine has two disk drives and
+starts Disk BASIC (answer the date prompt with Enter). Without
+`--videoformat` the BIOS decides between 50 and 60 Hz.""")
+table(["Option", "Values"], [
+    ["`port1`, `port2`", "`joystick` (default), `none`"],
+    ["`ram`", "`8`, `16`, `32`, `64` (KB, default 64)"],
+    ["`mapper1`, `mapper2`", "bank switching of the cartridge in that slot: `auto` "
+     "(default, guessed from the image), `plain`, `konami`, `konamiscc` (with SCC "
+     "sound), `ascii8`, `ascii16`; with battery RAM only when named: `ascii8sram`, "
+     "`ascii16sram`, `gamemaster2` (the saved game is a `.srm` file beside the image)"],
+    ["`disk`", "`on` (default with the disk ROM), `off`"],
+    ["`roms`", "`stub`: an own mini BIOS that starts cartridges directly"],
+], [0.22, 0.78])
+p("""Media: `--cart game.rom` (slot 1), `--tape game.cas` (CAS image; `CLOAD`,
+`BLOAD"CAS:",R` or `RUN"CAS:"` loads, the computer switches the motor; to
+save press RECORD on the deck before `CSAVE`), `--disk game.dsk` (sector
+image of 160–720 KB, drive A).
+Keys: left Alt = GRAPH, right Alt = CODE, End = STOP, Page Up = SELECT,
+Page Down = dead key, Home = HOME, Insert/Delete = INS/DEL, F1–F5; joystick
+1 on the numeric keypad.""")
+
 h2("TI-99/4A")
 p("""ROMs: the console ROM (`994AROM.BIN`, 8 KB) and GROM 0–2
 (`994AGROM.BIN`, 24 KB) in the `ti99` folder of the ROM folder; the disk
@@ -865,7 +893,7 @@ table(["Kind", "Formats", "Option"], [
     ["Tape", "TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81), TAP/TZX (ZX Spectrum), WAV (Apple II); a PRG is "
      "recorded in the machine's tape format", "`--tape`"],
     ["Cartridge", "CRT (C64/C128), raw VIC-20 and C16/Plus/4 dumps, CAR or 8/16 KB ROM "
-     "(Atari), .a26/.bin (Atari 2600), .col/.rom (ColecoVision, MegaCart), .nes (NES), "
+     "(Atari), .a26/.bin (Atari 2600), .col/.rom (ColecoVision, MegaCart), .rom (MSX, MegaROMs), .nes (NES), "
      ".sfc/.smc (SNES), .vec/.bin (Vectrex, up to 64 KB)", "`--cart`"],
     ["Program", "PRG, T64, XEX", "`--prg`"],
 ], [0.12, 0.74, 0.14])
@@ -1136,6 +1164,7 @@ table(["Machine id", "Machine", "Models (`--model`)", "Video formats (`--videofo
     ["`zx81`", "Sinclair ZX81 / TS1000", "`zx81` (default), `ts1000`", "–"],
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (default), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (default), `pal`"],
+    ["`msx`", "MSX (MSX1)", "–", "by the BIOS if not given; `ntsc`, `pal`"],
     ["`nes`", "Nintendo NES / Famicom", "–", "`ntsc` (default), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (default), `pal`"],
     ["`vectrex`", "Vectrex", "`vectrex`", "–"],
@@ -1178,7 +1207,7 @@ table(["Flag", "Meaning"], [
      "as a tape first."],
     ["`--cart FILE`", "A cartridge: CRT (C64/C128), raw VIC-20 (load address + ROM) or "
      "C16/Plus/4 (16/32 KB) dumps, Atari CAR or raw 8/16 KB ROM, 2600 .a26/.bin, "
-     "ColecoVision ROM, NES iNES/NES 2.0, SNES .sfc/.smc, Vectrex .vec/.bin."],
+     "ColecoVision ROM, MSX ROM, NES iNES/NES 2.0, SNES .sfc/.smc, Vectrex .vec/.bin."],
     ["`--autostart`", "Load and run the disk (C64: the first program of drive 8) or "
      "tape (Spectrum: LOAD \"\" and PLAY) after boot."],
 ], [0.2, 0.8])

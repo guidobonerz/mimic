@@ -347,7 +347,7 @@ impl Profile {
         let port = match machine {
             "c64" | "c128" => Some(1),
             "vic20" | "c16" | "plus4" | "atari8" | "atari2600" | "cpc" | "coleco" | "nes"
-            | "snes" | "vectrex" | "apple2" => Some(0),
+            | "snes" | "vectrex" | "apple2" | "msx" => Some(0),
             // The Amiga's joystick port is game port 1 (port 0 is the mouse's),
             // as is the Logophor 16's.
             "amiga" | "logophor16" => Some(1),

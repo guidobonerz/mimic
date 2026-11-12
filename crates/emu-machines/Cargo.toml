@@ -25,6 +25,7 @@ machine-zx81.workspace = true
 machine-trs80.workspace = true
 machine-spectrum.workspace = true
 machine-coleco.workspace = true
+machine-msx.workspace = true
 machine-ti99.workspace = true
 machine-bbc.workspace = true
 machine-mega65.workspace = true

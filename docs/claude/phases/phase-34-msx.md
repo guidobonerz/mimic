@@ -1,0 +1,61 @@
+# Phase 34: MSX
+
+Part of the project's instructions for Claude Code; the core is `CLAUDE.md` at the repository root, the index of these files is its section "Further documentation".
+
+| # | Phase | Est. | Gate |
+| --- | --- | --- | --- |
+| 34 | MSX (`machine-msx`, added and begun 2026-11-12 on the user's request): MSX1 first — Z80 (reuse `cpu-z80`, one wait state per M1 cycle), TMS9918A/TMS9929A (reuse `chips-ti`), AY-3-8910 and 8255 PPI (reuse `chips-amstrad`), four primary slots, keyboard matrix, two joystick ports, cartridges with the MegaROM schemes (`devices-cartridge::msx`), cassette (CAS), disk interface (WD2793, DSK); C-BIOS as a free optional download, real BIOS ROMs user-supplied; MSX2 later as a model | 6 wk | C-BIOS and a real MSX1 BIOS boot (the real one to BASIC); user-supplied cartridges run, MegaROMs among them; a CAS program loads; a DSK boots with a real disk ROM |
+
+## Decisions (user, 2026-11-12)
+
+- **Scope:** MSX1 first. MSX2 (V9938, RP5C01 clock, memory mapper, sub ROM) comes later as a model of the same machine; MSX2+/turbo R are not planned.
+- **ROMs:** C-BIOS first, fetched by `tools/fetch_cbios.py` into `~/.mimic/roms/msx/` (BSD licence, never committed). It starts cartridges and has no BASIC. A real MSX1 BIOS (32 KB, role `msx-bios`) from the user takes precedence once it lies in the folder (the ROM search lists its names before C-BIOS's).
+- **Media in the phase:** cartridges with mappers, cassette (CAS), disk (DSK). Cassette and disk need a real BIOS (BASIC, a disk ROM), so they follow once the user has put one there.
+
+Own choices (not asked): the machine id `msx`, international keyboard layout, 64 KB RAM in slot 3, cartridges in slots 1 and 2, no expanded slots yet; without `--videoformat` the BIOS's byte $002B picks 50 or 60 Hz; `PortKind::MsxJoy` as a new port kind (trigger B on pin 7); the mapper of a MegaROM is guessed from its register writes, `mapper1`/`mapper2` override.
+
+## Milestones
+
+- M1 The machine: slots, VDP, PSG, PPI, keyboard, joysticks, sound, a stub BIOS (`roms=stub`), C-BIOS, plain cartridges and the Konami, Konami SCC, ASCII 8 and ASCII 16 schemes, debugger targets with a VRAM space and the VDP's graphics views and overlays, savestates, host keymap, the fetch script, `tests/tests/msx_boot.rs`.
+- M2 Cartridges in depth: the user's cartridges (`EMU_MSX_CARTS`), the Konami SCC's sound chip, cartridges with battery RAM (ASCII 8/16 SRAM, Konami Game Master 2), key ghosting if a program needs it.
+- M3 A real BIOS: boot to MSX BASIC, typing through the matrix, the cassette port (PPI motor and output bits, PSG register 14 bit 7) with CAS images as a media slot, `CLOAD`/`BLOAD`.
+- M4 Disk: a disk interface cartridge with the WD2793 (reuse the FD1793 of `drives-other`), its disk ROM (user-supplied), DSK images; expanded slots if the configuration needs them.
+- M5 Frontends and docs: media panel, keymap checked by the user, README row and screenshot, the user guides. Gate.
+
+## Status
+
+2026-11-12: **M1 done.** `machine-msx` (15 tests), `devices-cartridge::msx` (5 tests), `PortKind::MsxJoy`, the keymap `MSX`, ROM roles `msx-bios` and `msx-logo`, `tools/fetch_cbios.py` (C-BIOS 0.29a, archive checked by SHA-256). With C-BIOS (`msx_boot`, 2 tests green): the start screen with "No cartridge found" at 50 Hz (the European build is preferred; `--videoformat ntsc|pal` both run), a test cartridge in either slot is found and prints through the BIOS's CHGMOD and CHPUT. The headless frontend starts the machine.
+
+2026-11-12, later: **M2 built as far as it goes without real cartridges** (the user's folders hold no MSX images; `EMU_MSX_CARTS` is unset). The Konami SCC sound chip (`devices-cartridge::scc`: five wavetable channels, in the cartridge's window at $9800 while bank $3F is at $8000, clocked with the PSG and mixed into the machine's sound), cartridges with battery RAM (`mapper1`/`mapper2` = `ascii8sram`, `ascii16sram`, `gamemaster2`; never guessed) and their `.srm` file as the media slot "battery RAM" (cartridge 1; the `BatterySlot` moved from `machine-snes` to `devices-cartridge::slot` and serves both machines). The bank switching schemes were checked against the MSX wiki's "MegaROM Mappers" page (the Konami SCC's bank numbers are six bits; the rest agreed). Tests: `machine-msx` 17, `devices-cartridge` 62 (msx 9, scc 3). Key ghosting is not built (no program has needed it).
+
+2026-11-12, the first real cartridge: **Championship Lode Runner** (the user's image, 48 KB, in `applications\mimic`) runs with C-BIOS: SEGA logo, title, the trigger starts level 1, sound (`msx_boot::a_user_cartridge_reacts_to_space_and_trigger` with `EMU_MSX_ROM`). It needed two things: an image of 32–64 KB whose only "AB" is at offset 0 and that writes a bank register is a small MegaROM (here ASCII 16; on a tie the guess now prefers ASCII 16 over ASCII 8), and the windows repeat in the other half of the slot for reading ($8000–$BFFF at $0000–$3FFF: the game puts the cartridge into page 0 and runs there).
+
+2026-11-12, the user has no further MSX cartridges and no disk ROM, but put a real BIOS into the ROM folder: `MSX System v1.0 + MSX BASIC (1983)(Microsoft)[a][MSX.ROM].rom` (32 KB, 50 Hz, UK character set; the ROM search now takes any 32 KB file whose name starts with "msx" before C-BIOS; two 16 KB BIOS halves with a 7-byte BLOAD header in the same folder are passed over by their size).
+
+2026-11-12: **M3 done.** With the real BIOS the machine boots to MSX BASIC 1.0 ("28815 Bytes free"), BASIC computes what is typed through the matrix, the test cartridge and Championship Lode Runner run as with C-BIOS. Cassette: `media::msx_cas` (CAS images), `drives-other::msx_tape` (plays at 1200 baud, records by decoding the output's half cycles, motor relay, keys play/record/stop/rewind/forward, writes the image back when RECORD is released), the media slot "cassette" (PPI port C bits 4 and 5, PSG register 14 bit 7). `CSAVE"t"` writes a CAS image of two blocks and `CLOAD` reads it back, then the program runs (`msx_boot::csave_writes_a_cas_image_and_cload_reads_it_back`). Tests: `machine-msx` 18, `msx_boot` 5 with the real BIOS (plus the cartridge folder test).
+
+2026-11-12, a CAS image of the user's: **Afteroids** (Zigurat 1988, `~/.mimic/roms/msx/Afteroids … .cas`, nine blocks: an ASCII loader, binary files and two headerless blocks its own loader reads) loads with `RUN"CAS:"` in about 13 minutes of tape and shows its title (`msx_boot::a_user_cassette_loads` with `EMU_MSX_CAS`, `EMU_FRAMES=52000`).
+
+2026-11-12: **M4 done** with the disk ROM the user supplied (`svi-738_disk.rom`, 16 KB, the Spectravideo SVI-738's, an MSX-DOS 1 kernel): `machine-msx::disk` (FD1793 of `drives-other` in double density at $7FB8–$7FBC, two drives; the register layout read off the ROM's code), slot 3 expanded while the interface is there (3-2 RAM, 3-1 disk ROM, the register at $FFFF), MSX sector dumps in `media::dmk` (`Image::parse_msx_dsk`, 160–720 KB, geometry from the boot sector or the size, written back), media slots "drive A" and "drive B", option `disk=on|off`. The machine starts Disk BASIC (asking for the date first; a real machine shows the MSX logo for about a second before, as here); on a blank 720 KB disk `SAVE"T"` writes the file (its directory entry is in the image), `FILES`, `LOAD"T"` and `RUN` work (`msx_boot::disk_basic_saves_a_program_and_loads_it_back`). Cartridges and the cassette work with the interface present. Tests: `machine-msx` 20, `msx_boot` 6 plus the three for user media.
+
+2026-11-12, a disk image of the user's: `Dokkin Minako Sensei! (1988)(Tect House)(ja).dsk` (720 KB, MSX-DOS 1.03 with an AUTOEXEC.BAT that starts `MAIN.COM`). **MSX-DOS boots** ("MSX-DOS version 1.03 … COMMAND version 1.11", the date prompt; checked on a copy without the AUTOEXEC.BAT, `msx_boot::a_user_disk_boots` with `EMU_MSX_DSK`). It needed the disk ROM and the controller's registers repeated in page 2 ($8000–$BFFF, registers at $BFB8): MSX-DOS has RAM in page 1 and reaches the controller there. The game itself shows only a green screen: it is an MSX2 program (it writes VDP register 15, which only the V9938 has) and waits for the MSX2 model.
+
+2026-11-12: **M5 done as far as it can be without the user at the desktop.** README gallery picture (`docs/screenshots/msx.png`: MSX BASIC 1.0, PAL, `--option disk=off --crt raw`, scaled to the 4:3 pixel aspect with a picture tool) and rows, the user guides' MSX section (German and English), `docs/usage.md` (ROMs, options, keys, media), drive activity for the status display (`Drive::motor`), the debugger sees the controller's registers at $7FB8/$BFB8 (`DebugTarget::peek`). The desktop's media panel is generic: tape keys and the disk, cartridge and battery RAM slots come from `media_slots()`; it was not opened here.
+
+**Gate:** C-BIOS and a real MSX1 BIOS boot (BASIC), a user-supplied cartridge runs (a small MegaROM), a CAS program loads (Afteroids), a DSK boots with a real disk ROM (MSX-DOS 1.03) — met on 2026-11-12 with the one cartridge the user has. Open beyond the gate: see below.
+
+2026-11-12, an MSX1 disk of the user's: **Colony** (Bulldog/Mastertronic 1987, `~/.mimic/roms/msx/Colony (1987)(Bulldog).dsk`: AUTOEXEC.BAS, a BASIC loader and three binary files) boots through Disk BASIC to its menu ("PRESS FIRE TO START"). Its loader does `POKE &HFFFF,&HAA` (all pages on secondary slot 2); with the RAM in 3-0 the machine reset in a loop, so the RAM is now in slot 3-2 (3-1 the disk ROM, 3-0 and 3-3 empty) and the stub BIOS selects it there.
+
+Not checked: playing a game from disk beyond its menu, the keyboard and the media panel on the desktop (the user's to try), formatting (`CALL FORMAT`, the controller's WRITE TRACK), a second drive in use, `BLOAD`/`BSAVE` and ASCII files on tape, 2400 baud recordings. The check of the Konami, SCC and battery RAM schemes on real games waits for images.
+
+Not checked yet: any other commercial cartridge (a Konami, Konami SCC or battery RAM one above all) (none in the user's folders: `EMU_MSX_CARTS` is unset), the mapper guess on real images, the keyboard on the desktop, a real BIOS.
+
+## Open items
+
+- M5 above; of M2 the run over real cartridges (`EMU_MSX_CARTS`) with the mapper guess, the SCC's sound and the battery RAM schemes on real games.
+- SCC, unverified: a period below 9 stops a channel, a period write restarts the counter but not the place in the waveform, the mix level against the PSG (own choice), the test register's pitch and noise modes (not built). ASCII 8 SRAM: the RAM is selected by bit 7 or by the bit of the image's bank count (covers Xanadu and the bit-7 cartridges; other wirings are not). The Konami scheme's random power-on banks are 2 and 3 here; R-Type's fixed bank is not built; the window mirrors are read-only and given to every MegaROM scheme (real cartridges differ).
+- Unverified details: whether the interrupt acknowledge also gets the M1 wait state (modelled so), the level of PSG register 14 bit 6 on international machines (reads 1), RAM contents at power-on (zeros), the mix of the PSG channels and the key click (own levels).
+- VRAM access timing is not enforced (as on the ColecoVision); the VDP draws a line from the registers as they are at its start.
+- Cassette: the tape always plays at 1200 baud; the gaps before the header tones (1 s, 0.5 s) are the deck's own; the tape's sound is not heard; no WAV or TSX tapes; the level read without a running tape is low (unverified). The Red Book's header lengths (15 360 and 3 840 cycles) are from memory of it.
+- Disk: only the SVI-738's interface (other disk ROMs reach their controller elsewhere, e.g. $7FF8–$7FFF, and are not recognised); the control register's bits 7–6 are ignored (meaning unknown); the ROM's ports $B4/$B5 (a clock chip) read $FF, so the date is asked for; whether the ROM repeats in pages 0 and 3 of its slot too is unknown (pages 1 and 2 are built).
+- The printer port ($90/$91) reads "not ready"; no printer attached.

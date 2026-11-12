@@ -43,7 +43,7 @@ usage: mimic-headless [options]
                         in the machine's tape format first
   --cart FILE           cartridge: CRT image, or a raw VIC-20 (load address
                         + ROM) or C16/Plus/4 (16/32 KB) dump; Atari CAR or
-                        raw 8/16 KB ROM; ColecoVision ROM; NES iNES file;
+                        raw 8/16 KB ROM; ColecoVision or MSX ROM; NES iNES file;
                         SNES .sfc/.smc; Vectrex .vec/.bin
   --overlay FILE|auto   snapshots with a picture in front of the screen (PNG;
                         the Vectrex's sheets); auto: the cartridge's own from

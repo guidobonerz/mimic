@@ -35,7 +35,7 @@ crates/
   emu-core/        Traits (Cpu, Bus, Machine), scheduler, savestates, DebugHooks, FrameRef
   cpu-6502/        6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 2A03 (NES), CMOS 65C02 (Apple IIe) via variant flags
   cpu-45gs02/      MEGA65 45GS02 (4510/65CE02 core, MAP, flat [zp],Z, 32-bit Q instructions; C65 4510 as a speed)
-  cpu-z80/         Z80 (C128, CPC, ZX81, Spectrum; internal T-states reported with their bus address for the Spectrum's contention)
+  cpu-z80/         Z80 (C128, CPC, ZX81, Spectrum, MSX; internal T-states reported with their bus address for the Spectrum's contention)
   cpu-m68k/        68000 (Amiga, Macintosh) and 68020 (A1200)
   cpu-65816/       WDC 65C816 (SNES 5A22 core)
   cpu-spc700/      Sony SPC700 (SNES sound CPU)
@@ -51,17 +51,17 @@ crates/
   chips-atari/     ANTIC, GTIA, POKEY, PIA
   chips-amstrad/   CRTC 6845, Gate Array, AY-3-8912, 8255 PPI, FDC 765
   chips-acorn/     MEMC, IOC, VIDC, PCF8583, WD1772 (Archimedes), Video ULA, SAA5050 teletext, Intel 8271 FDC and MC146818 clock (BBC Micro, Master)
-  chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision, TI-99/4A), TMS9901, GROM (TMC0430), TMS5220 speech
+  chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision, TI-99/4A, MSX), TMS9901, GROM (TMC0430), TMS5220 speech
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)
   chips-nintendo/  NES: PPU 2C02/2C07 with its palette, APU of the 2A03/2A07; SNES: S-PPU, S-DSP
   drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU), TCBM bus with the 1551
-  drives-other/    WD FD1771/FD1793 (TRS-80, TI-99/4A disk card), Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, ZX Microdrives
+  drives-other/    WD FD1771/FD1793 (TRS-80, TI-99/4A disk card, MSX), Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, MSX cassette, ZX Microdrives
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX, Kempston), light pens, keypads
-  devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts
+  devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts, MSX ROMs with the MegaROM schemes, battery RAM and the Konami SCC sound chip; the battery RAM (`.srm`) slot
   devices-net/     Devices that reach outside through emu-core::host: Ultimate 64 command interface (UCI), WiC64
   devices-printer/ Printers: Epson FX-80, NEC P6+ and ImageWriter models with page pictures, Commodore bus end, output through emu-core::host
-  media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR, punched-card decks (.deck/.crd/.chx)
+  media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR, MSX CAS, punched-card decks (.deck/.crd/.chx)
   media-backends/  Where media bytes come from: image file, copy-on-write overlay, host directory, real hardware
   emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
   emu-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends
@@ -74,6 +74,7 @@ crates/
   machine-archimedes/ Acorn Archimedes A305, A310, A440, A3000 as models
   machine-imsai/   IMSAI 8080: the picture is the front panel (clickable paddles, lamps by bus duty), serial terminal as second screen; card reader
   machine-keypunch/ IBM 029 card punch: the user types card decks (picture: the card), read back by the IMSAI's card reader
+  machine-msx/     MSX (MSX1): slots, keyboard, joysticks, cassette, SVI-738 disk interface; VDP, PSG, PPI and FD1793 reused; C-BIOS or a user-supplied BIOS
   machine-zx81/    Sinclair ZX81 / TS1000
   machine-trs80/   Tandy TRS-80 Model I (Level I/II, cassette, Expansion Interface with an FD1771) and Model III (FD1793, WAIT, NMI); floppy controller at track level on DMK/JV1/JV3
   machine-logophor16/ Logophor 16, the project's own fictional steampunk computer (spec: docs/logophor16/SPEC.md); ROM built from rom/ sources, shipped as a built-in profile
@@ -157,7 +158,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 26, 31, 32 and 33 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 26, 31, 32, 33 and 34 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

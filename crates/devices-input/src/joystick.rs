@@ -6,7 +6,9 @@
 //! pin 1 up, 2 down, 3 left, 4 right, 6 fire. Amiga/Atari second buttons on
 //! pin 9 (and pin 5 for a third) are reported for those machines. On the
 //! CPC's port (Amstrad JY2) the main button, "fire 2", is pin 6 and the
-//! extra one, "fire 1", pin 7 (cpcwiki, "Connector:Digital joystick").
+//! extra one, "fire 1", pin 7 (cpcwiki, "Connector:Digital joystick"). The
+//! MSX's general-purpose port has trigger A on pin 6 and trigger B on pin 7
+//! (MSX Technical Data Book, "General purpose I/O interface").
 
 use emu_core::input::{Dirs, InputEvent};
 use emu_core::port::{PortDevice, PortKind, PortLines};
@@ -57,7 +59,8 @@ impl Joystick {
                 low |= bit;
             }
         }
-        let buttons = if self.kind == PortKind::CpcJoy {
+        // The second button is pin 7 on the CPC and the MSX (trigger B).
+        let buttons = if matches!(self.kind, PortKind::CpcJoy | PortKind::MsxJoy) {
             [(1, pin::FIRE), (2, pin::CPC_FIRE1), (4, pin::BUTTON3)]
         } else {
             [(1, pin::FIRE), (2, pin::BUTTON2), (4, pin::BUTTON3)]

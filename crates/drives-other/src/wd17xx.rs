@@ -74,6 +74,11 @@ pub struct Drive {
     pub original: Vec<u8>,
     /// Images are TI-99/4A sector dumps ([`Image::parse_ti_dsk`]).
     pub ti_dsk: bool,
+    /// Images are MSX sector dumps ([`Image::parse_msx_dsk`]).
+    pub msx_dsk: bool,
+    /// The interface runs this drive's motor (shown by the status display;
+    /// set by machines that know: the MSX).
+    pub motor: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -985,7 +990,8 @@ pub fn write_back(d: &mut Drive) -> Result<(), MediaError> {
 }
 
 /// A drive as a media slot: DMK, JV1 or JV3 images (TRS-80), TI-99/4A
-/// sector dumps when [`Drive::ti_dsk`] is set.
+/// sector dumps when [`Drive::ti_dsk`] is set, MSX ones with
+/// [`Drive::msx_dsk`].
 impl MediaSlot for Drive {
     fn insert(&mut self, mut media: Media) -> Result<(), MediaError> {
         if media.kind != MediaKind::Disk {
@@ -993,7 +999,9 @@ impl MediaSlot for Drive {
         }
         let mut bytes = vec![0; media.backend.len() as usize];
         media.backend.read(0, &mut bytes)?;
-        let image = if self.ti_dsk {
+        let image = if self.msx_dsk {
+            Image::parse_msx_dsk(&bytes)?
+        } else if self.ti_dsk {
             Image::parse_ti_dsk(&bytes)?
         } else {
             Image::parse(&bytes)?
@@ -1027,7 +1035,7 @@ impl MediaSlot for Drive {
 
     fn status(&self) -> DriveStatus {
         DriveStatus {
-            active: false,
+            active: self.motor && self.image.is_some(),
             error: false,
             track: Some(self.cylinder.saturating_add(1)),
         }
