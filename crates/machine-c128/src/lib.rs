@@ -19,6 +19,11 @@
 //!
 //! Video formats (`--videoformat`): "pal" (default; 8566, 985 248 Hz) and
 //! "ntsc" (8564, 1 022 727 Hz); no models.
+//! The user port takes a four-player adapter (`userport` option: "cga",
+//! "hit", "kingsoft", "starbyte"; `devices_input::fourplayer`), whose
+//! joysticks are the ports "joystick 3" and "joystick 4"; other user port
+//! devices are not wired up.
+//!
 //! Options: `display` ("40" default, "80": the 40/80 key down at power-on),
 //! `vdc_ram` ("16k" default, "64k"), `sid` ("6581"/"8580"), `drive8`
 //! ("1571" with `roms["dos1571"]`, the default when given; "1541" with
@@ -366,6 +371,8 @@ fn load_roms(config: &MachineConfig) -> Result<Roms, ConfigError> {
 pub const CONTROL_PORT_1: PortId = PortId(0);
 pub const CONTROL_PORT_2: PortId = PortId(1);
 const PORT_NAMES: [&str; 2] = ["control port 1", "control port 2"];
+/// The user port: a four-player adapter (`devices_input::fourplayer`).
+pub const USER_PORT: PortId = PortId(2);
 
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(1);
@@ -381,6 +388,10 @@ pub struct C128 {
     sched: Scheduler,
     input: InputQueue,
     ports: [Option<Box<dyn PortDevice>>; 2],
+    /// The four-player adapter in the user port (`userport` option): its
+    /// lines reach CIA2's port B, PA2 and, with CNT1 bridged to CNT2, CIA2's
+    /// serial register; its joysticks are the ports 3 and 4.
+    user_port: Option<Box<dyn PortDevice>>,
     drive: Option<Drive8>,
     /// `printer` option: a printer on the serial bus.
     printer: Option<CbmPrinter>,
@@ -440,6 +451,17 @@ impl C128 {
         };
         let port1 = devices_input::cbm_port_option("port1", option("port1"), "none", true, true)?;
         let port2 = devices_input::control_port_option("port2", option("port2"), "joystick", true)?;
+        let user_port: Option<Box<dyn PortDevice>> = match option("userport") {
+            None | Some("none") => None,
+            Some(other) => match devices_input::FourPlayerKind::parse(other) {
+                Some(kind) => Some(Box::new(devices_input::FourPlayer::new(kind))),
+                None => {
+                    return Err(ConfigError::Invalid(format!(
+                        "userport option '{other}' (cga, hit, kingsoft, starbyte or none)"
+                    )))
+                }
+            },
+        };
         let stub = option("roms") == Some("stub");
         let drive_roms = if stub {
             DriveRoms::default()
@@ -490,6 +512,7 @@ impl C128 {
             sched: Scheduler::new(),
             input: InputQueue::new(),
             ports: [port1, port2],
+            user_port,
             drive,
             printer: CbmPrinter::from_config(config),
             program: ProgramSlot::default(),
@@ -738,6 +761,26 @@ impl C128 {
         let iec = self.io.iec;
         self.io.cia1.set_sp(fsdir || !iec.data);
         self.io.cia1.set_cnt(fsdir || !iec.srq);
+        // The user port: CIA2's port B outputs go to the device, its lines
+        // come back for this cycle's reads.
+        if let Some(dev) = &mut self.user_port {
+            use emu_core::port::user_port;
+            let now = self.sched.now();
+            dev.write_lines(
+                emu_core::port::PortLines {
+                    pulled_low: user_port::pb_lines(self.io.cia2.port_b_out()),
+                    analog: [u16::MAX; 2],
+                },
+                now,
+            );
+            let lines = dev.read_lines(now).pulled_low;
+            self.io.user_lines = lines;
+            if lines & user_port::CNT_BRIDGE != 0 {
+                let (cnt, _) = self.io.cia1.serial_out();
+                self.io.cia2.set_cnt(cnt);
+                self.io.cia2.set_sp(lines & user_port::SP2 == 0);
+            }
+        }
         // Datasette: port bit 3 WRITE, bit 5 MOTOR (output low = on), bit 4
         // SENSE; READ shares CIA1 /FLAG with SRQ.
         let port = &self.mem.port;
@@ -780,6 +823,12 @@ impl C128 {
                 if let emu_core::input::InputEvent::Key { machine_key, down } = ev.event {
                     self.io.keyboard.set(machine_key, down);
                     self.mem.caps_lock = self.io.keyboard.caps_lock;
+                }
+            }
+            InputTarget::Port(p) if p.0 > USER_PORT.0 => {
+                // The four-player adapter's joysticks.
+                if let Some(dev) = &mut self.user_port {
+                    dev.input_at(p.0 - USER_PORT.0 - 1, &ev.event);
                 }
             }
             InputTarget::Port(p) => {
@@ -1338,17 +1387,49 @@ impl Machine for C128 {
     }
 
     fn ports(&self) -> Vec<PortInfo> {
-        (0..2)
+        let mut ports: Vec<PortInfo> = (0..2)
             .map(|i| PortInfo {
                 id: PortId(i as u8),
                 kind: PortKind::CbmControl,
                 name: PORT_NAMES[i],
                 connected: self.ports[i].is_some(),
             })
-            .collect()
+            .collect();
+        ports.push(PortInfo {
+            id: USER_PORT,
+            kind: PortKind::CbmUserPort,
+            name: "user port",
+            connected: self.user_port.is_some(),
+        });
+        // The adapter's joysticks come and go with it.
+        if self.user_port.is_some() {
+            for (n, name) in ["joystick 3", "joystick 4"].into_iter().enumerate() {
+                ports.push(PortInfo {
+                    id: PortId(USER_PORT.0 + 1 + n as u8),
+                    kind: PortKind::CbmControl,
+                    name,
+                    connected: true,
+                });
+            }
+        }
+        ports
     }
 
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError> {
+        if port == USER_PORT {
+            // Only the four-player adapters' lines are wired up.
+            if dev.kind() != PortKind::CbmUserPort || dev.inputs() < 2 {
+                return Err(PortError::Incompatible {
+                    port: PortKind::CbmUserPort,
+                    device: dev.kind(),
+                });
+            }
+            if self.user_port.is_some() {
+                return Err(PortError::Occupied(port));
+            }
+            self.user_port = Some(dev);
+            return Ok(());
+        }
         let slot = self
             .ports
             .get_mut(usize::from(port.0))
@@ -1368,6 +1449,12 @@ impl Machine for C128 {
     }
 
     fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>> {
+        if port == USER_PORT {
+            self.io.user_lines = 0;
+            self.io.cia2.set_cnt(true);
+            self.io.cia2.set_sp(true);
+            return self.user_port.take();
+        }
         let dev = self.ports.get_mut(usize::from(port.0))?.take();
         self.refresh_port(port);
         dev
@@ -1452,6 +1539,14 @@ impl Machine for C128 {
             for p in &self.ports {
                 w.bytes(&p.as_ref().map(|d| d.save_state()).unwrap_or_default());
             }
+            // The user port's adapter (empty: none; older states end here).
+            w.bytes(
+                &self
+                    .user_port
+                    .as_ref()
+                    .map(|d| d.save_state())
+                    .unwrap_or_default(),
+            );
         });
         w.into_bytes()
     }
@@ -1540,11 +1635,19 @@ impl Machine for C128 {
                 let _ = d.load(&mut StateReader::new(b));
             }
         };
-        let port_states = match r
-            .chunk(*b"PORT", 1)
-            .and_then(|(_, mut c)| Ok([c.bytes()?, c.bytes()?]))
-        {
-            Ok(p) => p,
+        let user_state;
+        let port_states = match r.chunk(*b"PORT", 1).and_then(|(_, mut c)| {
+            let ports = [c.bytes()?, c.bytes()?];
+            let user = if c.remaining() > 0 { c.bytes()? } else { &[] };
+            if user.is_empty() != self.user_port.is_none() {
+                return Err(StateError::Invalid("user port device differs"));
+            }
+            Ok((ports, user))
+        }) {
+            Ok((p, user)) => {
+                user_state = user.to_vec();
+                p
+            }
             Err(e) => {
                 restore_drive(&mut self.drive);
                 restore_tape(&mut self.tape, &mut self.cart);
@@ -1568,6 +1671,18 @@ impl Machine for C128 {
                     restore_tape(&mut self.tape, &mut self.cart);
                     return Err(e);
                 }
+            }
+        }
+        if let Some(d) = &mut self.user_port {
+            if let Err(e) = d.load_state(&user_state) {
+                for (dev, backup) in self.ports.iter_mut().zip(&backups) {
+                    if let Some(d) = dev {
+                        let _ = d.load_state(backup);
+                    }
+                }
+                restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape, &mut self.cart);
+                return Err(e);
             }
         }
         self.cpu = next.cpu;

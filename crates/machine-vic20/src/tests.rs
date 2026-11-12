@@ -282,7 +282,7 @@ fn program_slot_relocates_basic_and_loads_code_absolute() {
 #[test]
 fn ports_accept_only_control_port_devices() {
     let mut m = stub();
-    assert_eq!(m.ports().len(), 1);
+    assert_eq!(m.ports().len(), 2, "the control port and the user port");
     assert!(matches!(
         m.connect(CONTROL_PORT, Box::new(Joystick::new(PortKind::CbmControl))),
         Err(PortError::Occupied(_))
@@ -293,7 +293,7 @@ fn ports_accept_only_control_port_devices() {
         Err(PortError::Incompatible { .. })
     ));
     assert!(matches!(
-        m.connect(PortId(1), Box::new(Joystick::new(PortKind::CbmControl))),
+        m.connect(PortId(5), Box::new(Joystick::new(PortKind::CbmControl))),
         Err(PortError::NoSuchPort(_))
     ));
 }
@@ -378,4 +378,54 @@ fn frame_rows_follow_the_vic() {
     assert_eq!(m.frame_row(t.first_line - 1), None);
     assert_eq!(m.frame_row(t.lines), None);
     assert!(m.overlays().is_empty());
+}
+
+#[test]
+fn four_player_adapter_in_the_user_port() {
+    use emu_core::input::Dirs;
+    let mut m = stub_with(&[("userport", "cga")], "pal");
+    let names: Vec<&str> = m.ports().iter().map(|p| p.name).collect();
+    assert_eq!(
+        names,
+        ["control port", "user port", "joystick 2", "joystick 3"]
+    );
+    run_cycles(&mut m, 30_000);
+    // PB7 an output and high: the adapter's first joystick.
+    m.io.via1.write(2, 0x80);
+    m.io.via1.write(0, 0x80);
+    for (port, dirs, fire) in [(2, Dirs::LEFT, true), (3, Dirs::RIGHT, true)] {
+        let at = m.now();
+        m.input(TimedInput {
+            at,
+            target: InputTarget::Port(PortId(port)),
+            event: emu_core::input::InputEvent::Digital {
+                dirs,
+                buttons: u8::from(fire),
+            },
+        });
+    }
+    run_cycles(&mut m, 20);
+    assert_eq!(m.io.read(0x9110), !0x04 & !0x30);
+    m.io.via1.write(0, 0x00);
+    run_cycles(&mut m, 20);
+    assert_eq!(m.io.read(0x9110), 0x7f & !0x08 & !0x30);
+    // The state carries the adapter; a machine without one refuses it,
+    // and a state from before the user port still loads.
+    let state = m.save_state();
+    let mut n = stub_with(&[("userport", "4player")], "pal");
+    n.load_state(&state).unwrap();
+    run_cycles(&mut n, 20);
+    assert_eq!(n.io.read(0x9110), 0x7f & !0x08 & !0x30);
+    assert!(stub().load_state(&state).is_err());
+    let plain = stub().save_state();
+    assert!(stub().load_state(&plain).is_ok());
+    assert!(m.disconnect(USER_PORT).is_some());
+    assert_eq!(m.ports().len(), 2);
+    run_cycles(&mut m, 20);
+    assert_eq!(m.io.read(0x9110), 0x7f);
+    // The adapters that need a CIA do not fit.
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("userport".into(), "hit".into());
+    assert!(Vic20::new(&config).is_err());
 }

@@ -41,6 +41,9 @@ pub struct Io {
     pub keyboard: Keyboard,
     /// Pins pulled low by the device in the control port.
     pub port_lines: u32,
+    /// Lines the user port's device pulls low (pin numbering of
+    /// `emu_core::port::user_port`); read each cycle, not state.
+    pub user_lines: u32,
     /// Serial bus levels after the last drive update.
     pub iec: IecLines,
     /// A datasette key is down (VIA1 PA6 low).
@@ -62,6 +65,7 @@ impl Io {
             via2: Via::new(),
             keyboard: Keyboard::default(),
             port_lines: 0,
+            user_lines: 0,
             iec: IecLines::default(),
             cassette_sense: false,
             debugcart: false,
@@ -85,7 +89,8 @@ impl Io {
     }
 
     /// VIA1 port A pin levels: what the VIA drives, pulled low by the
-    /// serial bus and the joystick. Port B (user port) is open.
+    /// serial bus and the joystick. Port B is the user port (open without
+    /// a device).
     pub fn via1_pins(&self) -> (u8, u8) {
         let mut ext = 0xff;
         for (low, bit) in [
@@ -101,7 +106,10 @@ impl Io {
                 ext &= !bit;
             }
         }
-        (self.via1.port_a_out() & ext, 0xff)
+        (
+            self.via1.port_a_out() & ext,
+            emu_core::port::user_port::pb(self.user_lines),
+        )
     }
 
     /// VIA2 pin levels: the keyboard matrix between port B (columns, PB7

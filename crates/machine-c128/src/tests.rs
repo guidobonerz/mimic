@@ -362,3 +362,59 @@ fn light_pen_in_control_port_1_latches_the_vic_iie() {
     n.run_frame(&mut DebugHooks::new());
     assert_eq!(r(&n, 0xd014), 66);
 }
+
+#[test]
+fn four_player_adapter_in_the_user_port() {
+    use emu_core::input::Dirs;
+    let mut m = stub_with("pal", &[("userport", "cga")]);
+    let names: Vec<&str> = m.ports().iter().map(|p| p.name).collect();
+    assert_eq!(names[2..], ["user port", "joystick 3", "joystick 4"]);
+    run_cycles(&mut m, 30_000);
+    // PB7 an output and high: joystick 3.
+    m.io.cia2.write(3, 0x80);
+    m.io.cia2.write(1, 0x80);
+    for (port, dirs, fire) in [(3, Dirs::UP, true), (4, Dirs::DOWN, false)] {
+        let at = m.now();
+        m.input(TimedInput {
+            at,
+            target: InputTarget::Port(PortId(port)),
+            event: InputEvent::Digital {
+                dirs,
+                buttons: u8::from(fire),
+            },
+        });
+    }
+    run_cycles(&mut m, 20);
+    assert_eq!(m.io.peek(&m.mem, 0xdd01), !0x01 & !0x10);
+    m.io.cia2.write(1, 0x00);
+    run_cycles(&mut m, 20);
+    assert_eq!(m.io.peek(&m.mem, 0xdd01), 0x7f & !0x02 & !0x10);
+    // The state carries the adapter; a machine without one refuses it.
+    let state = m.save_state();
+    let mut n = stub_with("pal", &[("userport", "cga")]);
+    n.load_state(&state).unwrap();
+    run_cycles(&mut n, 20);
+    assert_eq!(n.io.peek(&n.mem, 0xdd01), 0x7f & !0x02 & !0x10);
+    assert!(stub().load_state(&state).is_err());
+    assert!(stub_with("pal", &[("userport", "hit")])
+        .load_state(&state)
+        .is_err());
+    // A state from before the user port still loads.
+    let plain = stub().save_state();
+    assert!(stub().load_state(&plain).is_ok());
+    // Pulled out; only adapters fit.
+    assert!(m.disconnect(USER_PORT).is_some());
+    assert_eq!(m.ports().len(), 3);
+    run_cycles(&mut m, 20);
+    assert_eq!(m.io.peek(&m.mem, 0xdd01), 0x7f);
+    assert!(m
+        .connect(
+            USER_PORT,
+            Box::new(devices_input::Joystick::new(PortKind::CbmUserPort))
+        )
+        .is_err());
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("userport".into(), "wic64".into());
+    assert!(C128::new(&config).is_err());
+}

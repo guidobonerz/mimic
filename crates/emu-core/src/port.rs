@@ -88,6 +88,21 @@ pub trait PortDevice: Send {
     /// Host-neutral input from the host layer.
     fn input(&mut self, ev: &InputEvent);
 
+    /// How many input sources the device has: 1 for most; a four-player
+    /// adapter in a user port has two joysticks. The machine lists the
+    /// sources beyond what its own ports give as further ports and passes
+    /// their input on with [`PortDevice::input_at`].
+    fn inputs(&self) -> u8 {
+        1
+    }
+
+    /// Input for source `n` (0 is [`PortDevice::input`]).
+    fn input_at(&mut self, n: u8, ev: &InputEvent) {
+        if n == 0 {
+            self.input(ev);
+        }
+    }
+
     /// Host services for devices that reach outside the machine (the
     /// WiC64's network); passed on by [`crate::Machine::attach_host`].
     /// Pin-level devices ignore them (the default).
@@ -139,6 +154,8 @@ impl std::error::Error for PortError {}
 /// follows as pins 13–24. Source: C64 Programmer's Reference Guide,
 /// appendix I (user port pinout).
 pub mod user_port {
+    /// Pin 7: SP2, CIA2's serial data line (a device pulling it low).
+    pub const SP2: u32 = 1 << 6;
     /// Pin 8: CIA2 PC2, low for one cycle after each access to port B.
     pub const PC2: u32 = 1 << 7;
     /// Pin B: CIA2 /FLAG input (negative edge sets ICR bit 4).
@@ -147,6 +164,10 @@ pub mod user_port {
     pub const PB_SHIFT: u32 = 14;
     /// Pin M: CIA2 PA2.
     pub const PA2: u32 = 1 << 22;
+    /// Not a line but wiring a device reports with its lines: it bridges
+    /// pin 4 (CNT1) to pin 6 (CNT2), so CIA1's serial clock shifts CIA2's
+    /// serial register (four-player adapters with a button on SP2).
+    pub const CNT_BRIDGE: u32 = 1 << 30;
 
     /// The port B byte from lines (a bit pulled low reads 0).
     pub fn pb(pulled_low: u32) -> u8 {

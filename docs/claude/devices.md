@@ -28,6 +28,8 @@ pub trait PortDevice: Send {
     fn read_lines(&self, now: Cycle) -> PortLines;      // what the device drives onto the pins
     fn write_lines(&mut self, lines: PortLines, now: Cycle); // what the machine drives
     fn input(&mut self, ev: &InputEvent);                // host-neutral events from the host layer
+    fn inputs(&self) -> u8 { 1 }                         // input sources: a four-player adapter has two joysticks
+    fn input_at(&mut self, n: u8, ev: &InputEvent) { … } // input for source n (0 is `input`)
     fn save_state(&self) -> Vec<u8>;
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError>;
 }
@@ -35,6 +37,7 @@ pub trait PortDevice: Send {
 
 - Devices work at **pin/line level** with cycle timestamps, so analog/timing devices are accurate: 1351 proportional mouse via SID POT sampling, Amiga quadrature counting into JOYxDAT, paddles via POKEY/SID pot timers, light pens latching VIC/ANTIC registers.
 - A port accepts only devices with a matching `PortKind`; `connect` returns `PortError::Incompatible` otherwise.
+- **Four-player adapters** (added 2026-11-12): `devices_input::FourPlayer` is a `CbmUserPort` device with two joysticks of its own (`inputs() == 2`); the machine lists them as further ports ("joystick 3", "joystick 4") while the adapter is plugged in and passes their events on with `input_at`. Kinds: `cga` (Classical Games / Protovision, PB7 selects), `hit` (Digital Excess / Hitmen), `kingsoft`, `starbyte` — the last three use PA2 and SP2 and report `user_port::CNT_BRIDGE` (CNT1 wired to CNT2: CIA1's serial clock shifts SP2 into CIA2). Options: C64 `userport=cga|hit|kingsoft|starbyte` (all four), C128 the same (only adapters fit its user port so far), VIC-20 `userport=cga` (VIA1 port B; the others need a CIA). The Amiga's adapter hangs on the parallel port and is part of the machine (`parallel=4player`: joystick 3 on data bits 0–3 and SEL, joystick 4 on bits 4–7 and BUSY). The NES Four Score and the SNES Multiplayer 5 are the machines' `fourscore`/`multitap` options.
 - Default devices per machine come from config (e.g. C64: joystick in port 2; Amiga: mouse in port 0, joystick in port 1).
 
 ### Input events and host mapping

@@ -977,3 +977,65 @@ fn light_pen_in_game_port_0_freezes_the_beam_counters() {
     frames(&mut n, 2);
     assert_eq!(vhposr(&n), (312 & 0xff) << 8 | 226);
 }
+
+#[test]
+fn four_player_adapter_on_the_parallel_port() {
+    use emu_core::input::Dirs;
+    let mut m = stub_with(None, &[("parallel", "4player")]);
+    let names: Vec<&str> = m.ports().iter().map(|p| p.name).collect();
+    assert_eq!(names[2..], ["joystick 3", "joystick 4"]);
+    frames(&mut m, 2);
+    let read = |m: &mut Amiga| {
+        (
+            m.board.read_cia(0xbfe101, true),
+            m.board.read_cia(0xbfd000, true) & 0x07,
+        )
+    };
+    assert_eq!(read(&mut m), (0xff, 0x07), "nothing held");
+    for (port, dirs, fire) in [(2, Dirs::UP | Dirs::RIGHT, true), (3, Dirs::DOWN, false)] {
+        let at = m.now();
+        m.input(TimedInput {
+            at,
+            target: InputTarget::Port(PortId(port)),
+            event: InputEvent::Digital {
+                dirs,
+                buttons: u8::from(fire),
+            },
+        });
+    }
+    frames(&mut m, 1);
+    // Joystick 3: data bits 0 (up) and 3 (right), fire on SEL (bit 2);
+    // joystick 4: data bit 5 (down).
+    assert_eq!(read(&mut m), (!0x09 & !0x20, 0x03));
+    let at = m.now();
+    m.input(TimedInput {
+        at,
+        target: InputTarget::Port(PortId(3)),
+        event: InputEvent::Digital {
+            dirs: Dirs::LEFT,
+            buttons: 1,
+        },
+    });
+    frames(&mut m, 1);
+    assert_eq!(read(&mut m), (!0x09 & !0x40, 0x02), "fire 4: BUSY");
+    // The state carries the joysticks; one without the adapter loads too.
+    let state = m.save_state();
+    let mut n = stub_with(None, &[("parallel", "4player")]);
+    n.load_state(&state).unwrap();
+    assert_eq!(read(&mut n), (!0x09 & !0x40, 0x02));
+    n.load_state(&stub().save_state()).unwrap();
+    assert_eq!(read(&mut n), (0xff, 0x07));
+    let mut plain = stub();
+    plain.load_state(&state).unwrap();
+    assert_eq!(read(&mut plain), (0xff, 0x07));
+    assert_eq!(plain.ports().len(), 2);
+    // The printer needs the port itself.
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    config.options.insert("parallel".into(), "4player".into());
+    config.options.insert("printer".into(), "fx80".into());
+    assert!(Amiga::new(&config).is_err());
+    config.options.remove("printer");
+    config.options.insert("parallel".into(), "zip".into());
+    assert!(Amiga::new(&config).is_err());
+}

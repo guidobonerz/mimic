@@ -198,7 +198,12 @@ impl Io {
     /// serial bus line level (1 = released); port B is the user port's
     /// PB0–PB7 (open without a device).
     fn cia2_ext(&self) -> (u8, u8) {
-        let pa = 0x3f | if self.iec.clk { 0 } else { 0x40 } | if self.iec.data { 0 } else { 0x80 };
+        let mut pa =
+            0x3f | if self.iec.clk { 0 } else { 0x40 } | if self.iec.data { 0 } else { 0x80 };
+        // A user port device may pull PA2 (pin M) low.
+        if self.user_lines & emu_core::port::user_port::PA2 != 0 {
+            pa &= !0x04;
+        }
         (pa, emu_core::port::user_port::pb(self.user_lines))
     }
 

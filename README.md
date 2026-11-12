@@ -300,6 +300,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | --- | --- | --- |
 | Ultimate 64 command interface (C64 `uci=on`): DOS targets on a host folder, network target (TCP/UDP sockets), control identify | `devices-net` | 70 % (Ultimate control commands not offered; error texts and timing partly unverified) |
 | WiC64 on the user port (C64 `userport=wic64`): legacy and protocol 2, HTTP GET/POST, TCP, info, time | `devices-net` | 70 % (no https; handshake timing and some answers unverified) |
+| Four-player adapters: Classical Games / Protovision, Digital Excess / Hitmen, Kingsoft, Starbyte on the user port (C64, C128; VIC-20: Protovision), the Amiga's on the parallel port | `devices-input`, `machine-amiga` | 75 % (own test programs after the documented wiring; no game tried) |
 | Host network and folder (`media-backends`), journalled for exact replays | `emu-core::host` | 80 % (no TLS; the web frontend has no network) |
 
 ### Debugger, preview and frontends

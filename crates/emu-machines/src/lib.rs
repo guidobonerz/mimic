@@ -47,7 +47,7 @@ pub fn device_names(kind: PortKind) -> Vec<&'static str> {
         PortKind::AppleGame => vec!["joystick", "paddles"],
         PortKind::MacMouse => vec!["mouse"],
         PortKind::KempstonMouse => vec!["mouse"],
-        PortKind::CbmUserPort => vec!["wic64"],
+        PortKind::CbmUserPort => vec!["wic64", "cga", "hit", "kingsoft", "starbyte"],
         k if joystick_port(k) => vec!["joystick"],
         _ => Vec::new(),
     }
@@ -105,6 +105,11 @@ pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> 
             _ => return None,
         };
         return Some(Box::new(AppleJoystick::new(k)));
+    }
+    if kind == PortKind::CbmUserPort {
+        if let Some(k) = devices_input::FourPlayerKind::parse(name) {
+            return Some(Box::new(devices_input::FourPlayer::new(k)));
+        }
     }
     if name == "lightpen" {
         return devices_input::LightPenKind::for_port(kind)

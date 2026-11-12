@@ -58,6 +58,9 @@ pub struct Io {
     pub keyboard: Keyboard,
     /// Pins pulled low by the devices in control ports 1 and 2.
     pub port_lines: [u32; 2],
+    /// Lines the user port's device pulls low (pin numbering of
+    /// `emu_core::port::user_port`); read each cycle, not state.
+    pub user_lines: u32,
     /// POTX/POTY resistances of the devices in control ports 1 and 2
     /// (65535 = open).
     pub port_analog: [[u16; 2]; 2],
@@ -96,6 +99,7 @@ impl Io {
                 .expect("CPU clock is non-zero"),
             keyboard: Keyboard::default(),
             port_lines: [0; 2],
+            user_lines: 0,
             port_analog: [[u16::MAX; 2]; 2],
             iec: IecLines::default(),
             debugcart: false,
@@ -169,10 +173,15 @@ impl Io {
         (cols as u8, rows)
     }
 
-    /// CIA2: PA6 CLK in, PA7 DATA in read the serial line levels.
+    /// CIA2: PA6 CLK in, PA7 DATA in read the serial line levels; PA2 and
+    /// port B are the user port's (open without a device).
     fn cia2_ext(&self) -> (u8, u8) {
-        let pa = 0x3f | if self.iec.clk { 0 } else { 0x40 } | if self.iec.data { 0 } else { 0x80 };
-        (pa, 0xff)
+        let mut pa =
+            0x3f | if self.iec.clk { 0 } else { 0x40 } | if self.iec.data { 0 } else { 0x80 };
+        if self.user_lines & emu_core::port::user_port::PA2 != 0 {
+            pa &= !0x04;
+        }
+        (pa, emu_core::port::user_port::pb(self.user_lines))
     }
 
     /// Side-effect-free read of an I/O address.

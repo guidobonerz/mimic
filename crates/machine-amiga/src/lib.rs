@@ -67,6 +67,14 @@
 //!   half speed for HD disks and report DD disks as a DD drive).
 //! - `serial`: "none" (default) or "loopback" (TXD wired to RXD).
 //! - `wcs` (A1000): "rom" (default, Kickstart preloaded) or "disk".
+//! - `parallel`: "4player" puts the four-player adapter on the parallel
+//!   port (not together with `printer`): two more joysticks, listed as
+//!   the ports "joystick 3" (`PortId(2)`) and "joystick 4" (`PortId(3)`).
+//!   Their switches pull parallel port lines low: joystick 3 up, down,
+//!   left, right on data bits 0–3 (CIA-A port B) and fire on SEL (CIA-B
+//!   PA2); joystick 4 on data bits 4–7 and BUSY (CIA-B PA0). Programs
+//!   read the data port as an input. (Pinout: Linux kernel documentation,
+//!   "Amiga 4-joystick parport extension"; see `docs/sources.md`.)
 //! - `port0` / `port1`: game port devices, "mouse", "joystick", "lightpen"
 //!   or "none" (defaults: the mouse in port 0, a joystick in port 1). The
 //!   ports are sampled once a raster line; Denise counts mouse steps into
@@ -368,6 +376,11 @@ struct Board {
     cpu_write: Option<(u16, u16, u8)>,
     /// A printer hangs on the parallel port: not busy, paper in, selected.
     printer_on: bool,
+    /// Levels the four-player adapter allows on the parallel port: the
+    /// data lines (CIA-A port B) and BUSY/POUT/SEL (CIA-B PA0–PA2); $FF
+    /// without one or with nothing held.
+    par_data: u8,
+    par_status: u8,
     /// Bytes strobed to the printer since the last frame.
     printed: Vec<u8>,
     mem: Memory,
@@ -615,9 +628,9 @@ impl Board {
                 return 0xff;
             }
             if peek {
-                self.cia_a.peek(reg, ext, 0xff)
+                self.cia_a.peek(reg, ext, self.par_data)
             } else {
-                self.cia_a.read(reg, ext, 0xff)
+                self.cia_a.read(reg, ext, self.par_data)
             }
         } else {
             if addr & 0x2000 != 0 {
@@ -637,7 +650,7 @@ impl Board {
         if self.printer_on {
             0xfc
         } else {
-            0xff
+            self.par_status
         }
     }
 
@@ -1063,6 +1076,9 @@ impl Bus for PeekBus<'_> {
 pub struct Amiga {
     /// `printer` option: the paper end of the printer port.
     printer: Option<Printer>,
+    /// `parallel=4player`: the adapter's joysticks 3 and 4 (directions,
+    /// buttons).
+    four_player: Option<[(emu_core::input::Dirs, u8); 2]>,
     model: Model,
     standard: Standard,
     cpu: M68000,
@@ -1160,6 +1176,22 @@ impl Amiga {
             mem = mem.with_gayle();
         }
         let ptr_mask_byte = chip as u32 - 1;
+        let four_player = match config.options.get("parallel").map(String::as_str) {
+            None | Some("none") => None,
+            Some("4player") => {
+                if config.options.get("printer").is_some_and(|v| v != "off") {
+                    return Err(ConfigError::Invalid(
+                        "parallel=4player and a printer both need the parallel port".into(),
+                    ));
+                }
+                Some([(emu_core::input::Dirs::NONE, 0); 2])
+            }
+            Some(other) => {
+                return Err(ConfigError::Invalid(format!(
+                    "parallel option '{other}' (4player or none)"
+                )))
+            }
+        };
         let mut custom = Custom::new(standard, ptr_mask_byte & !1, chipset);
         custom.paula.uart.loopback = loopback;
         let mut m = Self {
@@ -1167,9 +1199,12 @@ impl Amiga {
             standard,
             cpu: M68000::with_model(model.cpu()),
             printer: Printer::from_config(config, devices_printer::Model::Fx80),
+            four_player,
             board: Board {
                 cpu_write: None,
                 printer_on: config.options.get("printer").is_some_and(|v| v != "off"),
+                par_data: 0xff,
+                par_status: 0xff,
                 printed: Vec::new(),
                 mem,
                 custom,
@@ -1368,12 +1403,48 @@ impl Amiga {
         new_field.then_some(StopReason::FrameDone)
     }
 
+    /// The four-player adapter's switches on the parallel port's lines.
+    fn parallel_lines(&mut self) {
+        use emu_core::input::Dirs;
+        let (mut data, mut status) = (0xffu8, 0xffu8);
+        if let Some(sticks) = &self.four_player {
+            // Joystick 3: data bits 0–3, fire SEL; joystick 4: bits 4–7,
+            // fire BUSY.
+            for (n, (dirs, buttons)) in sticks.iter().enumerate() {
+                for (i, d) in [Dirs::UP, Dirs::DOWN, Dirs::LEFT, Dirs::RIGHT]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if dirs.contains(d) {
+                        data &= !(1 << (4 * n + i));
+                    }
+                }
+                if buttons & 1 != 0 {
+                    status &= if n == 0 { !0x04 } else { !0x01 };
+                }
+            }
+        }
+        self.board.par_data = data;
+        self.board.par_status = status;
+    }
+
     fn apply_input(&mut self, ev: TimedInput) {
         match (ev.target, ev.event) {
             (InputTarget::Keyboard, InputEvent::Key { machine_key, down }) => {
                 if self.board.keyboard.key(machine_key.0 as u8, down) {
                     Machine::reset(self, ResetKind::Soft);
                 }
+            }
+            (InputTarget::Port(p), InputEvent::Digital { dirs, buttons }) if p.0 >= 2 => {
+                // The four-player adapter's joysticks.
+                if let Some(stick) = self
+                    .four_player
+                    .as_mut()
+                    .and_then(|s| s.get_mut(usize::from(p.0) - 2))
+                {
+                    *stick = (dirs, buttons);
+                }
+                self.parallel_lines();
             }
             (InputTarget::Port(p), event) => {
                 if let Some(Some(dev)) = self.ports.get_mut(usize::from(p.0)) {
@@ -1801,7 +1872,7 @@ impl Machine for Amiga {
     }
 
     fn ports(&self) -> Vec<PortInfo> {
-        [
+        let mut ports: Vec<PortInfo> = [
             (PORT0, "game port 0 (mouse)"),
             (PORT1, "game port 1 (joystick)"),
         ]
@@ -1812,7 +1883,19 @@ impl Machine for Amiga {
             name,
             connected: self.ports[usize::from(id.0)].is_some(),
         })
-        .collect()
+        .collect();
+        // The four-player adapter's joysticks on the parallel port.
+        if self.four_player.is_some() {
+            for (id, name) in [(PortId(2), "joystick 3"), (PortId(3), "joystick 4")] {
+                ports.push(PortInfo {
+                    id,
+                    kind: PortKind::AmigaGameport,
+                    name,
+                    connected: true,
+                });
+            }
+        }
+        ports
     }
 
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError> {
@@ -1878,6 +1961,14 @@ impl Machine for Amiga {
         }
         if let Some(p) = &self.printer {
             p.save_chunk(&mut w);
+        }
+        if let Some(sticks) = &self.four_player {
+            w.chunk(*b"A4JY", 1, |w| {
+                for (dirs, buttons) in sticks {
+                    w.u8(dirs.0);
+                    w.u8(*buttons);
+                }
+            });
         }
         let b = &self.board;
         // Version 5: the LED filter is a biquad (five states per side);
@@ -2039,6 +2130,18 @@ impl Machine for Amiga {
         if let Some(p) = &mut self.printer {
             p.load_chunk(s);
         }
+        // The adapter's joysticks (a state without them: nothing held).
+        if let Some(sticks) = &mut self.four_player {
+            *sticks = [(emu_core::input::Dirs::NONE, 0); 2];
+            if let Ok((_, mut c)) = StateReader::new(s).chunk(*b"A4JY", 1) {
+                for stick in sticks.iter_mut() {
+                    if let (Ok(d), Ok(b)) = (c.u8(), c.u8()) {
+                        *stick = (emu_core::input::Dirs(d & 0x0f), b & 0x07);
+                    }
+                }
+            }
+        }
+        self.parallel_lines();
         self.board.cpu_write = StateReader::new(s)
             .chunk(*b"CPUW", 1)
             .ok()

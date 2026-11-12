@@ -355,7 +355,7 @@ table(["Option", "Values"], [
     ["`uci`", "`on`: the Ultimate 64 command interface at $DF1C-$DF1F (see below)"],
     ["`reu`", "a RAM Expansion Unit: `128k` (1700), `256k` (1764), `512k` (1750), "
      "`1m`, `2m`, `4m`, `8m`, `16m`; `off` (default)"],
-    ["`userport`", "`wic64`: a WiC64 WLAN adapter in the user port; `none` (default)"],
+    ["`userport`", "`wic64`: a WiC64 WLAN adapter in the user port; `cga` (also `4player`), `hit`, `kingsoft`, `starbyte`: four-player adapters with joysticks 3 and 4; `none` (default)"],
     ["`net`", "`off`: no network for the UCI and the WiC64, even if the frontend has one"],
     ["`sd2iec`", "`on`: an SD2IEC on the serial bus (see below); `sd2iec_device` = 4–30 "
      "(default 9); `drive8=sd2iec` puts it in place of drive 8"],
@@ -1425,7 +1425,8 @@ table(["Key", "Machine", "Values"], [
     ["`reu`", "C64", "`128k`, `256k`, `512k`, `1m` … `16m`: a REU (REC 8726)"],
     ["`uci`", "C64", "`on`: the Ultimate 64 command interface at `$DF1C`–`$DF1F` "
      "(DOS, network, control, software IEC, HTTP); see `--uci-dir`, `--uci-mount`"],
-    ["`userport`", "C64", "`wic64`: the WiC64 (HTTP, TCP, time) on the user port"],
+    ["`userport`", "C64, C128, VIC-20", "`wic64` (C64 only): the WiC64 on the user port; `cga`, `hit`, `kingsoft`, `starbyte`: four-player adapters (VIC-20: `cga` only)"],
+    ["`parallel`", "Amiga", "`4player`: four-player adapter on the parallel port (joysticks 3 and 4)"],
     ["`ram`", "VIC-20", "`none`, `3k`, `8k`, `16k`, `24k`, `32k`, `35k`"],
     ["`hz`", "PET", "`50`, `60`"],
     ["`display`", "C128", "`40`, `80`: the screen the machine starts in"],

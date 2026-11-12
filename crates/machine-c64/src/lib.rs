@@ -64,7 +64,12 @@
 //!   while the VIC-II holds BA.
 //! - `options["userport"] = "wic64"`: a WiC64 in the user port
 //!   (`PortId(2)`, [`PortKind::CbmUserPort`]: CIA2 port B, PA2, PC2 and
-//!   FLAG2); "none" by default.
+//!   FLAG2); "none" by default. "cga" (also "4player", "protovision"),
+//!   "hit", "kingsoft" or "starbyte": a four-player adapter
+//!   ([`devices_input::fourplayer`]) with two more joysticks, listed as
+//!   the ports "joystick 3" (`PortId(3)`) and "joystick 4" (`PortId(4)`)
+//!   while it is plugged in; its lines reach CIA2's port B, PA2 and, with
+//!   CNT1 bridged to CNT2, CIA2's serial register.
 //! - `options["net"] = "off"`: the devices see no network even if the
 //!   frontend offers one.
 //!
@@ -683,7 +688,14 @@ impl C64 {
         let user_port: Option<Box<dyn PortDevice>> = match option("userport") {
             None | Some("none") => None,
             Some("wic64") => Some(Box::new(devices_net::Wic64::new())),
-            Some(other) => return Err(ConfigError::Invalid(format!("userport option '{other}'"))),
+            Some(other) => match devices_input::FourPlayerKind::parse(other) {
+                Some(kind) => Some(Box::new(devices_input::FourPlayer::new(kind))),
+                None => {
+                    return Err(ConfigError::Invalid(format!(
+                        "userport option '{other}' (wic64, cga, hit, kingsoft, starbyte or none)"
+                    )))
+                }
+            },
         };
         let net_off = match option("net") {
             None | Some("on") => false,
@@ -829,6 +841,13 @@ impl C64 {
             let lines = dev.read_lines(self.sched.now()).pulled_low;
             self.io.user_lines = lines;
             self.io.cia2.set_flag(lines & user_port::FLAG2 == 0);
+            if lines & user_port::CNT_BRIDGE != 0 {
+                // The adapter bridges CNT1 to CNT2: CIA1's serial clock
+                // shifts SP2's level into CIA2.
+                let (cnt, _) = self.io.cia1.serial_out();
+                self.io.cia2.set_cnt(cnt);
+                self.io.cia2.set_sp(lines & user_port::SP2 == 0);
+            }
         }
         // CIAs clock before the CPU access: a read sees this cycle's state.
         self.io.tick_cias();
@@ -1012,6 +1031,12 @@ impl C64 {
             InputTarget::Keyboard => {
                 if let emu_core::input::InputEvent::Key { machine_key, down } = ev.event {
                     self.io.keyboard.set(machine_key, down);
+                }
+            }
+            InputTarget::Port(p) if p.0 > USER_PORT.0 => {
+                // A four-player adapter's joysticks.
+                if let Some(dev) = &mut self.user_port {
+                    dev.input_at(p.0 - USER_PORT.0 - 1, &ev.event);
                 }
             }
             InputTarget::Port(p) => {
@@ -1539,6 +1564,17 @@ impl Machine for C64 {
             name: "user port",
             connected: self.user_port.is_some(),
         });
+        // A four-player adapter's joysticks (they come and go with it).
+        if self.user_port.as_ref().is_some_and(|d| d.inputs() >= 2) {
+            for (n, name) in ["joystick 3", "joystick 4"].into_iter().enumerate() {
+                ports.push(PortInfo {
+                    id: PortId(USER_PORT.0 + 1 + n as u8),
+                    kind: PortKind::CbmControl,
+                    name,
+                    connected: true,
+                });
+            }
+        }
         ports
     }
 
@@ -1579,6 +1615,8 @@ impl Machine for C64 {
         if port == USER_PORT {
             self.io.user_lines = 0;
             self.io.cia2.set_flag(true);
+            self.io.cia2.set_cnt(true);
+            self.io.cia2.set_sp(true);
             return self.user_port.take();
         }
         let dev = self.ports.get_mut(usize::from(port.0))?.take();
@@ -2104,6 +2142,8 @@ impl DebugTarget for C64 {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_fourplayer;
 #[cfg(test)]
 mod tests_net;
 #[cfg(test)]

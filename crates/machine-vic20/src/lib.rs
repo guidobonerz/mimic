@@ -13,6 +13,9 @@
 //! Options:
 //! - `ram`: "none" (default), "3k", "8k", "16k", "24k" or "all" (3 KB plus
 //!   blocks 1, 2, 3 and 5) — see [`memory`].
+//! - `userport`: "cga" (also "4player"): the Classical Games / Protovision
+//!   four-player adapter on VIA1's port B (`devices_input::fourplayer`); its
+//!   joysticks are the ports "joystick 2" and "joystick 3". "none" by default.
 //! - `port1`: "joystick" (default) or "none".
 //! - `drive8`: "1541" (default when `roms["dos1541"]` is given), "1571"
 //!   (`roms["dos1571"]`), "1581" (`roms["dos1581"]`), "virtual" or "none";
@@ -197,6 +200,8 @@ fn load_roms(config: &MachineConfig, model: vic::Model) -> Result<Roms, ConfigEr
 
 /// The control port (`PortId(0)`).
 pub const CONTROL_PORT: PortId = PortId(0);
+/// The user port: a four-player adapter (`devices_input::fourplayer`).
+pub const USER_PORT: PortId = PortId(1);
 
 pub const SLOT_DRIVE8: SlotId = SlotId(0);
 pub const SLOT_PROGRAM: SlotId = SlotId(1);
@@ -210,6 +215,9 @@ pub struct Vic20 {
     sched: Scheduler,
     input: InputQueue,
     port: Option<Box<dyn PortDevice>>,
+    /// The four-player adapter in the user port (`userport` option): VIA1's
+    /// port B; its joysticks are the ports 2 and 3.
+    user_port: Option<Box<dyn PortDevice>>,
     drive: Option<Drive8>,
     /// `printer` option: a printer on the serial bus.
     printer: Option<CbmPrinter>,
@@ -254,6 +262,25 @@ impl Vic20 {
             Some(r) => memory::expansion_for(r)
                 .ok_or_else(|| ConfigError::Invalid(format!("ram option '{r}'")))?,
         };
+        let user_port: Option<Box<dyn PortDevice>> =
+            match config.options.get("userport").map(String::as_str) {
+                None | Some("none") => None,
+                // The adapters that need CIA2's PA2 and serial port do not
+                // fit the VIC-20's user port.
+                Some(name)
+                    if devices_input::FourPlayerKind::parse(name)
+                        == Some(devices_input::FourPlayerKind::Cga) =>
+                {
+                    Some(Box::new(devices_input::FourPlayer::new(
+                        devices_input::FourPlayerKind::Cga,
+                    )))
+                }
+                Some(other) => {
+                    return Err(ConfigError::Invalid(format!(
+                        "userport option '{other}' (cga or none)"
+                    )))
+                }
+            };
         let port = devices_input::control_port_option(
             "port1",
             config.options.get("port1").map(String::as_str),
@@ -301,6 +328,7 @@ impl Vic20 {
             sched: Scheduler::new(),
             input: InputQueue::new(),
             port,
+            user_port,
             drive,
             printer: CbmPrinter::from_config(config),
             program: ProgramSlot::default(),
@@ -337,6 +365,20 @@ impl Vic20 {
             self.refresh_port();
         }
         // VIAs clock before the CPU access: a read sees this cycle's state.
+        // The user port: VIA1's port B outputs go to the device, its lines
+        // come back for this cycle's reads.
+        if let Some(dev) = &mut self.user_port {
+            use emu_core::port::user_port;
+            let now = self.sched.now();
+            dev.write_lines(
+                emu_core::port::PortLines {
+                    pulled_low: user_port::pb_lines(self.io.via1.port_b_out()),
+                    analog: [u16::MAX; 2],
+                },
+                now,
+            );
+            self.io.user_lines = dev.read_lines(now).pulled_low;
+        }
         self.io.tick_vias();
         // Datasette: VIA1 CA2 MOTOR (low = on), VIA2 PB3 WRITE, VIA1 PA6
         // SENSE, READ on VIA2 CA1.
@@ -440,6 +482,12 @@ impl Vic20 {
                     dev.input(&ev.event);
                 }
                 self.refresh_port();
+            }
+            InputTarget::Port(p) if p.0 > USER_PORT.0 => {
+                // The four-player adapter's joysticks.
+                if let Some(dev) = &mut self.user_port {
+                    dev.input_at(p.0 - USER_PORT.0 - 1, &ev.event);
+                }
             }
             InputTarget::Port(_) => {}
             InputTarget::Panel => {
@@ -793,15 +841,49 @@ impl Machine for Vic20 {
     }
 
     fn ports(&self) -> Vec<PortInfo> {
-        vec![PortInfo {
-            id: CONTROL_PORT,
-            kind: PortKind::CbmControl,
-            name: "control port",
-            connected: self.port.is_some(),
-        }]
+        let mut ports = vec![
+            PortInfo {
+                id: CONTROL_PORT,
+                kind: PortKind::CbmControl,
+                name: "control port",
+                connected: self.port.is_some(),
+            },
+            PortInfo {
+                id: USER_PORT,
+                kind: PortKind::CbmUserPort,
+                name: "user port",
+                connected: self.user_port.is_some(),
+            },
+        ];
+        // The adapter's joysticks come and go with it.
+        if self.user_port.is_some() {
+            for (n, name) in ["joystick 2", "joystick 3"].into_iter().enumerate() {
+                ports.push(PortInfo {
+                    id: PortId(USER_PORT.0 + 1 + n as u8),
+                    kind: PortKind::CbmControl,
+                    name,
+                    connected: true,
+                });
+            }
+        }
+        ports
     }
 
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError> {
+        if port == USER_PORT {
+            // Only a four-player adapter's port B lines are wired up.
+            if dev.kind() != PortKind::CbmUserPort || dev.inputs() < 2 {
+                return Err(PortError::Incompatible {
+                    port: PortKind::CbmUserPort,
+                    device: dev.kind(),
+                });
+            }
+            if self.user_port.is_some() {
+                return Err(PortError::Occupied(port));
+            }
+            self.user_port = Some(dev);
+            return Ok(());
+        }
         if port != CONTROL_PORT {
             return Err(PortError::NoSuchPort(port));
         }
@@ -820,6 +902,10 @@ impl Machine for Vic20 {
     }
 
     fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>> {
+        if port == USER_PORT {
+            self.io.user_lines = 0;
+            return self.user_port.take();
+        }
         if port != CONTROL_PORT {
             return None;
         }
@@ -903,6 +989,14 @@ impl Machine for Vic20 {
                     .map(|d| d.save_state())
                     .unwrap_or_default(),
             );
+            // The user port's adapter (empty: none; older states end here).
+            w.bytes(
+                &self
+                    .user_port
+                    .as_ref()
+                    .map(|d| d.save_state())
+                    .unwrap_or_default(),
+            );
         });
         w.into_bytes()
     }
@@ -965,7 +1059,15 @@ impl Machine for Vic20 {
                 let _ = d.load(&mut StateReader::new(b));
             }
         };
-        let port_state = match r.chunk(*b"PORT", 1).and_then(|(_, mut c)| c.bytes()) {
+        let user_present = self.user_port.is_some();
+        let (port_state, user_state) = match r.chunk(*b"PORT", 1).and_then(|(_, mut c)| {
+            let port = c.bytes()?;
+            let user = if c.remaining() > 0 { c.bytes()? } else { &[] };
+            if user.is_empty() == user_present {
+                return Err(StateError::Invalid("user port device differs"));
+            }
+            Ok((port, user.to_vec()))
+        }) {
             Ok(p) => p,
             Err(e) => {
                 restore_drive(&mut self.drive);
@@ -975,6 +1077,13 @@ impl Machine for Vic20 {
         };
         if let (Some(dev), false) = (&mut self.port, port_state.is_empty()) {
             if let Err(e) = dev.load_state(port_state) {
+                restore_drive(&mut self.drive);
+                restore_tape(&mut self.tape);
+                return Err(e);
+            }
+        }
+        if let Some(d) = &mut self.user_port {
+            if let Err(e) = d.load_state(&user_state) {
                 restore_drive(&mut self.drive);
                 restore_tape(&mut self.tape);
                 return Err(e);
