@@ -68,7 +68,7 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 
 ## Test overview
 
-Where the project stands against test suites and checks, as of 2026-11-11. 🟢 everything passes (or every remaining case is a known reference problem), 🟡 most passes with open cases, 🔴 not verified or largely failing, ⚪ not started. Details and trends: `docs/claude/testing.md`, `docs/test-results-c64.md` and the phase files in `docs/claude/phases/`.
+Where the project stands against test suites and checks, as of 2026-11-13. 🟢 everything passes (or every remaining case is a known reference problem), 🟡 most passes with open cases, 🔴 not verified or largely failing, ⚪ not started. Details and trends: `docs/claude/testing.md`, `docs/test-results-c64.md` and the phase files in `docs/claude/phases/`.
 
 ### CPUs
 
@@ -103,7 +103,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | Amstrad CPC | Arnold acid tests (CRTC type 1) | 90/98 | 🟡 | PPI mode 1, VSYNC port read, `crtctest` R8 count (several fail on real CPCs too); CRTC 0 18/22, 2 18/23 |
 | Amiga 500/1000/2000 (OCS) | WinUAE comparison, bus tests on a real A500 | 260/504; bus timing within 1.8 % | 🟡 | WinUAE rows, bus test 5 latency |
 | Amiga 500+ (ECS) | Kickstart 2.0/3.1 boot | insert-disk screen | 🟡 | programmable beam registers |
-| Amiga 1200 (AGA) | Kickstart 3.1 (40.068) and Workbench 3.1 boot from floppy, from an IDE hard disk and from a PCMCIA card (`amiga_boot`, 6 tests), bus tests on a real A1200 | Workbench desktop after 2100 frames (floppy), 400 (IDE, partition and RDB images; PCMCIA card CC0:); a blank PCMCIA SRAM card becomes fast RAM; bus timing within 4 % | 🟡 | AGA fetch details (DDFSTRT rounding) unchecked; no real HDF or PCMCIA card image tried |
+| Amiga 1200 (AGA) | Kickstart 3.1 (40.068) and Workbench 3.1 boot from floppy, from an IDE hard disk and from a PCMCIA card (`amiga_boot`, 6 tests), bus tests on a real A1200 | Workbench desktop after 2100 frames (floppy), 400 (IDE, partition and RDB images; PCMCIA card CC0:); a blank PCMCIA SRAM card becomes fast RAM; bus timing within 4 %; AGA picture probes (`tools/amiga_agaprobe.py`) match photographs of the real A1200: scroll limit, BSCAN2/SSCAN2, BYPASS, when sprites show with wide fetches | 🟡 | the garbage of DDFSTRT ≡ $C mod 16 with high-resolution FMODE 3 (planes 1 and 3 lose their data on the real A1200) not built; no real HDF or PCMCIA card image tried |
 | ZX81 | boot, PRINT, .P files | works | 🟡 | no test suite |
 | ZX Spectrum 48K/128K/+2 | Fuse test | all pass | 🟢 | border timing beyond the Fuse test, SAVE to tape |
 | ColecoVision | cartridge collection | 231/235 show a picture | 🟡 | TMS9918A reference pictures, VRAM timing |
@@ -147,7 +147,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 
 ## Status
 
-**Completeness** estimates how much of the planned scope of a component works and is covered by tests. 100 % means the full scope is done and checked against hardware test suites. Below that, the notes name what is missing or unverified. The figures are estimates, made from the test results and open items recorded in `CLAUDE.md` (as of 2026-10-24); they are not measurements.
+**Completeness** estimates how much of the planned scope of a component works and is covered by tests. 100 % means the full scope is done and checked against hardware test suites. Below that, the notes name what is missing or unverified. The figures are estimates, made from the test results and open items recorded in `CLAUDE.md` and the phase files (last revised 2026-11-13); they are not measurements.
 
 ### CPUs
 
@@ -173,12 +173,12 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | Commodore PET | `machine-pet` | 2001, 3032, 4032, 8032 | boots BASIC; IEEE drive virtual only (no true 2031) | 85 % |
 | Commodore C16 / Plus/4 | `machine-ted` | PAL, NTSC | boots BASIC, tape, cartridges | 85 % |
 | Commodore 128 | `machine-c128` | 40/80 columns, Z80 | boots BASIC; VDC; 1571 | 80 % |
-| Atari 400/800/800XL/65XE/130XE | `machine-atari8` | PAL, NTSC | Acid800 52/57 (800XL, 130XE); 5 ANTIC/GTIA edge cases open | 90 % |
+| Atari 400/800/800XL/65XE/130XE | `machine-atari8` | PAL, NTSC | Acid800 57/57 (800XL, 130XE), 56/56 (400), 56/57 (800, the remaining result correct) | 95 % |
 | Atari 2600 | `machine-atari2600` | NTSC, PAL (auto-detected) | own TIA/RIOT tests, 24 games, Pitfall II (DPC); Supercharger, SECAM missing | 88 % |
-| Amstrad CPC | `machine-cpc` | 464, 664, 6128; CRTC 0–2 | Arnold acid tests 66/70; tape and disc | 90 % |
+| Amstrad CPC | `machine-cpc` | 464, 664, 6128; CRTC 0–2 | Arnold acid tests 90/98 (CRTC type 1; type 0 18/22, type 2 18/23); tape and disc | 90 % |
 | Amiga 500/1000/2000 (OCS) | `machine-amiga` | PAL, NTSC | Kickstart 1.2–3.1, Workbench 1.3, demos; bus timing against WinUAE within 0.2–3 % | 85 % |
 | Amiga 500+ (ECS) | `machine-amiga` | `500plus` | Kickstart 2.0/3.1 reach insert-disk; programmable beam partly | 75 % |
-| Amiga 1200 (AGA) | `machine-amiga` | `1200` | Kickstart 3.1 (40.068) and Workbench 3.1 boot; Alice/Lisa with FMODE fetch, 256 colours, HAM8; Gayle with the IDE port (two hard disks, HDF with or without RDB) and the PCMCIA slot (SRAM cards as fast RAM or CC0:) | 70 % |
+| Amiga 1200 (AGA) | `machine-amiga` | `1200` | Kickstart 3.1 (40.068) and Workbench 3.1 boot; Alice/Lisa with FMODE fetch, 256 colours, HAM8; Gayle with the IDE port (two hard disks, HDF with or without RDB) and the PCMCIA slot (SRAM cards as fast RAM or CC0:); AGA scroll limit, scan doubling, BYPASS and the sprite rules of wide fetches checked against the real A1200 | 75 % |
 | Sinclair ZX81 / TS1000 | `machine-zx81` | 1/2/16 KB | boots, PRINT, .P files through traps | 85 % |
 | ColecoVision | `machine-coleco` | NTSC, PAL | 231 of 235 cartridges show a picture; MegaCart; four controller kinds | 90 % |
 | MSX (MSX1, MSX2) | `machine-msx` | NTSC, PAL | C-BIOS boots (MSX1 and MSX2) and starts cartridges; MSX BASIC 1.0 and 2.0 start; MSX2 with the V9938 (all modes, sprite mode 2, commands), memory mapper, sub ROM and clock; Konami, Konami SCC (with its sound chip), ASCII 8/16 MegaROM schemes, battery RAM; cassette (CAS, play and record), disks with the SVI-738 interface; one cartridge, one cassette and two disk games (one of them MSX2) run | 70 % |
