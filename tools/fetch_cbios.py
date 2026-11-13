@@ -7,8 +7,10 @@ Default target: the `msx` folder of the ROM directory (`EMU_ROM_DIR`, else
 `~/.mimic/roms`). Downloads the C-BIOS 0.29a release archive from
 SourceForge, checks its SHA-256 and unpacks the MSX1 ROMs (the main ROM in
 its international 60 Hz, European 50 Hz, Japanese and Brazilian builds and
-the logo ROM) with the C-BIOS licence text. The machine `msx` then starts
-without a user-supplied BIOS; C-BIOS runs cartridges and has no BASIC.
+the logo ROM) and the MSX2 ROMs (main ROM in the same four builds, sub ROM,
+logo ROM) with the C-BIOS licence text. The machine `msx` then starts
+without a user-supplied BIOS, as an MSX1 or with `--model msx2`; C-BIOS
+runs cartridges and has neither BASIC nor disk support.
 
 C-BIOS is BSD-licensed (see the `cbios.txt` this script puts beside the
 ROMs). It is an optional download, never committed (golden rule 6). Stdlib
@@ -37,6 +39,12 @@ FILES = [
     "roms/cbios_main_msx1_jp.rom",
     "roms/cbios_main_msx1_br.rom",
     "roms/cbios_logo_msx1.rom",
+    "roms/cbios_main_msx2.rom",
+    "roms/cbios_main_msx2_eu.rom",
+    "roms/cbios_main_msx2_jp.rom",
+    "roms/cbios_main_msx2_br.rom",
+    "roms/cbios_sub.rom",
+    "roms/cbios_logo_msx2.rom",
     "doc/cbios.txt",
 ]
 

@@ -609,3 +609,78 @@ fn a_user_disk_boots() {
         assert!(text.contains(&expect), "no '{expect}' on the screen");
     }
 }
+
+fn msx2_machine() -> Box<dyn Machine> {
+    let dir = media_backends::roms::env_dir().expect("no ROM folder");
+    let mut config = MachineConfig {
+        model: Some("msx2".into()),
+        roms: media_backends::roms::load(&dir, "msx").expect("ROMs"),
+        ..MachineConfig::default()
+    };
+    config.options.insert("disk".into(), "off".into());
+    emu_machines::registry().create("msx", &config).unwrap()
+}
+
+#[test]
+#[ignore = "needs an MSX2 BIOS and sub ROM or C-BIOS's in the ROM folder"]
+fn msx2_bios_shows_its_screen() {
+    let mut m = msx2_machine();
+    run(m.as_mut(), 400);
+    let path = snapshot(m.as_ref(), "msx2-bios.png");
+    let n = colours(m.as_ref());
+    let cpu = m.devices()[0];
+    let regs = m.debug_target(cpu).unwrap().regs();
+    let vdp: Vec<String> = m.chips()[0]
+        .regs
+        .iter()
+        .map(|r| format!("{}={:x}", r.name, r.value))
+        .collect();
+    eprintln!("{n} colours, {path}\n{regs:?}\n{}", vdp.join(" "));
+    assert!(n >= 2, "only the backdrop, see {path}");
+}
+
+#[test]
+#[ignore = "needs an MSX2 BIOS and sub ROM or C-BIOS's in the ROM folder"]
+fn msx2_finds_a_cartridge_that_calls_the_bios() {
+    let mut m = msx2_machine();
+    m.media_slot(SlotId(0))
+        .unwrap()
+        .insert(Media {
+            kind: MediaKind::Cartridge,
+            name: "bioscall.rom".into(),
+            backend: Box::new(Bytes(bios_call_cart())),
+        })
+        .unwrap();
+    run(m.as_mut(), 400);
+    let path = snapshot(m.as_ref(), "msx2-bioscall.png");
+    let vram = emu_core::MemSpaceId(1);
+    let cpu = m.devices()[0];
+    let t = m.debug_target(cpu).unwrap();
+    let row: Vec<u8> = (0..32)
+        .map(|i| t.peek(vram, 0x1800 + i, emu_core::Size::Byte).unwrap() as u8)
+        .collect();
+    assert!(row.windows(5).any(|w| w == b"MIMIC"), "{row:?}, see {path}");
+}
+
+#[test]
+#[ignore = "needs a real MSX2 BIOS in the ROM folder"]
+fn msx2_basic_starts() {
+    let mut m = msx2_machine();
+    run(m.as_mut(), 600);
+    let path = snapshot(m.as_ref(), "msx2-basic.png");
+    let text = screen_text(m.as_mut());
+    let cpu = m.devices()[0];
+    eprintln!("{:?}", m.debug_target(cpu).unwrap().regs());
+    for c in m.chips() {
+        let r: Vec<String> = c
+            .regs
+            .iter()
+            .map(|r| format!("{}={:x}", r.name, r.value))
+            .collect();
+        eprintln!("{}: {}", c.name, r.join(" "));
+    }
+    for line in text.as_bytes().chunks(40) {
+        eprintln!("|{}|", String::from_utf8_lossy(line));
+    }
+    assert!(text.contains("Ok"), "no BASIC prompt, see {path}");
+}

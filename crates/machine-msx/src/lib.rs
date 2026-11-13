@@ -1,4 +1,4 @@
-//! MSX (MSX1; NTSC and PAL).
+//! MSX (MSX1 and MSX2; NTSC and PAL).
 //!
 //! Z80A at 3.579545 MHz (a third of the 10.738635 MHz crystal, on PAL
 //! machines too), the TMS9918A video display processor (PAL: TMS9929A) with
@@ -86,11 +86,33 @@
 //! the PSG, two bus clocks at a time).
 //!
 //! Video formats (`--videoformat`): "ntsc" and "pal"; without one the
-//! BIOS decides (bit 7 of its byte $002B: 1 is a 50 Hz machine). No models
-//! yet (MSX2 will be one).
+//! BIOS decides (bit 7 of its byte $002B: 1 is a 50 Hz machine).
+//!
+//! **Models** (`--model`): "msx1" (default) and "msx2". The MSX2 (MSX2
+//! Technical Handbook, chapters 1 and 5) differs in:
+//! - the V9938 ([`video`], `chips-yamaha`) with 128 KB VRAM at ports
+//!   $98–$9B (palette at $9A, indirect registers at $9B); its picture is
+//!   568 half-width pixels, RGB; R9's NT bit sets the field rate, after
+//!   reset as the BIOS's $002B says;
+//! - slot 3 is always expanded: 3-0 the sub ROM (16 KB, extended BASIC
+//!   and the V9938's BIOS calls) at $0000, 3-2 the RAM, 3-1 the disk ROM
+//!   if there is one;
+//! - the RAM is behind a memory mapper (ports $FC–$FF: the 16 KB segment
+//!   of pages 0–3; after reset 3, 2, 1, 0; reads give the segment with the
+//!   bits above the RAM's size set), `ram` 64 to 4096 KB, default 256;
+//! - the RP5C01 clock ([`rtc`]) at $B4 (register) and $B5 (data), started
+//!   at 1990-01-01 and run by the machine's time, never the host's; it and
+//!   its RAM (the BIOS's screen settings) keep their contents through a
+//!   power cycle as the battery would, but not beyond the session.
+//!
+//! Option `vdp`: "tms9918" (the MSX1's default) or "v9938" (the MSX2's;
+//! on an MSX1 as some machines had it). The MSX2 has no light pen, no
+//! printer and no Kanji ROM here.
+//!
 //! Options:
 //! - `port1`, `port2`: "joystick" (default) or "none".
-//! - `ram`: "8", "16", "32" or "64" (default) KB.
+//! - `ram`: "8", "16", "32" or "64" (default) KB; MSX2: "64" to "4096",
+//!   default "256" (the mapper's size).
 //! - `mapper1`, `mapper2`: the bank switching scheme of the cartridge in
 //!   that slot: "auto" (default, guessed from the image), "plain",
 //!   "konami", "konamiscc", "ascii8", "ascii16", or with battery RAM
@@ -108,7 +130,10 @@
 //! ROMs: role "msx-bios" (32 KB BIOS and BASIC), user-supplied, never in
 //! the repository; C-BIOS (free, `tools/fetch_cbios.py`) is accepted in its
 //! place, with its 16 KB logo ROM as the optional role "msx-logo", used
-//! only when the BIOS is C-BIOS.
+//! only when the BIOS is C-BIOS. The MSX2: "msx2-bios" (32 KB) and
+//! "msx2-sub" (16 KB), or C-BIOS's MSX2 main ROM with its sub ROM
+//! ("msx2-sub-cbios", used only with C-BIOS: it does not have the real sub
+//! ROM's entry points) and its logo ROM "msx2-logo".
 //!
 //! **Cassette** (media slot "cassette", CAS images;
 //! [`drives_other::msx_tape`]): PPI port C bit 4 is the motor relay, bit 5
@@ -126,31 +151,35 @@
 //! disk in drive A.
 //!
 //! Not built yet: other disk interfaces, the printer port, key ghosting,
-//! MSX2.
+//! MSX2+ and turbo R.
 //!
 //! Sources: MSX Technical Data Book (ASCII/Sony, 1984: slots, I/O map,
 //! keyboard matrix, PSG ports, cartridge header); MSX Red Book (BIOS byte
 //! $002B); C-BIOS 0.29a documentation and its machine descriptions (its
-//! ROM layout); Texas Instruments TMS9918A, General Instrument AY-3-8910
-//! and Intel 8255A data (see `chips-ti`, `chips-amstrad`). The
+//! ROM layout); ASCII, *MSX2 Technical Handbook* (1987: slots of the
+//! MSX2, the memory mapper, the clock chip); Ricoh RP5C01 data sheet;
+//! Texas Instruments TMS9918A, Yamaha V9938, General Instrument AY-3-8910
+//! and Intel 8255A data (see `chips-ti`, `chips-yamaha`, `chips-amstrad`). The
 //! implementation is this project's own.
 
 #![forbid(unsafe_code)]
 
 pub mod disk;
+pub mod rtc;
 pub mod slot;
 pub mod stub;
+pub mod video;
 
 use chips_amstrad::ay::Ay;
 use chips_amstrad::ppi::Ppi;
-use chips_ti::{vdp, Tms9918, VdpModel};
+use chips_ti::Tms9918;
 use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
 use devices_cartridge::msx::{Mapper, MsxCart};
 use devices_input::joystick::pin;
 use disk::DiskInterface;
 use drives_other::msx_tape::MsxTape;
 use emu_core::audio::Decimator;
-use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use emu_core::frame::{FieldParity, FrameRef, OutputType, SignalInfo, VideoStandard};
 use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
 use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
 use emu_core::machine::ChipReg;
@@ -163,12 +192,14 @@ use emu_core::{
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
+use rtc::Rp5c01;
 use slot::CartPort;
+use video::Video;
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The Z80's view: memory at 0–$FFFF, I/O ports at `IO_BASE + port`.
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
-/// The VDP's 16 KB of video RAM.
+/// The VDP's video RAM: 16 KB, the V9938's 128 KB.
 pub const VRAM_SPACE: MemSpaceId = MemSpaceId(1);
 pub const SLOT_CART1: SlotId = SlotId(0);
 pub const SLOT_CART2: SlotId = SlotId(1);
@@ -201,16 +232,24 @@ pub fn entry() -> MachineEntry {
     MachineEntry {
         id: "msx",
         name: "MSX",
-        models: &[],
+        models: &["msx1", "msx2"],
         video_formats: emu_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Msx::new(config)?)),
     }
 }
 
+/// The machine's video standard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Model {
     Ntsc,
     Pal,
+}
+
+/// The generation: `--model msx1` (default) or `msx2`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Generation {
+    Msx1,
+    Msx2,
 }
 
 /// The device a port option names.
@@ -247,15 +286,25 @@ struct Board {
     logo: Option<Vec<u8>>,
     /// The RAM, at the top of slot 3.
     ram: Vec<u8>,
-    /// The disk ROM in slot 3-1; with it slot 3 is expanded.
+    /// The disk ROM in slot 3-1.
     disk_rom: Option<Vec<u8>>,
+    /// The MSX2's sub ROM in slot 3-0.
+    sub_rom: Option<Vec<u8>>,
+    /// Slot 3 is expanded (a disk ROM, or an MSX2).
+    expanded: bool,
     /// Slot 3's secondary slot register.
     sub: u8,
+    /// The MSX2's memory mapper: the 16 KB segment of each page (ports
+    /// $FC-$FF); the RAM is then a whole number of segments.
+    mapper: Option<[u8; 4]>,
+    /// The MSX2's clock chip and the T-state its next second begins at.
+    rtc: Option<Rp5c01>,
+    rtc_next: u64,
     /// The working copies of the inserted cartridges.
     carts: [Option<MsxCart>; 2],
     /// A cartridge has a sound chip.
     cart_sound: bool,
-    vdp: Tms9918,
+    vdp: Video,
     psg: Ay,
     ppi: Ppi,
     /// Held keys per keyboard row (bit set: held).
@@ -342,7 +391,7 @@ impl Board {
     /// The secondary slot of slot 3 the page of `addr` shows (0 while the
     /// slot is not expanded).
     fn sub_of(&self, addr: u16) -> u8 {
-        if self.disk_rom.is_some() {
+        if self.expanded {
             self.sub >> (2 * (addr >> 14)) & 3
         } else {
             0
@@ -352,9 +401,13 @@ impl Board {
     /// The RAM cell at `addr`, if its page shows the RAM (slot 3, or 3-2
     /// when the slot is expanded).
     fn ram_index(&self, addr: u16) -> Option<usize> {
-        let ram_sub = if self.disk_rom.is_some() { 2 } else { 0 };
+        let ram_sub = if self.expanded { 2 } else { 0 };
         if self.slot_of(addr) != 3 || self.sub_of(addr) != ram_sub {
             return None;
+        }
+        if let Some(segments) = &self.mapper {
+            let segment = usize::from(segments[usize::from(addr >> 14)]);
+            return Some((segment << 14 | usize::from(addr & 0x3fff)) % self.ram.len());
         }
         (usize::from(addr) + self.ram.len()).checked_sub(0x1_0000)
     }
@@ -362,22 +415,25 @@ impl Board {
     /// `addr` is one of the disk interface's registers and its page shows
     /// the disk ROM.
     fn disk_selected(&self, addr: u16) -> bool {
-        matches!(addr & 0xfff8, disk::BASE | disk::MIRROR)
+        self.disk_rom.is_some()
+            && matches!(addr & 0xfff8, disk::BASE | disk::MIRROR)
             && self.slot_of(addr) == 3
             && self.sub_of(addr) == 1
     }
 
     /// Slot 3 as the page of `addr` shows it.
     fn slot3_peek(&self, addr: u16) -> u8 {
-        let Some(rom) = &self.disk_rom else {
+        if !self.expanded {
             return self.ram_index(addr).map_or(0xff, |i| self.ram[i]);
-        };
+        }
         if addr == 0xffff {
             return !self.sub;
         }
+        let rom = |r: &Option<Vec<u8>>| r.as_ref().map_or(0xff, |r| r[usize::from(addr & 0x3fff)]);
         match self.sub_of(addr) {
             2 => self.ram_index(addr).map_or(0xff, |i| self.ram[i]),
-            1 if matches!(addr >> 14, 1 | 2) => rom[usize::from(addr & 0x3fff)],
+            1 if matches!(addr >> 14, 1 | 2) => rom(&self.disk_rom),
+            0 if addr >> 14 == 0 => rom(&self.sub_rom),
             _ => 0xff,
         }
     }
@@ -403,7 +459,7 @@ impl Board {
         match self.slot_of(addr) {
             0 => {}
             3 => {
-                if addr == 0xffff && self.disk_rom.is_some() {
+                if addr == 0xffff && self.expanded {
                     self.sub = v;
                 } else if let Some(i) = self.ram_index(addr) {
                     self.ram[i] = v;
@@ -423,6 +479,20 @@ impl Board {
             self.psg.regs[15]
         } else {
             0xff
+        }
+    }
+
+    /// The MSX2's ports without side effects: the clock chip's data ($B5)
+    /// and the mapper's segments ($FC-$FF, the bits beyond the RAM's size
+    /// high); $FF elsewhere.
+    fn io_peek(&self, port: u8) -> u8 {
+        match (port, &self.rtc, &self.mapper) {
+            (0xb5, Some(rtc), _) => rtc.read(),
+            (0xfc..=0xff, _, Some(segments)) => {
+                let mask = (self.ram.len() >> 14) - 1;
+                segments[usize::from(port & 3)] | !(mask as u8)
+            }
+            _ => 0xff,
         }
     }
 
@@ -486,8 +556,7 @@ struct MsxBus<'a> {
 impl MsxBus<'_> {
     fn io_read(&mut self, port: u8) -> u8 {
         match port {
-            0x98 => self.b.vdp.read_data(),
-            0x99 => self.b.vdp.read_status(),
+            0x98..=0x9b => self.b.vdp.read(port & 3),
             0xa2 => {
                 let mut a = psg_port_a(self.ports, self.b.psg_port_b(), Cycle(self.b.chips_t));
                 self.tape.sync(self.b.chips_t);
@@ -497,14 +566,13 @@ impl MsxBus<'_> {
                 self.b.psg.read(a)
             }
             0xa8..=0xab => self.b.ppi.read(port, 0, self.b.key_row()),
-            _ => 0xff,
+            _ => self.b.io_peek(port),
         }
     }
 
     fn io_write(&mut self, port: u8, v: u8) {
         match port {
-            0x98 => self.b.vdp.write_data(v),
-            0x99 => self.b.vdp.write_control(v),
+            0x98..=0x9b => self.b.vdp.write(port & 3, v),
             0xa0 => self.b.psg.bus_write(3, v),
             0xa1 => {
                 self.b.psg.bus_write(2, v);
@@ -514,6 +582,20 @@ impl MsxBus<'_> {
                 self.b.ppi.write(port, v);
                 self.b.mix();
                 cassette_lines(&self.b.ppi, self.tape, self.b.chips_t);
+            }
+            0xb4 | 0xb5 => {
+                if let Some(rtc) = &mut self.b.rtc {
+                    if port == 0xb4 {
+                        rtc.write_addr(v);
+                    } else {
+                        rtc.write(v);
+                    }
+                }
+            }
+            0xfc..=0xff => {
+                if let Some(segments) = &mut self.b.mapper {
+                    segments[usize::from(port & 3)] = v;
+                }
             }
             _ => {}
         }
@@ -587,11 +669,10 @@ fn peek(b: &Board, addr: u32) -> u8 {
     if addr >= IO_BASE {
         let port = addr as u8;
         return match port {
-            0x98 => b.vdp.peek().0,
-            0x99 => b.vdp.peek().1,
+            0x98..=0x9b => b.vdp.peek(port & 3),
             0xa2 => b.psg.read(0xff),
             0xa8..=0xab => b.ppi.read(port, 0, b.key_row()),
-            _ => 0xff,
+            _ => b.io_peek(port),
         };
     }
     b.mem_peek(addr as u16)
@@ -617,6 +698,7 @@ impl Bus for PeekBus<'_> {
 
 pub struct Msx {
     model: Model,
+    generation: Generation,
     cpu: Z80,
     board: Board,
     ports: [Option<Box<dyn PortDevice>>; 2],
@@ -636,20 +718,28 @@ pub struct Msx {
 
 impl Msx {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        if let Some(other) = config.model.as_deref() {
-            return Err(ConfigError::UnknownModel(other.into()));
-        }
-        let (bios, logo) = match config.options.get("roms").map(String::as_str) {
-            Some("stub") => (stub::rom(), None),
+        let generation = match config.model.as_deref() {
+            None | Some("msx1") => Generation::Msx1,
+            Some("msx2") => Generation::Msx2,
+            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        };
+        let msx2 = generation == Generation::Msx2;
+        let (bios, logo, sub_rom) = match config.options.get("roms").map(String::as_str) {
+            Some("stub") => (stub::rom(), None, None),
             Some(other) => return Err(ConfigError::Invalid(format!("roms option '{other}'"))),
             None => {
+                let (bios_role, logo_role) = if msx2 {
+                    ("msx2-bios", "msx2-logo")
+                } else {
+                    ("msx-bios", "msx-logo")
+                };
                 let r = config
                     .roms
-                    .get("msx-bios")
-                    .ok_or_else(|| ConfigError::MissingRom("msx-bios".into()))?;
+                    .get(bios_role)
+                    .ok_or_else(|| ConfigError::MissingRom(bios_role.into()))?;
                 if r.len() != 0x8000 {
                     return Err(ConfigError::Invalid(format!(
-                        "msx-bios must be 32768 bytes, got {}",
+                        "{bios_role} must be 32768 bytes, got {}",
                         r.len()
                     )));
                 }
@@ -657,10 +747,27 @@ impl Msx {
                 let cbios = r.windows(6).any(|w| w == b"C-BIOS");
                 let logo = config
                     .roms
-                    .get("msx-logo")
+                    .get(logo_role)
                     .filter(|l| cbios && l.len() == 0x4000)
                     .cloned();
-                (r.clone(), logo)
+                let sub = if msx2 {
+                    // C-BIOS's sub ROM fits only its own main ROM.
+                    let role = if cbios { "msx2-sub-cbios" } else { "msx2-sub" };
+                    let sub = config
+                        .roms
+                        .get(role)
+                        .ok_or_else(|| ConfigError::MissingRom(role.into()))?;
+                    if sub.len() != 0x4000 {
+                        return Err(ConfigError::Invalid(format!(
+                            "{role} must be 16384 bytes, got {}",
+                            sub.len()
+                        )));
+                    }
+                    Some(sub.clone())
+                } else {
+                    None
+                };
+                (r.clone(), logo, sub)
             }
         };
         let model = match config.video_format {
@@ -669,14 +776,34 @@ impl Msx {
             None if bios[0x2b] & 0x80 != 0 => Model::Pal,
             None => Model::Ntsc,
         };
-        let ram_kb = match config.options.get("ram").map(String::as_str) {
-            None | Some("64") => 64,
-            Some("32") => 32,
-            Some("16") => 16,
-            Some("8") => 8,
-            Some(other) => {
+        let ram_kb = match (config.options.get("ram").map(String::as_str), msx2) {
+            (None | Some("64"), false) => 64,
+            (Some("32"), false) => 32,
+            (Some("16"), false) => 16,
+            (Some("8"), false) => 8,
+            (None, true) => 256,
+            (Some(kb @ ("64" | "128" | "256" | "512" | "1024" | "2048" | "4096")), true) => {
+                kb.parse().unwrap_or(256)
+            }
+            (Some(other), false) => {
                 return Err(ConfigError::Invalid(format!(
                     "ram option '{other}' (8, 16, 32 or 64)"
+                )))
+            }
+            (Some(other), true) => {
+                return Err(ConfigError::Invalid(format!(
+                    "ram option '{other}' (64, 128, 256, 512, 1024, 2048 or 4096)"
+                )))
+            }
+        };
+        let v9938 = match (config.options.get("vdp").map(String::as_str), msx2) {
+            (None, _) => msx2,
+            (Some("v9938"), _) => true,
+            (Some("tms9918"), false) => false,
+            (Some(other), _) => {
+                return Err(ConfigError::Invalid(format!(
+                    "vdp option '{other}' (v9938{})",
+                    if msx2 { "" } else { " or tms9918" }
                 )))
             }
         };
@@ -701,22 +828,28 @@ impl Msx {
             mapper_option(config, "mapper1")?,
             mapper_option(config, "mapper2")?,
         ];
-        let vdp_model = match model {
-            Model::Ntsc => VdpModel::Ntsc,
-            Model::Pal => VdpModel::Pal,
+        let standard = match model {
+            Model::Ntsc => VideoStandard::Ntsc,
+            Model::Pal => VideoStandard::Pal,
         };
         let mut m = Self {
             model,
+            generation,
             cpu: Z80::new(),
             board: Board {
                 bios,
                 logo,
                 ram: vec![0; ram_kb * 1024],
+                expanded: msx2 || disk_rom.is_some(),
                 disk_rom: disk_rom.clone(),
+                sub_rom,
                 sub: 0,
+                mapper: msx2.then_some(MAPPER_RESET),
+                rtc: msx2.then(Rp5c01::new),
+                rtc_next: u64::from(CPU_HZ),
                 carts: [None, None],
                 cart_sound: false,
-                vdp: Tms9918::new(vdp_model),
+                vdp: Video::new(v9938, standard),
                 psg: Ay::new(),
                 ppi: Ppi::new(),
                 keys: [0; KEY_ROWS],
@@ -746,16 +879,20 @@ impl Msx {
         self.model
     }
 
+    pub fn generation(&self) -> Generation {
+        self.generation
+    }
+
     fn beam_pos(&self) -> BeamPos {
-        let v = &self.board.vdp;
+        let (line, dot, fields) = self.board.vdp.beam();
         BeamPos {
-            frame: v.fields,
-            line: v.line,
-            cycle: v.dot * 2 / 3,
+            frame: fields,
+            line,
+            cycle: dot * 2 / 3,
             // The frame column: pixel clock 0 is the left border's first
             // column; the blanking after the right border clamps to the
             // last column.
-            hpos: v.dot.min(vdp::WIDTH as u16 - 1),
+            hpos: self.board.vdp.column(dot),
         }
     }
 
@@ -807,6 +944,13 @@ impl Msx {
             self.overlay_fresh = true;
         }
         if field {
+            let b = &mut self.board;
+            if let Some(rtc) = &mut b.rtc {
+                while end >= b.rtc_next {
+                    rtc.second();
+                    b.rtc_next += u64::from(CPU_HZ);
+                }
+            }
             self.tape.sync(end);
             if let Some(d) = &mut self.disk {
                 d.tick(end);
@@ -883,30 +1027,47 @@ impl Msx {
     }
 
     fn signal(&self) -> SignalInfo {
-        let standard = match self.model {
-            Model::Ntsc => VideoStandard::Ntsc,
-            Model::Pal => VideoStandard::Pal,
+        // The V9938's picture is in half-width pixels and it has an RGB
+        // output; its R9 picks the field rate.
+        let v = &self.board.vdp;
+        let (scale, output) = if v.is_v9938() {
+            (2, OutputType::Rgb)
+        } else {
+            (1, OutputType::Composite)
         };
         SignalInfo {
-            pixel_clock_hz: CPU_HZ * 3 / 2,
-            active_pixels: vdp::WIDTH,
-            total_pixels: u32::from(vdp::LINE),
-            lines_per_field: u32::from(self.board.vdp.model.lines()),
-            standard,
-            output: OutputType::Composite,
+            pixel_clock_hz: CPU_HZ * 3 / 2 * scale,
+            active_pixels: v.width(),
+            total_pixels: u32::from(chips_ti::vdp::LINE) * scale,
+            lines_per_field: u32::from(v.lines()),
+            standard: v.standard(),
+            output,
             field: FieldParity::Progressive,
         }
     }
 }
+
+/// The mapper's segments after reset: the BIOS's own order (page 0
+/// segment 3 ... page 3 segment 0), so a program that never touches the
+/// mapper has 64 KB.
+const MAPPER_RESET: [u8; 4] = [3, 2, 1, 0];
 
 /// Read a byte as the CPU sees it now (tests and tools).
 pub fn peek_cpu(m: &Msx, addr: u16) -> u8 {
     m.board.mem_peek(addr)
 }
 
-/// The VDP (tests and tools).
-pub fn vdp(m: &Msx) -> &Tms9918 {
+/// The video chip (tests and tools).
+pub fn video(m: &Msx) -> &Video {
     &m.board.vdp
+}
+
+/// The MSX1's VDP (tests and tools); panics on a machine with a V9938.
+pub fn vdp(m: &Msx) -> &Tms9918 {
+    match &m.board.vdp {
+        Video::Tms(v) => v,
+        Video::V9938(_) => panic!("the machine has a V9938"),
+    }
 }
 
 impl Machine for Msx {
@@ -915,7 +1076,7 @@ impl Machine for Msx {
             return StopReason::FrameDone;
         }
         self.overlay_fresh = false;
-        if self.board.vdp.line == 0 && self.board.vdp.dot < 3 {
+        if matches!(self.board.vdp.beam(), (0, 0..=2, _)) {
             for f in dbg.per_frame_freezes() {
                 if f.space == CPU_SPACE && f.addr < IO_BASE {
                     for i in 0..f.size.bytes() {
@@ -948,12 +1109,15 @@ impl Machine for Msx {
         self.board.ppi.reset();
         self.board.psg.reset();
         self.board.sub = 0;
+        if let Some(segments) = &mut self.board.mapper {
+            *segments = MAPPER_RESET;
+        }
         if let Some(d) = &mut self.disk {
             d.reset();
         }
         if kind == ResetKind::Hard {
             self.board.ram.fill(0);
-            self.board.vdp = Tms9918::new(self.board.vdp.model);
+            self.board.vdp = self.board.vdp.power_on();
             self.board.vdp.set_overlays(&self.overlay_ids);
             self.board.keys = [0; KEY_ROWS];
             for i in 0..2 {
@@ -980,21 +1144,18 @@ impl Machine for Msx {
 
     fn framebuffer(&self) -> FrameRef<'_> {
         FrameRef {
-            width: vdp::WIDTH,
-            height: self.board.vdp.model.height(),
-            pixels: PixelData::Indexed {
-                pixels: self.board.vdp.frame(),
-                palette: &vdp::PALETTE,
-            },
+            width: self.board.vdp.width(),
+            height: self.board.vdp.height(),
+            pixels: self.board.vdp.pixels(),
             luma_chroma: None,
             signal: self.signal(),
         }
     }
 
-    /// The TMS9918A/TMS9929A's views (`tiles`, `sprites`, `screen`,
-    /// `palette`) from VRAM; option `addr` is a VRAM address.
+    /// The video chip's views (`tiles`, `sprites`, `screen`, `palette`)
+    /// from VRAM; option `addr` is a VRAM address.
     fn gfx_views(&self) -> Vec<GfxViewInfo> {
-        vdp::gfx::views(self.board.vdp.model.chip_name())
+        self.board.vdp.gfx_views()
     }
 
     fn gfx_view(&self, id: &str, opts: &GfxOptions) -> Option<GfxView> {
@@ -1002,9 +1163,9 @@ impl Machine for Msx {
     }
 
     /// `sprites` (a box per sprite where the VDP drew it, per line) and
-    /// `limit` (bands on lines with a fifth sprite).
+    /// `limit` (bands on lines with one sprite too many).
     fn overlays(&self) -> Vec<OverlayInfo> {
-        vdp::overlay::infos(self.board.vdp.model.chip_name())
+        self.board.vdp.overlays()
     }
 
     fn set_overlays(&mut self, ids: &[&str]) {
@@ -1052,7 +1213,7 @@ impl Machine for Msx {
                 id: VRAM_SPACE,
                 name: "vram",
                 device: CPU,
-                addr_bits: 14,
+                addr_bits: self.board.vdp.vram_bits(),
                 big_endian: false,
             },
         ]
@@ -1060,7 +1221,6 @@ impl Machine for Msx {
 
     fn chips(&self) -> Vec<ChipInfo> {
         let b = &self.board;
-        let v = &b.vdp;
         let reg = |name, value: u32, bits| ChipReg {
             name,
             addr: None,
@@ -1071,17 +1231,7 @@ impl Machine for Msx {
             "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12", "R13",
             "R14", "R15",
         ];
-        let mut vdp_regs: Vec<ChipReg> = R
-            .iter()
-            .zip(v.regs)
-            .map(|(n, val)| reg(*n, u32::from(val), 8))
-            .collect();
-        vdp_regs.extend([
-            reg("STATUS", u32::from(v.peek().1), 8),
-            reg("ADDR", u32::from(v.addr), 14),
-            reg("LINE", u32::from(v.line), 9),
-            reg("DOT", u32::from(v.dot), 9),
-        ]);
+        let vdp_regs = b.vdp.chip_regs();
         let mut psg_regs: Vec<ChipReg> = R
             .iter()
             .zip(b.psg.regs)
@@ -1096,6 +1246,15 @@ impl Machine for Msx {
             reg("PAGE3", u32::from(slots >> 6), 2),
             reg("SUB3", u32::from(b.sub), 8),
         ];
+        if let Some(segments) = b.mapper {
+            const SEGMENTS: [&str; 4] = ["SEGMENT0", "SEGMENT1", "SEGMENT2", "SEGMENT3"];
+            slot_regs.extend(
+                SEGMENTS
+                    .iter()
+                    .zip(segments)
+                    .map(|(n, s)| reg(*n, u32::from(s), 8)),
+            );
+        }
         const BANKS: [[&str; 4]; 2] = [
             ["CART1_4000", "CART1_6000", "CART1_8000", "CART1_A000"],
             ["CART2_4000", "CART2_6000", "CART2_8000", "CART2_A000"],
@@ -1267,6 +1426,13 @@ impl Machine for Msx {
                 w.bool(c.is_some());
             }
         });
+        w.chunk(*b"MSXM", 1, |w| {
+            w.raw(&b.mapper.unwrap_or_default());
+            w.u64(b.rtc_next);
+        });
+        if let Some(rtc) = &b.rtc {
+            rtc.save(&mut w);
+        }
         self.cpu.save(&mut w);
         b.vdp.save(&mut w);
         b.psg.save(&mut w);
@@ -1322,6 +1488,16 @@ impl Machine for Msx {
             }
         }
         board.samples.clear();
+        let (_, mut c) = r.chunk(*b"MSXM", 1)?;
+        let mut segments = [0u8; 4];
+        c.raw_into(&mut segments)?;
+        if let Some(m) = &mut board.mapper {
+            *m = segments;
+        }
+        board.rtc_next = c.u64()?;
+        if let Some(rtc) = &mut board.rtc {
+            rtc.load(&mut r)?;
+        }
         let mut cpu = self.cpu.clone();
         let mut sched = self.sched.clone();
         let mut input = self.input.clone();
@@ -1388,7 +1564,10 @@ impl DebugTarget for Msx {
                     .as_ref()
                     .map(|d| u32::from(d.peek(a as u16, self.board.chips_t))),
                 CPU_SPACE => Some(u32::from(peek(&self.board, a))),
-                VRAM_SPACE => Some(u32::from(self.board.vdp.vram[(a & 0x3fff) as usize])),
+                VRAM_SPACE => {
+                    let vram = self.board.vdp.vram();
+                    Some(u32::from(vram[a as usize & (vram.len() - 1)]))
+                }
                 _ => None,
             }
         };
@@ -1405,7 +1584,10 @@ impl DebugTarget for Msx {
                     Some(i) => self.board.ram[i] = byte,
                     None => return false,
                 },
-                VRAM_SPACE => self.board.vdp.vram[(a & 0x3fff) as usize] = byte,
+                VRAM_SPACE => {
+                    let vram = self.board.vdp.vram_mut();
+                    vram[a as usize & (vram.len() - 1)] = byte;
+                }
                 _ => return false,
             }
         }

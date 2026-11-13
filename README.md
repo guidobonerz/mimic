@@ -106,7 +106,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | ZX81 | boot, PRINT, .P files | works | 🟡 | no test suite |
 | ZX Spectrum 48K/128K/+2 | Fuse test | all pass | 🟢 | border timing beyond the Fuse test, SAVE to tape |
 | ColecoVision | cartridge collection | 231/235 show a picture | 🟡 | TMS9918A reference pictures, VRAM timing |
-| MSX (MSX1) | MSX BASIC 1.0, Disk BASIC and C-BIOS 0.29a (`msx_boot`, 6 tests), own stub BIOS tests | BASIC computes, CSAVE/CLOAD through a CAS image, SAVE/LOAD on a disk, MSX-DOS 1.03 boots, a test cartridge calling the BIOS; one cartridge game (Championship Lode Runner), one cassette game (Afteroids) and one disk game (Colony) start | 🟡 | more cartridges (Konami, SCC, battery RAM unchecked), MSX2 |
+| MSX (MSX1, MSX2) | MSX BASIC 1.0, Disk BASIC and C-BIOS 0.29a (`msx_boot`, 8 tests), own stub BIOS and V9938 tests | BASIC computes, CSAVE/CLOAD through a CAS image, SAVE/LOAD on a disk, MSX-DOS 1.03 boots, a test cartridge calling the BIOS; one cartridge game (Championship Lode Runner), one cassette game (Afteroids) and one disk game (Colony) start; C-BIOS boots as an MSX2 (V9938 logo and screen) | 🟡 | more cartridges (Konami, SCC, battery RAM unchecked), MSX2 software with a real MSX2 BIOS |
 | NES | nes-test-roms (blargg, nestest …) | 116/119 | 🟡 | `6-MMC3_alt`, `blargg_apu_2005` 10 and 11 |
 | SNES | Harte CPU sets, snes-tests (gilyon), PeterLemon's ROMs | snes-tests 3/3, PeterLemon 67/78, games run with sound, DSP-1 commands correct | 🟡 | mid-line register changes, input-driven PeterLemon pictures, coprocessors beyond the NEC DSPs |
 | Vectrex | executive, Mine Storm, Scramble | play | 🟡 | overlays, phosphor persistence |
@@ -180,7 +180,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | Amiga 1200 (AGA) | `machine-amiga` | `1200` | Kickstart 3.1 boots the model; boot test row red; Workbench 3.x not booted | 45 % |
 | Sinclair ZX81 / TS1000 | `machine-zx81` | 1/2/16 KB | boots, PRINT, .P files through traps | 85 % |
 | ColecoVision | `machine-coleco` | NTSC, PAL | 231 of 235 cartridges show a picture; MegaCart; four controller kinds | 90 % |
-| MSX (MSX1) | `machine-msx` | NTSC, PAL | C-BIOS boots and starts cartridges; Konami, Konami SCC (with its sound chip), ASCII 8/16 MegaROM schemes, battery RAM; cassette (CAS, play and record), disks with the SVI-738 interface; one cartridge and one cassette game run | 70 % |
+| MSX (MSX1, MSX2) | `machine-msx` | NTSC, PAL | C-BIOS boots (MSX1 and MSX2) and starts cartridges; MSX2 with the V9938 (all modes, sprite mode 2, commands), memory mapper, sub ROM and clock; Konami, Konami SCC (with its sound chip), ASCII 8/16 MegaROM schemes, battery RAM; cassette (CAS, play and record), disks with the SVI-738 interface; one cartridge and one cassette game run | 70 % |
 | NES / Famicom | `machine-nes` | NTSC, PAL, Four Score | 116 of 119 test ROMs; mappers 0–4 | 90 % |
 | SNES | `machine-snes` | NTSC, PAL | games run with sound; DSP-1 to DSP-4, battery SRAM file; mid-line register changes open | 75 % |
 | Vectrex | `machine-vectrex` | – | executive and Scramble run; light pen and 3D Imager modelled; overlays and phosphor persistence open; Mine Storm and 3-D Mine Storm need the 8 KB system ROM | 55 % |

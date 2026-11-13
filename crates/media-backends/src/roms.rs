@@ -557,7 +557,10 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
                 "bios",
                 // Any other name starting with "msx" ("MSX System v1.0 + MSX
                 // BASIC … [MSX.ROM].rom"): the size picks the 32 KB image.
-                "msx",
+                // Not "msx2…" nor "MSX System v2…": those are the MSX2's below.
+                "msx system v1",
+                "msx ",
+                "msx-",
                 "cbios-main-msx1-eu",
                 "cbios-main-msx1-rom",
                 "cbios-main-msx1",
@@ -565,6 +568,43 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             0x8000,
         ),
         optional("msx-logo", &["cbios-logo-msx1"], 0x4000),
+        // The MSX2 (`--model msx2`): its 32 KB main ROM and 16 KB sub ROM
+        // (extended BASIC), or C-BIOS's; names starting with "msx2", not
+        // "msx2+".
+        optional(
+            "msx2-bios",
+            &[
+                "msx2-bios",
+                "msx2bios",
+                "msx2-main",
+                "msx2-rom",
+                "msx2 ",
+                "msx2-",
+                // "MSX System v2.0 + MSX BASIC (1985)(Microsoft)[MSX2.ROM]"
+                "msx system v2",
+                "cbios-main-msx2-eu",
+                "cbios-main-msx2-rom",
+            ],
+            0x8000,
+        ),
+        optional(
+            "msx2-sub",
+            &[
+                "msx2-sub",
+                "msx2sub",
+                "msx2-ext",
+                "msx2ext",
+                "msx2 subrom",
+                "msx2 sub",
+                "msx2 ",
+                "msx2-",
+            ],
+            0x4000,
+        ),
+        // C-BIOS's sub ROM: it follows only C-BIOS's main ROM, not the
+        // real sub ROM's entry points, so it never stands in for one.
+        optional("msx2-sub-cbios", &["cbios-sub-rom"], 0x4000),
+        optional("msx2-logo", &["cbios-logo-msx2-rom"], 0x4000),
         // The disk ROM of the Spectravideo SVI-738 (its controller is
         // reached through $7FB8–$7FBC; other interfaces differ).
         optional(
@@ -739,7 +779,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "trs80" => &["trs80", "trs-80", "tandy"],
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
-        "msx" => &["msx", "msx1"],
+        "msx" => &["msx", "msx1", "msx2"],
         "ti99" => &["ti99", "ti-99", "ti994a"],
         "bbc" => &[
             "bbc",

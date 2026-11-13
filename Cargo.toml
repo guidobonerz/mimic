@@ -33,6 +33,7 @@ chips-atari = { path = "crates/chips-atari" }
 chips-amstrad = { path = "crates/chips-amstrad" }
 chips-sinclair = { path = "crates/chips-sinclair" }
 chips-ti = { path = "crates/chips-ti" }
+chips-yamaha = { path = "crates/chips-yamaha" }
 chips-logophor = { path = "crates/chips-logophor" }
 chips-acorn = { path = "crates/chips-acorn" }
 chips-nintendo = { path = "crates/chips-nintendo" }

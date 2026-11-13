@@ -38,7 +38,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Video (`--videoformat
     ["`zx81`", "Sinclair ZX81 / Timex Sinclair 1000", "`zx81` (Standard, PAL), `ts1000` (NTSC)", "–"],
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (Standard), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (Standard), `pal`"],
-    ["`msx`", "MSX (MSX1)", "–", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
+    ["`msx`", "MSX", "`msx1` (Standard), `msx2`", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
     ["`nes`", "Nintendo Entertainment System / Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`vectrex`", "Vectrex (Vektorbildschirm)", "`vectrex`", "–"],
@@ -151,7 +151,7 @@ table(["Ordner", "Maschine", "ROMs (Beispielnamen und Größen)"], [
     ["`spectrum/`", "ZX Spectrum", "`Spec48.rom` (16 KB), `spec128.rom`, `specp2.rom` (je 32 KB); "
      "optional `mf128.rom` (Multiface 128), `specif1.rom` (Interface 1)"],
     ["`coleco/`", "ColecoVision", "`coleco.rom` (8 KB BIOS)"],
-    ["`msx/`", "MSX", "32 KB MSX1-BIOS oder C-BIOS (`python tools/fetch_cbios.py`)"],
+    ["`msx/`", "MSX", "32 KB MSX1-BIOS oder C-BIOS (`python tools/fetch_cbios.py`); MSX2: Haupt-ROM 32 KB und Sub-ROM 16 KB"],
     ["`snes/`", "SNES", "optional: das 64-Byte-Sound-Boot-ROM `spc700.rom`"],
     ["`vectrex/`", "Vectrex", "das 8-KB-System-ROM (Executive und Mine Storm); ein 4-KB-Abbild "
      "nur des Executive geht auch, siehe den Vectrex-Abschnitt"],
@@ -604,9 +604,16 @@ hat kein BASIC). Mit dem Disk-ROM des Spectravideo SVI-738
 (`svi-738_disk.rom`, 16 KB) hat die Maschine zwei Diskettenlaufwerke und
 startet Disk BASIC (die Datumsfrage mit Enter übergehen). Ohne
 `--videoformat` bestimmt das BIOS 50 oder 60 Hz.""")
+p("""`--model msx2` ist ein MSX2: V9938 mit 128 KB Video-RAM (alle
+Bildschirmmodi bis SCREEN 8, Palette, Sprite-Modus 2), Memory Mapper (256 KB
+RAM), Sub-ROM und Uhr. Es braucht ein MSX2-Haupt-ROM (32 KB, Name beginnt mit
+`msx2`) und das Sub-ROM (16 KB, `msx2-sub`) oder die MSX2-ROMs von C-BIOS,
+die dasselbe Skript holt. C-BIOS startet nur Module; Disk BASIC und
+MSX2-Disketten brauchen ein echtes MSX2-BIOS.""")
 table(["Option", "Werte"], [
     ["`port1`, `port2`", "`joystick` (Standard), `none`"],
-    ["`ram`", "`8`, `16`, `32`, `64` (KB, Standard 64)"],
+    ["`ram`", "`8`, `16`, `32`, `64` (KB, Standard 64); MSX2 `64` bis `4096` (Standard 256)"],
+    ["`vdp`", "`tms9918` (MSX1-Standard), `v9938` (MSX2; beim MSX1 auf Wunsch)"],
     ["`mapper1`, `mapper2`", "Bankumschaltung des Moduls im Schacht: `auto` (Standard, "
      "aus dem Abbild geraten), `plain`, `konami`, `konamiscc` (mit SCC-Ton), `ascii8`, "
      "`ascii16`; mit Batterie-RAM nur ausdrücklich: `ascii8sram`, `ascii16sram`, "
@@ -1207,7 +1214,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Videoformate (`--vide
     ["`zx81`", "Sinclair ZX81 / TS1000", "`zx81` (Standard), `ts1000`", "–"],
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (Standard), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (Standard), `pal`"],
-    ["`msx`", "MSX (MSX1)", "–", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
+    ["`msx`", "MSX", "`msx1` (Standard), `msx2`", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
     ["`nes`", "Nintendo NES / Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`vectrex`", "Vectrex", "`vectrex`", "–"],

@@ -1,4 +1,5 @@
 use super::*;
+use chips_ti::vdp;
 use emu_core::input::Dirs;
 use emu_core::media::{Media, MediaBackend, MediaError};
 
@@ -423,7 +424,7 @@ fn configuration_errors() {
     assert!(matches!(Msx::new(&config), Err(ConfigError::Invalid(_))));
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
-    config.model = Some("msx2".into());
+    config.model = Some("msx3".into());
     assert!(matches!(
         Msx::new(&config),
         Err(ConfigError::UnknownModel(_))
@@ -764,4 +765,197 @@ fn the_disk_rom_expands_slot_3() {
     config.roms.clear();
     config.options.insert("disk".into(), "on".into());
     assert!(matches!(Msx::new(&config), Err(ConfigError::MissingRom(_))));
+}
+
+fn msx2_stub(format: Option<&str>, options: &[(&str, &str)]) -> Msx {
+    let mut config = MachineConfig {
+        model: Some("msx2".into()),
+        video_format: format.and_then(VideoStandard::parse),
+        ..MachineConfig::default()
+    };
+    config.options.insert("roms".into(), "stub".into());
+    for (k, v) in options {
+        config.options.insert((*k).into(), (*v).into());
+    }
+    Msx::new(&config).unwrap()
+}
+
+/// The colour at active-area pixel (x, y) of a machine with a V9938.
+fn rgb(m: &Msx, x: u32, y: u32) -> emu_core::frame::Rgb8 {
+    let Video::V9938(v) = video(m) else {
+        panic!("no V9938");
+    };
+    let row = y + u32::from(v.display_start());
+    m.framebuffer()
+        .rgb_at(chips_yamaha::v9938::LEFT as u32 + 2 * x, row)
+        .unwrap()
+}
+
+fn default_color(n: usize) -> emu_core::frame::Rgb8 {
+    let (r, g, b) = chips_yamaha::v9938::DEFAULT_PALETTE[n];
+    chips_yamaha::v9938::rgb777(r, g, b)
+}
+
+#[test]
+fn an_msx2_runs_the_stub_on_its_v9938() {
+    for (format, lines, height) in [(None, 262u32, 243), (Some("pal"), 313, 294)] {
+        let mut m = msx2_stub(format, &[]);
+        assert_eq!(m.generation(), Generation::Msx2);
+        frames(&mut m, 10);
+        assert!(n_frames_counted(&m), "the RAM is in slot 3-2");
+        let f = m.framebuffer();
+        assert_eq!((f.width, f.height), (568, height));
+        assert_eq!(f.signal.lines_per_field, lines);
+        assert_eq!(f.signal.total_pixels, 684);
+        assert_eq!(f.signal.output, OutputType::Rgb);
+        assert!(matches!(f.pixels, emu_core::frame::PixelData::Rgb(_)));
+        assert_eq!(rgb(&m, 8, 0), default_color(10), "box top row: yellow");
+        assert_eq!(rgb(&m, 9, 1), default_color(4));
+        assert_eq!(rgb(&m, 0x78, 0x61), default_color(15), "the sprite");
+        let spaces = m.memory_spaces();
+        assert_eq!(spaces[1].addr_bits, 17);
+        assert!(m.poke(VRAM_SPACE, 0x1_2345, Size::Byte, 0x5a));
+        assert_eq!(m.peek(VRAM_SPACE, 0x1_2345, Size::Byte), Some(0x5a));
+        assert!(m.gfx_views().iter().all(|v| v.name.starts_with("V9938")));
+        assert!(m.gfx_view("screen", &GfxOptions::new()).is_some());
+        assert!(m.chips()[0].regs.iter().any(|r| r.name == "S2"));
+    }
+    // An MSX1 can have the chip too (as the Spectravideo SVI-738 has).
+    let mut m = stub_with(Some("pal"), &[("vdp", "v9938")]);
+    assert_eq!(m.generation(), Generation::Msx1);
+    frames(&mut m, 10);
+    assert_eq!(m.framebuffer().signal.lines_per_field, 313);
+    assert_eq!(rgb(&m, 8, 0), default_color(10));
+    assert!(m.board.mapper.is_none() && m.board.rtc.is_none());
+}
+
+#[test]
+fn the_memory_mapper_switches_segments() {
+    let mut m = msx2_stub(None, &[]);
+    assert_eq!(m.board.ram.len(), 256 * 1024);
+    // Segment 5 into page 3, a byte there; segment 0 back, another.
+    let code = [
+        0xf3, 0x3e, 0x05, 0xd3, 0xff, 0x3e, 0x77, 0x32, 0x00, 0xc0, 0x3e, 0x00, 0xd3, 0xff, 0x3e,
+        0x11, 0x32, 0x00, 0xc0, 0x18, 0xfe,
+    ];
+    insert(&mut m, SLOT_CART1, cart(0x4000, &code));
+    frames(&mut m, 5);
+    assert_eq!(m.board.ram[5 * 0x4000], 0x77);
+    assert_eq!(m.board.ram[0], 0x11);
+    assert_eq!(m.board.mapper, Some([3, 2, 1, 0]));
+    assert_eq!(m.peek(CPU_SPACE, IO_BASE + 0xfc, Size::Byte), Some(0xf3));
+    assert!(m.chips()[3].regs.iter().any(|r| r.name == "SEGMENT3"));
+    // The segment number wraps at the RAM's size; a reset restores the order.
+    m.board.mapper = Some([3, 2, 1, 16 + 5]);
+    assert_eq!(peek_cpu(&m, 0xc000), 0x77);
+    m.reset(ResetKind::Soft);
+    assert_eq!(m.board.mapper, Some([3, 2, 1, 0]));
+    for (ram, len) in [("64", 64), ("4096", 4096)] {
+        assert_eq!(msx2_stub(None, &[("ram", ram)]).board.ram.len(), len * 1024);
+    }
+    let mut config = MachineConfig {
+        model: Some("msx2".into()),
+        ..MachineConfig::default()
+    };
+    config.options.insert("roms".into(), "stub".into());
+    for (key, value) in [("ram", "32"), ("vdp", "tms9918")] {
+        let mut c = config.clone();
+        c.options.insert(key.into(), value.into());
+        assert!(
+            matches!(Msx::new(&c), Err(ConfigError::Invalid(_))),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn the_clock_chip_answers_at_b4_and_runs_with_the_machine() {
+    let mut m = msx2_stub(None, &[]);
+    // Block 2, register 0 = 10; read it back into $C000.
+    let code = [
+        0xf3, 0x3e, 0x0d, 0xd3, 0xb4, 0x3e, 0x0a, 0xd3, 0xb5, 0x3e, 0x00, 0xd3, 0xb4, 0x3e, 0x0a,
+        0xd3, 0xb5, 0xdb, 0xb5, 0x32, 0x00, 0xc0, 0x18, 0xfe,
+    ];
+    insert(&mut m, SLOT_CART1, cart(0x4000, &code));
+    frames(&mut m, 5);
+    assert_eq!(m.board.rtc.as_ref().unwrap().blocks[2][0], 10);
+    assert_eq!(peek_cpu(&m, 0xc000), 0xfa);
+    assert_eq!(m.peek(CPU_SPACE, IO_BASE + 0xb5, Size::Byte), Some(0xfa));
+    // 150 fields of 1/60 s: two seconds, and half a one.
+    frames(&mut m, 145);
+    assert_eq!(m.board.rtc.as_ref().unwrap().blocks[0][0], 2);
+    // The battery keeps it through a power cycle; an MSX1 has none.
+    m.reset(ResetKind::Hard);
+    assert_eq!(m.board.rtc.as_ref().unwrap().blocks[2][0], 10);
+    let m1 = stub_with(None, &[]);
+    assert_eq!(m1.peek(CPU_SPACE, IO_BASE + 0xb5, Size::Byte), Some(0xff));
+}
+
+#[test]
+fn an_msx2_needs_its_roms_and_has_the_sub_rom_in_slot_3_0() {
+    let mut config = MachineConfig {
+        model: Some("msx2".into()),
+        ..MachineConfig::default()
+    };
+    // An MSX1 BIOS does not count.
+    config.roms.insert("msx-bios".into(), vec![0; 0x8000]);
+    assert!(matches!(Msx::new(&config), Err(ConfigError::MissingRom(r)) if r == "msx2-bios"));
+    let mut bios = vec![0xffu8; 0x8000];
+    bios[..2].copy_from_slice(&[0xf3, 0x76]);
+    bios[0x2b] = 0x80;
+    config.roms.insert("msx2-bios".into(), bios);
+    // C-BIOS's sub ROM does not stand in for a real BIOS's.
+    config.roms.insert("msx2-sub-cbios".into(), vec![0; 0x4000]);
+    assert!(matches!(Msx::new(&config), Err(ConfigError::MissingRom(r)) if r == "msx2-sub"));
+    config.roms.insert("msx2-sub".into(), vec![0; 0x2000]);
+    assert!(matches!(Msx::new(&config), Err(ConfigError::Invalid(_))));
+    let mut sub = vec![0x5au8; 0x4000];
+    sub[..2].copy_from_slice(b"CD");
+    config.roms.insert("msx2-sub".into(), sub);
+    let mut m = Msx::new(&config).unwrap();
+    assert_eq!(m.model(), Model::Pal, "the BIOS's $002B");
+    assert_eq!(m.framebuffer().signal.lines_per_field, 313);
+    assert_eq!(
+        m.media_slots().len(),
+        4,
+        "no disk interface without its ROM"
+    );
+    // Page 0 on slot 3, there 3-0.
+    m.board.ppi.write(3, 0x82);
+    m.board.ppi.write(0, 0xc3);
+    assert_eq!(peek_cpu(&m, 0xffff), 0xff, "the register reads inverted");
+    assert_eq!((peek_cpu(&m, 0), peek_cpu(&m, 2)), (b'C', 0x5a));
+    assert_eq!(peek_cpu(&m, 0xc000), 0xff, "3-0 has only page 0");
+    m.board.mem_write(0xffff, 0x80);
+    assert_eq!(peek_cpu(&m, 0xc000), 0x00, "the RAM in 3-2");
+    // With the disk ROM: 3-1, beside the sub ROM.
+    config
+        .roms
+        .insert("msx-disk-svi738".into(), vec![0x12; 0x4000]);
+    let mut m = Msx::new(&config).unwrap();
+    assert_eq!(m.media_slots().len(), 6);
+    m.board.ppi.write(3, 0x82);
+    m.board.ppi.write(0, 0xcf);
+    m.board.mem_write(0xffff, 0x84);
+    assert_eq!((peek_cpu(&m, 0), peek_cpu(&m, 0x4000)), (b'C', 0x12));
+}
+
+#[test]
+fn msx2_savestates_are_deterministic_and_do_not_mix() {
+    let mut a = msx2_stub(None, &[]);
+    frames(&mut a, 7);
+    a.board.mapper = Some([3, 2, 1, 0]);
+    let state = a.save_state();
+    let mut b = msx2_stub(None, &[]);
+    b.load_state(&state).unwrap();
+    frames(&mut a, 20);
+    frames(&mut b, 20);
+    assert_eq!(a.save_state(), b.save_state());
+    assert_eq!(a.framebuffer(), b.framebuffer());
+    let mut msx1 = stub_with(None, &[]);
+    assert!(msx1.load_state(&state).is_err());
+    assert!(a.load_state(&msx1.save_state()).is_err());
+    for cut in [0, 40, state.len() / 2, state.len() - 3] {
+        assert!(b.load_state(&state[..cut]).is_err());
+    }
 }

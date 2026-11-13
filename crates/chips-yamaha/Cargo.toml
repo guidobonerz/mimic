@@ -1,0 +1,12 @@
+[package]
+name = "chips-yamaha"
+description = "Yamaha V9938 video display processor (MSX2)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
