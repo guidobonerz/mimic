@@ -860,12 +860,48 @@ fn files(dir: &Path) -> io::Result<Vec<(String, PathBuf, u64)>> {
                     continue;
                 }
                 len -= header;
+            } else if len % 1024 == BSAVE_HEADER as u64 && bsave_len(&head(&e.path())) == Some(len)
+            {
+                len -= BSAVE_HEADER as u64;
             }
             entries.push((name, e.path(), len));
         }
     }
     entries.sort();
     Ok(entries)
+}
+
+/// An MSX BSAVE header: $FE, then start, end and run address (each low
+/// byte first). Some MSX ROM dumps come with one in front.
+const BSAVE_HEADER: usize = 7;
+
+/// The file length a BSAVE header announces (header plus end − start + 1),
+/// None if `head` is not one.
+fn bsave_len(head: &[u8]) -> Option<u64> {
+    let [0xfe, s0, s1, e0, e1, ..] = *head else {
+        return None;
+    };
+    let (start, end) = (u16::from_le_bytes([s0, s1]), u16::from_le_bytes([e0, e1]));
+    let body = u64::from(end.checked_sub(start)?) + 1;
+    Some(body + BSAVE_HEADER as u64)
+}
+
+/// The image without a BSAVE header if `data` starts with one that fits its
+/// length.
+fn strip_bsave(data: Vec<u8>) -> Vec<u8> {
+    if data.len() % 1024 == BSAVE_HEADER && bsave_len(&data) == Some(data.len() as u64) {
+        data[BSAVE_HEADER..].to_vec()
+    } else {
+        data
+    }
+}
+
+/// The first bytes of a file (fewer if it is shorter).
+fn head(path: &Path) -> Vec<u8> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(BSAVE_HEADER);
+    let _ = fs::File::open(path).and_then(|f| f.take(BSAVE_HEADER as u64).read_to_end(&mut head));
+    head
 }
 
 fn is_cloanto(path: &Path) -> bool {
@@ -876,9 +912,10 @@ fn is_cloanto(path: &Path) -> bool {
         .is_ok_and(|()| head == CLOANTO_HEADER)
 }
 
-/// A ROM file's image: Amiga Forever files decrypted with the folder's key.
+/// A ROM file's image: Amiga Forever files decrypted with the folder's key,
+/// MSX dumps without their BSAVE header.
 fn read_rom(path: &Path) -> io::Result<Vec<u8>> {
-    let data = fs::read(path)?;
+    let data = strip_bsave(fs::read(path)?);
     if data.starts_with(CLOANTO_HEADER) {
         let key = fs::read(path.with_file_name("rom.key"))?;
         return decrypt_cloanto(&data, &key)
@@ -964,6 +1001,9 @@ pub fn match_files(
         .filter(|(_, name, _)| name == "rom-key")
         .map(|(folder, _, data)| (folder.clone(), data.clone()))
         .collect();
+    for (_, _, data) in &mut all {
+        *data = strip_bsave(std::mem::take(data));
+    }
     all.retain_mut(|(folder, _, data)| {
         if !data.starts_with(CLOANTO_HEADER) {
             return true;
@@ -1195,6 +1235,30 @@ mod tests {
         assert_eq!(vic["chargen"][0], 0x03, "standard character set");
         assert_eq!(vic["basic"][0], 4);
         assert_eq!(vic["dos1541"][0], 5);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn msx_dumps_with_a_bsave_header_count_without_it() {
+        let dir = temp_dir("bsave");
+        let mut sub = vec![0xfe, 0x00, 0x90, 0xff, 0xcf, 0x00, 0x90];
+        sub.extend([0x43, 0x44]);
+        sub.resize(7 + 0x4000, 0);
+        fs::write(dir.join("MSX2 Extension (19xx)(-)[R87-0000.MS2].rom"), &sub).unwrap();
+        // A header that does not fit the length is left alone (not found).
+        let mut odd = sub.clone();
+        odd[3] = 0xfe;
+        fs::write(dir.join("msx2-sub-odd.rom"), &odd).unwrap();
+        fs::write(dir.join("msx-bios.rom"), vec![0; 0x8000]).unwrap();
+        let roms = load(&dir, "msx").unwrap();
+        assert_eq!(roms["msx2-sub"].len(), 0x4000);
+        assert_eq!(&roms["msx2-sub"][..2], b"CD");
+        let files = [
+            ("roms/msx/msx2ext.rom".into(), sub),
+            ("roms/msx/msx-bios.rom".into(), vec![0; 0x8000]),
+        ];
+        let found = match_files(&files, "msx").unwrap();
+        assert_eq!(&found["msx2-sub"][..2], b"CD");
         fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -1,8 +1,8 @@
 name: Nightly
 
+# Full CPU suites, started by hand only (no daily schedule).
+
 on:
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
 
 env:

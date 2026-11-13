@@ -1,9 +1,12 @@
 name: CI
 
+# Runs only for a pushed version tag `v*` (alongside build.yml) or when
+# started by hand; plain pushes and pull requests build nothing.
+
 on:
   push:
-    branches: [main]
-  pull_request:
+    tags: ["v*"]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -49,7 +52,7 @@ jobs:
       - name: Fetch CPU test data
         shell: bash
         run: bash tools/fetch-testdata.sh
-      # Harte: every 10th test per opcode on push; the full suite runs nightly.
+      # Harte: every 10th test per opcode; the full suite is in nightly.yml (by hand).
       - name: CPU test suites (Harte sample, Dormann)
         shell: bash
         env:
