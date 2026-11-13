@@ -22,7 +22,11 @@
 //! - `1200`: 68EC020 at 14.18 MHz (four CPU clocks per colour clock; the
 //!   68020's bus cycles take three of them, a long-word aligned long is
 //!   one cycle on the 32-bit chip RAM), the AGA chip set (Alice, Lisa), 2 MB
-//!   chip RAM, Gayle (its id register; an empty IDE port that reads $FF; no PCMCIA),
+//!   chip RAM, Gayle (its id register, the IDE port with two hard disks as
+//!   media slots 4 and 5 — [`SLOT_IDE`], images with an RDB or a single
+//!   partition behind a virtual one, `media::hdf` — its interrupt on INT2;
+//!   the PCMCIA slot with an SRAM memory card, media slot 6 —
+//!   [`SLOT_PCMCIA`], [`pcmcia`]),
 //!   Kickstart 3.1 by default (the A500/A600/A2000 image 40.063 boots the
 //!   A1200 model; an A1200 image, 3.0 39.106 or 3.1 40.068, is the role
 //!   `kick30a1200`/`kick31a1200`, which the model prefers, e.g. Amiga
@@ -109,6 +113,7 @@
 
 pub mod keyboard;
 pub mod memory;
+pub mod pcmcia;
 pub mod stub;
 
 use chips_amiga::custom::{self, Chipset, Custom, Standard, FIRST_CCK};
@@ -133,6 +138,10 @@ use keyboard::Keyboard;
 use memory::{Memory, Region};
 
 pub const CPU: DeviceId = DeviceId("cpu");
+/// The A1200's IDE drives 0 and 1: media slots 4 and 5 (after DF0:–DF3:).
+pub const SLOT_IDE: SlotId = SlotId(4);
+/// The A1200's PCMCIA slot: media slot 6.
+pub const SLOT_PCMCIA: SlotId = SlotId(6);
 /// The 68000's 24-bit view.
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 /// Chip RAM as the DMA channels see it.
@@ -501,8 +510,10 @@ impl Board {
         if out.vsync {
             self.cia_a.tod_tick();
         }
-        self.custom.paula.ports_line = self.cia_a.irq();
-        self.custom.paula.exter_line = self.cia_b.irq();
+        self.custom.paula.ports_line =
+            self.cia_a.irq() || self.mem.gayle.as_ref().is_some_and(memory::Gayle::int2);
+        self.custom.paula.exter_line =
+            self.cia_b.irq() || self.mem.gayle.as_ref().is_some_and(memory::Gayle::int6);
         let ipl = self.custom.ipl();
         if ipl != self.ipl {
             self.ipl_before = self.ipl;
@@ -612,11 +623,15 @@ impl Board {
     }
 
     /// /RSTO (68000 RESET instruction) or power-on: the CIAs reset, the
-    /// expansion board goes back to autoconfig.
+    /// expansion board goes back to autoconfig, Gayle and its IDE drives
+    /// reset (A1200).
     fn reset_devices(&mut self) {
         self.cia_a.reset();
         self.cia_b.reset();
         self.mem.reset_expansion();
+        if let Some(g) = &mut self.mem.gayle {
+            g.reset();
+        }
         self.cia_outputs();
     }
 
@@ -694,7 +709,11 @@ impl Board {
                 u16::from(self.read_cia(addr & !1, peek)) << 8
                     | u16::from(self.read_cia(addr | 1, peek))
             }
-            Region::Gayle => u16::from(self.read_gayle(addr & !1, peek)) << 8,
+            Region::Gayle => match &mut self.mem.gayle {
+                Some(g) if peek => g.peek_word(addr & !1),
+                Some(g) => g.read_word(addr & !1),
+                None => 0,
+            },
             Region::Open => 0,
         }
     }
@@ -775,7 +794,7 @@ impl Board {
             }
             Region::Gayle => {
                 if let Some(g) = &mut self.mem.gayle {
-                    g.write(addr, (v >> 8) as u8);
+                    g.write_word(addr, v);
                 }
             }
             Region::Rom | Region::Open => {}
@@ -1009,7 +1028,7 @@ fn peek_plain(b: &Board, addr: u32, size: Size) -> u32 {
                 u16::from(f.map_or(0xff, |f| f.read(a & 0xffff))) << 8 | 0xff
             }
             Region::Custom => b.custom.peek(a as u16),
-            Region::Gayle => u16::from(b.mem.gayle.as_ref().map_or(0, |g| g.peek(a))) << 8,
+            Region::Gayle => b.mem.gayle.as_ref().map_or(0, |g| g.peek_word(a)),
             Region::Cia | Region::Open => 0,
         }
     };
@@ -1552,6 +1571,12 @@ fn cia_info(name: &'static str, cia: &Cia, base: u32, step: u32) -> ChipInfo {
 impl Amiga {
     /// A frame ended: what the machine sent goes to the paper.
     fn printer_frame(&mut self) {
+        if let Some(g) = &mut self.board.mem.gayle {
+            g.ide.end_frame();
+            g.card.end_frame();
+            // A card put in or taken out shows in Gayle's requests.
+            g.sync();
+        }
         if let Some(p) = &mut self.printer {
             self.board.printed.drain(..).for_each(|b| p.feed(b));
             p.frame();
@@ -1928,9 +1953,12 @@ impl Machine for Amiga {
         }
     }
 
+    /// DF0:–DF3: (slots 0–3), on the A1200 the IDE drives 0 and 1 (slots
+    /// 4 and 5; a hard disk image with an RDB, or one partition).
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         const NAMES: [&str; 4] = ["DF0:", "DF1:", "DF2:", "DF3:"];
-        self.board
+        let mut v: Vec<MediaSlotInfo> = self
+            .board
             .drives
             .iter()
             .enumerate()
@@ -1940,10 +1968,39 @@ impl Machine for Amiga {
                 kind: MediaKind::Disk,
                 inserted: d.has_disk(),
             })
-            .collect()
+            .collect();
+        if let Some(g) = &self.board.mem.gayle {
+            for (i, (d, name)) in g.ide.disks.iter().zip(["IDE 0", "IDE 1"]).enumerate() {
+                v.push(MediaSlotInfo {
+                    id: SlotId(SLOT_IDE.0 + i as u8),
+                    name,
+                    kind: MediaKind::Disk,
+                    inserted: d.has_disk(),
+                });
+            }
+            v.push(MediaSlotInfo {
+                id: SLOT_PCMCIA,
+                name: "PCMCIA",
+                kind: MediaKind::Cartridge,
+                inserted: g.card.present(),
+            });
+        }
+        v
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
+        if slot == SLOT_PCMCIA {
+            let g = self.board.mem.gayle.as_mut()?;
+            return Some(&mut g.card as &mut dyn MediaSlot);
+        }
+        if slot.0 >= SLOT_IDE.0 {
+            let g = self.board.mem.gayle.as_mut()?;
+            return g
+                .ide
+                .disks
+                .get_mut(usize::from(slot.0 - SLOT_IDE.0))
+                .map(|d| d as &mut dyn MediaSlot);
+        }
         self.board
             .drives
             .get_mut(usize::from(slot.0))
@@ -1972,8 +2029,9 @@ impl Machine for Amiga {
         }
         let b = &self.board;
         // Version 5: the LED filter is a biquad (five states per side);
-        // version 6: Gayle's id shift (A1200).
-        w.chunk(*b"A500", 6, |w| {
+        // version 6: Gayle's id shift (A1200); version 7: Gayle's
+        // registers and its IDE channel; version 8: the PCMCIA card.
+        w.chunk(*b"A500", 8, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -2026,7 +2084,7 @@ impl Machine for Amiga {
     /// Atomic: everything loads into copies first.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"A500", 6)?;
+        let (version, mut c) = r.chunk(*b"A500", 8)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,
@@ -2068,8 +2126,8 @@ impl Machine for Amiga {
             if has_gayle != board.mem.gayle.is_some() {
                 return Err(StateError::Invalid("Gayle differs"));
             }
-            if has_gayle {
-                board.mem.gayle = Some(memory::Gayle::load(&mut c)?);
+            if let Some(g) = &mut board.mem.gayle {
+                g.load(&mut c, version)?;
             }
         }
         board.samples.clear();
@@ -2118,6 +2176,10 @@ impl Machine for Amiga {
         // Disks are media, not state: they stay in their drives.
         for (new, old) in board.drives.iter_mut().zip(&mut self.board.drives) {
             new.take_disk(old);
+        }
+        if let (Some(new), Some(old)) = (&mut board.mem.gayle, &mut self.board.mem.gayle) {
+            new.ide.take_media(&mut old.ide);
+            new.card.take_media(&mut old.card);
         }
         self.cpu = cpu;
         self.board = board;

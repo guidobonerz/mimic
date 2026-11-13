@@ -1,6 +1,6 @@
 [package]
 name = "drives-other"
-description = "Amiga floppy (MFM), Atari SIO drives, CPC FDC drives, datasettes"
+description = "Amiga floppy (MFM), ATA/IDE hard disks, Atari SIO drives, CPC FDC drives, datasettes"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

@@ -518,7 +518,12 @@ table(["Option", "Values"], [
     ["`wcs`", "A1000: `rom` or `disk` (load Kickstart from disk with the bootstrap ROM)"],
 ], [0.22, 0.78])
 p("""Without a disk, Kickstart shows its insert-disk screen; an ADF in DF0:
-boots. Workbench 1.3 takes about three minutes of emulated time to reach
+boots. The A1200 (`--model 1200`) has Gayle's IDE port: `--disk drive.hdf`
+goes to drive 0 (a second one to drive 1), a whole hard disk with an RDB or a
+single partition, which gets a virtual RDB and boots as DH0: (OFS/FFS from
+the ROM). `--cart card.img` puts an SRAM card (up to 4 MB) into the PCMCIA
+slot: a blank one becomes fast RAM, one with an AmigaDOS file system (an ADF,
+say) the bootable card disk CC0:. Workbench 1.3 takes about three minutes of emulated time to reach
 its screen from disk. Keys: left/right Windows key = left/right Amiga key,
 both Ctrl = CTRL, Insert = HELP, Delete = DEL; **Ctrl + both Windows keys**
 resets like the real keyboard. Sound is stereo with the A500's filters.""")
@@ -586,9 +591,12 @@ starts Disk BASIC (answer the date prompt with Enter). Without
 p("""`--model msx2` is an MSX2: the V9938 with 128 KB video RAM (every screen
 mode up to SCREEN 8, the palette, sprite mode 2), a memory mapper (256 KB
 RAM), the sub ROM and the clock. It needs an MSX2 main ROM (32 KB, its name
-starting with `msx2`) and the sub ROM (16 KB, `msx2-sub`), or C-BIOS's MSX2
-ROMs, which the same script fetches. C-BIOS only starts cartridges; Disk
-BASIC and MSX2 disks need a real MSX2 BIOS.""")
+starting with `msx2`) and the sub ROM (16 KB, `msx2-sub` or `msx2 `, such as
+`MSX2 Extension … .rom`), or C-BIOS's MSX2 ROMs, which the same script
+fetches. Dumps with a 7-byte BSAVE header (16391 bytes) are loaded without
+it. C-BIOS only starts cartridges; MSX BASIC 2.0, Disk BASIC and MSX2 disks
+need a real MSX2 BIOS. On the MSX2 the BIOS sets the field rate (the
+V9938's NT bit).""")
 table(["Option", "Values"], [
     ["`port1`, `port2`", "`joystick` (default), `none`"],
     ["`ram`", "`8`, `16`, `32`, `64` (KB, default 64); MSX2 `64` to `4096` (default 256)"],

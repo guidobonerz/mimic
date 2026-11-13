@@ -263,6 +263,8 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
         // disk images.
         "do" | "po" | "nib" | "woz" | "img" | "image" | "dc42" | "diskcopy42" | "hda" | "hdv"
         | "hfv" => Some(MediaKind::Disk),
+        // Amiga hard disk images (A1200 IDE: with an RDB or one partition).
+        "hdf" => Some(MediaKind::Disk),
         // ZX Microdrive cartridges, TR-DOS disks.
         "mdr" | "trd" => Some(MediaKind::Disk),
         // Acorn DFS (BBC Micro): single- and double-sided; ADFS L (BBC

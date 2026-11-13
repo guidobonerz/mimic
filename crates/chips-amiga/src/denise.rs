@@ -195,6 +195,19 @@ pub struct Denise {
     pub(crate) fine: bool,
     /// BPL1DAT was written on this line.
     armed: bool,
+    /// AGA with a wide fetch: sprites show from DDFSTRT + 7 colour clocks
+    /// on although the line's first BPL1DAT comes later (the owner's A1200
+    /// and WinUAE, `tools/amiga_agaprobe.py ddf-high`, 2026-11-13: with
+    /// FMODE 3 and DDFSTRT $48, $44, $40 sprite 0 shows 4, 20 and 36
+    /// pixels before the data). Set by Agnus ([`Denise::arm_sprites`]).
+    sprites_on: bool,
+    /// The 35 ns pixel from which `sprites_on` counts.
+    sprites_from: u32,
+    /// The 35 ns pixel where the line's first plane data shows (its first
+    /// load), once BPL1DAT was written: with a wide AGA fetch sprites show
+    /// from there too, if that is earlier (DDFSTRT $3C, whose block starts
+    /// a unit before $40's, shows all of sprite 0 on the A1200).
+    data_from: Option<u32>,
     /// HAM: the colour of the previous pixel.
     ham: u32,
     pub sprites: [Sprite; 8],
@@ -318,6 +331,9 @@ impl Denise {
             phase: [0; 2],
             fine: false,
             armed: false,
+            sprites_on: false,
+            sprites_from: 0,
+            data_from: None,
             ham: 0,
             sprites: [Sprite::default(); 8],
             sprite_writes: [None; SPRITE_WRITES],
@@ -498,14 +514,44 @@ impl Denise {
         }
     }
 
+    /// AGA sprite scan doubling (FMODE bit 15 SSCAN2): Lisa leaves the
+    /// position's top bit SH10 (HSTART bit 8, 256 low-resolution pixels)
+    /// out of the horizontal compare, Alice takes it as the sprite's
+    /// doubling switch (the AGA documentation). So a sprite starts at
+    /// HSTART and again 256 pixels to either side: the owner's A1200 shows
+    /// sprites 0 and 1 a second time at the right and sprite 7 at the left
+    /// (`tools/amiga_agaprobe.py scan`, 2026-11-13). Output pixels in 256
+    /// low-resolution pixels, or 0 without SSCAN2.
+    #[inline(always)]
+    fn sprite_period<const FINE: bool>(&self) -> u32 {
+        match (self.aga && self.fmode & 0x8000 != 0, FINE) {
+            (false, _) => 0,
+            (true, true) => 1024,
+            (true, false) => 512,
+        }
+    }
+
+    /// Does sprite `s` start at output pixel `x`?
+    #[inline(always)]
+    fn sprite_starts<const FINE: bool>(s: &Sprite, aga: bool, period: u32, x: u32) -> bool {
+        let start = Self::sprite_start::<FINE>(s, aga);
+        if period == 0 {
+            x == start
+        } else {
+            x % period == start % period
+        }
+    }
+
     /// Is a sprite drawing, or does one start, in the `n` output pixels
     /// from `x` on? Otherwise the sprite logic leaves them alone (it is
     /// checked once a colour clock instead of for every pixel).
     #[inline(always)]
     fn sprites_due<const FINE: bool>(&self, x: u32, n: u32) -> bool {
+        let period = self.sprite_period::<FINE>();
         self.sprites.iter().any(|s| {
             s.count > 0
-                || (s.armed && (x..x + n).contains(&Self::sprite_start::<FINE>(s, self.aga)))
+                || (s.armed
+                    && (x..x + n).any(|p| Self::sprite_starts::<FINE>(s, self.aga, period, p)))
         })
     }
 
@@ -556,14 +602,14 @@ impl Denise {
         let width = self.sprite_width();
         let step = self.sprite_step::<FINE>();
         let aga = self.aga;
+        let period = self.sprite_period::<FINE>();
         let mut vals = [0u8; 8];
         for (n, s) in self.sprites.iter_mut().enumerate() {
             // A sprite's first pixel is one low-resolution pixel right of
             // HSTART (WinUAE screenshot of Interference's tunnel frame,
             // `docs/sources.md`: HSTART $84 shows one pixel inside a window
             // starting at 148, HSTART $1AE one pixel inside one ending at 432).
-            let start = Self::sprite_start::<FINE>(s, aga);
-            if s.armed && x == start {
+            if s.armed && Self::sprite_starts::<FINE>(s, aga, period, x) {
                 s.a = s.data;
                 s.b = s.datb;
                 s.count = width * u16::from(step);
@@ -650,7 +696,14 @@ impl Denise {
 
     /// The scroll delays of the odd and even planes in super-hires (35 ns)
     /// pixels (BPLCON1; the AGA's extra bits: PF1H0–1 in 9–8, PF1H6–7 in
-    /// 11–10, the same for PF2H in 13–12 and 15–14).
+    /// 11–10, the same for PF2H in 13–12 and 15–14). Lisa delays a
+    /// playfield by at most 64 pixels of its resolution ("seamless
+    /// scrolling of up to 64 bit wide bitplanes in all resolutions", the
+    /// AGA documentation): in high resolution the top bit (PF1H7/PF2H7,
+    /// 64 pixels) is ignored, in super-hires the top two. The owner's
+    /// A1200 shows it (`tools/amiga_agaprobe.py scroll`, 2026-11-13: $8800,
+    /// $CC00, $CCFF move a FMODE 3 high-resolution picture by 0, 32 and 63
+    /// pixels; BigTime's AXIS picture showed a COLOR00 band before).
     fn scroll(&self) -> (u32, u32) {
         let c = u32::from(self.bplcon1);
         let odd = (c & 15) << 2;
@@ -658,9 +711,16 @@ impl Denise {
         if !self.aga {
             return (odd, even);
         }
+        let mask = if self.shres() {
+            0x3f
+        } else if self.hires() {
+            0x7f
+        } else {
+            0xff
+        };
         (
-            odd | (c >> 8 & 3) | (c >> 10 & 3) << 6,
-            even | (c >> 12 & 3) | (c >> 14 & 3) << 6,
+            (odd | (c >> 8 & 3) | (c >> 10 & 3) << 6) & mask,
+            (even | (c >> 12 & 3) | (c >> 14 & 3) << 6) & mask,
         )
     }
 
@@ -687,6 +747,7 @@ impl Denise {
                 },
             );
             self.armed = true;
+            self.data_from.get_or_insert(base + odd.min(even));
         }
     }
 
@@ -709,9 +770,19 @@ impl Denise {
         }
     }
 
+    /// Agnus reached DDFSTRT + 7 on a line with a wide AGA fetch: sprites
+    /// may show from 35 ns pixel `from` of the line on
+    /// ([`Denise::sprites_on`]).
+    pub fn arm_sprites(&mut self, from: u32) {
+        self.sprites_on = true;
+        self.sprites_from = from;
+    }
+
     /// Start of a Denise line.
     pub fn start_line(&mut self) {
         self.armed = false;
+        self.sprites_on = false;
+        self.data_from = None;
         self.ham = self.colors[0];
         // A write from the line's end lands before the new one's pixels.
         self.apply_sprite_writes(u32::MAX);
@@ -776,7 +847,8 @@ impl Denise {
                 self.shift[p] <<= shifts;
             }
         }
-        let c = if self.con3() & 0x20 != 0 {
+        // The blanked border, or BYPASS (the raw value 0: black).
+        let c = if self.con3() & 0x20 != 0 || (self.aga && self.bplcon0 & 0x20 != 0) {
             0
         } else {
             self.colors[0]
@@ -922,7 +994,18 @@ impl Denise {
             // with `tools/amiga_sprtest.py`). Interference hides its sprite
             // boxes behind its raster bars by switching to BPU = 0 four lines
             // before it stops sprite DMA.
-            let shown = (inside && self.armed) || border_sprites;
+            // With a wide AGA bitplane fetch (FMODE bits 1-0) only Agnus'
+            // DDFSTRT + 7 point counts, not the line's first BPL1DAT (which an
+            // aligned block may bring earlier: DDFSTRT $48 shows 4 pixels of
+            // sprite 0 like $44 20 and $40 36, the owner's A1200).
+            let gate = if self.aga && self.fmode & 3 != 0 {
+                let px = if FINE { x } else { 2 * x };
+                (self.sprites_on && px >= self.sprites_from)
+                    || self.data_from.is_some_and(|d| px >= d)
+            } else {
+                self.armed
+            };
+            let shown = (inside && gate) || border_sprites;
             let sprite = sprite.filter(|_| shown);
             if REC && sprites_live && shown {
                 self.record_sprites_seen(if FINE { x / 2 } else { x }, vals);
@@ -935,7 +1018,10 @@ impl Denise {
                     self.clxdat |= self.collisions(index, &vals) & 1;
                 }
             }
-            let c = match (sprite, front) {
+            // The pixel's colour and the colour register it comes from
+            // (None: the border or COLOR00 behind the window).
+            let pf_raw = (self.armed && inside).then_some(index ^ xor);
+            let (c, raw) = match (sprite, front) {
                 (Some((pair, c)), Some(pf_no)) => {
                     let prio = if pf_no == 1 {
                         self.bplcon2 & 7
@@ -943,13 +1029,25 @@ impl Denise {
                         (self.bplcon2 >> 3) & 7
                     };
                     if u16::from(pair) >= prio {
-                        pf
+                        (pf, pf_raw)
                     } else {
-                        self.colors[usize::from(c)]
+                        (self.colors[usize::from(c)], Some(c))
                     }
                 }
-                (Some((_, c)), None) => self.colors[usize::from(c)],
-                (None, _) => pf,
+                (Some((_, c)), None) => (self.colors[usize::from(c)], Some(c)),
+                (None, _) => (pf, pf_raw),
+            };
+            // AGA BPLCON0 bit 5 BYPASS: "bitplanes are scrolled and
+            // prioritized normally, but bypass the colour table and 8 bit
+            // wide data appear on R(7:0)" (the AGA documentation). The
+            // owner's A1200 shows the raw value as a grey: planes 0-3 and the
+            // border black, the sprites (registers 17-31) all one dark grey
+            // (`tools/amiga_agaprobe.py bypass`, 2026-11-13).
+            let c = if self.aga && self.bplcon0 & 0x20 != 0 {
+                let v = u32::from(raw.unwrap_or(0));
+                v << 16 | v << 8 | v
+            } else {
+                c
             };
             *px = if shres && !self.aga {
                 // Two bits per gun: the upper ones, spread over the byte.
@@ -1096,6 +1194,10 @@ impl Denise {
             w.u8(s.reg);
             w.u64(s.value);
         }
+        w.bool(self.sprites_on);
+        w.u32(self.sprites_from);
+        w.bool(self.data_from.is_some());
+        w.u32(self.data_from.unwrap_or(0));
     }
 
     /// `version` is the OCS chunk's: version 2 saved one pending load per
@@ -1103,7 +1205,7 @@ impl Denise {
     /// 32 colours of 12 bits; 7 added BPLCON3 and DIWHIGH; 8 is the AGA
     /// layout (256 colours of 24 bits, eight planes of 64 bits); 10 keeps
     /// the load times in 35 ns pixels (before: 70 ns) and the output mode;
-    /// 13 the sprite writes on their way.
+    /// 13 the sprite writes on their way; 17 the early sprite arming.
     pub(crate) fn load(r: &mut StateReader<'_>, version: u16) -> Result<Self, StateError> {
         let mut d = if version >= 8 {
             Self::load_v8(r)?
@@ -1121,6 +1223,13 @@ impl Denise {
                     value: r.u64()?,
                 };
                 *slot = some.then_some(w);
+            }
+            if version >= 17 {
+                d.sprites_on = r.bool()?;
+                d.sprites_from = r.u32()?;
+                let some = r.bool()?;
+                let at = r.u32()?;
+                d.data_from = some.then_some(at);
             }
         } else if version >= 10 {
             d.fine = r.bool()?;
@@ -1331,6 +1440,46 @@ mod tests {
         d.write_bpldat(0, w(0x8000), 0x3f);
         let px = line(&mut d, 0x3f, 0x44);
         assert_eq!(&px[6..10], &[0, 0, RED, RED]);
+    }
+
+    #[test]
+    fn aga_scroll_stays_within_64_pixels_of_the_resolution() {
+        let mut d = Denise::new();
+        d.set_aga(true);
+        d.bplcon1 = 0x8800; // PF1H7 and PF2H7: 32 low-resolution pixels
+        d.bplcon0 = 0x0201;
+        assert_eq!(d.scroll(), (128, 128), "low resolution: all eight bits");
+        d.bplcon0 = 0x8201;
+        assert_eq!(
+            d.scroll(),
+            (0, 0),
+            "high resolution: the top bit is ignored"
+        );
+        d.bplcon1 = 0xccff;
+        assert_eq!(d.scroll(), (124, 124), "62 high-resolution pixels");
+        d.bplcon0 = 0x0241;
+        assert_eq!(d.scroll(), (60, 60), "super-hires: the top two bits go");
+    }
+
+    #[test]
+    fn aga_bypass_shows_the_raw_value() {
+        let mut d = Denise::new();
+        d.set_aga(true);
+        d.write_color(0, 0x222);
+        d.write_color(1, 0xf00);
+        d.bplcon0 = 0x1221; // one plane, BYPASS, ECSENA
+        d.diwstrt = 0x2c81;
+        d.diwstop = 0x2cc1;
+        d.start_line();
+        d.write_bpldat(0, w(0x8000), 0x3f);
+        let px = line(&mut d, 0x3f, 0x44);
+        assert_eq!(
+            &px[6..8],
+            &[0x01_01_01; 2],
+            "plane value 1 as a grey, not COLOR01"
+        );
+        assert_eq!(px[8], 0, "value 0 is black, not COLOR00");
+        assert_eq!(px[0], 0, "the border too");
     }
 
     #[test]

@@ -192,6 +192,13 @@ pub const FIRST_CCK: u32 = 0x38;
 /// Colour clocks Denise's pixel counter runs behind Agnus' horizontal
 /// position (see [`Custom::denise_h`]).
 const DENISE_LAG: u16 = 2;
+/// AGA with a wide fetch: colour clocks from DDFSTRT to the point from which
+/// sprites show (see [`Custom::plane_dma_line`] in the slot loop).
+const SPRITES_FROM: u16 = 7;
+/// ... and the 35 ns pixels after that colour clock's first one where they
+/// start (fitted to the A1200 photograph and WinUAE: 4/20/36 pixels of
+/// sprite 0 at DDFSTRT $48/$44/$40).
+const SPRITES_DELAY_35NS: u32 = 20;
 /// Colour clocks per PAL line.
 pub const PAL_LINE: u16 = 227;
 /// Colour clocks from the vertical strobe to the VERTB request.
@@ -827,6 +834,16 @@ impl Custom {
         (first, first + units * 8)
     }
 
+    /// A line with bitplane DMA (inside the vertical window, BPLEN on, planes
+    /// in BPLCON0).
+    #[inline(always)]
+    fn plane_dma_line(&self) -> bool {
+        self.bpl_vertical
+            && self.v >= self.standard.top() - 1
+            && self.dma_on(dma::BPLEN)
+            && self.denise.planes() > 0
+    }
+
     #[inline(always)]
     fn plane_at(&self, h: u16) -> Option<usize> {
         // No bitplane DMA during vertical blank, even with the window open.
@@ -991,6 +1008,17 @@ impl Custom {
         let mut blitter_took = false;
         let mut copper_took = false;
         let mut copper_held = false;
+        // AGA with a wide fetch: sprites show from DDFSTRT + SPRITES_FROM on
+        // lines with bitplane DMA, before the first BPL1DAT of an aligned
+        // block that starts later (the owner's A1200, WinUAE).
+        if self.chipset.aga
+            && self.fetch_words() > 1
+            && h == (self.ddfstrt & 0xfc).max(0x18) + SPRITES_FROM
+            && self.plane_dma_line()
+        {
+            let dh = self.denise_h(h);
+            self.denise.arm_sprites(8 * dh + SPRITES_DELAY_35NS);
+        }
         let slot_kind = self.slot(h);
         match slot_kind {
             Slot::Fixed => {}
@@ -1004,15 +1032,29 @@ impl Custom {
                 }
             }
             Slot::Sprite(n, first) => {
-                let words = self.sprite_words();
-                let w = self.fetch_wide(chip, self.sprpt[n], words);
-                self.sprpt[n] = self.sprpt[n].wrapping_add(2 * words) & self.ptr_mask;
-                let control = self.spr_dma[n] == SprDma::Control;
-                let reg = usize::from(!first) + if control { 0 } else { 2 };
-                let dh = self.denise_h(h);
-                self.denise.write_sprite_wide_at(n, reg, w, dh);
-                if control && !first {
-                    self.spr_dma[n] = SprDma::Wait;
+                // AGA scan doubling (FMODE SSCAN2, SPRxPOS bit 7 SH10 set):
+                // on lines whose V0 differs from VSTART's the sprite's DMA
+                // rests and Lisa shows the last line's data again (the AGA
+                // documentation; on the owner's A1200 the lists of the
+                // sprites with HSTART >= $100 fall out of step, as this
+                // makes them, `tools/amiga_agaprobe.py scan`).
+                let pos = self.denise.sprites[n].pos;
+                let rests = self.chipset.aga
+                    && self.fmode & 0x8000 != 0
+                    && self.spr_dma[n] == SprDma::Data
+                    && pos & 0x80 != 0
+                    && (self.v ^ (pos >> 8)) & 1 != 0;
+                if !rests {
+                    let words = self.sprite_words();
+                    let w = self.fetch_wide(chip, self.sprpt[n], words);
+                    self.sprpt[n] = self.sprpt[n].wrapping_add(2 * words) & self.ptr_mask;
+                    let control = self.spr_dma[n] == SprDma::Control;
+                    let reg = usize::from(!first) + if control { 0 } else { 2 };
+                    let dh = self.denise_h(h);
+                    self.denise.write_sprite_wide_at(n, reg, w, dh);
+                    if control && !first {
+                        self.spr_dma[n] = SprDma::Wait;
+                    }
                 }
             }
             Slot::Plane(p) => {
@@ -1247,8 +1289,18 @@ impl Custom {
 
     /// Add the plane's modulo (BPL1MOD odd planes 1/3/5, BPL2MOD even
     /// planes 2/4/6) to its pointer, after its last fetch of the line.
+    /// AGA scan doubling (FMODE bit 14 BSCAN2): every plane takes BPL1MOD
+    /// on lines whose V0 is DIWSTRT's V0 and BPL2MOD on the others (the AGA
+    /// documentation; the owner's A1200 doubles the lines that way,
+    /// `tools/amiga_agaprobe.py scan`, 2026-11-13).
     fn add_modulo(&mut self, p: usize) {
-        let m = if p & 1 == 0 {
+        let m = if self.chipset.aga && self.fmode & 0x4000 != 0 {
+            if (self.v ^ (self.diwstrt >> 8)) & 1 == 0 {
+                self.bpl1mod
+            } else {
+                self.bpl2mod
+            }
+        } else if p & 1 == 0 {
             self.bpl1mod
         } else {
             self.bpl2mod
@@ -1681,7 +1733,7 @@ impl Savestate for Custom {
         // writes on their way in Denise; 14: the Copper's bus hold after a
         // COPJMP strobe; 15: a Copper write to INTREQ/INTENA on its way;
         // 16: with its colour clocks left.
-        w.chunk(TAG, 16, |w| {
+        w.chunk(TAG, 17, |w| {
             w.u8(match self.standard {
                 Standard::Pal => 0,
                 Standard::Ntsc => 1,
@@ -1744,7 +1796,7 @@ impl Savestate for Custom {
 
     /// Atomic; the standard and pointer width are configuration.
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (version, mut c) = r.chunk(TAG, 16)?;
+        let (version, mut c) = r.chunk(TAG, 17)?;
         let standard = match c.u8()? {
             0 => Standard::Pal,
             1 => Standard::Ntsc,

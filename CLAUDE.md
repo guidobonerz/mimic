@@ -57,12 +57,12 @@ crates/
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)
   chips-nintendo/  NES: PPU 2C02/2C07 with its palette, APU of the 2A03/2A07; SNES: S-PPU, S-DSP
   drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU), TCBM bus with the 1551
-  drives-other/    WD FD1771/FD1793 (TRS-80, TI-99/4A disk card, MSX), Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, MSX cassette, ZX Microdrives
+  drives-other/    WD FD1771/FD1793 (TRS-80, TI-99/4A disk card, MSX), ATA/IDE hard disks (A1200), Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, MSX cassette, ZX Microdrives
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX, Kempston), light pens, keypads
   devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts, MSX ROMs with the MegaROM schemes, battery RAM and the Konami SCC sound chip; the battery RAM (`.srm`) slot
   devices-net/     Devices that reach outside through emu-core::host: Ultimate 64 command interface (UCI), WiC64
   devices-printer/ Printers: Epson FX-80, NEC P6+ and ImageWriter models with page pictures, Commodore bus end, output through emu-core::host
-  media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR, MSX CAS, punched-card decks (.deck/.crd/.chx)
+  media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR, MSX CAS, Amiga HDF (RDB), punched-card decks (.deck/.crd/.chx)
   media-backends/  Where media bytes come from: image file, copy-on-write overlay, host directory, real hardware
   emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
   emu-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends

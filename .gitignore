@@ -5,3 +5,6 @@
 /roms
 # Python bytecode (tools/).
 __pycache__/
+
+# Personal Claude Code settings (e.g. Greaseweazle permissions)
+.claude/settings.local.json

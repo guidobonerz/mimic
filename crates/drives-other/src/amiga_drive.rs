@@ -357,6 +357,12 @@ impl MediaSlot for AmigaDrive {
         if media.kind != MediaKind::Disk {
             return Err(MediaError::Unsupported(media.kind));
         }
+        // A hard disk image of a floppy's size goes to a hard disk.
+        if media.name.to_ascii_lowercase().ends_with(".hdf") {
+            return Err(MediaError::Format(
+                "a hard disk image (.hdf) goes to a hard disk (A1200: --model 1200)".into(),
+            ));
+        }
         let mut file = vec![0; media.backend.len() as usize];
         media.backend.read(0, &mut file)?;
         let (image, layout, tracks, bits) = if dms::is_dms(&file) {

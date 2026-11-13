@@ -25,7 +25,7 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/amiga-workbench.png" alt="Amiga 500: Workbench 1.3"><br><b>Amiga 500</b><br>Workbench 1.3</td>
 </tr>
 <tr>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/amiga-1200.png" alt="Amiga 1200: Kickstart 3.1"><br><b>Amiga 1200</b><br>Kickstart 3.1</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/amiga-1200.png" alt="Amiga 1200: Workbench 3.1"><br><b>Amiga 1200</b><br>Workbench 3.1</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/mac-finder.png" alt="Macintosh Plus: System 6.0.8 Finder"><br><b>Macintosh Plus</b><br>System 6.0.8 Finder</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/archimedes-desktop.png" alt="Archimedes A310: RISC OS 3.11 Desktop"><br><b>Archimedes A310</b><br>RISC OS 3.11 Desktop</td>
 </tr>
@@ -62,6 +62,7 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 <tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/mega65.png" alt="MEGA65: Open ROMs start screen"><br><b>MEGA65</b><br>Open ROMs start screen</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/msx.png" alt="MSX: MSX BASIC 1.0"><br><b>MSX</b><br>MSX BASIC 1.0</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/msx2.png" alt="MSX2: SCREEN 8, 256 colours"><br><b>MSX2</b><br>SCREEN 8, 256 colours</td>
 </tr>
 </table>
 
@@ -102,11 +103,11 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | Amstrad CPC | Arnold acid tests (CRTC type 1) | 90/98 | 🟡 | PPI mode 1, VSYNC port read, `crtctest` R8 count (several fail on real CPCs too); CRTC 0 18/22, 2 18/23 |
 | Amiga 500/1000/2000 (OCS) | WinUAE comparison, bus tests on a real A500 | 260/504; bus timing within 1.8 % | 🟡 | WinUAE rows, bus test 5 latency |
 | Amiga 500+ (ECS) | Kickstart 2.0/3.1 boot | insert-disk screen | 🟡 | programmable beam registers |
-| Amiga 1200 (AGA) | Kickstart 3.1 boot, bus tests on a real A1200 | within 4 % | 🔴 | Workbench 3.x not booted (needs an ADF) |
+| Amiga 1200 (AGA) | Kickstart 3.1 (40.068) and Workbench 3.1 boot from floppy, from an IDE hard disk and from a PCMCIA card (`amiga_boot`, 6 tests), bus tests on a real A1200 | Workbench desktop after 2100 frames (floppy), 400 (IDE, partition and RDB images; PCMCIA card CC0:); a blank PCMCIA SRAM card becomes fast RAM; bus timing within 4 % | 🟡 | AGA fetch details (DDFSTRT rounding) unchecked; no real HDF or PCMCIA card image tried |
 | ZX81 | boot, PRINT, .P files | works | 🟡 | no test suite |
 | ZX Spectrum 48K/128K/+2 | Fuse test | all pass | 🟢 | border timing beyond the Fuse test, SAVE to tape |
 | ColecoVision | cartridge collection | 231/235 show a picture | 🟡 | TMS9918A reference pictures, VRAM timing |
-| MSX (MSX1, MSX2) | MSX BASIC 1.0, Disk BASIC and C-BIOS 0.29a (`msx_boot`, 8 tests), own stub BIOS and V9938 tests | BASIC computes, CSAVE/CLOAD through a CAS image, SAVE/LOAD on a disk, MSX-DOS 1.03 boots, a test cartridge calling the BIOS; one cartridge game (Championship Lode Runner), one cassette game (Afteroids) and one disk game (Colony) start; C-BIOS boots as an MSX2 (V9938 logo and screen) | 🟡 | more cartridges (Konami, SCC, battery RAM unchecked), MSX2 software with a real MSX2 BIOS |
+| MSX (MSX1, MSX2) | MSX BASIC 1.0 and 2.0, Disk BASIC and C-BIOS 0.29a (`msx_boot`, 12 tests), own stub BIOS and V9938 tests | BASIC computes, CSAVE/CLOAD through a CAS image, SAVE/LOAD on a disk, MSX-DOS 1.03 boots, a test cartridge calling the BIOS; one cartridge game (Championship Lode Runner), one cassette game (Afteroids) and one disk game (Colony) start; MSX2: MSX BASIC 2.0 starts, C-BIOS boots, one MSX2 disk game (Dokkin Minako Sensei!) runs, SCREEN 8 draws its 256 colours | 🟡 | more cartridges (Konami, SCC, battery RAM unchecked), more MSX2 software, the V9938 commands' speeds |
 | NES | nes-test-roms (blargg, nestest …) | 116/119 | 🟡 | `6-MMC3_alt`, `blargg_apu_2005` 10 and 11 |
 | SNES | Harte CPU sets, snes-tests (gilyon), PeterLemon's ROMs | snes-tests 3/3, PeterLemon 67/78, games run with sound, DSP-1 commands correct | 🟡 | mid-line register changes, input-driven PeterLemon pictures, coprocessors beyond the NEC DSPs |
 | Vectrex | executive, Mine Storm, Scramble | play | 🟡 | overlays, phosphor persistence |
@@ -156,7 +157,7 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | MEGA65 45GS02 (4510/65CE02) | `cpu-45gs02` | MEGA65 | own per-instruction tests after the MEGA65 guide (MAP, flat, Q examples), Klaus Dormann | 75 % (no 6502 personality; decimal flags and long-branch base unmeasured) |
 | Zilog Z80 | `cpu-z80` | C128, CPC, ZX81, ColecoVision | Tom Harte, ZEXDOC, ZEXALL | 97 % |
 | Motorola 68000 | `cpu-m68k` | Amiga 500/1000/2000/500+, Macintosh | Tom Harte (all but three contradictory cases) | 97 % |
-| Motorola 68020 / 68EC020 | `cpu-m68k` | Amiga 1200 | unit tests only; timing approximate, no cache | 60 % |
+| Motorola 68020 / 68EC020 | `cpu-m68k` | Amiga 1200 | unit tests and own random tests (98.1 %); instruction cache; timing from the User's Manual tables, chip bus timing measured on a real A1200 | 70 % |
 | WDC 65C816 (5A22) | `cpu-65816` | SNES | Tom Harte, all 5 080 400 tests | 95 % |
 | Sony SPC700 | `cpu-spc700` | SNES sound module | Tom Harte, all 256 000 tests | 98 % |
 | NEC µPD77C25 | `cpu-upd7725` | SNES DSP-1 to DSP-4 | own tests; DSP-1B program: multiply, sine/cosine, distance, inverse | 85 % |
@@ -177,10 +178,10 @@ Where the project stands against test suites and checks, as of 2026-11-11. 🟢 
 | Amstrad CPC | `machine-cpc` | 464, 664, 6128; CRTC 0–2 | Arnold acid tests 66/70; tape and disc | 90 % |
 | Amiga 500/1000/2000 (OCS) | `machine-amiga` | PAL, NTSC | Kickstart 1.2–3.1, Workbench 1.3, demos; bus timing against WinUAE within 0.2–3 % | 85 % |
 | Amiga 500+ (ECS) | `machine-amiga` | `500plus` | Kickstart 2.0/3.1 reach insert-disk; programmable beam partly | 75 % |
-| Amiga 1200 (AGA) | `machine-amiga` | `1200` | Kickstart 3.1 boots the model; boot test row red; Workbench 3.x not booted | 45 % |
+| Amiga 1200 (AGA) | `machine-amiga` | `1200` | Kickstart 3.1 (40.068) and Workbench 3.1 boot; Alice/Lisa with FMODE fetch, 256 colours, HAM8; Gayle with the IDE port (two hard disks, HDF with or without RDB) and the PCMCIA slot (SRAM cards as fast RAM or CC0:) | 70 % |
 | Sinclair ZX81 / TS1000 | `machine-zx81` | 1/2/16 KB | boots, PRINT, .P files through traps | 85 % |
 | ColecoVision | `machine-coleco` | NTSC, PAL | 231 of 235 cartridges show a picture; MegaCart; four controller kinds | 90 % |
-| MSX (MSX1, MSX2) | `machine-msx` | NTSC, PAL | C-BIOS boots (MSX1 and MSX2) and starts cartridges; MSX2 with the V9938 (all modes, sprite mode 2, commands), memory mapper, sub ROM and clock; Konami, Konami SCC (with its sound chip), ASCII 8/16 MegaROM schemes, battery RAM; cassette (CAS, play and record), disks with the SVI-738 interface; one cartridge and one cassette game run | 70 % |
+| MSX (MSX1, MSX2) | `machine-msx` | NTSC, PAL | C-BIOS boots (MSX1 and MSX2) and starts cartridges; MSX BASIC 1.0 and 2.0 start; MSX2 with the V9938 (all modes, sprite mode 2, commands), memory mapper, sub ROM and clock; Konami, Konami SCC (with its sound chip), ASCII 8/16 MegaROM schemes, battery RAM; cassette (CAS, play and record), disks with the SVI-738 interface; one cartridge, one cassette and two disk games (one of them MSX2) run | 70 % |
 | NES / Famicom | `machine-nes` | NTSC, PAL, Four Score | 116 of 119 test ROMs; mappers 0–4 | 90 % |
 | SNES | `machine-snes` | NTSC, PAL | games run with sound; DSP-1 to DSP-4, battery SRAM file; mid-line register changes open | 75 % |
 | Vectrex | `machine-vectrex` | – | executive and Scramble run; light pen and 3D Imager modelled; overlays and phosphor persistence open; Mine Storm and 3-D Mine Storm need the 8 KB system ROM | 55 % |

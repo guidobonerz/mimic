@@ -536,7 +536,13 @@ table(["Option", "Werte"], [
     ["`wcs`", "A1000: `rom` oder `disk` (Kickstart mit dem Bootstrap-ROM von Diskette laden)"],
 ], [0.22, 0.78])
 p("""Ohne Diskette zeigt Kickstart seinen Diskette-einlegen-Bildschirm; ein ADF
-in DF0: bootet. Workbench 1.3 braucht etwa drei Minuten emulierter Zeit bis
+in DF0: bootet. Der A1200 (`--model 1200`) hat den IDE-Anschluss der Gayle:
+`--disk platte.hdf` kommt an Laufwerk 0 (ein zweites an Laufwerk 1), eine
+ganze Festplatte mit RDB oder eine einzelne Partition, die einen virtuellen
+RDB bekommt und als DH0: bootet (OFS/FFS aus dem ROM). `--cart karte.img`
+steckt eine SRAM-Karte (bis 4 MB) in den PCMCIA-Schacht: leer wird sie Fast
+RAM, mit AmigaDOS-Dateisystem (etwa ein ADF) die bootfähige Karten-Diskette
+CC0:. Workbench 1.3 braucht etwa drei Minuten emulierter Zeit bis
 zu ihrem Bildschirm. Tasten: linke/rechte Windows-Taste = linke/rechte
 Amiga-Taste, beide Strg = CTRL, Einfg = HELP, Entf = DEL; **Strg + beide
 Windows-Tasten** löst einen Reset aus wie die echte Tastatur. Der Ton ist
@@ -607,9 +613,12 @@ startet Disk BASIC (die Datumsfrage mit Enter übergehen). Ohne
 p("""`--model msx2` ist ein MSX2: V9938 mit 128 KB Video-RAM (alle
 Bildschirmmodi bis SCREEN 8, Palette, Sprite-Modus 2), Memory Mapper (256 KB
 RAM), Sub-ROM und Uhr. Es braucht ein MSX2-Haupt-ROM (32 KB, Name beginnt mit
-`msx2`) und das Sub-ROM (16 KB, `msx2-sub`) oder die MSX2-ROMs von C-BIOS,
-die dasselbe Skript holt. C-BIOS startet nur Module; Disk BASIC und
-MSX2-Disketten brauchen ein echtes MSX2-BIOS.""")
+`msx2`) und das Sub-ROM (16 KB, `msx2-sub` oder `msx2 `, etwa
+`MSX2 Extension … .rom`) oder die MSX2-ROMs von C-BIOS, die dasselbe Skript
+holt. Dumps mit 7 Byte BSAVE-Kopf (16391 Bytes) werden ohne ihn geladen.
+C-BIOS startet nur Module; MSX BASIC 2.0, Disk BASIC und MSX2-Disketten
+brauchen ein echtes MSX2-BIOS. Die Bildfrequenz legt beim MSX2 das BIOS
+fest (NT-Bit des V9938).""")
 table(["Option", "Werte"], [
     ["`port1`, `port2`", "`joystick` (Standard), `none`"],
     ["`ram`", "`8`, `16`, `32`, `64` (KB, Standard 64); MSX2 `64` bis `4096` (Standard 256)"],
@@ -1249,7 +1258,7 @@ table(["Option", "Bedeutung"], [
     ["`--disk DATEI`", "Ein Diskettenabbild ins erste Laufwerk: D64/D71/D81/G64 (Laufwerk 8), "
      "ATR (Atari D1:), ADF/HD-ADF/extended ADF/DMS (Amiga DF0:), DSK/EDSK (CPC), "
      "DSK/DO/PO/NIB/WOZ (Apple II Schacht 6), 400K/800K-DSK oder DiskCopy 4.2 und "
-     "Festplattenabbilder (Mac, SCSI), ADF (Archimedes), TRD (Spectrum mit `beta=on`), MDR "
+     "Festplattenabbilder (Mac, SCSI), HDF (A1200, IDE), ADF (Archimedes), TRD (Spectrum mit `beta=on`), MDR "
      "(Microdrive). *(wiederholbar)*: das nächste Abbild geht ins nächste Laufwerk; ein "
      "Laufwerk, das ein Abbild ablehnt, reicht es weiter. Weitere Disketten wechseln im "
      "Desktop mit Strg+D ins erste Laufwerk."],

@@ -33,6 +33,9 @@
 //! power cycle clears the latch and the WCS.
 
 use chips_amiga::ChipRam;
+use drives_other::ata::Ata;
+
+use crate::pcmcia::{self, Pcmcia};
 use emu_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Kickstart image size in the map.
@@ -69,66 +72,295 @@ impl Region {
     }
 }
 
-/// The A1200's Gayle (IDE interface, PCMCIA, system control). Without an
-/// IDE drive the IDE registers ($DA0000–$DA3FFF) read $FF, the floating
-/// bus (status $FF: no device; with 0 the ROM's scsi.device waited for a
-/// drive to become ready — Kickstart 40.068 never reached insert-disk,
-/// 40.063 only after about 850 frames instead of 150), Gayle's own
-/// registers 0; the id register at $DE1000 delivers the
-/// chip's id ($D0 on the A1200) bit by bit in D7, most significant bit
-/// first, a read per bit; a write restarts the sequence. Kickstart 3.x
-/// reads it to tell an A1200 from an A500/A2000 and then probes the IDE
-/// port (`docs/sources.md`: Linux kernel gayle driver, amiga-dev wiki).
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+/// The A1200's Gayle (IDE interface, PCMCIA, system control).
+///
+/// **IDE** ($DA0000–$DA7FFF): the ATA task file ([`Ata`]), register = A4–A2,
+/// A12 selects the control block (CS1: alternate status / device control at
+/// register 6, so $DA101A or $DA301A); register 0 is the 16-bit data
+/// register, the others are bytes in the word's upper half (D15–D8). The
+/// data bus is wired byte-swapped: the drive's D7–D0 are the CPU's D15–D8,
+/// so a block's bytes arrive in their order on the disk (an image made by
+/// the Amiga or by WinUAE reads as written) and IDENTIFY's numbers come
+/// swapped (scsi.device swaps them back; with straight wiring it set 0
+/// sectors and head $F). The
+/// ROM's scsi.device uses $DA2000 + 4·reg (+2 for the byte registers),
+/// the Linux driver $DA0000 + 2 + 4·reg: both are the same registers. With
+/// no drive every IDE register reads $FF, the floating bus (status $FF: no
+/// device; with 0 scsi.device waited for a drive to become ready —
+/// Kickstart 40.068 never reached insert-disk).
+///
+/// **Gayle's registers** (bytes, D15–D8): $DA8000 card status (7 the IDE
+/// drive's INTRQ, 6 card detect …), $DA9000 interrupt requests (7 IDE: set
+/// when INTRQ rises; writing a 0 to bits 7–2 clears them, bits 1–0 are
+/// written as given), $DAA000 interrupt enables (7 IDE → INT2), $DAB000
+/// configuration (PCMCIA speed and voltage, kept). The IDE request with its
+/// enable drives INT2 (Paula's PORTS, level 2) together with CIA-A.
+///
+/// **Id** at $DE1000: the chip's id ($D0 on the A1200) bit by bit in D7,
+/// most significant bit first, a read per bit; a write restarts the
+/// sequence. Kickstart 3.x reads it to tell an A1200 from an A500/A2000 and
+/// then probes the IDE port.
+///
+/// **PCMCIA** ([`Pcmcia`]): common memory $600000–$9FFFFF, attribute
+/// memory $A00000–$A1FFFF, I/O $A20000–$A3FFFF, reset $A40000. The card
+/// status register shows the card: 6 CCDET (a card is in), 5 BVD1 and 4
+/// BVD2 (its battery is good), 3 WR (writable), 2 RDY (ready); a card
+/// going in or out sets request bit 6, which with its enable is INT6 (the
+/// NetBSD driver's level for card detect); the others stay quiet on an
+/// SRAM card.
+///
+/// Sources (`docs/sources.md`): the Linux kernel's `amigayle.h` and Gayle
+/// IDE driver (register addresses and bits), NetBSD's Gayle PCMCIA driver
+/// (the card detect interrupt's level), Commodore's NDK 3.1 PCMCIA notes
+/// (the address spaces), the amiga-dev wiki (Gayle).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Gayle {
     /// Bits of the id delivered so far.
     id_bits: u8,
+    pub ide: Ata,
+    card_status: u8,
+    intreq: u8,
+    inten: u8,
+    config: u8,
+    /// INTRQ as last seen (its rising edge sets the request).
+    irq_line: bool,
+    pub card: Pcmcia,
+}
+
+impl Default for Gayle {
+    fn default() -> Self {
+        let mut ide = Ata::new();
+        for d in &mut ide.disks {
+            d.prepare = Some(media::hdf::with_rdb);
+        }
+        Self {
+            id_bits: 0,
+            ide,
+            card_status: 0,
+            intreq: 0,
+            inten: 0,
+            config: 0,
+            irq_line: false,
+            card: Pcmcia::default(),
+        }
+    }
 }
 
 /// Gayle's id on the A1200.
 pub const GAYLE_ID_A1200: u8 = 0xd0;
+/// The IDE bit of Gayle's status, request and enable registers.
+pub const GAYLE_IDE: u8 = 0x80;
+/// Card detect: in the status (a card is in), request and enable (it
+/// went in or out).
+pub const GAYLE_CCDET: u8 = 0x40;
+const GAYLE_BVD1: u8 = 0x20;
+const GAYLE_BVD2: u8 = 0x10;
+const GAYLE_WR: u8 = 0x08;
+const GAYLE_RDY: u8 = 0x04;
+
+/// What a Gayle address is.
+enum GayleReg {
+    /// IDE register; true: the control block (CS1).
+    Ide(u8, bool),
+    CardStatus,
+    IntReq,
+    IntEna,
+    Config,
+    Id,
+    /// PCMCIA common memory, offset.
+    Common(u32),
+    /// PCMCIA attribute memory, offset.
+    Attribute(u32),
+    /// PCMCIA I/O and the reset register.
+    CardIo,
+    None,
+}
+
+fn gayle_reg(addr: u32) -> GayleReg {
+    let a = addr & 0xff_ffff;
+    match a {
+        0xda_0000..=0xda_7fff => GayleReg::Ide((a >> 2 & 7) as u8, a & 0x1000 != 0),
+        0xda_8000..=0xda_8fff => GayleReg::CardStatus,
+        0xda_9000..=0xda_9fff => GayleReg::IntReq,
+        0xda_a000..=0xda_afff => GayleReg::IntEna,
+        0xda_b000..=0xda_bfff => GayleReg::Config,
+        0xde_1000..=0xde_1fff => GayleReg::Id,
+        pcmcia::COMMON..=pcmcia::COMMON_END => GayleReg::Common(a - pcmcia::COMMON),
+        0xa0_0000..=0xa1_ffff => GayleReg::Attribute(a - pcmcia::ATTRIBUTE),
+        0xa2_0000..=0xa5_ffff => GayleReg::CardIo,
+        _ => GayleReg::None,
+    }
+}
 
 impl Gayle {
     /// A byte read from Gayle's space.
     pub fn read(&mut self, addr: u32) -> u8 {
-        if addr & 0xff_f000 == 0xde_1000 {
-            let bit = (GAYLE_ID_A1200 << (self.id_bits & 7)) & 0x80;
-            self.id_bits = self.id_bits.wrapping_add(1).min(8);
-            return bit;
-        }
-        Self::other(addr)
+        let v = match gayle_reg(addr) {
+            GayleReg::Ide(0, false) => self.ide.read_data() as u8,
+            GayleReg::Ide(6, true) => self.ide.alt_status(),
+            GayleReg::Ide(r, false) => self.ide.read(r),
+            GayleReg::Id => {
+                let bit = (GAYLE_ID_A1200 << (self.id_bits & 7)) & 0x80;
+                self.id_bits = self.id_bits.wrapping_add(1).min(8);
+                bit
+            }
+            _ => self.peek(addr),
+        };
+        self.sync();
+        v
     }
 
-    /// Reads other than the id: the empty IDE port's floating bus.
-    fn other(addr: u32) -> u8 {
-        if (0xda_0000..0xda_4000).contains(&(addr & 0xff_ffff)) {
-            0xff
-        } else {
-            0
+    /// A word read: the IDE data register gives all 16 bits, the others
+    /// their byte in the upper half.
+    pub fn read_word(&mut self, addr: u32) -> u16 {
+        match gayle_reg(addr) {
+            GayleReg::Ide(0, false) => {
+                let v = self.ide.read_data().swap_bytes();
+                self.sync();
+                v
+            }
+            GayleReg::Common(o) => self.card.common_word(o),
+            GayleReg::Attribute(o) => {
+                u16::from(self.card.attribute(o)) << 8 | u16::from(self.card.attribute(o | 1))
+            }
+            _ => u16::from(self.read(addr)) << 8,
         }
     }
 
     pub fn peek(&self, addr: u32) -> u8 {
-        if addr & 0xff_f000 == 0xde_1000 {
-            return (GAYLE_ID_A1200 << (self.id_bits & 7)) & 0x80;
+        match gayle_reg(addr) {
+            GayleReg::Ide(6, true) => self.ide.alt_status(),
+            GayleReg::Ide(_, true) => 0xff,
+            GayleReg::Ide(r, false) => self.ide.peek(r),
+            GayleReg::CardStatus => {
+                let ide = if self.ide.irq() { GAYLE_IDE } else { 0 };
+                let card = if self.card.present() {
+                    let wr = if self.card.writable() { GAYLE_WR } else { 0 };
+                    GAYLE_CCDET | GAYLE_BVD1 | GAYLE_BVD2 | GAYLE_RDY | wr
+                } else {
+                    0
+                };
+                ide | card
+            }
+            GayleReg::IntReq => self.intreq,
+            GayleReg::IntEna => self.inten,
+            GayleReg::Config => self.config,
+            GayleReg::Id => (GAYLE_ID_A1200 << (self.id_bits & 7)) & 0x80,
+            GayleReg::Common(o) => self.card.common(o),
+            GayleReg::Attribute(o) => self.card.attribute(o),
+            GayleReg::CardIo => 0xff,
+            GayleReg::None => 0,
         }
-        Self::other(addr)
     }
 
-    pub fn write(&mut self, addr: u32, _v: u8) {
-        if addr & 0xff_f000 == 0xde_1000 {
-            self.id_bits = 0;
+    pub fn peek_word(&self, addr: u32) -> u16 {
+        match gayle_reg(addr) {
+            GayleReg::Ide(0, false) => self.ide.peek_data().swap_bytes(),
+            GayleReg::Common(o) => self.card.common_word(o),
+            GayleReg::Attribute(o) => {
+                u16::from(self.card.attribute(o)) << 8 | u16::from(self.card.attribute(o | 1))
+            }
+            _ => u16::from(self.peek(addr)) << 8,
         }
+    }
+
+    pub fn write(&mut self, addr: u32, v: u8) {
+        match gayle_reg(addr) {
+            GayleReg::Ide(0, false) => self.ide.write_data(u16::from(v) << 8 | u16::from(v)),
+            GayleReg::Ide(6, true) => self.ide.write_control(v),
+            GayleReg::Ide(_, true) => {}
+            GayleReg::Ide(r, false) => self.ide.write(r, v),
+            GayleReg::CardStatus => self.card_status = v & 0x7f,
+            GayleReg::IntReq => self.intreq = (self.intreq & v & 0xfc) | (v & 3),
+            GayleReg::IntEna => self.inten = v,
+            GayleReg::Config => self.config = v & 0x0f,
+            GayleReg::Id => self.id_bits = 0,
+            GayleReg::Common(o) => self.card.set_common(o, v),
+            // Attribute memory is the CIS (ROM here); I/O and reset have
+            // nothing on an SRAM card.
+            GayleReg::Attribute(_) | GayleReg::CardIo | GayleReg::None => {}
+        }
+        self.sync();
+    }
+
+    /// A word write: the data register takes all 16 bits.
+    pub fn write_word(&mut self, addr: u32, v: u16) {
+        match gayle_reg(addr) {
+            GayleReg::Ide(0, false) => {
+                self.ide.write_data(v.swap_bytes());
+                self.sync();
+            }
+            GayleReg::Common(o) => {
+                self.card.set_common(o, (v >> 8) as u8);
+                self.card.set_common(o | 1, v as u8);
+            }
+            _ => self.write(addr, (v >> 8) as u8),
+        }
+    }
+
+    /// INTRQ's rising edge sets the IDE request; a card going in or out
+    /// the card detect request.
+    pub fn sync(&mut self) {
+        let line = self.ide.irq();
+        if line && !self.irq_line {
+            self.intreq |= GAYLE_IDE;
+        }
+        self.irq_line = line;
+        if std::mem::take(&mut self.card.changed) {
+            self.intreq |= GAYLE_CCDET;
+        }
+    }
+
+    /// Gayle's INT2 output (the IDE drive).
+    pub fn int2(&self) -> bool {
+        self.intreq & self.inten & GAYLE_IDE != 0
+    }
+
+    /// Gayle's INT6 output (card detect).
+    pub fn int6(&self) -> bool {
+        self.intreq & self.inten & GAYLE_CCDET != 0
+    }
+
+    /// The system reset line: the IDE drives reset too.
+    pub fn reset(&mut self) {
+        self.ide.reset();
+        self.intreq = 0;
+        self.inten = 0;
+        self.card_status = 0;
+        self.config = 0;
+        self.irq_line = false;
+        self.id_bits = 0;
+        // A card in the slot is no news after a reset.
+        self.card.changed = false;
     }
 
     pub fn save(&self, w: &mut StateWriter) {
         w.u8(self.id_bits);
+        w.u8(self.card_status);
+        w.u8(self.intreq);
+        w.u8(self.inten);
+        w.u8(self.config);
+        w.bool(self.irq_line);
+        self.ide.save(w);
+        self.card.save(w);
     }
 
-    pub fn load(r: &mut StateReader<'_>) -> Result<Self, StateError> {
-        Ok(Self {
-            id_bits: r.u8()?.min(8),
-        })
+    /// `version` 6 states hold only the id shift, 7 no card.
+    pub fn load(&mut self, r: &mut StateReader<'_>, version: u16) -> Result<(), StateError> {
+        self.id_bits = r.u8()?.min(8);
+        if version < 7 {
+            return Ok(());
+        }
+        self.card_status = r.u8()? & 0x7f;
+        self.intreq = r.u8()?;
+        self.inten = r.u8()?;
+        self.config = r.u8()? & 0x0f;
+        self.irq_line = r.bool()?;
+        self.ide.load(r)?;
+        if version >= 8 {
+            self.card.load(r)?;
+        }
+        Ok(())
     }
 }
 
@@ -347,6 +579,13 @@ impl Memory {
                 }
             }
             0x00_0000..=0x1f_ffff => Region::Chip,
+            // A600/A1200: the PCMCIA slot's common memory where no fast RAM
+            // board answers, its attribute, I/O and reset spaces.
+            pcmcia::COMMON..=pcmcia::COMMON_END if self.gayle.is_some() => match &self.fast {
+                Some(f) if f.index(a).is_some() => Region::Fast,
+                _ => Region::Gayle,
+            },
+            0xa0_0000..=0xa5_ffff if self.gayle.is_some() => Region::Gayle,
             EXPANSION_BASE..=0x9f_ffff => match &self.fast {
                 Some(f) if f.index(a).is_some() => Region::Fast,
                 _ => Region::Open,
@@ -662,5 +901,63 @@ mod tests {
         assert_eq!(back, m);
         let mut other = Memory::new(0x8_0000, 0x8_0000, &[0; 0x4_0000]);
         assert!(other.load(&mut StateReader::new(&bytes)).is_err());
+    }
+
+    struct Mem(Vec<u8>);
+
+    impl emu_core::media::MediaBackend for Mem {
+        fn len(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read(&mut self, o: u64, b: &mut [u8]) -> Result<(), emu_core::media::MediaError> {
+            b.copy_from_slice(&self.0[o as usize..o as usize + b.len()]);
+            Ok(())
+        }
+        fn write(&mut self, o: u64, d: &[u8]) -> Result<(), emu_core::media::MediaError> {
+            self.0[o as usize..o as usize + d.len()].copy_from_slice(d);
+            Ok(())
+        }
+        fn commit(&mut self) -> Result<(), emu_core::media::MediaError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn gayle_swaps_the_ide_data_bus_and_raises_int2_on_intrq() {
+        use emu_core::media::{Media, MediaKind, MediaSlot};
+        let mut g = Gayle::default();
+        assert_eq!(g.read(0xda_201c), 0xff, "no drive: the floating bus");
+        assert_eq!(g.read_word(0xda_2000), 0xffff);
+        // A disk with an RDB stays as it is; block 0 starts "RDSK".
+        let mut disk = vec![0u8; 64 * 512];
+        disk[..512].copy_from_slice(&media::hdf::rdb_blocks(32, 0x444f_5301)[..512]);
+        g.ide.disks[0]
+            .insert(Media {
+                name: "hd.hdf".into(),
+                kind: MediaKind::Disk,
+                backend: Box::new(Mem(disk)),
+            })
+            .unwrap();
+        g.write(0xda_a000, GAYLE_IDE);
+        // READ SECTORS, LBA 0.
+        for (reg, v) in [(2, 1), (3, 0), (4, 0), (5, 0), (6, 0xe0), (7, 0x20)] {
+            g.write(0xda_2000 + 4 * reg, v);
+        }
+        assert!(g.int2(), "INTRQ rose");
+        assert_eq!(g.peek(0xda_8000) & GAYLE_IDE, GAYLE_IDE);
+        assert_eq!(g.read(0xda_301a) & 0x08, 0x08, "alternate status: DRQ");
+        // The block's bytes arrive in their order.
+        assert_eq!(g.read_word(0xda_2000), u16::from_be_bytes(*b"RD"));
+        assert_eq!(g.read_word(0xda_2000), u16::from_be_bytes(*b"SK"));
+        // The status read drops INTRQ; the request stays until written 0.
+        g.read(0xda_201c);
+        assert_eq!(g.peek(0xda_8000) & GAYLE_IDE, 0);
+        assert!(g.int2());
+        g.write(0xda_9000, 0x7c | (g.peek(0xda_9000) & 3));
+        assert!(!g.int2());
+        // The id: $D0, a bit a read.
+        g.write(0xde_1000, 0);
+        let id = (0..8).fold(0u8, |id, _| id << 1 | g.read(0xde_1000) >> 7);
+        assert_eq!(id, GAYLE_ID_A1200);
     }
 }
