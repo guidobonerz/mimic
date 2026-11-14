@@ -209,6 +209,9 @@ pub const SLOT_TAPE: SlotId = SlotId(2);
 pub const SLOT_CARTRIDGE: SlotId = SlotId(3);
 
 pub struct Vic20 {
+    /// The BASIC interpreter as the debugger sees it (derived from what
+    /// is mapped; not machine state).
+    basic: basic_dialects::cbm::CbmBasic,
     cpu: Cpu6502,
     mem: Memory,
     io: Io,
@@ -319,6 +322,7 @@ impl Vic20 {
             Some(other) => return Err(ConfigError::Invalid(format!("debugcart option '{other}'"))),
         };
         let mut m = Self {
+            basic: basic_dialects::cbm::CbmBasic::new(CPU_SPACE),
             cpu,
             mem: Memory::new(load_roms(config, model)?, expansion),
             io: Io {
@@ -708,6 +712,13 @@ impl Machine for Vic20 {
 
     fn frame_row(&self, line: u16) -> Option<u32> {
         self.io.vic.frame_row(line)
+    }
+
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
     }
 
     fn gfx_views(&self) -> Vec<GfxViewInfo> {
@@ -1106,6 +1117,8 @@ impl Machine for Vic20 {
         Ok(())
     }
 }
+
+basic_dialects::impl_basic_debug!(Vic20, basic);
 
 impl DebugTarget for Vic20 {
     fn regs(&self) -> RegisterSet {

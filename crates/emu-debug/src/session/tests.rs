@@ -647,3 +647,33 @@ fn cheats_import_formats_and_the_database() {
         .any(|e| e["event"] == "cheats_loaded" && e["game"] == "Fake Game"));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_machine_without_basic_refuses_the_basic_commands() {
+    let mut s = session();
+    assert_eq!(result(&mut s, Command::Capabilities)["basic"], false);
+    for cmd in [
+        Command::BasicInfo,
+        Command::BasicState,
+        Command::BasicVars,
+        Command::BasicStack,
+        Command::BasicList {
+            from: None,
+            to: None,
+        },
+        Command::BasicBreakAdd {
+            line: 10,
+            statement: None,
+            enabled: None,
+        },
+        Command::BasicStep { kind: None },
+        Command::BasicRunTo {
+            line: 10,
+            statement: None,
+        },
+    ] {
+        let v = call(&mut s, cmd);
+        assert_eq!(v["error"], "fake has no BASIC the debugger can follow");
+    }
+    assert!(!s.is_running());
+}

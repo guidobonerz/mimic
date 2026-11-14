@@ -31,9 +31,10 @@ RULES = [
     ("emu-input", ["emu-core"]),
     ("emu-profile", []),
     ("emu-cheats", ["emu-core"]),                 # cheat files, imports, search                           # start profiles: frontends only
+    ("basic-dialects", ["emu-core"]),             # BASIC decoders for the debugger, linked by machines
     ("media-backends", ["emu-core", "media"]),  # host folders as D64 images
     ("drives-*", ["emu-core", "cpu-*", "chips-*", "media"]),
-    ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "asm-*", "brass"]),  # asm-*, brass: ROMs and systems built from sources
+    ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "asm-*", "brass", "basic-dialects"]),  # asm-*, brass: ROMs and systems built from sources
     # Also the catalogue of pluggable port devices for the frontends.
     ("emu-machines", ["emu-core", "machine-*", "devices-input", "devices-net"]),
     ("emu-debug", ["emu-core", "emu-preview", "video-crt", "emu-cheats"]),  # golden rule 1; preview encoders for gfx_get
@@ -46,7 +47,7 @@ RULES = [
 
 # Golden rule 10: emulation crates never see host devices.
 HOST_CRATES = {"gilrs", "winit", "wgpu", "egui", "cpal", "tokio", "tokio-tungstenite"}
-HOST_FREE = ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "machine-*"]
+HOST_FREE = ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "machine-*", "basic-dialects"]
 
 DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 

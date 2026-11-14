@@ -152,6 +152,16 @@ def format_stop(state):
     elif kind == "watchpoint":
         kind = "watchpoint %s (%s $%04x)" % (
             reason.get("bp"), "write" if reason.get("write") else "read", reason.get("addr", 0))
+    elif kind in ("basic_break", "basic_step"):
+        if kind == "basic_break":
+            what = "BASIC breakpoint %s" % reason.get("bp")
+        else:
+            what = "BASIC step (%s)" % reason.get("step")
+        line = reason.get("line")
+        if line is None:
+            kind = "%s in direct mode" % what
+        else:
+            kind = "%s at line %s statement %s" % (what, line, reason.get("statement"))
     pc = state.get("pc")
     beam = state.get("beam") or {}
     where = "pc=$%04x" % pc if pc is not None else "pc=?"
@@ -439,6 +449,129 @@ def cmd_vectors(c, args):
             f.write("\n".join(lines))
         text.append("-> %s" % args.svg)
     out(args, v, text)
+
+
+def basic_place(text):
+    """LINE or LINE:STATEMENT into the arguments of the basic_* commands."""
+    line, sep, statement = str(text).partition(":")
+    place = {"line": parse_number(line)}
+    if sep:
+        place["statement"] = parse_number(statement)
+    return place
+
+
+def basic_value(text):
+    """A value for basic_set_var: a number, else a string ("quotes" optional)."""
+    t = str(text)
+    if len(t) >= 2 and t[0] == t[-1] == '"':
+        return t[1:-1]
+    try:
+        return parse_number(t)
+    except ValueError:
+        pass
+    try:
+        return float(t)
+    except ValueError:
+        return t
+
+
+def basic_listing(lst):
+    """Text lines for a basic_list result, the current line marked."""
+    cur = lst.get("current") or {}
+    text = []
+    for l in lst["lines"]:
+        mark = ">" if l["line"] == cur.get("line") else " "
+        text.append("%s%5d %s" % (mark, l["line"], l["text"]))
+    return text or ["(no program)"]
+
+
+def cmd_basic(c, args):
+    """The BASIC debugger (protocol 11): program, variables, stack,
+    breakpoints on lines and steps by statement or line."""
+    action, words = args.action, args.words
+
+    def word(i, default=None):
+        return words[i] if len(words) > i else default
+
+    def need(i, what):
+        if len(words) <= i:
+            raise ValueError("basic %s: %s missing" % (action, what))
+        return words[i]
+
+    def run(cmd, **kw):
+        c.take_events()
+        c.call(cmd, **kw)
+        ev = c.wait_event("stopped", timeout=args.timeout)
+        out(args, ev, [format_stop(ev)])
+
+    if action == "info":
+        i = c.call("basic_info")
+        s = c.call("basic_state")
+        if s["line"] is None:
+            where = "no line"
+        else:
+            where = "line %s statement %s" % (s["line"], s["statement"])
+        out(args, {"info": i, "state": s}, [
+            "%s (steps by %s, memory space %s)" % (i["dialect"], i["granularity"], i["space"]),
+            "%s: %s, GOSUB depth %s" % (s["mode"], where, s["depth"]),
+        ])
+    elif action == "list":
+        lst = c.call("basic_list",
+                     **{"from": parse_number(word(0)) if word(0) else None,
+                        "to": parse_number(word(1)) if word(1) else None})
+        out(args, lst, basic_listing(lst))
+    elif action == "vars":
+        r = c.call("basic_vars")
+        text = []
+        for v in r["vars"]:
+            if "dims" in v:
+                value = "(%s)" % ",".join(str(d) for d in v["dims"])
+            else:
+                value = json.dumps(v["value"])
+            text.append("%-8s %-6s $%04x  %s" % (v["name"], v["type"], v["addr"], value))
+        out(args, r, text or ["(no variables)"])
+    elif action == "array":
+        r = c.call("basic_array", name=need(0, "NAME"),
+                   first=parse_number(word(1, "0")),
+                   count=parse_number(word(2)) if word(2) else None)
+        out(args, r, ["%s(%d) = %s" % (r["name"], r["first"] + i, json.dumps(v))
+                      for i, v in enumerate(r["values"])])
+    elif action == "set":
+        name, _, index = need(0, "NAME").partition("(")
+        c.call("basic_set_var", name=name, value=basic_value(need(1, "VALUE")),
+               index=parse_number(index.rstrip(")")) if index else None)
+    elif action == "stack":
+        r = c.call("basic_stack")
+        text = []
+        for f in r["frames"]:
+            at = "line %s statement %s" % (f["line"], f["statement"])
+            if f["kind"] == "for":
+                text.append("FOR %s TO %s STEP %s  (%s)" % (
+                    f["var"], json.dumps(f["limit"]), json.dumps(f["step"]), at))
+            else:
+                text.append("GOSUB from %s" % at)
+        out(args, r, text or ["(empty)"])
+    elif action == "break":
+        bp = c.call("basic_break_add", **basic_place(need(0, "LINE[:STATEMENT]")))["bp"]
+        out(args, {"bp": bp}, ["BASIC breakpoint %s" % bp])
+    elif action == "breaks":
+        lst = c.call("basic_break_list")
+        text = []
+        for b in lst:
+            where = "line %s" % b["line"]
+            if b["statement"] is not None:
+                where += " statement %s" % b["statement"]
+            text.append("%3d %s  hits %d%s" % (b["bp"], where, b["hits"],
+                                              "" if b["enabled"] else "  (disabled)"))
+        out(args, lst, text or ["no BASIC breakpoints"])
+    elif action == "unbreak":
+        c.call("basic_break_remove", bp=parse_number(need(0, "BP")))
+    elif action == "step":
+        run("basic_step", kind=word(0, "line"))
+    elif action == "until":
+        run("basic_run_to", **basic_place(need(0, "LINE[:STATEMENT]")))
+    else:
+        raise ValueError("unknown basic action %r" % action)
 
 
 def cmd_dlist(c, args):
@@ -829,6 +962,16 @@ def build_parser(shell=False):
     sp = add("vectors", cmd_vectors, "vector display (Vectrex): the beam segments of the last frame")
     sp.add_argument("--all", action="store_true", help="list every segment")
     sp.add_argument("--svg", help="also write the segments as an SVG picture")
+    sp = add("basic", cmd_basic, "BASIC debugger: info, list [FROM [TO]], vars, "
+             "array NAME [FIRST [COUNT]], set NAME|NAME(I) VALUE, stack, "
+             "break LINE[:STATEMENT], breaks, unbreak BP, "
+             "step [statement|line|over|out], until LINE[:STATEMENT]")
+    sp.add_argument("action", nargs="?", default="list",
+                    choices=["info", "list", "vars", "array", "set", "stack", "break",
+                             "breaks", "unbreak", "step", "until"])
+    sp.add_argument("words", nargs="*")
+    sp.add_argument("--timeout", type=float, default=30.0,
+                    help="seconds to wait for a step or run to stop")
     sp = add("dlist", cmd_dlist, "Atari: decode the ANTIC display list (default: at DLIST)")
     sp.add_argument("addr", nargs="?")
     sp = add("break", cmd_break, "add a breakpoint: address/symbol, raster line, or irq/nmi")

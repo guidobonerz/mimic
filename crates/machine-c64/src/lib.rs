@@ -523,6 +523,9 @@ pub const SLOT_SD2IEC: SlotId = SlotId(4);
 pub const SD2IEC_FOLDER: &str = "/SD2IEC";
 
 pub struct C64 {
+    /// The BASIC interpreter as the debugger sees it (derived from what
+    /// is mapped; not machine state).
+    basic: basic_dialects::cbm::CbmBasic,
     cpu: Cpu6502,
     mem: Memory,
     io: Io,
@@ -720,6 +723,7 @@ impl C64 {
         let mem = Memory::new(load_roms(config)?);
         let fastload = fastload && fastload::kernal_matches(&mem.roms.kernal[..]);
         let mut m = Self {
+            basic: basic_dialects::cbm::CbmBasic::new(CPU_SPACE),
             cpu,
             mem,
             io: Io::new(vic, cia, sid),
@@ -1340,6 +1344,13 @@ impl Machine for C64 {
 
     fn frame_row(&self, line: u16) -> Option<u32> {
         self.io.vic.frame_row(line)
+    }
+
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
     }
 
     fn gfx_views(&self) -> Vec<GfxViewInfo> {
@@ -2044,6 +2055,8 @@ fn sd2iec_card(host: &HostServices) -> Option<SharedFiles> {
     let card = SubFileHost::new(files, SD2IEC_FOLDER).ok()?;
     Some(std::sync::Arc::new(std::sync::Mutex::new(card)) as SharedFiles)
 }
+
+basic_dialects::impl_basic_debug!(C64, basic);
 
 impl DebugTarget for C64 {
     fn regs(&self) -> RegisterSet {

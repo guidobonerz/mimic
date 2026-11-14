@@ -1,0 +1,12 @@
+[package]
+name = "basic-dialects"
+description = "Decoders of BASIC interpreters' memory for the BASIC debugger: program text, variables, stack and stop points per dialect family"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true

@@ -919,8 +919,21 @@ python tools/polydbg.py rewind --on 1          # Rückspulpuffer an
 python tools/polydbg.py rewind 50              # 50 Bilder zurück
 python tools/polydbg.py back 3                 # 3 Befehle zurück
 python tools/polydbg.py save state.bin
+python tools/polydbg.py basic                  # BASIC-Programm listen (> = aktuelle Zeile)
+python tools/polydbg.py basic break 100        # Haltepunkt auf Zeile 100 (100:2 = 3. Anweisung)
+python tools/polydbg.py basic step             # eine Zeile weiter; step statement|over|out
+python tools/polydbg.py basic vars             # BASIC-Variablen mit Werten
+python tools/polydbg.py basic set A 42         # Variable setzen (auch 'N%' 7, 'F(3)' 1.5)
+python tools/polydbg.py basic stack            # offene GOSUBs und FOR-Schleifen
 python tools/polydbg.py shell                  # interaktive Eingabe
 ```
+
+Der BASIC-Debugger (`basic …`) arbeitet auf C64, VIC-20 und PET: Er hält
+an BASIC-Zeilen und -Anweisungen, steppt zeilen- oder anweisungsweise, über
+ein GOSUB hinweg (`over`) oder aus ihm heraus (`out`) und zeigt und ändert
+Variablen. Zeichenketten lassen sich nur mit gleicher Länge überschreiben.
+`basic info` nennt den Dialekt und wo das Programm steht, `basic until 200`
+läuft bis Zeile 200, `basic array F` zeigt ein Feld.
 
 `--host`/`--port` wählen den Server, `--json` gibt die rohen Antworten aus,
 `raw CMD '{...}'` schickt beliebige Befehle. `python tools/polydbg.py --help`

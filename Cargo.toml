@@ -48,6 +48,7 @@ media-backends = { path = "crates/media-backends" }
 emu-input = { path = "crates/emu-input" }
 emu-profile = { path = "crates/emu-profile" }
 emu-cheats = { path = "crates/emu-cheats" }
+basic-dialects = { path = "crates/basic-dialects" }
 video-crt = { path = "crates/video-crt" }
 machine-pet = { path = "crates/machine-pet" }
 machine-vic20 = { path = "crates/machine-vic20" }

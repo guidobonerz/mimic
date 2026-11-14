@@ -1,4 +1,7 @@
-//! Helpers for tests of CPU cores and other bus masters.
+//! Helpers for tests of CPU cores and other bus masters, and a toy machine
+//! with a BASIC for tests of the BASIC debugger ([`basic`]).
+
+pub mod basic;
 
 use crate::bus::{Bus, Size};
 

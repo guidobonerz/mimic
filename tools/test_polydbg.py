@@ -34,6 +34,26 @@ class Parsing(unittest.TestCase):
         args = polydbg.build_parser().parse_args(["picture", "--overlays", "beam,grid"])
         self.assertEqual(args.overlays, "beam,grid")
 
+    def test_basic_arguments(self):
+        self.assertEqual(polydbg.basic_place("100"), {"line": 100})
+        self.assertEqual(polydbg.basic_place("20:2"), {"line": 20, "statement": 2})
+        with self.assertRaises(ValueError):
+            polydbg.basic_place("ten")
+        self.assertEqual(polydbg.basic_value("42"), 42)
+        self.assertEqual(polydbg.basic_value("$10"), 16)
+        self.assertEqual(polydbg.basic_value("-1.5"), -1.5)
+        self.assertEqual(polydbg.basic_value("HELLO"), "HELLO")
+        self.assertEqual(polydbg.basic_value('"42"'), "42")
+        args = polydbg.build_parser().parse_args(["basic", "step", "over"])
+        self.assertEqual((args.action, args.words), ("step", ["over"]))
+        self.assertEqual(polydbg.build_parser().parse_args(["basic"]).action, "list")
+        lst = {"current": {"line": 20}, "lines": [{"line": 10, "text": "A=5"},
+                                                  {"line": 20, "text": "GOTO 10"}]}
+        self.assertEqual(polydbg.basic_listing(lst), ["    10 A=5", ">   20 GOTO 10"])
+        stop = {"reason": {"kind": "basic_break", "bp": 1, "line": 20, "statement": 0}, "pc": 16}
+        self.assertTrue(polydbg.format_stop(stop).startswith(
+            "BASIC breakpoint 1 at line 20 statement 0: "), polydbg.format_stop(stop))
+
     def test_addresses_or_symbols(self):
         self.assertEqual(polydbg.address_args("$0810"), {"addr": 0x0810})
         self.assertEqual(polydbg.address_args("sprites.init"), {"symbol": "sprites.init"})

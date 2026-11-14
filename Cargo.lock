@@ -337,6 +337,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "basic-dialects"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2243,6 +2250,7 @@ dependencies = [
 name = "machine-c64"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-cbm",
  "cpu-6502",
  "devices-cartridge",
@@ -2362,6 +2370,7 @@ dependencies = [
 name = "machine-pet"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-cbm",
  "cpu-6502",
  "devices-input",
@@ -2460,6 +2469,7 @@ dependencies = [
 name = "machine-vic20"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-cbm",
  "cpu-6502",
  "devices-cartridge",

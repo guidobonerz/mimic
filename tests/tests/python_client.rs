@@ -113,3 +113,103 @@ fn command_line_client_drives_the_debugger() {
     assert!(stderr.contains("no breakpoint 99"), "{stderr}");
     server.shutdown();
 }
+
+/// `polydbg basic …` against the toy BASIC machine of `emu-core`.
+#[test]
+fn command_line_client_debugs_basic() {
+    use emu_core::testing::basic::{ToyBasic, ToyStmt::*};
+    let Some(python) = python() else {
+        eprintln!("skipped: no Python 3 found");
+        return;
+    };
+    let machine = ToyBasic::new(&[
+        (10, &[Let('A', 5), Gosub(100), Add('A', -2)]),
+        (20, &[Goto(10)]),
+        (100, &[For('I', 1, 2), Add('A', 1), Next]),
+        (110, &[Return]),
+    ]);
+    let server = DebugServer::start(
+        Session::new(Box::new(machine), "toybasic"),
+        ServerConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            vice: None,
+            run: false,
+            realtime: false,
+        },
+    )
+    .unwrap();
+    let p = Polydbg {
+        python,
+        script: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tools/polydbg.py"),
+        port: server.addr().port(),
+    };
+
+    let info = p.ok(&["basic", "info"]);
+    assert!(info.starts_with("Toy BASIC (steps by statement"), "{info}");
+    assert!(
+        info.contains("running: line 10 statement 0, GOSUB depth 0"),
+        "{info}"
+    );
+    let list = p.ok(&["basic"]);
+    let lines: Vec<&str> = list.lines().collect();
+    assert_eq!(lines[0], ">   10 A=5:GOSUB 100:A=A-2");
+    assert_eq!(lines[2], "   100 FOR I=1 TO 2:A=A+1:NEXT");
+    assert_eq!(p.ok(&["basic", "list", "20", "20"]).trim(), "20 GOTO 10");
+
+    assert_eq!(
+        p.ok(&["basic", "break", "100:1"]).trim(),
+        "BASIC breakpoint 1"
+    );
+    let stop = p.ok(&["resume", "--wait"]);
+    assert!(
+        stop.starts_with("BASIC breakpoint 1 at line 100 statement 1: "),
+        "{stop}"
+    );
+    let stack = p.ok(&["basic", "stack"]);
+    let frames: Vec<&str> = stack.lines().collect();
+    assert_eq!(
+        frames,
+        [
+            "FOR I TO 2 STEP 1  (line 100 statement 0)",
+            "GOSUB from line 10 statement 1"
+        ]
+    );
+    assert!(p
+        .ok(&["basic", "breaks"])
+        .contains("line 100 statement 1  hits 1"));
+    p.ok(&["basic", "unbreak", "1"]);
+    assert!(p.ok(&["basic", "breaks"]).contains("no BASIC breakpoints"));
+
+    p.ok(&["basic", "set", "A", "40"]);
+    p.ok(&["basic", "set", "S$", "HELLO"]);
+    p.ok(&["basic", "set", "@(2)", "-9"]);
+    let vars = p.ok(&["basic", "vars"]);
+    assert!(vars.contains("A        int    $0200  40"), "{vars}");
+    assert!(vars.contains("S$       string $0260  \"HELLO\""), "{vars}");
+    assert!(vars.contains("@        int    $0240  (8)"), "{vars}");
+    assert_eq!(p.ok(&["basic", "array", "@", "2", "1"]).trim(), "@(2) = -9");
+
+    let step = p.ok(&["basic", "step", "out"]);
+    assert!(
+        step.starts_with("BASIC step (out) at line 10 statement 2: "),
+        "{step}"
+    );
+    assert!(p
+        .ok(&["basic", "step"])
+        .starts_with("BASIC step (line) at line 20 statement 0: "));
+    assert!(p
+        .ok(&["basic", "until", "110"])
+        .starts_with("BASIC step (run_to) at line 110 statement 0: "));
+    let state: serde_json::Value =
+        serde_json::from_str(&p.ok(&["--json", "basic", "info"])).unwrap();
+    assert_eq!(state["state"]["depth"], 1);
+    // A = 40 + 2 - 2, then 5 + 2 in the second round.
+    let vars: serde_json::Value =
+        serde_json::from_str(&p.ok(&["--json", "basic", "vars"])).unwrap();
+    assert_eq!(vars["vars"][0]["value"], 7);
+
+    let (ok, _, stderr) = p.run(&["basic", "unbreak", "9"]);
+    assert!(!ok);
+    assert!(stderr.contains("no BASIC breakpoint 9"), "{stderr}");
+    server.shutdown();
+}

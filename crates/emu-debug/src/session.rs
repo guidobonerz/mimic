@@ -127,6 +127,8 @@ pub struct Session {
     /// this debugger asked for.
     overlay_wants: emu_core::overlay::OverlayWants,
     dbg_overlays: Vec<String>,
+    /// BASIC breakpoints and steps.
+    basic: basic::BasicDbg,
 }
 
 /// Called with the machine whenever its picture may have changed: after
@@ -170,6 +172,7 @@ impl Session {
             rewind: rewind::Rewind::default(),
             overlay_wants: emu_core::overlay::OverlayWants::default(),
             dbg_overlays: Vec::new(),
+            basic: basic::BasicDbg::default(),
         }
     }
 
@@ -411,6 +414,9 @@ impl Session {
             }
             _ => {}
         }
+        if let Some(decision) = self.basic_hit(id) {
+            return decision;
+        }
         let Some(meta) = self.bp_meta.get(&id).cloned() else {
             return Some(reason);
         };
@@ -450,10 +456,12 @@ impl Session {
             RunMode::Instr | RunMode::StepOut { .. } => self.hooks.set_instr_step(false),
             RunMode::Free => {}
         }
+        self.basic_cancel();
     }
 
     /// Start an asynchronous run.
     fn start(&mut self, mode: RunMode) -> Value {
+        self.basic_before_run();
         self.mode = mode;
         self.running = true;
         let pc = self.main_pc();
@@ -499,6 +507,7 @@ impl Session {
                 | Command::SetControl { .. }
                 | Command::Input { .. }
                 | Command::ReplayInput { .. }
+                | Command::BasicSetVar { .. }
         );
         let moves = matches!(
             cmd,
@@ -513,6 +522,8 @@ impl Session {
                 | Command::Reset { .. }
                 | Command::LoadState { .. }
                 | Command::Rewind { .. }
+                | Command::BasicStep { .. }
+                | Command::BasicRunTo { .. }
         );
         let instr = matches!(cmd, Command::StepInstr { .. });
         if moves {
@@ -793,6 +804,31 @@ impl Session {
                 scale,
                 options,
             } => self.gfx_get(&view, format.as_deref(), scale, &options),
+            Command::BasicInfo => self.basic_info(),
+            Command::BasicState => self.basic_state(),
+            Command::BasicList { from, to } => self.basic_list(from, to),
+            Command::BasicVars => self.basic_vars(),
+            Command::BasicArray { name, first, count } => self.basic_array(&name, first, count),
+            Command::BasicSetVar { name, index, value } => self.basic_set_var(&name, index, &value),
+            Command::BasicStack => self.basic_stack(),
+            Command::BasicBreakAdd {
+                line,
+                statement,
+                enabled,
+            } => self.basic_break_add(line, statement, enabled),
+            Command::BasicBreakRemove { bp } => self.basic_break_remove(bp),
+            Command::BasicBreakEnable { bp, enabled } => self.basic_break_enable(bp, enabled),
+            Command::BasicBreakList => Ok(self.basic_break_list()),
+            Command::BasicStep { kind } => {
+                self.stop_for_sync();
+                self.basic_step(kind.as_deref())?;
+                Ok(self.start(RunMode::Free))
+            }
+            Command::BasicRunTo { line, statement } => {
+                self.stop_for_sync();
+                self.basic_run_to(line, statement)?;
+                Ok(self.start(RunMode::Free))
+            }
             Command::BreakAdd(spec) => self.break_add(spec),
             Command::BreakRemove { bp } => {
                 let id = BpId(bp);
@@ -1225,7 +1261,10 @@ impl Session {
     }
 
     fn state_json(&mut self, reason: &StopReason) -> Value {
-        let mut reason_json = protocol::stop_json(reason);
+        let mut reason_json = match self.basic.take_reason() {
+            Some(basic) => basic,
+            None => protocol::stop_json(reason),
+        };
         if let StopReason::Breakpoint(id) | StopReason::Watchpoint { id, .. } = reason {
             if let Some(meta) = self.bp_meta.get(id) {
                 reason_json["hits"] = json!(meta.hits);
@@ -1261,7 +1300,7 @@ impl Session {
         })
     }
 
-    fn capabilities(&self) -> Value {
+    fn capabilities(&mut self) -> Value {
         let mut kinds: Vec<&str> = protocol::BREAK_KINDS.to_vec();
         if self.machine.beam().is_none() {
             kinds.retain(|k| *k != "raster");
@@ -1275,12 +1314,14 @@ impl Session {
             "optional_events": protocol::OPTIONAL_EVENTS,
             "beam": self.machine.beam().is_some(),
             "vectors": self.machine.vectors().is_some(),
+            "basic": self.has_basic(),
             // Machine-specific extensions (none yet); generic clients ignore them.
             "extensions": [],
         })
     }
 }
 
+mod basic;
 mod devices;
 mod freezer;
 mod gfx;

@@ -968,3 +968,182 @@ fn vector_display_segments() {
     let e = c.call(json!({"cmd": "vectors"}));
     assert_eq!(e["ok"], false);
 }
+
+/// Protocol 11: the BASIC debugger (`basic_*`), announced in
+/// `capabilities`, against the toy BASIC machine of `emu-core` (no ROM
+/// needed); machines without a BASIC answer with an error.
+///
+/// ```text
+/// 10 A=5:GOSUB 100:A=A-2
+/// 20 FOR I=1 TO 2:B=B+10:NEXT
+/// 30 GOTO 10
+/// 100 A=A+1:RETURN
+/// ```
+#[test]
+fn basic_debugger() {
+    use emu_core::testing::basic::{ToyBasic, ToyStmt::*};
+    let machine = ToyBasic::new(&[
+        (10, &[Let('A', 5), Gosub(100), Add('A', -2)]),
+        (20, &[For('I', 1, 2), Add('B', 10), Next]),
+        (30, &[Goto(10)]),
+        (100, &[Add('A', 1), Return]),
+    ]);
+    let server = DebugServer::start(
+        Session::new(Box::new(machine), "toybasic"),
+        ServerConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            vice: None,
+            run: false,
+            realtime: false,
+        },
+    )
+    .unwrap();
+    let mut c = Client::connect(&server);
+    assert_eq!(c.recv()["version"], 11);
+    let caps = c.ok(json!({"cmd": "capabilities"}));
+    assert_eq!(caps["basic"], true);
+    for cmd in [
+        "basic_info",
+        "basic_state",
+        "basic_list",
+        "basic_vars",
+        "basic_array",
+        "basic_set_var",
+        "basic_stack",
+        "basic_break_add",
+        "basic_break_remove",
+        "basic_break_enable",
+        "basic_break_list",
+        "basic_step",
+        "basic_run_to",
+    ] {
+        assert!(caps["commands"].as_array().unwrap().contains(&json!(cmd)));
+    }
+    assert_eq!(
+        c.ok(json!({"cmd": "basic_info"})),
+        json!({"dialect": "Toy BASIC", "granularity": "statement", "space": 0})
+    );
+    assert_eq!(
+        c.ok(json!({"cmd": "basic_state"})),
+        json!({"mode": "running", "line": 10, "statement": 0, "addr": 0x1003, "depth": 0})
+    );
+    let list = c.ok(json!({"cmd": "basic_list", "from": 20, "to": 30}));
+    assert_eq!(
+        list["current"],
+        json!({"mode": "running", "line": 10, "statement": 0})
+    );
+    let line = &list["lines"][0];
+    assert_eq!(
+        (
+            line["line"].clone(),
+            line["addr"].clone(),
+            line["text"].clone()
+        ),
+        (json!(20), json!(0x100e), json!("FOR I=1 TO 2:B=B+10:NEXT"))
+    );
+    assert_eq!(line["statements"], json!([0, 13, 20]));
+    let raw = emu_debug::protocol::base64_decode(line["raw"].as_str().unwrap()).unwrap();
+    assert_eq!(raw[..3], [14, 20, 0]);
+    assert_eq!(list["lines"].as_array().unwrap().len(), 2);
+
+    // A breakpoint on a line: `stopped` carries line and statement.
+    let bp = c.ok(json!({"cmd": "basic_break_add", "line": 100}))["bp"].clone();
+    assert_eq!(c.ok(json!({"cmd": "resume"})), json!({"running": true}));
+    let ev = c.event("stopped");
+    assert_eq!(
+        ev["reason"],
+        json!({"kind": "basic_break", "bp": bp, "hits": 1, "mode": "running",
+               "line": 100, "statement": 0})
+    );
+    assert_eq!(
+        c.ok(json!({"cmd": "basic_stack"})),
+        json!({"depth": 1, "frames": [{"kind": "gosub", "line": 10, "statement": 1}]})
+    );
+    assert_eq!(
+        c.ok(json!({"cmd": "basic_break_list"})),
+        json!([{"bp": bp, "line": 100, "statement": null, "enabled": true, "hits": 1}])
+    );
+    c.ok(json!({"cmd": "basic_break_enable", "bp": bp, "enabled": false}));
+    c.ok(json!({"cmd": "basic_break_remove", "bp": bp}));
+
+    // Variables: read, write, see the program use the new value.
+    let vars = c.ok(json!({"cmd": "basic_vars"}));
+    assert_eq!(
+        vars["vars"][0],
+        json!({"name": "A", "type": "int", "addr": 0x0200, "value": 5})
+    );
+    c.ok(json!({"cmd": "basic_set_var", "name": "A", "value": 50}));
+    c.ok(json!({"cmd": "basic_set_var", "name": "S$", "value": "MIMIC"}));
+    c.ok(json!({"cmd": "basic_set_var", "name": "@", "index": 1, "value": 7}));
+    assert_eq!(
+        c.ok(json!({"cmd": "basic_array", "name": "@", "count": 3})),
+        json!({"name": "@", "first": 0, "values": [0, 7, 0]})
+    );
+
+    // Steps are asynchronous and end with `stopped`.
+    let step = |c: &mut Client, kind: &str| {
+        assert_eq!(
+            c.ok(json!({"cmd": "basic_step", "kind": kind})),
+            json!({"running": true})
+        );
+        let r = c.event("stopped")["reason"].clone();
+        assert_eq!(
+            (r["kind"].clone(), r["step"].clone()),
+            (json!("basic_step"), json!(kind))
+        );
+        (
+            r["line"].as_u64().unwrap(),
+            r["statement"].as_u64().unwrap(),
+        )
+    };
+    assert_eq!(step(&mut c, "statement"), (100, 1));
+    assert_eq!(step(&mut c, "out"), (10, 2));
+    assert_eq!(step(&mut c, "line"), (20, 0));
+    let vars = c.ok(json!({"cmd": "basic_vars"}));
+    assert_eq!(vars["vars"][0]["value"], 49);
+    assert!(vars["vars"]
+        .as_array()
+        .unwrap()
+        .contains(&json!({"name": "S$", "type": "string", "addr": 0x0260, "value": "MIMIC"})));
+    assert_eq!(step(&mut c, "statement"), (20, 1));
+    let stack = c.ok(json!({"cmd": "basic_stack"}));
+    assert_eq!(
+        stack["frames"],
+        json!([{"kind": "for", "var": "I", "limit": 2, "step": 1, "line": 20, "statement": 0}])
+    );
+    assert_eq!(step(&mut c, "over"), (30, 0));
+    assert_eq!(
+        c.ok(json!({"cmd": "basic_run_to", "line": 20, "statement": 2}))["running"],
+        true
+    );
+    let r = c.event("stopped")["reason"].clone();
+    assert_eq!(
+        r,
+        json!({"kind": "basic_step", "step": "run_to", "mode": "running",
+               "line": 20, "statement": 2})
+    );
+    // The machine-level debugger still works beside it.
+    let r = c.ok(json!({"cmd": "step_instr"}));
+    assert_eq!(r["reason"]["kind"], "step_done");
+    for bad in [
+        json!({"cmd": "basic_step", "kind": "out"}),
+        json!({"cmd": "basic_step", "kind": "sideways"}),
+        json!({"cmd": "basic_break_remove", "bp": 99}),
+        json!({"cmd": "basic_set_var", "name": "A", "value": "text"}),
+        json!({"cmd": "basic_set_var", "name": "A", "value": 1e9}),
+        json!({"cmd": "basic_array", "name": "A"}),
+    ] {
+        assert_eq!(c.call(bad)["ok"], false);
+    }
+    server.shutdown();
+
+    // A machine without a BASIC the debugger can follow.
+    let other = server_with(MachineConfig::default());
+    let mut c = Client::connect(&other);
+    c.recv();
+    assert_eq!(c.ok(json!({"cmd": "capabilities"}))["basic"], false);
+    for cmd in ["basic_info", "basic_list", "basic_step"] {
+        assert_eq!(c.call(json!({"cmd": cmd}))["ok"], false);
+    }
+    other.shutdown();
+}

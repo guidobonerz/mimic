@@ -165,6 +165,13 @@ pub trait Machine: Send {
         None
     }
 
+    /// The machine's BASIC interpreter for the debugger (program, position,
+    /// variables, stack, stop points; see [`crate::basic`]). `None` for
+    /// machines without a BASIC the debugger can follow (the default).
+    fn basic(&mut self) -> Option<&mut dyn crate::basic::BasicDebug> {
+        None
+    }
+
     /// The debug overlays this machine offers (see [`crate::overlay`]).
     /// Default: none.
     fn overlays(&self) -> Vec<crate::overlay::OverlayInfo> {

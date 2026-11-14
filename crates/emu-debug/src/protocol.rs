@@ -72,6 +72,17 @@
 //! `style` and every segment as `[x0, y0, x1, y1, intensity, r, g, b,
 //! cycles, at]`), and `vectors` in `capabilities` (whether the machine has
 //! a vector display).
+//! 11 adds the BASIC debugger for machines whose BASIC interpreter the
+//! machine describes (`basic` in `capabilities`): `basic_info` (dialect,
+//! granularity of its steps, memory space), `basic_state` (mode, line,
+//! statement, text pointer, GOSUB depth), `basic_list` (the stored program
+//! as text with statement offsets and the raw bytes), `basic_vars`,
+//! `basic_array`, `basic_set_var`, `basic_stack` (GOSUB and FOR frames),
+//! breakpoints on lines and statements (`basic_break_add`/`remove`/
+//! `enable`/`list`; their numbers are separate from `break_add`'s) and the
+//! asynchronous `basic_step` (`statement`, `line`, `over`, `out`) and
+//! `basic_run_to`. A run they end reports `stopped` with the reason kind
+//! `basic_break` or `basic_step` and the line and statement.
 //!
 //! Every change to this message set needs a contract test and a bump of
 //! [`PROTOCOL_VERSION`].
@@ -84,7 +95,7 @@ use serde_json::{json, Value};
 use emu_core::{BeamPos, StopReason};
 
 pub const PROTOCOL_NAME: &str = "mimic-debug";
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Request {
@@ -310,6 +321,62 @@ pub enum Command {
         #[serde(default)]
         options: BTreeMap<String, u32>,
     },
+    /// The machine's BASIC interpreter: dialect, step granularity
+    /// (`statement` or `line`), memory space. An error (as for all
+    /// `basic_*` commands) if the machine has none.
+    BasicInfo,
+    /// Where the interpreter is: `mode` (`inactive`, `direct`, `running`),
+    /// `line`, `statement`, `addr` (text pointer), `depth` (open GOSUBs).
+    BasicState,
+    /// The stored program, lines `from`–`to` (default: all).
+    BasicList {
+        from: Option<u32>,
+        to: Option<u32>,
+    },
+    /// Variables with their values; arrays with their sizes.
+    BasicVars,
+    /// `count` (default 256, at most [`MAX_BASIC_ARRAY`]) elements of an
+    /// array from element `first`, in storage order.
+    BasicArray {
+        name: String,
+        first: Option<u32>,
+        count: Option<u32>,
+    },
+    /// Write a variable, or with `index` an array element. `value`: a
+    /// number or a string.
+    BasicSetVar {
+        name: String,
+        index: Option<u32>,
+        value: Value,
+    },
+    /// The GOSUB/FOR stack, innermost first.
+    BasicStack,
+    /// Stop when the program reaches `line` (with `statement`: that
+    /// statement of it, 0 = the first).
+    BasicBreakAdd {
+        line: u32,
+        statement: Option<u16>,
+        enabled: Option<bool>,
+    },
+    BasicBreakRemove {
+        bp: u32,
+    },
+    BasicBreakEnable {
+        bp: u32,
+        enabled: bool,
+    },
+    BasicBreakList,
+    /// Asynchronous. `kind`: `line` (default; into subroutines),
+    /// `statement`, `over` (the next line at this GOSUB depth) or `out`
+    /// (until the current subroutine has returned).
+    BasicStep {
+        kind: Option<String>,
+    },
+    /// Asynchronous: run until the program reaches `line` (`statement`).
+    BasicRunTo {
+        line: u32,
+        statement: Option<u16>,
+    },
     /// Ports with their kind, connection state and the devices the
     /// frontend can plug in.
     ListPorts,
@@ -402,6 +469,7 @@ pub const MAX_PEEK: u32 = 0x10000;
 pub const MAX_DISASM: u32 = 256;
 pub const MAX_STEP_COUNT: u32 = 100_000;
 pub const MAX_TRACE_CAPACITY: u32 = 1 << 20;
+pub const MAX_BASIC_ARRAY: u32 = 4096;
 
 /// Commands listed by `capabilities`.
 pub const COMMANDS: &[&str] = &[
@@ -432,6 +500,19 @@ pub const COMMANDS: &[&str] = &[
     "vectors",
     "gfx_list",
     "gfx_get",
+    "basic_info",
+    "basic_state",
+    "basic_list",
+    "basic_vars",
+    "basic_array",
+    "basic_set_var",
+    "basic_stack",
+    "basic_break_add",
+    "basic_break_remove",
+    "basic_break_enable",
+    "basic_break_list",
+    "basic_step",
+    "basic_run_to",
     "break_add",
     "break_remove",
     "break_enable",
@@ -628,6 +709,25 @@ mod tests {
         };
         assert_eq!(view, "sprites");
         assert_eq!(options.get("index"), Some(&3));
+        let r = parse_request(r#"{"id":12,"cmd":"basic_break_add","line":100}"#).unwrap();
+        assert_eq!(
+            r.cmd,
+            Command::BasicBreakAdd {
+                line: 100,
+                statement: None,
+                enabled: None
+            }
+        );
+        let r =
+            parse_request(r#"{"id":13,"cmd":"basic_set_var","name":"A$","value":"HI"}"#).unwrap();
+        assert_eq!(
+            r.cmd,
+            Command::BasicSetVar {
+                name: "A$".into(),
+                index: None,
+                value: json!("HI")
+            }
+        );
     }
 
     #[test]

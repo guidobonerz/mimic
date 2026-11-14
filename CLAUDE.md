@@ -67,6 +67,7 @@ crates/
   emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
   emu-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends
   emu-cheats/      Cheat files with patches, POKE/VICE/code imports, CRC-32 database, memory search
+  basic-dialects/  BASIC interpreters' memory decoded for the BASIC debugger (program, variables, stack, stop points); Commodore BASIC so far; linked by the machines
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
   machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-bbc/  machine-mega65/  machine-nes/  machine-snes/  machine-vectrex/
@@ -89,7 +90,7 @@ tests/             Integration tests, reference frames, test-suite runners
 tools/             Python debug client, scripts
 ```
 
-Keep dependencies pointing downward: `machine-*` → `chips-*`/`cpu-*` → `emu-core`. `emu-debug`/`emu-preview` depend on `emu-core` only (`emu-preview` may also use `video-crt`). Frontends pick machines via a registry in `emu-core`; the only machine-aware crate they may depend on is `emu-machines`, which registers all machines. `tools/check-deps.py` enforces these rules in CI — update its `RULES` table when adding a crate.
+Keep dependencies pointing downward: `machine-*` → `chips-*`/`cpu-*`/`basic-dialects` → `emu-core`. `emu-debug`/`emu-preview` depend on `emu-core` only (`emu-preview` may also use `video-crt`). Frontends pick machines via a registry in `emu-core`; the only machine-aware crate they may depend on is `emu-machines`, which registers all machines. `tools/check-deps.py` enforces these rules in CI — update its `RULES` table when adding a crate.
 
 ## Core traits (contract — change deliberately)
 
@@ -120,6 +121,7 @@ pub trait Machine: Send {
     fn chips(&self) -> Vec<ChipInfo>;                   // register dumps for debugger views
     fn devices(&self) -> Vec<DeviceId>;                 // debug targets, main CPU first: "cpu", 1541, C128 Z80, Copper, Blitter
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget>; // regs, set_reg, peek/poke per MemSpace, disassemble
+    fn basic(&mut self) -> Option<&mut dyn BasicDebug> { None } // BASIC interpreter for the debugger: program, position, variables, stack, stop points (`emu-core::basic`)
     fn input(&mut self, ev: TimedInput);                // queued, applied exactly at ev.at (part of savestate)
     fn now(&self) -> Cycle;                             // master cycles since power-on, time base of TimedInput
     fn controls(&self) -> Vec<ControlInfo> { vec![] }    // console buttons/switches (power, reset, 2600 switches …) for panels
@@ -159,7 +161,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 26, 31, 32, 33 and 34 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 26, 31, 32, 33, 34 and 35 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

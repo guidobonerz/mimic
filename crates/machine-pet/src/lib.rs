@@ -528,6 +528,9 @@ const PALETTE: [Rgb8; 2] = [
 ];
 
 pub struct Pet {
+    /// The BASIC interpreter as the debugger sees it (derived from what
+    /// is mapped; not machine state).
+    basic: basic_dialects::cbm::CbmBasic,
     model: Model,
     cpu: Cpu6502,
     mem: Memory,
@@ -617,6 +620,7 @@ impl Pet {
         });
         cpu.reset();
         Ok(Self {
+            basic: basic_dialects::cbm::CbmBasic::new(CPU_SPACE),
             model,
             cpu,
             mem: Memory {
@@ -972,6 +976,13 @@ impl Machine for Pet {
         self.video.frame_row(line)
     }
 
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
+    }
+
     fn gfx_views(&self) -> Vec<GfxViewInfo> {
         gfx::views()
     }
@@ -1230,6 +1241,8 @@ impl Machine for Pet {
         Ok(())
     }
 }
+
+basic_dialects::impl_basic_debug!(Pet, basic);
 
 impl DebugTarget for Pet {
     fn regs(&self) -> RegisterSet {

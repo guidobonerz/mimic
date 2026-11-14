@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audio;
+pub mod basic;
 pub mod beam;
 pub mod bus;
 pub mod controls;
@@ -32,6 +33,7 @@ pub mod vector;
 pub mod version;
 
 pub use audio::{AudioFormat, Decimator, SAMPLE_RATE};
+pub use basic::{BasicDebug, BasicMode, BasicPos, BasicState, BasicValue};
 pub use beam::{BeamPos, TraceConfig, TraceEntry, TraceEvent, TraceRange};
 pub use bus::{Bus, Size};
 pub use controls::{ControlId, ControlInfo, ControlKind};
