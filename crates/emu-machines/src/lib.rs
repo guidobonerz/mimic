@@ -165,6 +165,7 @@ pub fn registry() -> Registry {
     r.register(machine_amiga::entry());
     r.register(machine_zx81::entry());
     r.register(machine_trs80::entry());
+    r.register(machine_kc85::entry());
     r.register(machine_spectrum::entry());
     r.register(machine_coleco::entry());
     r.register(machine_msx::entry());

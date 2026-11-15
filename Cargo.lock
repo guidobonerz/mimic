@@ -640,6 +640,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "chips-zilog"
+version = "0.1.0"
+dependencies = [
+ "emu-core",
+]
+
+[[package]]
 name = "ciborium"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1246,6 +1253,7 @@ dependencies = [
  "machine-coleco",
  "machine-cpc",
  "machine-imsai",
+ "machine-kc85",
  "machine-keypunch",
  "machine-logophor16",
  "machine-mac",
@@ -1310,6 +1318,7 @@ dependencies = [
  "machine-c64",
  "machine-cpc",
  "machine-imsai",
+ "machine-kc85",
  "machine-keypunch",
  "machine-logophor16",
  "machine-mac",
@@ -2326,6 +2335,16 @@ name = "machine-imsai"
 version = "0.1.0"
 dependencies = [
  "cpu-8080",
+ "emu-core",
+ "media",
+]
+
+[[package]]
+name = "machine-kc85"
+version = "0.1.0"
+dependencies = [
+ "chips-zilog",
+ "cpu-z80",
  "emu-core",
  "media",
 ]

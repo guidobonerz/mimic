@@ -1,0 +1,15 @@
+[package]
+name = "machine-kc85"
+description = "Robotron KC85/2, /3, /4 and /5 (VEB Mikroelektronik Mühlhausen)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
+cpu-z80.workspace = true
+chips-zilog.workspace = true
+media.workspace = true

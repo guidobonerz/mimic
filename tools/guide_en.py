@@ -39,6 +39,7 @@ table(["Machine id", "Machine", "Models (`--model`)", "Video (`--videoformat`)"]
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (default), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (default), `pal`"],
     ["`msx`", "MSX", "`msx1` (default), `msx2`", "by the BIOS if not given; `ntsc`, `pal`"],
+    ["`kc85`", "Robotron KC85/2, /3, /4, /5", "`4` (default), `2`, `3`, `5`", "–"],
     ["`nes`", "Nintendo Entertainment System / Famicom", "–", "`ntsc` (default), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (default), `pal`"],
     ["`vectrex`", "Vectrex (vector display)", "`vectrex`", "–"],
@@ -149,6 +150,9 @@ table(["Folder", "Machine", "ROMs (example names and sizes)"], [
     ["`spectrum/`", "ZX Spectrum", "`Spec48.rom` (16 KB), `spec128.rom`, `specp2.rom` (32 KB each); "
      "optional `mf128.rom` (Multiface 128), `specif1.rom` (Interface 1)"],
     ["`coleco/`", "ColecoVision", "`coleco.rom` (8 KB BIOS)"],
+    ["`kc85/`", "Robotron KC85", "CAOS and BASIC per model under KCemu's names: `hc900.852`; "
+     "`caos__e0.853`, `basic_c0.853`; `caos__e0.854`, `caos__c0.854`, `basic_c0.854`; "
+     "`caos__e0.855`, `caos__c0.855`, `basic_c0.855`; optional module ROMs `m006.rom` …"],
     ["`msx/`", "MSX", "a 32 KB MSX1 BIOS or C-BIOS (`python tools/fetch_cbios.py`); MSX2: main ROM 32 KB and sub ROM 16 KB"],
     ["`snes/`", "SNES", "optional: the 64-byte sound boot ROM `spc700.rom`"],
     ["`vectrex/`", "Vectrex", "the 8 KB system ROM (executive and Mine Storm); a 4 KB "
@@ -615,6 +619,34 @@ image of 160–720 KB, drive A).
 Keys: left Alt = GRAPH, right Alt = CODE, End = STOP, Page Up = SELECT,
 Page Down = dead key, Home = HOME, Insert/Delete = INS/DEL, F1–F5; joystick
 1 on the numeric keypad.""")
+
+h2("Robotron KC85")
+p("""The East German KC85/2, /3, /4 and /5 as models `2`, `3`, `4` (default)
+and `5`: U880 (Z80), 320 × 256 pixels with a foreground and a background
+colour per cell, two sound channels, the keyboard over its pulse protocol,
+cassette and two module slots. ROMs in the `kc85` folder of the ROM folder,
+under the names of KCemu's ROM set: KC85/2 `hc900.852`; KC85/3
+`caos__e0.853` and `basic_c0.853`; KC85/4 `caos__e0.854`, `caos__c0.854` and
+`basic_c0.854`; KC85/5 `caos__e0.855`, `caos__c0.855` and `basic_c0.855`.
+The machine starts into the CAOS menu; `BASIC` starts HC-BASIC (answer
+`MEMORY END ?` with Enter). The KC85/3 needs about 6 seconds to its menu,
+the others about 2.""")
+table(["Option", "Values"], [
+    ["`slot8`, `slotc`", "a module in slot 08 or 0C: `none` (default), `m022` "
+     "(16 KB RAM), `m011` (64 KB RAM), `m006` (BASIC), `m012` (Texor), `m026` (Forth), "
+     "`m027` (Development), `m033` (TypeStar); ROM modules need their image "
+     "(`m026.rom` …) in the ROM folder"],
+    ["`roms`", "`stub`: a test program of mimic's own instead of CAOS"],
+], [0.22, 0.78])
+p("""CAOS switches modules on: `SWITCH 8 C1` (slot 8, ROM from $C000), then
+`MENU` shows the new commands; on the KC85/2 the M006 starts its own CAOS
+with BASIC by `JUMP C`. Cassette: `--tape program.kcc` or a KC-TAP image
+(`.tap`); `LOAD` in the CAOS menu loads machine programs and starts them,
+the computer switches the motor (BASIC programs from tape are untried). Saving to tape and the D004 floppy unit are not there yet. Keys:
+Escape = BRK, Tab or Pause = STOP, Home = HOME (shifted CLS), End = CLR,
+Insert = INS, Backspace and Delete = DEL, Caps Lock = SHIFT LOCK, F1–F6;
+`^` is on `=`, `:` on `;`, `+` on `'`, `_` on `\\`. The console panel has
+RESET (warm start, memory survives) and POWER.""")
 
 h2("TI-99/4A")
 p("""ROMs: the console ROM (`994AROM.BIN`, 8 KB) and GROM 0–2
@@ -1180,6 +1212,7 @@ table(["Machine id", "Machine", "Models (`--model`)", "Video formats (`--videofo
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (default), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (default), `pal`"],
     ["`msx`", "MSX", "`msx1` (default), `msx2`", "by the BIOS if not given; `ntsc`, `pal`"],
+    ["`kc85`", "Robotron KC85/2, /3, /4, /5", "`4` (default), `2`, `3`, `5`", "–"],
     ["`nes`", "Nintendo NES / Famicom", "–", "`ntsc` (default), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (default), `pal`"],
     ["`vectrex`", "Vectrex", "`vectrex`", "–"],
@@ -1218,7 +1251,7 @@ table(["Flag", "Meaning"], [
      "that refuses an image passes it on. Extra disks swap into the first drive with "
      "Ctrl+D in the desktop."],
     ["`--tape FILE`", "TAP/T64 (datasette), CAS (Atari), CDT/TZX (CPC, Spectrum), TAP "
-     "(Spectrum), WAV (Apple II), .P (ZX81), PTP (IMSAI paper tape). A PRG is recorded "
+     "(Spectrum), WAV (Apple II), .P (ZX81), KC-TAP/KCC (KC85), PTP (IMSAI paper tape). A PRG is recorded "
      "as a tape first."],
     ["`--cart FILE`", "A cartridge: CRT (C64/C128), raw VIC-20 (load address + ROM) or "
      "C16/Plus/4 (16/32 KB) dumps, Atari CAR or raw 8/16 KB ROM, 2600 .a26/.bin, "

@@ -64,6 +64,10 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/msx.png" alt="MSX: MSX BASIC 1.0"><br><b>MSX</b><br>MSX BASIC 1.0</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/msx2.png" alt="MSX2: SCREEN 8, 256 colours"><br><b>MSX2</b><br>SCREEN 8, 256 colours</td>
 </tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/kc85-4.png" alt="Robotron KC85/4: CAOS 4.2 menu"><br><b>Robotron KC85/4</b><br>CAOS 4.2 menu</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/kc85-basic.png" alt="Robotron KC85/4: HC-BASIC, the foreground and background colours"><br><b>Robotron KC85/4</b><br>HC-BASIC, the foreground and background colours</td>
+</tr>
 </table>
 
 ## Test overview
@@ -108,6 +112,7 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | ZX Spectrum 48K/128K/+2 | Fuse test | all pass | 🟢 | border timing beyond the Fuse test, SAVE to tape |
 | ColecoVision | cartridge collection | 231/235 show a picture | 🟡 | TMS9918A reference pictures, VRAM timing |
 | MSX (MSX1, MSX2) | MSX BASIC 1.0 and 2.0, Disk BASIC and C-BIOS 0.29a (`msx_boot`, 12 tests), own stub BIOS and V9938 tests | BASIC computes, CSAVE/CLOAD through a CAS image, SAVE/LOAD on a disk, MSX-DOS 1.03 boots, a test cartridge calling the BIOS; one cartridge game (Championship Lode Runner), one cassette game (Afteroids) and one disk game (Colony) start; MSX2: MSX BASIC 2.0 starts, C-BIOS boots, one MSX2 disk game (Dokkin Minako Sensei!) runs, SCREEN 8 draws its 256 colours | 🟡 | more cartridges (Konami, SCC, battery RAM unchecked), more MSX2 software, the V9938 commands' speeds |
+| Robotron KC85/2, /3, /4, /5 | CAOS 2.2, 3.1, 4.2, 4.4 and HC-BASIC (`kc85_boot`, 3 tests), own stub ROM | all four boot to the CAOS menu; a typed BASIC program runs; LOAD reads a program from a cassette image and starts it | 🟡 | saving to tape, D004 floppy, real software, picture against hardware |
 | NES | nes-test-roms (blargg, nestest …) | 116/119 | 🟡 | `6-MMC3_alt`, `blargg_apu_2005` 10 and 11 |
 | SNES | Harte CPU sets, snes-tests (gilyon), PeterLemon's ROMs | snes-tests 3/3, PeterLemon 67/78, games run with sound, DSP-1 commands correct | 🟡 | mid-line register changes, input-driven PeterLemon pictures, coprocessors beyond the NEC DSPs |
 | Vectrex | executive, Mine Storm, Scramble | play | 🟡 | overlays, phosphor persistence |
@@ -121,7 +126,7 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | TI-99/4A | real ROMs (`ti99_boot`, 5 tests) | title screen, menu, TI BASIC computes; Parsec from its C/G dumps; SAVE/OLD on cassette (WAV) and on disk (TI disk controller); Parsec talks through the Speech Synthesizer | 🟡 | speech excitation by ear against hardware, GROM/VDP access timing, inverted (379) banking |
 | BBC Micro B / B+ / B+ 128 / Master 128 | real ROMs (`bbc_boot`, 19 tests) | all four boot to BASIC; mode 7 against its reference picture; SAVE/LOAD on tape (UEF), on DFS discs (8271, 1770) and ADFS; SHIFT+BREAK boots a disc; the Master's clock, shadow RAM and keypad | 🟡 | no commercial discs or tapes tried; Tube, Econet, ADC missing |
 | MEGA65 | Open ROMs 2021-08-24 (`mega65_boot`, 4 tests), own 45GS02 tests, Dormann | start screen against its reference, typing, LIST/RUN, LOAD from a true 1541; Dormann passes on the 45GS02 | 🟡 | the official ROM 920xxx and the hypervisor not tried yet (not in the ROM folder); timing approximate |
-| Colour Genie, CPC Plus, QL, Atari ST, KC85, KIM-1 | – | – | ⚪ | planned phases |
+| Colour Genie, CPC Plus, QL, Atari ST, KIM-1 | – | – | ⚪ | planned phases |
 
 ### Drives, devices and frontends
 
@@ -182,6 +187,7 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | Sinclair ZX81 / TS1000 | `machine-zx81` | 1/2/16 KB | boots, PRINT, .P files through traps | 85 % |
 | ColecoVision | `machine-coleco` | NTSC, PAL | 231 of 235 cartridges show a picture; MegaCart; four controller kinds | 90 % |
 | MSX (MSX1, MSX2) | `machine-msx` | NTSC, PAL | C-BIOS boots (MSX1 and MSX2) and starts cartridges; MSX BASIC 1.0 and 2.0 start; MSX2 with the V9938 (all modes, sprite mode 2, commands), memory mapper, sub ROM and clock; Konami, Konami SCC (with its sound chip), ASCII 8/16 MegaROM schemes, battery RAM; cassette (CAS, play and record), disks with the SVI-738 interface; one cartridge, one cassette and two disk games (one of them MSX2) run | 70 % |
+| Robotron KC85 | `machine-kc85` | KC85/2, /3, /4, /5 | all boot to CAOS with real ROMs; picture, keyboard, sound, cassette loading (KC-TAP, KCC), ROM and RAM modules; no saving to tape, no D004, no real software tried | 50 % |
 | NES / Famicom | `machine-nes` | NTSC, PAL, Four Score | 116 of 119 test ROMs; mappers 0–4 | 90 % |
 | SNES | `machine-snes` | NTSC, PAL | games run with sound; DSP-1 to DSP-4, battery SRAM file; mid-line register changes open | 75 % |
 | Vectrex | `machine-vectrex` | – | executive and Scramble run; light pen and 3D Imager modelled; overlays and phosphor persistence open; Mine Storm and 3-D Mine Storm need the 8 KB system ROM | 55 % |

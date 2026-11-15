@@ -34,6 +34,7 @@ chips-amstrad = { path = "crates/chips-amstrad" }
 chips-sinclair = { path = "crates/chips-sinclair" }
 chips-ti = { path = "crates/chips-ti" }
 chips-yamaha = { path = "crates/chips-yamaha" }
+chips-zilog = { path = "crates/chips-zilog" }
 chips-logophor = { path = "crates/chips-logophor" }
 chips-acorn = { path = "crates/chips-acorn" }
 chips-nintendo = { path = "crates/chips-nintendo" }
@@ -60,6 +61,7 @@ machine-atari8 = { path = "crates/machine-atari8" }
 machine-atari2600 = { path = "crates/machine-atari2600" }
 machine-cpc = { path = "crates/machine-cpc" }
 machine-zx81 = { path = "crates/machine-zx81" }
+machine-kc85 = { path = "crates/machine-kc85" }
 machine-trs80 = { path = "crates/machine-trs80" }
 machine-spectrum = { path = "crates/machine-spectrum" }
 machine-coleco = { path = "crates/machine-coleco" }

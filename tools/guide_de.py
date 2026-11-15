@@ -39,6 +39,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Video (`--videoformat
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (Standard), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (Standard), `pal`"],
     ["`msx`", "MSX", "`msx1` (Standard), `msx2`", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
+    ["`kc85`", "Robotron KC85/2, /3, /4, /5", "`4` (Standard), `2`, `3`, `5`", "–"],
     ["`nes`", "Nintendo Entertainment System / Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`vectrex`", "Vectrex (Vektorbildschirm)", "`vectrex`", "–"],
@@ -151,6 +152,9 @@ table(["Ordner", "Maschine", "ROMs (Beispielnamen und Größen)"], [
     ["`spectrum/`", "ZX Spectrum", "`Spec48.rom` (16 KB), `spec128.rom`, `specp2.rom` (je 32 KB); "
      "optional `mf128.rom` (Multiface 128), `specif1.rom` (Interface 1)"],
     ["`coleco/`", "ColecoVision", "`coleco.rom` (8 KB BIOS)"],
+    ["`kc85/`", "Robotron KC85", "CAOS und BASIC je Modell unter KCemus Namen: `hc900.852`; "
+     "`caos__e0.853`, `basic_c0.853`; `caos__e0.854`, `caos__c0.854`, `basic_c0.854`; "
+     "`caos__e0.855`, `caos__c0.855`, `basic_c0.855`; optional Modul-ROMs `m006.rom` …"],
     ["`msx/`", "MSX", "32 KB MSX1-BIOS oder C-BIOS (`python tools/fetch_cbios.py`); MSX2: Haupt-ROM 32 KB und Sub-ROM 16 KB"],
     ["`snes/`", "SNES", "optional: das 64-Byte-Sound-Boot-ROM `spc700.rom`"],
     ["`vectrex/`", "Vectrex", "das 8-KB-System-ROM (Executive und Mine Storm); ein 4-KB-Abbild "
@@ -638,6 +642,35 @@ Tasten: linke Alt = GRAPH, rechte Alt = CODE, Ende = STOP, Bild↑ = SELECT,
 Bild↓ = Akzenttaste, Pos1 = HOME, Einfg/Entf = INS/DEL, F1–F5; Joystick 1
 auf dem Ziffernblock.""")
 
+h2("Robotron KC85")
+p("""Die Kleincomputer KC85/2, /3, /4 und /5 aus Mühlhausen als Modelle `2`,
+`3`, `4` (Standard) und `5`: U880 (Z80), 320 × 256 Bildpunkte mit Vorder-
+und Hintergrundfarbe je Zelle, zwei Tonkanäle, die Tastatur über ihr
+Impulsprotokoll, Kassette und zwei Modulschächte. ROMs im Unterordner `kc85`
+des ROM-Ordners, unter den Namen des ROM-Satzes von KCemu: KC85/2
+`hc900.852`; KC85/3 `caos__e0.853` und `basic_c0.853`; KC85/4
+`caos__e0.854`, `caos__c0.854` und `basic_c0.854`; KC85/5 `caos__e0.855`,
+`caos__c0.855` und `basic_c0.855`. Die Maschine startet ins CAOS-Menü;
+`BASIC` startet HC-BASIC (die Frage `MEMORY END ?` mit Enter übergehen).
+Das KC85/3 braucht etwa 6 Sekunden bis zum Menü, die anderen etwa 2.""")
+table(["Option", "Werte"], [
+    ["`slot8`, `slotc`", "ein Modul in Schacht 08 bzw. 0C: `none` (Standard), `m022` "
+     "(16 KB RAM), `m011` (64 KB RAM), `m006` (BASIC), `m012` (Texor), `m026` (Forth), "
+     "`m027` (Development), `m033` (TypeStar); ROM-Module brauchen ihr Abbild "
+     "(`m026.rom` …) im ROM-Ordner"],
+    ["`roms`", "`stub`: ein eigenes Testprogramm statt CAOS"],
+], [0.22, 0.78])
+p("""Module schaltet CAOS ein: `SWITCH 8 C1` (Schacht 8, ROM ab $C000), danach
+zeigt `MENU` die neuen Befehle; das M006 startet auf dem KC85/2 mit `JUMP C`
+sein eigenes CAOS mit BASIC. Kassette: `--tape programm.kcc` oder ein
+KC-TAP-Abbild (`.tap`); `LOAD` im CAOS-Menü lädt Maschinenprogramme und
+startet sie, den Motor schaltet der Rechner (BASIC-Programme vom Band sind
+nicht erprobt). Speichern auf Band und die Floppy D004 gibt es noch nicht.
+Tasten: Esc = BRK, Tab oder Pause = STOP, Pos1 = HOME (mit Umschalt CLS),
+Ende = CLR, Einfg = INS, Rücktaste und Entf = DEL, Feststelltaste = SHIFT
+LOCK, F1–F6; `^` liegt auf `=`, `:` auf `;`, `+` auf `'`, `_` auf `\\`. Das
+Konsolenpanel hat RESET (Warmstart, der Speicher bleibt) und POWER.""")
+
 h2("TI-99/4A")
 p("""ROMs: das Konsolen-ROM (`994AROM.BIN`, 8 KB) und GROM 0–2
 (`994AGROM.BIN`, 24 KB) im Unterordner `ti99` des ROM-Ordners; das DSR-ROM
@@ -942,7 +975,7 @@ table(["Art", "Formate", "Option"], [
      "400K/800K-DSK und DiskCopy 4.2, SCSI-Festplattenabbilder (Macintosh); "
      "ein Ordner als virtuelle Diskette",
      "`--disk`"],
-    ["Kassette", "TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81), TAP/TZX (ZX Spectrum), WAV (Apple II); ein PRG wird "
+    ["Kassette", "TAP (Commodore), CAS (Atari), CDT/TZX (CPC), P/81 (ZX81), TAP/TZX (ZX Spectrum), WAV (Apple II), KC-TAP/KCC (KC85); ein PRG wird "
      "im Bandformat der Maschine aufgenommen", "`--tape`"],
     ["Modul", "CRT (C64/C128), rohe VIC-20- und C16/Plus/4-Dumps, CAR oder 8/16-KB-ROM "
      "(Atari), .a26/.bin (Atari 2600), .col/.rom (ColecoVision, MegaCart), .rom (MSX, MegaROMs), .nes (NES), "
@@ -1224,6 +1257,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Videoformate (`--vide
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (Standard), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (Standard), `pal`"],
     ["`msx`", "MSX", "`msx1` (Standard), `msx2`", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
+    ["`kc85`", "Robotron KC85/2, /3, /4, /5", "`4` (Standard), `2`, `3`, `5`", "–"],
     ["`nes`", "Nintendo NES / Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`snes`", "Super Nintendo / Super Famicom", "–", "`ntsc` (Standard), `pal`"],
     ["`vectrex`", "Vectrex", "`vectrex`", "–"],
@@ -1263,7 +1297,7 @@ table(["Option", "Bedeutung"], [
      "Laufwerk, das ein Abbild ablehnt, reicht es weiter. Weitere Disketten wechseln im "
      "Desktop mit Strg+D ins erste Laufwerk."],
     ["`--tape DATEI`", "TAP/T64 (Datasette), CAS (Atari), CDT/TZX (CPC, Spectrum), TAP "
-     "(Spectrum), WAV (Apple II), .P (ZX81), PTP (IMSAI-Lochstreifen). Ein PRG wird zuerst "
+     "(Spectrum), WAV (Apple II), .P (ZX81), KC-TAP/KCC (KC85), PTP (IMSAI-Lochstreifen). Ein PRG wird zuerst "
      "als Band aufgenommen."],
     ["`--cart DATEI`", "Ein Modul: CRT (C64/C128), rohe VIC-20- (Ladeadresse + ROM) oder "
      "C16/Plus/4-Dumps (16/32 KB), Atari CAR oder rohes 8/16-KB-ROM, 2600 .a26/.bin, "

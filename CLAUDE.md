@@ -53,6 +53,7 @@ crates/
   chips-acorn/     MEMC, IOC, VIDC, PCF8583, WD1772 (Archimedes), Video ULA, SAA5050 teletext, Intel 8271 FDC and MC146818 clock (BBC Micro, Master)
   chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision, TI-99/4A, MSX), TMS9901, GROM (TMC0430), TMS5220 speech
   chips-yamaha/    V9938 VDP (MSX2): 128 KB VRAM, palette, G4–G7 bitmaps, sprite mode 2, commands
+  chips-zilog/     Z80 CTC and PIO with their interrupt daisy chain (KC85)
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)
   chips-nintendo/  NES: PPU 2C02/2C07 with its palette, APU of the 2A03/2A07; SNES: S-PPU, S-DSP
@@ -77,6 +78,7 @@ crates/
   machine-imsai/   IMSAI 8080: the picture is the front panel (clickable paddles, lamps by bus duty), serial terminal as second screen; card reader
   machine-keypunch/ IBM 029 card punch: the user types card decks (picture: the card), read back by the IMSAI's card reader
   machine-msx/     MSX1 and MSX2 as models: slots, keyboard, joysticks, cassette, SVI-738 disk interface; MSX2 with V9938, memory mapper, sub ROM, RP5C01; C-BIOS or a user-supplied BIOS
+  machine-kc85/    Robotron KC85/2, /3, /4, /5 as models: IRM picture, keyboard over its pulse protocol, cassette (KC-TAP, KCC), module slots
   machine-zx81/    Sinclair ZX81 / TS1000
   machine-trs80/   Tandy TRS-80 Model I (Level I/II, cassette, Expansion Interface with an FD1771) and Model III (FD1793, WAIT, NMI); floppy controller at track level on DMK/JV1/JV3
   machine-logophor16/ Logophor 16, the project's own fictional steampunk computer (spec: docs/logophor16/SPEC.md); ROM built from rom/ sources, shipped as a built-in profile
@@ -162,7 +164,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 26, 31, 32, 33, 34 and 35 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34 and 35 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

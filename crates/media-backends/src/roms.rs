@@ -733,7 +733,33 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("os200", &["rom200", "riscos200", "riscos-200"], 0x8_0000),
         optional("os120", &["rom120", "arthur120", "arthur-120"], 0x8_0000),
     ];
+    // KC85: CAOS per model (file names as KCemu ships them: the address
+    // and the model in the name), BASIC, module ROMs.
+    const KC85: &[RomSpec] = &[
+        optional("caos2", &["hc900-852", "caos--e0-852", "caos22"], 0x2000),
+        optional("caos3", &["caos--e0-853", "caos31", "caos-e0-853"], 0x2000),
+        optional(
+            "caos4e",
+            &["caos--e0-854", "caos42e", "caos-e0-854"],
+            0x2000,
+        ),
+        optional(
+            "caos4c",
+            &["caos--c0-854", "caos42c", "caos-c0-854"],
+            0x1000,
+        ),
+        optional("caos5e", &["caos--e0-855", "caos-e0-855"], 0x2000),
+        optional("caos5c", &["caos--c0-855", "caos-c0-855"], 0x2000),
+        optional("basic", &["basic-c0-853", "basic-c0-854", "basic"], 0x2000),
+        optional("basic5", &["basic-c0-855", "basic5"], 0x8000),
+        optional("m006", &["m006"], 0x4000),
+        optional("m012", &["m012"], 0x2000),
+        optional("m026", &["m026"], 0x2000),
+        optional("m027", &["m027"], 0x2000),
+        optional("m033", &["m033"], 0x4000),
+    ];
     match machine {
+        "kc85" => KC85,
         "imsai" => IMSAI,
         "archimedes" => ARCHIMEDES,
         "mac" => MAC,
@@ -774,6 +800,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "cpc" => &["cpc", "amstrad"],
         "amiga" => &["amiga"],
         "imsai" => &["imsai"],
+        "kc85" => &["kc85", "kc"],
         "archimedes" => &["archimedes", "riscos", "acorn"],
         "zx81" => &["zx81", "sinclair"],
         "trs80" => &["trs80", "trs-80", "tandy"],

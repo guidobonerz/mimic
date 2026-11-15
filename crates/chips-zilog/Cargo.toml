@@ -1,0 +1,12 @@
+[package]
+name = "chips-zilog"
+description = "Zilog Z80 family peripherals: CTC (counter/timer), PIO (parallel I/O) and their interrupt daisy chain"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+emu-core.workspace = true
