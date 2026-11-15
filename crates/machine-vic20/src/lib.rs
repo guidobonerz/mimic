@@ -843,6 +843,16 @@ impl Machine for Vic20 {
         self.sched.now()
     }
 
+    /// Text as key presses (upper-case letters; see [`keyboard::typed_events`]), with a pause behind RETURN for BASIC to take the line in.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            240_000,
+            keyboard::typed_events,
+        ))
+    }
+
     fn controls(&self) -> Vec<emu_core::ControlInfo> {
         use emu_core::ControlInfo;
         vec![

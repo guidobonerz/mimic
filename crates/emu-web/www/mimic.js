@@ -199,6 +199,7 @@ async function start(config) {
     try { await call("overlay", { path: $("overlay").value }); } catch (e) { say(e.message, true); }
   }
   for (const id of ["pause", "reset", "stop", "save", "load"]) $(id).disabled = false;
+  $("paste").disabled = !info.type;
   $("pause").textContent = "Pause";
   showSlots();
   showCheats();
@@ -222,7 +223,7 @@ async function stop() {
   await call("stop");
   running = false;
   info = null;
-  for (const id of ["pause", "reset", "stop", "save", "load"]) $(id).disabled = true;
+  for (const id of ["pause", "reset", "stop", "save", "load", "paste"]) $(id).disabled = true;
   $("mediabox").hidden = true;
   $("cheatbox").hidden = true;
   $("panel").replaceChildren();
@@ -668,9 +669,41 @@ function stopAudioQueue() { worker.postMessage({ type: "audioClear" }); }
 // machine while the picture has the focus.
 canvas.addEventListener("keydown", (e) => {
   if (!running || e.repeat) { if (running) e.preventDefault(); return; }
+  // Ctrl+V (Cmd+V) is the browser's: its paste event brings the text.
+  // With Shift it drops the pasted text not typed yet.
+  if ((e.ctrlKey || e.metaKey) && e.code === "KeyV") {
+    if (e.shiftKey) { e.preventDefault(); pasteCancel(); }
+    return;
+  }
   send("key", { code: e.code, down: true });
   e.preventDefault();
 });
+canvas.addEventListener("paste", (e) => {
+  e.preventDefault();
+  if (running) paste(e.clipboardData.getData("text/plain"));
+});
+
+// The machine's keyboard types `text` (a BASIC listing), line by line and
+// faster than real time. The modifier that made the paste is released on
+// the machine first, or it would turn the text into control codes.
+async function paste(text) {
+  if (!text) { say("paste: the clipboard has no text", true); return; }
+  for (const code of held) if (/^(Control|Meta|Shift|Alt)/.test(code)) send("key", { code, down: false });
+  try {
+    const r = await call("paste", { text });
+    say(`pasting: ${r.pending} characters (Ctrl+Shift+V stops)`);
+  } catch (e) {
+    say("paste: " + e.message, true);
+  }
+}
+async function pasteCancel() {
+  try {
+    const r = await call("paste_cancel");
+    if (r.dropped) say(`paste stopped, ${r.dropped} characters dropped`);
+  } catch (e) {
+    say(e.message, true);
+  }
+}
 canvas.addEventListener("keyup", (e) => {
   if (!running) return;
   send("key", { code: e.code, down: false });
@@ -812,6 +845,15 @@ function wire() {
     if (paused) { stopAudioQueue(); say(`${info.machine} · paused`); }
   };
   $("reset").onclick = (e) => { send("reset", { hard: e.shiftKey }); stopAudioQueue(); };
+  $("paste").onclick = async () => {
+    if (!running) return;
+    try {
+      await paste(await navigator.clipboard.readText());
+    } catch (e) {
+      say("paste: the browser does not hand out the clipboard here; click the picture and press Ctrl+V", true);
+    }
+    $("screen").focus();
+  };
   $("scale").onchange = fit;
   $("sound").onchange = () => worker.postMessage({ type: "sound", on: $("sound").checked });
   $("crt").onchange = async () => {

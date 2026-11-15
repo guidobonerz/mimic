@@ -38,7 +38,7 @@ use crate::cpu::{Flow, Instr, Register, RegisterSet};
 use crate::cycle::Cycle;
 use crate::debug::{BreakpointKind, DebugHooks};
 use crate::frame::{FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard};
-use crate::input::TimedInput;
+use crate::input::{InputEvent, InputTarget, MachineKey, TimedInput};
 use crate::machine::{
     ChipInfo, DebugTarget, DeviceId, Machine, MemSpace, MemSpaceId, ResetKind, StopReason,
 };
@@ -65,6 +65,8 @@ pub const DEFINED: u16 = 0x0238;
 pub const ARRAY: u16 = 0x0240;
 pub const STRING: u16 = 0x0260;
 pub const FLOAT: u16 = 0x0270;
+/// The keys pressed so far: a count, then their characters (up to 255).
+pub const KEYS: u16 = 0x0300;
 pub const PROGRAM: u16 = 0x1000;
 
 const FRAME_BYTES: u16 = 11;
@@ -146,6 +148,13 @@ pub struct ToyBasic {
 }
 
 impl ToyBasic {
+    /// The characters of the keys pressed so far ([`KEYS`]).
+    pub fn typed(&self) -> String {
+        (0..u16::from(self.b(KEYS)))
+            .map(|i| char::from(self.b(KEYS + 1 + i)))
+            .collect()
+    }
+
     /// A machine with `lines` stored and running from the first.
     pub fn new(lines: &[(u16, &[ToyStmt])]) -> Self {
         let mut m = Self {
@@ -506,6 +515,7 @@ impl BasicDebug for ToyBasic {
                 BasicGranularity::Statement
             },
             space: SPACE,
+            name_len: 0,
         }
     }
 
@@ -795,7 +805,44 @@ impl Machine for ToyBasic {
         (dev.0 == "cpu").then_some(self as &mut dyn DebugTarget)
     }
 
-    fn input(&mut self, _ev: TimedInput) {}
+    fn input(&mut self, ev: TimedInput) {
+        if let InputEvent::Key {
+            machine_key,
+            down: true,
+        } = ev.event
+        {
+            // No keyboard to read: the keys' characters go into a buffer
+            // in RAM as their events arrive (for tests of typed text).
+            let n = self.b(KEYS);
+            if n < u8::MAX {
+                self.set_b(KEYS + 1 + u16::from(n), machine_key.0 as u8);
+                self.set_b(KEYS, n + 1);
+            }
+        }
+    }
+
+    /// Every character has a key of its own code, down for 4 cycles and
+    /// up for 4; a RETURN is followed by a pause of 64 cycles.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        Some(crate::input::typed_lines(text, start, 64, |line, from| {
+            let mut events = Vec::new();
+            let mut t = from;
+            for c in line.chars().filter(|&c| u32::from(c) < 0x80) {
+                for (at, down) in [(t, true), (t + 4, false)] {
+                    events.push(TimedInput {
+                        at: Cycle(at),
+                        target: InputTarget::Keyboard,
+                        event: InputEvent::Key {
+                            machine_key: MachineKey(c as u16),
+                            down,
+                        },
+                    });
+                }
+                t += 8;
+            }
+            (events, t)
+        }))
+    }
 
     fn now(&self) -> Cycle {
         Cycle(self.cycle)

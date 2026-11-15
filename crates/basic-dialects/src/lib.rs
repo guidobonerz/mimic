@@ -20,7 +20,9 @@ use emu_core::{DebugTarget, MemSpaceId};
 
 /// A decoder for one interpreter; `host` is the machine's main CPU.
 pub trait Dialect {
-    /// The memory space all addresses are in (the main CPU's view).
+    /// The memory space the addresses of lines and variables are in and
+    /// `plan_set`'s bytes are written to (the main CPU's view, or the RAM
+    /// behind its ROMs).
     fn space(&self) -> MemSpaceId;
     fn info(&self) -> BasicInfo;
     fn state(&self, host: &dyn DebugTarget) -> BasicState;
@@ -47,24 +49,42 @@ pub trait Dialect {
 
 /// Implement [`emu_core::basic::BasicDebug`] for a machine that is its own
 /// main CPU [`DebugTarget`] and keeps a [`Dialect`] in field `$field`.
+/// A machine whose `DebugTarget` may stand for another processor names a
+/// method as third argument that returns the main CPU's (reads only; the
+/// writes of `set_variable` go through the machine's own `poke`).
 #[macro_export]
 macro_rules! impl_basic_debug {
-    ($machine:ty, $field:ident) => {
+    (@host $me:ident) => {
+        $me
+    };
+    (@host $me:ident, $host:ident) => {
+        &$me.$host()
+    };
+    ($machine:ty, $field:ident $(, $host:ident)?) => {
         impl ::emu_core::basic::BasicDebug for $machine {
             fn info(&self) -> ::emu_core::basic::BasicInfo {
                 $crate::Dialect::info(&self.$field)
             }
 
             fn state(&self) -> ::emu_core::basic::BasicState {
-                $crate::Dialect::state(&self.$field, self)
+                $crate::Dialect::state(
+                    &self.$field,
+                    $crate::impl_basic_debug!(@host self $(, $host)?),
+                )
             }
 
             fn program(&self) -> Vec<::emu_core::basic::BasicLine> {
-                $crate::Dialect::program(&self.$field, self)
+                $crate::Dialect::program(
+                    &self.$field,
+                    $crate::impl_basic_debug!(@host self $(, $host)?),
+                )
             }
 
             fn variables(&self) -> Vec<::emu_core::basic::BasicVar> {
-                $crate::Dialect::variables(&self.$field, self)
+                $crate::Dialect::variables(
+                    &self.$field,
+                    $crate::impl_basic_debug!(@host self $(, $host)?),
+                )
             }
 
             fn array(
@@ -73,11 +93,20 @@ macro_rules! impl_basic_debug {
                 first: u32,
                 count: u32,
             ) -> Result<Vec<::emu_core::basic::BasicValue>, ::emu_core::basic::BasicError> {
-                $crate::Dialect::array(&self.$field, self, name, first, count)
+                $crate::Dialect::array(
+                    &self.$field,
+                    $crate::impl_basic_debug!(@host self $(, $host)?),
+                    name,
+                    first,
+                    count,
+                )
             }
 
             fn stack(&self) -> Vec<::emu_core::basic::BasicFrame> {
-                $crate::Dialect::stack(&self.$field, self)
+                $crate::Dialect::stack(
+                    &self.$field,
+                    $crate::impl_basic_debug!(@host self $(, $host)?),
+                )
             }
 
             fn set_variable(
@@ -87,7 +116,16 @@ macro_rules! impl_basic_debug {
                 value: &::emu_core::basic::BasicValue,
             ) -> Result<(), ::emu_core::basic::BasicError> {
                 let space = $crate::Dialect::space(&self.$field);
-                let writes = $crate::Dialect::plan_set(&self.$field, &*self, name, index, value)?;
+                let writes = {
+                    let me = &*self;
+                    $crate::Dialect::plan_set(
+                        &me.$field,
+                        $crate::impl_basic_debug!(@host me $(, $host)?),
+                        name,
+                        index,
+                        value,
+                    )?
+                };
                 for (addr, byte) in writes {
                     let done = ::emu_core::DebugTarget::poke(
                         self,
@@ -104,7 +142,10 @@ macro_rules! impl_basic_debug {
             }
 
             fn stop_points(&self) -> Vec<::emu_core::basic::BasicStopPoint> {
-                $crate::Dialect::stop_points(&self.$field, self)
+                $crate::Dialect::stop_points(
+                    &self.$field,
+                    $crate::impl_basic_debug!(@host self $(, $host)?),
+                )
             }
         }
     };

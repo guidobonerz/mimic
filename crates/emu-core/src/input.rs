@@ -135,6 +135,178 @@ impl InputQueue {
     }
 }
 
+/// Type `text` line by line with `typed` (a machine's own "key events for
+/// this text from this cycle" function) and leave `pause` cycles after
+/// every RETURN, the time an interpreter needs to take a program line in
+/// before it reads the keyboard again. Returns the events and the cycle
+/// after the last pause.
+pub fn typed_lines(
+    text: &str,
+    start: Cycle,
+    pause: u64,
+    mut typed: impl FnMut(&str, u64) -> (Vec<TimedInput>, u64),
+) -> (Vec<TimedInput>, Cycle) {
+    let mut events = Vec::new();
+    let mut t = start.0;
+    for line in text.split_inclusive('\n') {
+        let (ev, end) = typed(line, t);
+        events.extend(ev);
+        t = end.max(t);
+        if line.ends_with('\n') {
+            t += pause;
+        }
+    }
+    (events, Cycle(t))
+}
+
+/// How long typed keys stay down and up, in the machine's cycles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TypeTiming {
+    /// A key stays down this long (two keyboard scans or more).
+    pub hold: u64,
+    /// All keys are up this long before the next character.
+    pub gap: u64,
+    /// SHIFT and other modifiers go down this long before their key.
+    pub lead: u64,
+}
+
+/// Key events that type `text` from cycle `start`, one character after
+/// the other. `keys` names the keys of a character, modifiers first and
+/// the key itself last; characters it has no keys for are skipped. Returns
+/// the events and the cycle after the last gap.
+pub fn typed_chars(
+    text: &str,
+    start: u64,
+    timing: TypeTiming,
+    keys: impl Fn(char) -> Option<Vec<u16>>,
+) -> (Vec<TimedInput>, u64) {
+    let event = |at: u64, key: u16, down: bool| TimedInput {
+        at: Cycle(at),
+        target: InputTarget::Keyboard,
+        event: InputEvent::Key {
+            machine_key: MachineKey(key),
+            down,
+        },
+    };
+    let mut events = Vec::new();
+    let mut t = start;
+    for c in text.chars() {
+        let Some(list) = keys(c) else { continue };
+        let Some((&key, modifiers)) = list.split_last() else {
+            continue;
+        };
+        let lead = if modifiers.is_empty() { 0 } else { timing.lead };
+        events.extend(modifiers.iter().map(|&m| event(t, m, true)));
+        events.push(event(t + lead, key, true));
+        events.push(event(t + lead + timing.hold, key, false));
+        events.extend(
+            modifiers
+                .iter()
+                .rev()
+                .map(|&m| event(t + lead + timing.hold, m, false)),
+        );
+        t += lead + timing.hold + timing.gap;
+    }
+    (events, t)
+}
+
+/// Most characters a [`TextFeed`] holds; more is refused.
+pub const MAX_FEED: usize = 256 * 1024;
+
+/// Longest piece a [`TextFeed`] hands to the machine at once.
+const FEED_PIECE: usize = 128;
+
+/// Text waiting to be typed into a machine: pasted from the host's
+/// clipboard or sent by a script. It lives on the host side (as the user's
+/// fingers do) and hands the machine one line at a time through
+/// [`Machine::typed_keys`](crate::Machine::typed_keys), so the machine's
+/// input queue stays short, whatever the length of the text, and the rest
+/// can be dropped at any time.
+#[derive(Clone, Debug, Default)]
+pub struct TextFeed {
+    pieces: VecDeque<String>,
+    chars: usize,
+    /// The cycle the keys handed over so far end at, and how long they take.
+    until: Option<(Cycle, u64)>,
+}
+
+impl TextFeed {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add text behind what is waiting. Line ends (CR LF, CR, LF) become
+    /// `\n`, tabs spaces. Returns the characters taken; 0 when the feed
+    /// would grow over [`MAX_FEED`].
+    pub fn push(&mut self, text: &str) -> usize {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let count = text.chars().count();
+        if count == 0 || self.chars + count > MAX_FEED {
+            return 0;
+        }
+        for line in text.split_inclusive('\n') {
+            let mut piece = String::new();
+            for c in line.chars() {
+                piece.push(if c == '\t' { ' ' } else { c });
+                if piece.chars().count() == FEED_PIECE {
+                    self.pieces.push_back(std::mem::take(&mut piece));
+                }
+            }
+            if !piece.is_empty() {
+                self.pieces.push_back(piece);
+            }
+        }
+        self.chars += count;
+        count
+    }
+
+    /// Drop the text not yet handed to the machine.
+    pub fn clear(&mut self) {
+        self.pieces.clear();
+        self.chars = 0;
+    }
+
+    /// Characters not yet handed to the machine.
+    pub fn pending(&self) -> usize {
+        self.chars
+    }
+
+    /// Text is waiting, or keys handed over are still being typed at `now`.
+    pub fn active(&self, now: Cycle) -> bool {
+        !self.pieces.is_empty() || self.until.is_some_and(|(until, _)| now < until)
+    }
+
+    /// Call before every frame: once the machine has typed what it was
+    /// given, the key events of the next piece, to be queued with
+    /// [`Machine::input`](crate::Machine::input). A machine that cannot
+    /// type drops the text.
+    pub fn pump(&mut self, machine: &dyn crate::Machine) -> Vec<TimedInput> {
+        let now = machine.now();
+        if let Some((until, span)) = self.until {
+            // Further away than the keys take: the machine's time went
+            // back (a savestate, a rewind); those keys are gone.
+            if now < until && until.0 - now.0 <= span {
+                return Vec::new();
+            }
+            self.until = None;
+        }
+        let Some(piece) = self.pieces.pop_front() else {
+            return Vec::new();
+        };
+        self.chars = self.chars.saturating_sub(piece.chars().count());
+        match machine.typed_keys(&piece, now) {
+            Some((events, end)) => {
+                self.until = Some((end, end.0.saturating_sub(now.0)));
+                events
+            }
+            None => {
+                self.clear();
+                Vec::new()
+            }
+        }
+    }
+}
+
 /// Upper bound on queued events; protects savestate loading.
 pub const MAX_QUEUED: usize = 1 << 16;
 
@@ -320,6 +492,77 @@ mod tests {
             .load(&mut StateReader::new(&data[..data.len() - 1]))
             .is_err());
         assert_eq!(keep.len(), 1);
+    }
+
+    #[test]
+    fn typed_lines_pause_after_every_return() {
+        let (events, end) = typed_lines("AB\nC", Cycle(100), 50, |line, from| {
+            let n = line.chars().count() as u64;
+            (
+                (0..n).map(|i| key(from + i * 10, 1)).collect(),
+                from + n * 10,
+            )
+        });
+        let at: Vec<u64> = events.iter().map(|e| e.at.0).collect();
+        // The first line with its RETURN takes 30 cycles, then the pause.
+        assert_eq!(at, [100, 110, 120, 180]);
+        assert_eq!(end, Cycle(190));
+    }
+
+    #[test]
+    fn a_feed_hands_the_text_over_line_by_line() {
+        use crate::machine::Machine;
+        use crate::testing::basic::ToyBasic;
+        let mut m = ToyBasic::new(&[]);
+        let mut feed = TextFeed::new();
+        assert_eq!(feed.push("10 A\r\n20\tB\rRUN"), 13);
+        assert_eq!(feed.pending(), 13);
+        assert!(feed.active(m.now()));
+        // The first line at once, the second only when the first is typed.
+        let first = feed.pump(&m);
+        assert_eq!(first.len(), 2 * 5);
+        assert!(feed.pump(&m).is_empty());
+        assert_eq!(feed.pending(), 8);
+        for e in first {
+            m.input(e);
+        }
+        let mut dbg = crate::debug::DebugHooks::new();
+        let mut frames = 0;
+        while feed.active(m.now()) {
+            for e in feed.pump(&m) {
+                m.input(e);
+            }
+            m.run_frame(&mut dbg);
+            frames += 1;
+            assert!(frames < 100);
+        }
+        assert_eq!(m.typed(), "10 A\n20 B\nRUN");
+        assert_eq!(feed.pending(), 0);
+
+        // Too much is refused whole; clearing drops what waits.
+        assert_eq!(feed.push(&"x".repeat(MAX_FEED + 1)), 0);
+        assert_eq!(feed.push("A\nB\n"), 4);
+        feed.clear();
+        assert_eq!(feed.pending(), 0);
+        assert!(feed.pump(&m).is_empty());
+    }
+
+    #[test]
+    fn a_feed_goes_on_after_the_machine_went_back_in_time() {
+        use crate::machine::Machine;
+        use crate::testing::basic::ToyBasic;
+        let mut late = ToyBasic::new(&[]);
+        let mut dbg = crate::debug::DebugHooks::new();
+        for _ in 0..50 {
+            late.run_frame(&mut dbg);
+        }
+        let mut feed = TextFeed::new();
+        feed.push("A\nB\n");
+        assert!(!feed.pump(&late).is_empty());
+        // The same feed on a machine at cycle 0: the keys of the first
+        // line are far in its future, so it does not wait for them.
+        let early = ToyBasic::new(&[]);
+        assert!(!feed.pump(&early).is_empty());
     }
 
     #[test]

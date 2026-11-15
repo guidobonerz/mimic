@@ -213,3 +213,42 @@ fn command_line_client_debugs_basic() {
     assert!(stderr.contains("no BASIC breakpoint 9"), "{stderr}");
     server.shutdown();
 }
+
+/// `polydbg type`: text for the machine's keyboard, typed while it runs.
+#[test]
+fn command_line_client_types_text() {
+    use emu_core::testing::basic::ToyBasic;
+    let Some(python) = python() else {
+        eprintln!("skipped: no Python 3 found");
+        return;
+    };
+    let server = DebugServer::start(
+        Session::new(Box::new(ToyBasic::new(&[])), "toybasic"),
+        ServerConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            vice: None,
+            run: false,
+            realtime: false,
+        },
+    )
+    .unwrap();
+    let p = Polydbg {
+        python,
+        script: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tools/polydbg.py"),
+        port: server.addr().port(),
+    };
+    // Paused, the text waits; a RETURN is added behind it.
+    assert_eq!(
+        p.ok(&["type", "10 A\\n20 B"]).trim(),
+        "10 characters waiting, typing"
+    );
+    assert_eq!(
+        p.ok(&["type", "--no-return", "RUN"]).trim(),
+        "13 characters waiting, typing"
+    );
+    p.ok(&["resume"]);
+    assert_eq!(p.ok(&["type", "--wait"]).trim(), "0 characters waiting");
+    p.ok(&["pause"]);
+    p.ok(&["type", "X", "Y"]);
+    assert_eq!(p.ok(&["type", "--cancel"]).trim(), "dropped 4 characters");
+}

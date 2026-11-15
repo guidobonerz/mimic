@@ -232,6 +232,18 @@ pub trait Machine: Send {
     /// Master cycles since power-on; the time base of [`TimedInput::at`].
     fn now(&self) -> Cycle;
 
+    /// Key events that type `text` on the machine's keyboard from cycle
+    /// `start` on, for pasting text (a BASIC listing) and scripted typing:
+    /// the events and the cycle at which more text may follow. Lines end
+    /// with `\n`; characters the keyboard has no key for are skipped. The
+    /// caller queues the events with [`Machine::input`] (so recordings
+    /// carry them); [`crate::input::TextFeed`] does that line by line.
+    /// `None` (the default): text cannot be typed into this machine.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        let _ = (text, start);
+        None
+    }
+
     /// The buttons and switches on the case with their current state, for
     /// control panels; operated with [`crate::input::InputEvent::Control`]
     /// on [`crate::input::InputTarget::Panel`]. Default: none.

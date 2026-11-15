@@ -233,7 +233,7 @@ fn cartridge_appears_at_0_and_power_cycles_on_insert() {
 }
 
 #[test]
-fn a_4k_system_rom_fills_both_halves() {
+fn a_4k_system_rom_is_the_upper_half() {
     let mut rom = vec![0x12u8; 0x1000];
     rom[0xffe] = 0xf0;
     rom[0xfff] = 0x00;
@@ -241,7 +241,9 @@ fn a_4k_system_rom_fills_both_halves() {
     config.roms.insert("vectrex".into(), rom);
     let m = Vectrex::new(&config).unwrap();
     assert_eq!(m.cpu().pc, 0xf000);
-    assert_eq!(m.peek_cpu(0xe000), 0x12);
+    // The executive in the upper half, the built-in game block below it.
+    assert_eq!(m.peek_cpu(0xf000), 0x12);
+    assert_eq!(m.peek_cpu(0xe000), crate::stub::no_game()[0]);
     let mut config = MachineConfig::default();
     config.roms.insert("vectrex".into(), vec![0; 100]);
     assert!(Vectrex::new(&config).is_err());

@@ -1057,6 +1057,16 @@ impl Machine for Pet {
         self.sched.now()
     }
 
+    /// Text as key presses on this model's keyboard, with a pause behind RETURN for BASIC to take the line in.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            240_000,
+            |line, from| keyboard::typed_events(self.layout(), line, from),
+        ))
+    }
+
     fn controls(&self) -> Vec<emu_core::ControlInfo> {
         use emu_core::ControlInfo;
         vec![ControlInfo::button(0, "POWER", false)]

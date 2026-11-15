@@ -44,6 +44,7 @@ pub mod hw {
     pub const NORMAL: u16 = 0;
     pub const ACTION_REPLAY: u16 = 1;
     pub const FINAL_CARTRIDGE_3: u16 = 3;
+    pub const SIMONS_BASIC: u16 = 4;
     pub const OCEAN: u16 = 5;
     pub const FUN_PLAY: u16 = 7;
     pub const SUPER_GAMES: u16 = 8;

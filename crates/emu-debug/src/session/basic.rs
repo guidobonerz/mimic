@@ -6,7 +6,9 @@
 //! or a line (stop points). While a BASIC breakpoint or step is active the
 //! session keeps hidden breakpoints there; at each hit it asks the machine
 //! where the program is and resumes silently unless a breakpoint or the
-//! step is satisfied. With nothing active nothing is armed, so a machine
+//! step is satisfied. A breakpoint may carry a condition over the
+//! program's variables ([`crate::basic_expr`]) and a number of hits to let
+//! pass. With nothing active nothing is armed, so a machine
 //! running BASIC pays nothing for the debugger (golden rule 5).
 
 use std::collections::BTreeMap;
@@ -14,19 +16,25 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use emu_core::basic::{
-    BasicDebug, BasicFrame, BasicGranularity, BasicMode, BasicPos, BasicState, BasicValue,
+    BasicDebug, BasicFrame, BasicGranularity, BasicMode, BasicPos, BasicState, BasicValue, BasicVar,
 };
 use emu_core::{BpId, BreakpointKind, StopReason};
 
 use super::Session;
+use crate::basic_expr::{self, Expr, Vars};
 use crate::protocol::{base64_encode, MAX_BASIC_ARRAY};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct BasicBreak {
     line: u32,
     /// `None`: wherever the program enters the line.
     statement: Option<u16>,
     enabled: bool,
+    /// As given and parsed.
+    condition: Option<(String, Expr)>,
+    /// Hits (with the condition holding) to let pass before stopping.
+    ignore: u32,
+    /// Hits that counted (condition held).
     hits: u32,
     /// `basic_run_to`: removed when the run ends.
     temporary: bool,
@@ -78,6 +86,31 @@ impl BasicDbg {
     /// The BASIC reason of the stop being reported, if BASIC caused it.
     pub(super) fn take_reason(&mut self) -> Option<Value> {
         self.reason.take()
+    }
+}
+
+/// The program's variables for a condition: the plain ones read once per
+/// stop point, the array elements as they are asked for.
+struct ProgramVars<'a> {
+    basic: &'a dyn BasicDebug,
+    vars: &'a [BasicVar],
+}
+
+impl Vars for ProgramVars<'_> {
+    fn var(&self, name: &str) -> Option<BasicValue> {
+        self.vars
+            .iter()
+            .find(|v| v.dims.is_empty() && v.name.eq_ignore_ascii_case(name))
+            .and_then(|v| v.value.clone())
+    }
+
+    fn element(&self, name: &str, index: u32) -> Option<BasicValue> {
+        // One dimension only: the order of more is the dialect's.
+        let array = self
+            .vars
+            .iter()
+            .find(|v| v.dims.len() == 1 && v.name.eq_ignore_ascii_case(name))?;
+        self.basic.array(&array.name, index, 1).ok()?.pop()
     }
 }
 
@@ -166,21 +199,43 @@ impl Session {
         };
         let mut reason = None;
         if let (BasicMode::Running, Some(pos)) = (state.mode, state.pos) {
-            let hit = self.basic.breaks.iter_mut().find(|(_, b)| {
-                b.enabled
-                    && b.line == pos.line
-                    && match b.statement {
-                        Some(s) => s == pos.statement,
-                        None => entered,
+            let here: Vec<u32> = self
+                .basic
+                .breaks
+                .iter()
+                .filter(|(_, b)| {
+                    b.enabled
+                        && b.line == pos.line
+                        && match b.statement {
+                            Some(s) => s == pos.statement,
+                            None => entered,
+                        }
+                })
+                .map(|(&bp, _)| bp)
+                .collect();
+            // Every breakpoint here whose condition holds counts its hit;
+            // the first one past its ignore count stops.
+            let mut vars: Option<Vec<BasicVar>> = None;
+            for bp in here {
+                let holds = match (&self.basic.breaks[&bp].condition, self.machine.basic()) {
+                    (Some((_, cond)), Some(basic)) => {
+                        let basic = &*basic;
+                        let vars = vars.get_or_insert_with(|| basic.variables());
+                        cond.holds(&ProgramVars { basic, vars })
                     }
-            });
-            if let Some((&bp, b)) = hit {
+                    _ => true,
+                };
+                let Some(b) = self.basic.breaks.get_mut(&bp).filter(|_| holds) else {
+                    continue;
+                };
                 b.hits = b.hits.saturating_add(1);
-                reason = Some(if b.temporary {
-                    json!({"kind": "basic_step", "step": "run_to"})
-                } else {
-                    json!({"kind": "basic_break", "bp": bp, "hits": b.hits})
-                });
+                if b.hits > b.ignore && reason.is_none() {
+                    reason = Some(if b.temporary {
+                        json!({"kind": "basic_step", "step": "run_to"})
+                    } else {
+                        json!({"kind": "basic_break", "bp": bp, "hits": b.hits})
+                    });
+                }
             }
         }
         if reason.is_none() {
@@ -230,6 +285,7 @@ impl Session {
             "dialect": info.dialect,
             "granularity": info.granularity.name(),
             "space": info.space.0,
+            "name_len": info.name_len,
         }))
     }
 
@@ -330,6 +386,9 @@ impl Session {
                 BasicFrame::Gosub { from } => {
                     json!({"kind": "gosub", "line": from.line, "statement": from.statement})
                 }
+                BasicFrame::Loop { word, from } => json!({
+                    "kind": "loop", "word": word, "line": from.line, "statement": from.statement,
+                }),
                 BasicFrame::For {
                     var,
                     limit,
@@ -349,14 +408,46 @@ impl Session {
         line: u32,
         statement: Option<u16>,
         enabled: Option<bool>,
+        condition: Option<String>,
+        ignore: Option<u32>,
     ) -> Result<Value, String> {
         let info = self.basic()?.info();
         if info.granularity == BasicGranularity::Line && statement.is_some_and(|s| s != 0) {
             return Err(format!("{} only stops at lines", info.dialect));
         }
+        let condition = self.basic_condition(condition)?;
         let bp = self.basic_add(line, statement, enabled != Some(false), false);
+        if let Some(b) = self.basic.breaks.get_mut(&bp) {
+            b.condition = condition;
+            b.ignore = ignore.unwrap_or(0);
+        }
         self.basic_rearm();
         Ok(json!({"bp": bp}))
+    }
+
+    /// A condition's text parsed for this machine's BASIC.
+    fn basic_condition(&mut self, text: Option<String>) -> Result<Option<(String, Expr)>, String> {
+        let Some(text) = text else {
+            return Ok(None);
+        };
+        let name_len = self.basic()?.info().name_len;
+        let e = basic_expr::parse(&text, name_len).map_err(|e| format!("condition: {e}"))?;
+        Ok(Some((text, e)))
+    }
+
+    pub(super) fn basic_break_condition(
+        &mut self,
+        bp: u32,
+        condition: Option<String>,
+    ) -> Result<Value, String> {
+        if !self.basic.breaks.get(&bp).is_some_and(|b| !b.temporary) {
+            return Err(format!("no BASIC breakpoint {bp}"));
+        }
+        let condition = self.basic_condition(condition)?;
+        if let Some(b) = self.basic.breaks.get_mut(&bp) {
+            b.condition = condition;
+        }
+        Ok(json!({}))
     }
 
     fn basic_add(
@@ -373,6 +464,8 @@ impl Session {
                 line,
                 statement,
                 enabled,
+                condition: None,
+                ignore: 0,
                 hits: 0,
                 temporary,
             },
@@ -409,6 +502,7 @@ impl Session {
                 json!({
                     "bp": bp, "line": b.line, "statement": b.statement,
                     "enabled": b.enabled, "hits": b.hits,
+                    "condition": b.condition.as_ref().map(|(t, _)| t), "ignore": b.ignore,
                 })
             })
             .collect();
@@ -530,6 +624,18 @@ mod tests {
             line,
             statement,
             enabled: None,
+            condition: None,
+            ignore: None,
+        }
+    }
+
+    fn break_if(line: u32, statement: Option<u16>, condition: &str, ignore: u32) -> Command {
+        Command::BasicBreakAdd {
+            line,
+            statement,
+            enabled: None,
+            condition: Some(condition.into()),
+            ignore: Some(ignore),
         }
     }
 
@@ -563,7 +669,8 @@ mod tests {
         let list = ok(&mut s, Command::BasicBreakList);
         assert_eq!(
             list,
-            json!([{"bp": bp, "line": 20, "statement": null, "enabled": true, "hits": 2}])
+            json!([{"bp": bp, "line": 20, "statement": null, "enabled": true, "hits": 2,
+                    "condition": null, "ignore": 0}])
         );
         // Disabled or removed: nothing armed, the program runs on.
         ok(
@@ -594,6 +701,57 @@ mod tests {
             assert_eq!(var(&mut s, "B"), b);
         }
         assert_eq!(ok(&mut s, Command::BasicBreakList)[0]["hits"], 3);
+    }
+
+    #[test]
+    fn a_condition_decides_which_passes_stop() {
+        let mut s = session();
+        // Line 20, statement 1 runs with B = 0, 10, 20 in the first round.
+        let bp = ok(&mut s, break_if(20, Some(1), "b = 20 and i = 3", 0))["bp"].clone();
+        assert_eq!(run(&mut s, Command::Resume), ("basic_break".into(), 20, 1));
+        assert_eq!(var(&mut s, "B"), json!(20));
+        let list = ok(&mut s, Command::BasicBreakList);
+        assert_eq!(list[0]["condition"], "b = 20 and i = 3");
+        assert_eq!(list[0]["hits"], 1);
+        // Another condition for the same breakpoint, then none.
+        let cond = |condition: Option<&str>| Command::BasicBreakCondition {
+            bp: 1,
+            condition: condition.map(str::to_string),
+        };
+        ok(&mut s, cond(Some("B >= 40")));
+        assert_eq!(run(&mut s, Command::Resume), ("basic_break".into(), 20, 1));
+        assert_eq!(var(&mut s, "B"), json!(40));
+        ok(&mut s, cond(None));
+        assert_eq!(run(&mut s, Command::Resume), ("basic_break".into(), 20, 1));
+        assert_eq!(var(&mut s, "B"), json!(50));
+        // What does not parse is refused and changes nothing.
+        for bad in [cond(Some("B >")), break_if(20, None, "S$ = 1", 0)] {
+            let v = call(&mut s, bad);
+            let error = v["error"].as_str().unwrap();
+            assert!(error.starts_with("condition: "), "{v}");
+        }
+        let missing = Command::BasicBreakCondition {
+            bp: 9,
+            condition: None,
+        };
+        assert_eq!(call(&mut s, missing)["ok"], false);
+        assert_eq!(
+            ok(&mut s, Command::BasicBreakList),
+            json!([{"bp": bp, "line": 20, "statement": 1, "enabled": true, "hits": 3,
+                    "condition": null, "ignore": 0}])
+        );
+    }
+
+    #[test]
+    fn an_ignore_count_lets_hits_pass() {
+        let mut s = session();
+        // Line 30 is entered once per round, with C = 0, 1, 2 …
+        ok(&mut s, break_if(30, None, "C >= 1", 2));
+        assert_eq!(run(&mut s, Command::Resume), ("basic_break".into(), 30, 0));
+        assert_eq!(var(&mut s, "C"), json!(3));
+        let list = ok(&mut s, Command::BasicBreakList);
+        assert_eq!(list[0]["hits"], 3);
+        assert_eq!(list[0]["ignore"], 2);
     }
 
     #[test]
@@ -668,7 +826,7 @@ mod tests {
         let mut s = session();
         assert_eq!(
             ok(&mut s, Command::BasicInfo),
-            json!({"dialect": "Toy BASIC", "granularity": "statement", "space": 0})
+            json!({"dialect": "Toy BASIC", "granularity": "statement", "space": 0, "name_len": 0})
         );
         let state = ok(&mut s, Command::BasicState);
         assert_eq!(state["mode"], "running");

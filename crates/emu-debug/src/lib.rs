@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod basic_expr;
 pub mod expr;
 pub mod host;
 pub mod protocol;

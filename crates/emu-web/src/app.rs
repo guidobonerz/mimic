@@ -22,6 +22,9 @@ use video_crt::field::{Deinterlace, FieldStage};
 /// must not hang the page).
 const MAX_FRAME_STEPS: usize = 4;
 
+/// Machine frames per `run_frame` while pasted text is being typed.
+const PASTE_WARP: usize = 8;
+
 pub struct Running {
     pub id: String,
     pub(crate) machine: Box<dyn Machine>,
@@ -56,6 +59,8 @@ pub struct Running {
     audio: Vec<f32>,
     /// The uploaded file in each slot (by slot id), for the page's lists.
     mounted: BTreeMap<u8, String>,
+    /// Pasted text on its way to the machine's keyboard.
+    feed: emu_core::input::TextFeed,
 }
 
 #[derive(Default)]
@@ -271,6 +276,7 @@ impl WebEmu {
             aspect: 1.0,
             samples: Vec::new(),
             audio: Vec::new(),
+            feed: emu_core::input::TextFeed::new(),
             mounted,
         });
         self.search = None;
@@ -327,24 +333,61 @@ impl WebEmu {
             "aspect": r.aspect,
             "pointer": r.wants_pointer,
             "mouse": r.wants_mouse,
+            "type": m.typed_keys("", m.now()).is_some(),
+            "typing": r.feed.pending(),
+        })
+    }
+
+    /// Type `text` on the machine's keyboard, behind text still waiting
+    /// (the page's paste): line by line while the machine runs, at
+    /// [`PASTE_WARP`] frames a call. The characters waiting afterwards.
+    pub fn paste(&mut self, text: &str) -> Result<usize, String> {
+        let r = self.running.as_mut().ok_or("no machine running")?;
+        if r.machine.typed_keys("", r.machine.now()).is_none() {
+            return Err("this machine cannot type text".into());
+        }
+        if !text.is_empty() && r.feed.push(text) == 0 {
+            return Err("too much text".into());
+        }
+        Ok(r.feed.pending())
+    }
+
+    /// Drop the pasted text not yet typed; its length in characters.
+    pub fn paste_cancel(&mut self) -> usize {
+        self.running.as_mut().map_or(0, |r| {
+            let n = r.feed.pending();
+            r.feed.clear();
+            n
         })
     }
 
     pub fn run_frame(&mut self) -> Result<(), String> {
         let r = self.running.as_mut().ok_or("no machine running")?;
-        for _ in 0..MAX_FRAME_STEPS {
-            match r.machine.run_frame(&mut r.hooks) {
-                StopReason::FrameDone => break,
-                StopReason::Fault { device, reason } => {
-                    return Err(format!("{} fault: {reason}", device.0))
+        // While pasted text is typed (some ten characters a second at the
+        // machine's pace) every call runs several frames, without sound.
+        let typing = r.feed.active(r.machine.now());
+        let frames = if typing { PASTE_WARP } else { 1 };
+        for _ in 0..frames {
+            for ev in r.feed.pump(r.machine.as_ref()) {
+                r.machine.input(ev);
+            }
+            for _ in 0..MAX_FRAME_STEPS {
+                match r.machine.run_frame(&mut r.hooks) {
+                    StopReason::FrameDone => break,
+                    StopReason::Fault { device, reason } => {
+                        return Err(format!("{} fault: {reason}", device.0))
+                    }
+                    // A jam is the guest's own doing: the picture stays.
+                    _ => {}
                 }
-                // A jam is the guest's own doing: the picture stays.
-                _ => {}
             }
         }
         r.render();
         r.samples.clear();
         let format = r.machine.audio(&mut r.samples);
+        if typing {
+            r.samples.clear();
+        }
         let scale = 1.0 / 32768.0;
         if format.channels == 2 {
             r.audio
@@ -992,5 +1035,50 @@ mod tests {
             .start(&json!({"machine": "c64", "options": {"roms": "stub"}, "crt": "x"}))
             .is_err());
         assert!(emu.start(&json!({"machine": "nothing"})).is_err());
+    }
+
+    #[test]
+    fn pasted_text_is_typed_several_frames_a_call() {
+        let mut emu = WebEmu::new();
+        emu.start(&json!({"machine": "c64", "options": {"roms": "stub"}}))
+            .unwrap();
+        assert_eq!(emu.info()["type"], true);
+        assert_eq!(emu.info()["typing"], 0);
+        assert_eq!(emu.paste("10 A\r\n20 B\n").unwrap(), 10);
+        assert_eq!(emu.paste("RUN").unwrap(), 13);
+        let start = emu.running.as_ref().unwrap().machine.now().0;
+        emu.run_frame().unwrap();
+        let warp = emu.running.as_ref().unwrap().machine.now().0 - start;
+        assert_eq!(
+            emu.info()["typing"],
+            8,
+            "the first line is with the machine"
+        );
+        let mut calls = 0;
+        while emu
+            .running
+            .as_ref()
+            .is_some_and(|r| r.feed.active(r.machine.now()))
+        {
+            emu.run_frame().unwrap();
+            calls += 1;
+            assert!(calls < 500, "typing never ends");
+        }
+        assert_eq!(emu.info()["typing"], 0);
+        // Typed: a frame a call again.
+        let start = emu.running.as_ref().unwrap().machine.now().0;
+        emu.run_frame().unwrap();
+        let plain = emu.running.as_ref().unwrap().machine.now().0 - start;
+        assert_eq!(warp / plain, PASTE_WARP as u64);
+
+        emu.paste("A\nB\n").unwrap();
+        assert_eq!(emu.paste_cancel(), 4);
+        assert_eq!(emu.paste_cancel(), 0);
+
+        // A console has no keyboard to type on.
+        emu.start(&json!({"machine": "atari2600", "options": {"roms": "stub"}}))
+            .unwrap();
+        assert_eq!(emu.info()["type"], false);
+        assert!(emu.paste("A").is_err());
     }
 }

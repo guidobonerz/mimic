@@ -380,6 +380,9 @@ pub const SLOT_TAPE: SlotId = SlotId(2);
 pub const SLOT_CARTRIDGE: SlotId = SlotId(3);
 
 pub struct C128 {
+    /// The BASIC interpreter as the debugger sees it (derived from what
+    /// is mapped; not machine state): BASIC 7.0, or BASIC V2 in C64 mode.
+    basic: basic_dialects::cbm::CbmBasic,
     cpu: Cpu6502,
     z80: Z80,
     mem: Memory,
@@ -504,6 +507,9 @@ impl C128 {
             Some(other) => return Err(ConfigError::Invalid(format!("debugcart option '{other}'"))),
         };
         let mut m = Self {
+            basic: basic_dialects::cbm::CbmBasic::new(CPU_SPACE)
+                .with_ram(RAM_SPACE, 0x1_0000)
+                .scan_from(0x4000),
             cpu,
             z80: Z80::new(),
             mem: Memory::new(load_roms(config)?),
@@ -1154,6 +1160,13 @@ impl Machine for C128 {
         self.io.vic.frame_row(line)
     }
 
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&self.main_cpu()) {
+            self.basic = found;
+        }
+        Some(self)
+    }
+
     /// The VIC-IIe's views (as on the C64) and the VDC's (`vdc-*`).
     fn gfx_views(&self) -> Vec<GfxViewInfo> {
         let mut views = vic2::gfx::views(
@@ -1363,6 +1376,16 @@ impl Machine for C128 {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    /// Text as key presses (upper-case letters; see [`keyboard::typed_events`]), with a pause behind RETURN for BASIC to take the line in.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            240_000,
+            keyboard::typed_events,
+        ))
     }
 
     fn controls(&self) -> Vec<emu_core::ControlInfo> {
@@ -1711,6 +1734,38 @@ const VDC_NAMES: [&str; 37] = [
     "R15", "R16", "R17", "R18", "R19", "R20", "R21", "R22", "R23", "R24", "R25", "R26", "R27",
     "R28", "R29", "R30", "R31", "R32", "R33", "R34", "R35", "R36",
 ];
+
+basic_dialects::impl_basic_debug!(C128, basic, main_cpu);
+
+/// The 8502 for the BASIC decoder, whatever processor the debugger
+/// addresses: its registers and the shared memory spaces, reads only.
+struct MainCpu<'a>(&'a C128);
+
+impl C128 {
+    fn main_cpu(&self) -> MainCpu<'_> {
+        MainCpu(self)
+    }
+}
+
+impl DebugTarget for MainCpu<'_> {
+    fn regs(&self) -> RegisterSet {
+        self.0.cpu.regs()
+    }
+
+    fn set_reg(&mut self, _name: &str, _v: u32) {}
+
+    fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
+        self.0.peek(space, addr, size)
+    }
+
+    fn poke(&mut self, _space: MemSpaceId, _addr: u32, _size: Size, _v: u32) -> bool {
+        false
+    }
+
+    fn disassemble(&self, addr: u32) -> Instr {
+        self.0.disassemble(addr)
+    }
+}
 
 /// The debugger reaches the 8502 or the Z80, whichever
 /// [`Machine::debug_target`] selected last; memory spaces are shared.

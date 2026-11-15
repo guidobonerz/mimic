@@ -83,6 +83,14 @@
 //! asynchronous `basic_step` (`statement`, `line`, `over`, `out`) and
 //! `basic_run_to`. A run they end reports `stopped` with the reason kind
 //! `basic_break` or `basic_step` and the line and statement.
+//! 12 adds conditions for BASIC breakpoints: `condition` (an expression
+//! over the program's variables, see [`crate::basic_expr`]) and `ignore`
+//! in `basic_break_add`, both in `basic_break_list`, `basic_break_condition`
+//! to replace a condition, and `name_len` in `basic_info`.
+//! 13 adds typed text: `type {text}` queues text that the machine's
+//! keyboard types while it runs (a pasted BASIC listing; line ends are
+//! RETURN), `type` without text asks how much is waiting, `type_cancel`
+//! drops the rest; `"type": true|false` in `capabilities`.
 //!
 //! Every change to this message set needs a contract test and a bump of
 //! [`PROTOCOL_VERSION`].
@@ -95,7 +103,7 @@ use serde_json::{json, Value};
 use emu_core::{BeamPos, StopReason};
 
 pub const PROTOCOL_NAME: &str = "mimic-debug";
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Request {
@@ -352,11 +360,28 @@ pub enum Command {
     /// The GOSUB/FOR stack, innermost first.
     BasicStack,
     /// Stop when the program reaches `line` (with `statement`: that
-    /// statement of it, 0 = the first).
+    /// statement of it, 0 = the first) and `condition` holds
+    /// ([`crate::basic_expr`]); the first `ignore` such hits pass.
     BasicBreakAdd {
         line: u32,
         statement: Option<u16>,
         enabled: Option<bool>,
+        condition: Option<String>,
+        ignore: Option<u32>,
+    },
+    /// Type `text` on the machine's keyboard, behind text still waiting:
+    /// line by line while the machine runs (line ends are RETURN,
+    /// characters without a key are skipped). Without `text`: only the
+    /// answer, `{"pending": characters waiting, "active": still typing}`.
+    Type {
+        text: Option<String>,
+    },
+    /// Drop the text not yet typed.
+    TypeCancel,
+    /// Replace a BASIC breakpoint's condition (`None` removes it).
+    BasicBreakCondition {
+        bp: u32,
+        condition: Option<String>,
     },
     BasicBreakRemove {
         bp: u32,
@@ -510,9 +535,12 @@ pub const COMMANDS: &[&str] = &[
     "basic_break_add",
     "basic_break_remove",
     "basic_break_enable",
+    "basic_break_condition",
     "basic_break_list",
     "basic_step",
     "basic_run_to",
+    "type",
+    "type_cancel",
     "break_add",
     "break_remove",
     "break_enable",
@@ -715,7 +743,31 @@ mod tests {
             Command::BasicBreakAdd {
                 line: 100,
                 statement: None,
-                enabled: None
+                enabled: None,
+                condition: None,
+                ignore: None,
+            }
+        );
+        let r = parse_request(
+            r#"{"id":12,"cmd":"basic_break_add","line":100,"condition":"A>1","ignore":2}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            r.cmd,
+            Command::BasicBreakAdd {
+                line: 100,
+                statement: None,
+                enabled: None,
+                condition: Some("A>1".into()),
+                ignore: Some(2),
+            }
+        );
+        let r = parse_request(r#"{"id":12,"cmd":"basic_break_condition","bp":1}"#).unwrap();
+        assert_eq!(
+            r.cmd,
+            Command::BasicBreakCondition {
+                bp: 1,
+                condition: None
             }
         );
         let r =

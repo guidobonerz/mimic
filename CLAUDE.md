@@ -124,6 +124,7 @@ pub trait Machine: Send {
     fn basic(&mut self) -> Option<&mut dyn BasicDebug> { None } // BASIC interpreter for the debugger: program, position, variables, stack, stop points (`emu-core::basic`)
     fn input(&mut self, ev: TimedInput);                // queued, applied exactly at ev.at (part of savestate)
     fn now(&self) -> Cycle;                             // master cycles since power-on, time base of TimedInput
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> { None } // key events that type text (paste, `type`); the caller queues them with input(), `emu-core::input::TextFeed` line by line
     fn controls(&self) -> Vec<ControlInfo> { vec![] }    // console buttons/switches (power, reset, 2600 switches …) for panels
     fn ports(&self) -> Vec<PortInfo>;                   // physical connectors (see `docs/claude/devices.md`)
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError>;

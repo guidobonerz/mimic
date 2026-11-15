@@ -40,18 +40,21 @@ const GRAPHICS: [[&str; 8]; 10] = [
     ["RVS", "[", " ", "<", "STOP", "", ".", "="],
 ];
 
-/// Business keyboard, rows 0–9, columns 0–7. `KP` marks the keypad.
+/// Business keyboard, rows 0–9, columns 0–7. `KP` marks the keypad: the
+/// keys whose codes have bit 7 set in the editor ROM's table (`$B1` for
+/// the keypad's 1), which SHIFT leaves alone. The digits of the main row
+/// have plain codes (`$31`) and give `!"#$%&'()` with SHIFT.
 const BUSINESS: [[&str; 8]; 10] = [
-    ["KP2", "KP5", "KP8", "KP-", "8", "CRSR_RIGHT", "", ""],
-    ["KP1", "KP4", "KP7", "0", "7", "↑", "", "9"],
-    ["ESC", "S", "F", "H", "]", "K", ";", "5"],
-    ["A", "D", "G", "J", "RETURN", "L", "@", "6"],
+    ["2", "5", "8", "-", "KP8", "CRSR_RIGHT", "", ""],
+    ["1", "4", "7", "0", "KP7", "↑", "", "KP9"],
+    ["ESC", "S", "F", "H", "]", "K", ";", "KP5"],
+    ["A", "D", "G", "J", "RETURN", "L", "@", "KP6"],
     ["TAB", "W", "R", "Y", "\\", "I", "P", "DEL"],
-    ["Q", "E", "T", "U", "CRSR_DOWN", "O", "[", "4"],
-    ["LSHIFT", "C", "B", "KP.", ".", "", "RSHIFT", "3"],
-    ["Z", "V", "N", ",", "KP0", "", "", "2"],
-    ["RVS", "X", " ", "M", "HOME", "", "/", "1"],
-    ["←", "KP3", "KP6", "KP9", "STOP", ":", "", ""],
+    ["Q", "E", "T", "U", "CRSR_DOWN", "O", "[", "KP4"],
+    ["LSHIFT", "C", "B", ".", "KP.", "", "RSHIFT", "KP3"],
+    ["Z", "V", "N", ",", "KP0", "", "", "KP2"],
+    ["RVS", "X", " ", "M", "HOME", "", "/", "KP1"],
+    ["←", "3", "6", "9", "STOP", ":", "", ""],
 ];
 
 impl Layout {
@@ -84,14 +87,42 @@ impl Layout {
     }
 
     /// The key (and whether SHIFT is needed) that types `c`: upper-case
-    /// letters, digits, space, RETURN and the symbols with their own key.
+    /// letters, digits, space, RETURN and the symbols. The graphics
+    /// keyboard has a key for every symbol; on the business keyboard's
+    /// typewriter layout `!"#$%&'()` are the shifted digits 1 to 9, `*`,
+    /// `+`, `<`, `>`, `?` the shifted `:`, `;`, `,`, `.`, `/`, and `=` the
+    /// shifted `-`.
     pub fn key_for_char(self, c: char) -> Option<(MachineKey, bool)> {
         let c = match c {
             '\r' | '\n' => return self.key("RETURN").map(|k| (k, false)),
             c => c.to_ascii_uppercase(),
         };
         let mut buf = [0u8; 4];
-        self.key(c.encode_utf8(&mut buf)).map(|k| (k, false))
+        if let Some(k) = self.key(c.encode_utf8(&mut buf)) {
+            return Some((k, false));
+        }
+        if self != Layout::Business {
+            return None;
+        }
+        let (label, shift) = match c {
+            '=' => ("-", true),
+            '!' => ("1", true),
+            '"' => ("2", true),
+            '#' => ("3", true),
+            '$' => ("4", true),
+            '%' => ("5", true),
+            '&' => ("6", true),
+            '\'' => ("7", true),
+            '(' => ("8", true),
+            ')' => ("9", true),
+            '*' => (":", true),
+            '+' => (";", true),
+            '<' => (",", true),
+            '>' => (".", true),
+            '?' => ("/", true),
+            _ => return None,
+        };
+        self.key(label).map(|k| (k, shift))
     }
 }
 
@@ -114,11 +145,18 @@ pub fn typed_events(layout: Layout, text: &str, start: u64) -> (Vec<TimedInput>,
     let mut events = Vec::new();
     let mut t = start;
     for c in text.chars() {
-        let Some((k, _)) = layout.key_for_char(c) else {
+        let Some((k, shift)) = layout.key_for_char(c) else {
             continue;
         };
+        let shift = shift.then(|| layout.key("LSHIFT")).flatten();
+        if let Some(s) = shift {
+            events.push(key_event(t, s, true));
+        }
         events.push(key_event(t, k, true));
         events.push(key_event(t + TYPE_HOLD, k, false));
+        if let Some(s) = shift {
+            events.push(key_event(t + TYPE_HOLD, s, false));
+        }
         t += TYPE_HOLD + TYPE_GAP;
     }
     (events, t)
@@ -203,10 +241,17 @@ mod tests {
         );
         assert_eq!(
             Layout::Business.key_for_char('6'),
-            Some((MachineKey(100 + 3 * 8 + 7), false)),
+            Some((MachineKey(100 + 9 * 8 + 2), false)),
             "main row, not the keypad"
         );
-        assert_eq!(Layout::Business.key_for_char('*'), None);
+        // No key of its own on the business keyboard: SHIFT and `:`.
+        assert_eq!(
+            Layout::Business.key_for_char('*'),
+            Some((MachineKey(100 + 9 * 8 + 5), true))
+        );
+        assert_eq!(Layout::Business.key_for_char('~'), None);
+        let (ev, _) = typed_events(Layout::Business, "\"", 0);
+        assert_eq!(ev.len(), 4, "SHIFT around the key");
         let (ev, end) = typed_events(Layout::Graphics, "RUN\n", 10);
         assert_eq!(ev.len(), 8);
         assert_eq!(end, 10 + 4 * 80_000);

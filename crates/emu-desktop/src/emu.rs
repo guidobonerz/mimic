@@ -143,6 +143,14 @@ pub struct Shared {
     /// Set by the window (Ctrl+D): put the next disk of
     /// [`Shared::disk_swap`] into the first drive.
     pub next_disk: AtomicBool,
+    /// Text from the clipboard for the machine's keyboard to type (Ctrl+V,
+    /// the panel's PASTE button).
+    pub paste: Mutex<Option<String>>,
+    /// Set by the window (Ctrl+Shift+V): drop the pasted text not yet typed.
+    pub paste_cancel: AtomicBool,
+    /// Published by the emulation thread: text can be typed into this
+    /// machine (the panel shows PASTE).
+    pub can_type: AtomicBool,
     /// The gamepad fire button (position in `panel::PAD_FIRE_BUTTONS`), set
     /// by the panel's PAD FIRE switch.
     pub pad_fire: AtomicU8,
@@ -270,6 +278,9 @@ impl Shared {
             next_screen: AtomicBool::new(false),
             disk_swap: Mutex::default(),
             next_disk: AtomicBool::new(false),
+            paste: Mutex::default(),
+            paste_cancel: AtomicBool::new(false),
+            can_type: AtomicBool::new(false),
             dropped_disks: Mutex::default(),
             has_media: AtomicBool::new(false),
             machine_id: Mutex::default(),
@@ -966,6 +977,7 @@ pub fn spawn(
         let mut drive_seen = false;
         let mut tracker = Tracker::default();
         let (mut min_fill, mut max_fill, mut frames) = (usize::MAX, 0, 0u32);
+        shared.can_type.store(session.can_type(), Ordering::Relaxed);
         while !shared.quit.load(Ordering::Relaxed) {
             // The frame's length as the picture's timing gives it now: a
             // machine may change it (the Logophor's Panorama switches to
@@ -999,6 +1011,22 @@ pub fn spawn(
                         msg = join_messages(msg, c);
                     }
                     report_media(&shared, msg);
+                }
+            }
+            // Pasted text: the machine's keyboard types it line by line
+            // while it runs (at warp, see below).
+            if shared.paste_cancel.swap(false, Ordering::Relaxed) {
+                let dropped = session.type_cancel();
+                if dropped > 0 {
+                    *shared.status.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(format!("paste stopped, {dropped} characters dropped"));
+                }
+            }
+            let pasted = shared.paste.lock().ok().and_then(|mut p| p.take());
+            if let Some(text) = pasted {
+                if let Err(e) = session.type_text(&text) {
+                    *shared.status.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(format!("paste: {e}"));
                 }
             }
             let mut disk = None;
@@ -1179,6 +1207,12 @@ pub fn spawn(
                         .filter(|(_, at)| at.elapsed() < Duration::from_secs(4))
                         .map(|(m, _)| m.clone());
                 }
+                if f.note.is_none() && session.typing() {
+                    f.note = Some(format!(
+                        "pasting: {} characters left (Ctrl+Shift+V stops)",
+                        session.typing_pending()
+                    ));
+                }
                 if f.note.is_none() && shared.warping.load(Ordering::Relaxed) {
                     f.note = Some("warp: loading".into());
                 }
@@ -1265,12 +1299,16 @@ pub fn spawn(
             }
 
             let percent = crate::footer::speed_percent(shared.speed.load(Ordering::Relaxed));
-            let warp = warp_hold > 0
-                && quiet_frames >= WARP_QUIET
-                && still_picture(picture_moves)
-                && !program_running
-                && percent == 100
-                && shared.warp_load.load(Ordering::Relaxed);
+            // Pasted text is typed at the machine's own pace, some ten
+            // characters a second: as fast as the host can meanwhile.
+            let typing = percent == 100 && session.typing();
+            let warp = typing
+                || (warp_hold > 0
+                    && quiet_frames >= WARP_QUIET
+                    && still_picture(picture_moves)
+                    && !program_running
+                    && percent == 100
+                    && shared.warp_load.load(Ordering::Relaxed));
             if debug_stats && warp != shared.warping.load(Ordering::Relaxed) {
                 eprintln!(
                     "frame {frames_run}: warp {} (quiet {quiet_frames}, moving {})",

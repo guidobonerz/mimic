@@ -643,6 +643,18 @@ impl Machine for Trs80 {
         self.sched.now()
     }
 
+    /// Text as key presses (each key held for three fields and released
+    /// for three), with a pause behind ENTER for BASIC to take the line in.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        let hold = self.timing.t_per_field() * 3;
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            hold * 4,
+            |line, from| keyboard::typed_events(line, from, hold, hold),
+        ))
+    }
+
     fn controls(&self) -> Vec<emu_core::ControlInfo> {
         vec![
             emu_core::ControlInfo::button(CONTROL_RESET, "RESET", false),

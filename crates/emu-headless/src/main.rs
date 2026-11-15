@@ -49,6 +49,12 @@ usage: mimic-headless [options]
                         the Vectrex's sheets); auto: the cartridge's own from
                         ~/.mimic/overlays/<machine>/<cartridge name>.png
   --autostart           load and run the disk (C64) or tape (Spectrum) after boot
+  --type TEXT           type TEXT on the machine's keyboard (\\n = RETURN,
+                        \\\\ = \\); repeatable, the pieces follow each other
+  --type-file FILE      type the text in FILE (a BASIC listing), line by line
+  --type-at N           start typing after N frames (default 0; give the
+                        machine time to boot); with --debug the text is
+                        typed as soon as the machine runs
   --rom ROLE=FILE       ROM image for a role, e.g. kernal=kernal.bin (repeatable)
   --rom-dir DIR         find the machine's ROMs in DIR (default: $EMU_ROM_DIR,
                         then ~/.mimic/roms)
@@ -111,6 +117,10 @@ struct Args {
     disk: Vec<String>,
     tape: Option<String>,
     cart: Option<String>,
+    /// `--type` and `--type-file`, in the order given.
+    type_text: String,
+    /// `--type-at`: the frame the typing starts at.
+    type_at: u64,
     /// `--overlay FILE|auto|none`.
     overlay: Option<String>,
     frames: u64,
@@ -177,6 +187,16 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--tape" => args.tape = Some(value("--tape")?),
             "--cart" => args.cart = Some(value("--cart")?),
             "--overlay" => args.overlay = Some(value("--overlay")?),
+            "--type" => args.type_text.push_str(&unescape(&value("--type")?)),
+            "--type-file" => {
+                let path = value("--type-file")?;
+                let text = String::from_utf8_lossy(&read(&path)?).into_owned();
+                args.type_text.push_str(&text);
+            }
+            "--type-at" => {
+                let n = value("--type-at")?;
+                args.type_at = n.parse().map_err(|_| format!("bad frame count '{n}'"))?;
+            }
             "--autostart" => {
                 args.config.options.insert("autostart".into(), "on".into());
             }
@@ -605,6 +625,7 @@ fn run(mut args: Args) -> Result<ExitCode, String> {
         }
         session.set_host(Box::new(host::FrontendHost));
         session.set_host_journal(journal.clone());
+        session.type_text(&args.type_text)?;
         let tap = args.preview.map(|_| {
             let tap = FrameTap::new();
             tap.publish(session.machine(), args.run);
@@ -711,7 +732,23 @@ fn run(mut args: Args) -> Result<ExitCode, String> {
     let mut frames = 0;
     let mut audio = Vec::new();
     let mut format = None;
+    // `--type`: the text goes in line by line once its frame has come.
+    let mut feed = emu_core::input::TextFeed::new();
+    let mut to_type = Some(args.type_text.as_str()).filter(|t| !t.is_empty());
+    if to_type.is_some() && machine.typed_keys("", machine.now()).is_none() {
+        return Err(format!("{} cannot type text", args.machine));
+    }
     while frames < args.frames {
+        if frames >= args.type_at {
+            if let Some(text) = to_type.take() {
+                if feed.push(text) == 0 {
+                    return Err("--type: too much text".into());
+                }
+            }
+            for ev in feed.pump(machine.as_ref()) {
+                machine.input(ev);
+            }
+        }
         let stop = machine.run_frame(&mut dbg);
         if args.wav.is_some() {
             format = Some(machine.audio(&mut audio));
@@ -840,6 +877,24 @@ fn main() -> ExitCode {
         eprintln!("error: {e}");
         ExitCode::FAILURE
     })
+}
+
+/// `--type`'s text: `\n` is RETURN, `\\` a backslash.
+fn unescape(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some(other) => out.push(other),
+            None => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

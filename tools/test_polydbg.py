@@ -54,6 +54,14 @@ class Parsing(unittest.TestCase):
         self.assertTrue(polydbg.format_stop(stop).startswith(
             "BASIC breakpoint 1 at line 20 statement 0: "), polydbg.format_stop(stop))
 
+    def test_type_arguments(self):
+        parse = polydbg.build_parser().parse_args
+        args = parse(["type", "10", "PRINT", "1"])
+        self.assertEqual(args.text, ["10", "PRINT", "1"])
+        self.assertFalse(args.cancel or args.wait or args.no_return)
+        self.assertEqual(parse(["type", "-f", "prog.bas", "--wait"]).file, "prog.bas")
+        self.assertTrue(parse(["type", "--cancel"]).cancel)
+
     def test_addresses_or_symbols(self):
         self.assertEqual(polydbg.address_args("$0810"), {"addr": 0x0810})
         self.assertEqual(polydbg.address_args("sprites.init"), {"symbol": "sprites.init"})

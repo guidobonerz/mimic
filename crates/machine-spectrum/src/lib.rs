@@ -1222,6 +1222,27 @@ impl Machine for Spectrum {
         self.sched.now()
     }
 
+    /// Text as key presses on the 128K models, whose editor takes BASIC
+    /// letter by letter. The 48K's keyboard enters a keyword with one key
+    /// (`P` is PRINT at the start of a statement), so text typed letter by
+    /// letter would not be the text meant: `None` there. The same holds
+    /// for a 128K model switched to 48 BASIC, which this cannot tell.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        if !self.model.is_128() {
+            return None;
+        }
+        let hz = u64::from(self.model.cpu_hz());
+        // The 128 editor is busy for most of a second after ENTER (it
+        // checks and stores the line and redraws the listing) and drops
+        // the keys pressed meanwhile.
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            hz * 3 / 2,
+            |line, from| keyboard::typed_events(line, from, hz),
+        ))
+    }
+
     fn controls(&self) -> Vec<emu_core::ControlInfo> {
         let mut c = vec![emu_core::ControlInfo::button(0, "RESET", false)];
         if self.mem.mf_rom.is_some() {

@@ -175,6 +175,8 @@ fn gate(mut g: Gate, dialect: &str) {
         line: 20,
         statement: None,
         enabled: None,
+        condition: None,
+        ignore: None,
     })["bp"]
         .clone();
     g.keys("RUN\n");
@@ -268,7 +270,9 @@ fn gate(mut g: Gate, dialect: &str) {
         g.ok(Command::StepInstr { count: Some(7) });
         let state = g.ok(Command::BasicState);
         let depth = state["depth"].as_u64().unwrap();
-        let line = state["line"].as_u64().unwrap();
+        let line = state["line"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{name}: {state}"));
         assert!(depth == 0 || line == 100, "{name}: {state}");
         inside += depth;
     }
@@ -276,6 +280,22 @@ fn gate(mut g: Gate, dialect: &str) {
         inside > 0,
         "{name}: the frame was never seen inside a statement"
     );
+
+    // A breakpoint with a condition over the program's variables: the
+    // third pass of the loop, in a round after C$ was set.
+    g.ok(Command::BasicBreakAdd {
+        line: 20,
+        statement: Some(1),
+        enabled: None,
+        condition: Some("i = 3 AND C$ = \"ABC\" AND NOT QQ".into()),
+        ignore: None,
+    });
+    assert_eq!(
+        g.run(Command::Resume),
+        ("basic_break".into(), 20, 1),
+        "{name}"
+    );
+    assert_eq!(g.var("I"), json!(3.0), "{name}");
     println!("{name}: {dialect} ok");
 }
 
@@ -305,4 +325,225 @@ fn pet() {
         let typist: Typist = Box::new(|text, at| typed_events(Layout::Graphics, text, at));
         gate(Gate::new("pet", Some(model), typist), dialect);
     }
+}
+
+/// What BASIC 3.5 and 7.0 add: DO loops on the interpreter's own stack
+/// beside FOR, and `extra` (a line 20 the program never reaches) for the
+/// listing.
+fn loops(mut g: Gate, extra: &str) {
+    let name = g.name.clone();
+    let line10 = "A=0:DO:A=A+1:FORI=1TO2:B=B+1:NEXT:LOOPUNTILA=2:END";
+    g.type_line(&format!("10 {line10}"));
+    g.type_line(&format!("20 {extra}"));
+    let list = g.ok(Command::BasicList {
+        from: None,
+        to: None,
+    });
+    assert_eq!(list["lines"][0]["text"], line10, "{name}");
+    assert_eq!(list["lines"][1]["text"], extra, "{name}");
+    g.keys(
+        "RUN
+",
+    );
+    let inner = Command::BasicRunTo {
+        line: 10,
+        statement: Some(4),
+    };
+    assert_eq!(g.run(inner), ("basic_step".into(), 10, 4), "{name}");
+    let stack = g.stack();
+    assert_eq!(
+        stack["frames"],
+        json!([{"kind": "for", "var": "I", "limit": 2.0, "step": 1.0,
+                "line": 10, "statement": 3},
+               {"kind": "loop", "word": "DO", "line": 10, "statement": 1}]),
+        "{name}"
+    );
+    assert_eq!(stack["depth"], 0, "{name}");
+    // Out of the FOR loop, around the DO loop once.
+    assert_eq!(g.step("statement"), (10, 5), "{name}");
+    assert_eq!(g.step("statement"), (10, 4), "{name}");
+    assert_eq!(g.step("statement"), (10, 5), "{name}");
+    assert_eq!(g.step("statement"), (10, 6), "{name}");
+    assert_eq!(
+        g.stack()["frames"],
+        json!([{"kind": "loop", "word": "DO", "line": 10, "statement": 1}]),
+        "{name}"
+    );
+    assert_eq!(g.step("statement"), (10, 2), "{name}");
+    assert_eq!(g.var("A"), json!(1.0), "{name}");
+    println!("{name}: loops ok");
+}
+
+#[test]
+#[ignore = "needs Plus/4 ROMs"]
+fn plus4() {
+    for machine in ["plus4", "c16"] {
+        let typist: Typist = Box::new(machine_ted::keyboard::typed_events);
+        gate(Gate::new(machine, None, typist), "Commodore BASIC 3.5");
+        let typist: Typist = Box::new(machine_ted::keyboard::typed_events);
+        loops(Gate::new(machine, None, typist), "SOUND1,500,5:COLOR0,1");
+    }
+}
+
+#[test]
+#[ignore = "needs C128 ROMs"]
+fn c128() {
+    let c128 = || {
+        let typist: Typist = Box::new(machine_c128::keyboard::typed_events);
+        let mut g = Gate::new("c128", None, typist);
+        g.run_for(3_000_000);
+        g
+    };
+    gate(c128(), "Commodore BASIC 7.0");
+    // Tokens of two bytes: $FE nn and $CE nn.
+    loops(c128(), "BANK15:C=POT(1):SLOW");
+    // C64 mode: the same machine with BASIC V2.
+    let mut g = c128();
+    g.type_line("GO64");
+    g.type_line("Y");
+    g.run_for(3_000_000);
+    g.name = "c128 in C64 mode".into();
+    gate(g, "Commodore BASIC V2");
+}
+
+/// Simons' BASIC and TSB on the C64: their keywords in the listing (LOOP
+/// is `$64 $3A`, no colon), REPEAT and LOOP as frames, EXEC as a call.
+fn extension(mut g: Gate, dialect: &str) {
+    let name = g.name.clone();
+    assert_eq!(g.ok(Command::BasicInfo)["dialect"], dialect, "{name}");
+    for line in [
+        "10 A=0:REPEAT:A=A+1:UNTIL A=3",
+        "20 LOOP:D=D+1:EXIT IF D=2:END LOOP",
+        "30 EXEC SUB",
+        "40 B=5:HIRES 0,1:PLOT 10,10,1:LINE 0,0,100,100,1:NRM:END",
+        "50 PROC SUB",
+        "60 C=1:END PROC",
+    ] {
+        g.type_line(line);
+    }
+    let list = g.ok(Command::BasicList {
+        from: None,
+        to: None,
+    });
+    let lines: Vec<(u64, &str, Vec<u64>)> = list["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            let statements = l["statements"].as_array().unwrap();
+            (
+                l["line"].as_u64().unwrap(),
+                l["text"].as_str().unwrap(),
+                statements.iter().map(|s| s.as_u64().unwrap()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            (10, "A=0:REPEAT:A=A+1:UNTIL A=3", vec![0, 4, 11, 17]),
+            (20, "LOOP:D=D+1:EXIT IF D=2:END LOOP", vec![0, 5, 11, 23]),
+            (30, "EXEC SUB", vec![0]),
+            (
+                40,
+                "B=5:HIRES 0,1:PLOT 10,10,1:LINE 0,0,100,100,1:NRM:END",
+                vec![0, 4, 14, 27, 46, 50],
+            ),
+            (50, "PROC SUB", vec![0]),
+            (60, "C=1:END PROC", vec![0, 4]),
+        ],
+        "{name}"
+    );
+
+    g.keys("RUN\n");
+    let to = |line, statement| Command::BasicRunTo {
+        line,
+        statement: Some(statement),
+    };
+    assert_eq!(g.run(to(10, 2)), ("basic_step".into(), 10, 2), "{name}");
+    assert_eq!(
+        g.stack()["frames"],
+        json!([{"kind": "loop", "word": "REPEAT", "line": 10, "statement": 1}]),
+        "{name}"
+    );
+    // Around the REPEAT loop by statement.
+    assert_eq!(g.step("statement"), (10, 3), "{name}");
+    assert_eq!(g.step("statement"), (10, 2), "{name}");
+    assert_eq!(g.var("A"), json!(1.0), "{name}");
+    assert_eq!(g.run(to(20, 2)), ("basic_step".into(), 20, 2), "{name}");
+    assert_eq!(g.var("A"), json!(3.0), "{name}");
+    assert_eq!(
+        g.stack()["frames"],
+        json!([{"kind": "loop", "word": "LOOP", "line": 20, "statement": 0}]),
+        "{name}"
+    );
+    // Over the procedure call, then into it and out again.
+    assert_eq!(g.run(to(30, 0)), ("basic_step".into(), 30, 0), "{name}");
+    assert_eq!(g.var("D"), json!(2.0), "{name}");
+    assert_eq!(g.step("statement"), (60, 0), "{name}");
+    let stack = g.stack();
+    assert_eq!(stack["depth"], 1, "{name}");
+    assert_eq!(
+        stack["frames"][0],
+        json!({"kind": "gosub", "line": 30, "statement": 0}),
+        "{name}"
+    );
+    assert_eq!(g.step("out"), (40, 0), "{name}");
+    assert_eq!(g.var("C"), json!(1.0), "{name}");
+    assert_eq!(g.stack()["depth"], 0, "{name}");
+    // The graphics commands run with the BASIC ROM switched off, in RAM
+    // that also lies where the ROM has its stop point: no stop inside.
+    for statement in 1..=5 {
+        assert_eq!(g.step("statement"), (40, statement), "{name}");
+    }
+    println!("{name}: {dialect} ok");
+}
+
+/// A C64 with the user's cartridge image `file` plugged in, looked for
+/// in `EMU_BASIC_EXT_DIR`, else beside the ROM folder (`~/.mimic`).
+fn c64_with_cartridge(name: &str, file: &str) -> Gate {
+    use emu_core::media::{Media, MediaKind};
+    let dir = std::env::var_os("EMU_BASIC_EXT_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let roms = media_backends::roms::env_dir()?;
+            Some(roms.parent()?.to_path_buf())
+        })
+        .expect("no folder for the cartridge images");
+    let path = dir.join(file);
+    let data = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let typist: Typist = Box::new(machine_c64::keyboard::typed_events);
+    let mut g = Gate::new("c64", None, typist);
+    g.name = name.into();
+    let m = g.s.machine_mut();
+    let slot = m
+        .media_slots()
+        .into_iter()
+        .find(|s| s.name == "cartridge")
+        .expect("cartridge slot")
+        .id;
+    m.media_slot(slot)
+        .unwrap()
+        .insert(Media {
+            name: file.into(),
+            kind: MediaKind::Cartridge,
+            backend: Box::new(media_backends::image::MemoryBackend { data }),
+        })
+        .unwrap();
+    g.run_for(8_000_000);
+    g
+}
+
+#[test]
+#[ignore = "needs C64 ROMs and the user's TSB cartridge image"]
+fn c64_tsb_cartridge() {
+    let g = c64_with_cartridge("c64 with the TSB cartridge", "TSBneo_md_260228.crt");
+    extension(g, "Commodore BASIC V2 + TSB");
+}
+
+#[test]
+#[ignore = "needs C64 ROMs and the user's Simons' BASIC cartridge image"]
+fn c64_simons_basic_cartridge() {
+    let g = c64_with_cartridge("c64 with the Simons' BASIC cartridge", "Simons_Basic.crt");
+    extension(g, "Commodore BASIC V2 + Simons' BASIC");
 }

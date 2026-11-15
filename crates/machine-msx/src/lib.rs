@@ -168,6 +168,7 @@ pub mod disk;
 pub mod rtc;
 pub mod slot;
 pub mod stub;
+pub mod typing;
 pub mod video;
 
 use chips_amstrad::ay::Ay;
@@ -1307,6 +1308,16 @@ impl Machine for Msx {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    /// Text as key presses ([`typing`]), with a pause behind RETURN for BASIC to take the line in.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            typing::LINE_PAUSE,
+            typing::typed_events,
+        ))
     }
 
     fn controls(&self) -> Vec<emu_core::ControlInfo> {

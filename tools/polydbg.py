@@ -35,6 +35,7 @@ import json
 import shlex
 import socket
 import sys
+import time
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 6510
@@ -548,12 +549,20 @@ def cmd_basic(c, args):
             if f["kind"] == "for":
                 text.append("FOR %s TO %s STEP %s  (%s)" % (
                     f["var"], json.dumps(f["limit"]), json.dumps(f["step"]), at))
+            elif f["kind"] == "loop":
+                text.append("%s at %s" % (f["word"], at))
             else:
                 text.append("GOSUB from %s" % at)
         out(args, r, text or ["(empty)"])
     elif action == "break":
-        bp = c.call("basic_break_add", **basic_place(need(0, "LINE[:STATEMENT]")))["bp"]
+        place = basic_place(need(0, "LINE[:STATEMENT]"))
+        if len(words) > 1:
+            place["condition"] = " ".join(words[1:])
+        bp = c.call("basic_break_add", **place)["bp"]
         out(args, {"bp": bp}, ["BASIC breakpoint %s" % bp])
+    elif action == "cond":
+        c.call("basic_break_condition", bp=parse_number(need(0, "BP")),
+               condition=" ".join(words[1:]) or None)
     elif action == "breaks":
         lst = c.call("basic_break_list")
         text = []
@@ -561,6 +570,8 @@ def cmd_basic(c, args):
             where = "line %s" % b["line"]
             if b["statement"] is not None:
                 where += " statement %s" % b["statement"]
+            if b.get("condition"):
+                where += "  if %s" % b["condition"]
             text.append("%3d %s  hits %d%s" % (b["bp"], where, b["hits"],
                                               "" if b["enabled"] else "  (disabled)"))
         out(args, lst, text or ["no BASIC breakpoints"])
@@ -720,6 +731,34 @@ def cmd_frame(c, args):
 def cmd_reset(c, args):
     s = c.call("reset", kind="hard" if args.hard else "soft")
     out(args, s, [format_stop(s)])
+
+
+def cmd_type(c, args):
+    """Type text on the machine's keyboard: words, a file, stdin (-), or
+    --cancel; --wait until it is typed (the machine has to run)."""
+    if args.cancel:
+        r = c.call("type_cancel")
+        out(args, r, ["dropped %d characters" % r["dropped"]])
+        return
+    if args.file == "-":
+        text = sys.stdin.read()
+    elif args.file:
+        with open(args.file, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    else:
+        # As on a command line: \\n is RETURN, and the text ends with one.
+        text = " ".join(args.text).replace("\\n", "\n")
+        if text and not args.no_return and not text.endswith("\n"):
+            text += "\n"
+    r = c.call("type", text=text) if text else c.call("type")
+    if args.wait:
+        deadline = time.time() + args.timeout
+        while r["active"]:
+            if time.time() > deadline:
+                raise DebugError("still typing after %g s (is the machine running?)" % args.timeout)
+            time.sleep(0.05)
+            r = c.call("type")
+    out(args, r, ["%d characters waiting%s" % (r["pending"], ", typing" if r["active"] else "")])
 
 
 def cmd_save(c, args):
@@ -964,7 +1003,7 @@ def build_parser(shell=False):
     sp.add_argument("--svg", help="also write the segments as an SVG picture")
     sp = add("basic", cmd_basic, "BASIC debugger: info, list [FROM [TO]], vars, "
              "array NAME [FIRST [COUNT]], set NAME|NAME(I) VALUE, stack, "
-             "break LINE[:STATEMENT], breaks, unbreak BP, "
+             "break LINE[:STATEMENT] [CONDITION], cond BP [CONDITION], breaks, unbreak BP, "
              "step [statement|line|over|out], until LINE[:STATEMENT]")
     sp.add_argument("action", nargs="?", default="list",
                     choices=["info", "list", "vars", "array", "set", "stack", "break",
@@ -1013,6 +1052,15 @@ def build_parser(shell=False):
     sp.add_argument("count", nargs="?", type=int, default=1)
     sp = add("reset", cmd_reset, "reset (--hard: power cycle)")
     sp.add_argument("--hard", action="store_true")
+    sp = add("type", cmd_type,
+             "type text on the machine's keyboard while it runs: TEXT... (\\n = RETURN; "
+             "one is added at the end), --file FILE (- = stdin), --cancel")
+    sp.add_argument("text", nargs="*")
+    sp.add_argument("--file", "-f")
+    sp.add_argument("--no-return", action="store_true", help="no RETURN behind the text")
+    sp.add_argument("--cancel", action="store_true", help="drop the text not typed yet")
+    sp.add_argument("--wait", action="store_true", help="return when the text is typed")
+    sp.add_argument("--timeout", type=float, default=120.0)
     sp = add("save", cmd_save, "save machine state and freezes to a file")
     sp.add_argument("file")
     sp = add("load", cmd_load, "load a state file")

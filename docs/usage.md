@@ -385,6 +385,25 @@ Zorro-II-Karte per Autoconfig, Kickstart 1.2 und neuer finden es).
 
 `EMU_DESKTOP_DEBUG=1` gibt alle 5 Sekunden Bild- und Audio-Statistik aus.
 
+### Text einfügen (BASIC-Listings)
+
+**Strg+V** tippt den Text aus der Zwischenablage in die Maschine – Zeile
+für Zeile über deren Tastatur, so als würde man ihn selbst eingeben. Das
+geht in jedem Programm, das Tasten liest, also im BASIC-Editor genauso wie
+unter Simons' BASIC oder TSB. Zeilenenden werden zu RETURN, Zeichen ohne
+Taste werden ausgelassen. Während des Tippens läuft die Maschine im Warp
+(ohne Ton), die Fußzeile zeigt, wie viele Zeichen noch warten.
+**Strg+Umschalt+V** bricht ab; im Konsolen-Panel gibt es dafür den Knopf
+PASTE.
+
+Möglich bei C64, VIC-20, PET, C16/Plus/4, C128, MEGA65, Atari 8-Bit, CPC,
+TRS-80, Spectrum 128K/+2, Apple II, BBC Micro, MSX und TI-99/4A. Nicht beim
+ZX81 und Spectrum 48K: dort gibt eine Taste ein ganzes Schlüsselwort ein.
+
+Die Maschine muss am Prompt stehen und Zeit für jede Zeile haben; das
+Tippen sieht nicht nach, ob sie bereit ist. Ist sie länger beschäftigt
+(etwa der TRS-80 bei `MEMORY SIZE?`), gehen Zeichen verloren.
+
 ## 6. Kommandozeilen-Frontend `emu-headless`
 
 Ohne Fenster und Ton – für Skripte, CI und als Debug-Server.
@@ -420,6 +439,18 @@ cargo run --release -p emu-headless -- --machine cpc \
 | `--vice [ADR]` | VICE-Binary-Monitor (Standard `127.0.0.1:6502`), schließt `--debug` ein |
 | `--run` | mit `--debug`: gleich laufen statt angehalten starten |
 | `--no-realtime` | mit `--debug`: so schnell wie möglich |
+
+Text tippen lassen (ein Listing aus einer Datei, danach `run`):
+
+```bash
+cargo run --release -p emu-headless -- --machine c64 \
+    --type-file listing.bas --type 'run\n' --type-at 150 \
+    --frames 1500 --snapshot out.png
+```
+
+`--type TEXT` (`\n` = RETURN) und `--type-file DATEI` lassen sich mischen
+und wiederholen; `--type-at N` wartet N Bilder, bis die Maschine gebootet
+hat. Mit `--debug` wird der Text getippt, sobald die Maschine läuft.
 
 ## 7. Medien: Disketten, Bänder, Module, Programme
 
@@ -721,6 +752,9 @@ node tools/web-smoke.mjs                      # alle Maschinen im WASM-Modul (Te
 - Eingabe: ins Bild klicken, dann gehen Tasten an die Maschine
   (positionsgleich wie im Desktop); Gamepads (Standard-Mapping) spielen den
   Joystick; Maus/Paddles fangen den Mauszeiger (Esc gibt ihn frei).
+- Text einfügen: **Strg+V** im Bild (oder der Knopf **Paste**) tippt den
+  Text der Zwischenablage in die Maschine, Strg+Umschalt+V bricht ab;
+  Maschinen und Grenzen wie im Desktop.
 - Direktstart per URL: `?machine=c64&options=roms=stub&start=1`
   (Optionen mit Komma getrennt), `&model=`, `&crt=raw|default|lite`.
 - Monitor: `raw` (scharfe Pixel), das Profil der Maschine oder `lite`;
@@ -921,17 +955,29 @@ python tools/polydbg.py back 3                 # 3 Befehle zurück
 python tools/polydbg.py save state.bin
 python tools/polydbg.py basic                  # BASIC-Programm listen (> = aktuelle Zeile)
 python tools/polydbg.py basic break 100        # Haltepunkt auf Zeile 100 (100:2 = 3. Anweisung)
+python tools/polydbg.py basic break 100 "I=5 AND A$<>\"\""  # nur wenn die Bedingung gilt
+python tools/polydbg.py basic cond 1 "SC%>=1000"   # Bedingung von Haltepunkt 1 ersetzen (ohne Text: entfernen)
 python tools/polydbg.py basic step             # eine Zeile weiter; step statement|over|out
 python tools/polydbg.py basic vars             # BASIC-Variablen mit Werten
 python tools/polydbg.py basic set A 42         # Variable setzen (auch 'N%' 7, 'F(3)' 1.5)
-python tools/polydbg.py basic stack            # offene GOSUBs und FOR-Schleifen
+python tools/polydbg.py basic stack            # offene GOSUBs und Schleifen (FOR, DO, REPEAT, LOOP)
+python tools/polydbg.py type 10 PRINT 6*7      # Text tippen (RETURN am Ende; \n = RETURN mittendrin)
+python tools/polydbg.py type --file prog.bas --wait   # Listing tippen und warten, bis es drin ist
+python tools/polydbg.py type --cancel          # noch nicht getippten Text verwerfen
 python tools/polydbg.py shell                  # interaktive Eingabe
 ```
 
-Der BASIC-Debugger (`basic …`) arbeitet auf C64, VIC-20 und PET: Er hält
+`type` (Protokoll 13: `type {text}`, `type_cancel`) tippt nur, während die
+Maschine läuft; `capabilities` meldet mit `"type"`, ob sie es kann.
+
+Der BASIC-Debugger (`basic …`) arbeitet auf C64, VIC-20, PET, C16, Plus/4
+und C128 (dort auch im C64-Modus): Er hält
 an BASIC-Zeilen und -Anweisungen, steppt zeilen- oder anweisungsweise, über
 ein GOSUB hinweg (`over`) oder aus ihm heraus (`out`) und zeigt und ändert
 Variablen. Zeichenketten lassen sich nur mit gleicher Länge überschreiben.
+Auf dem C64 erkennt er die BASIC-Erweiterungen Simons' BASIC und TSB, wenn
+sie als Modul (CRT) eingesteckt sind: Ihre Befehle stehen im Listing, offene
+`REPEAT`- und `LOOP`-Schleifen im Stack, und ein `EXEC` zählt wie ein GOSUB.
 `basic info` nennt den Dialekt und wo das Programm steht, `basic until 200`
 läuft bis Zeile 200, `basic array F` zeigt ein Feld.
 

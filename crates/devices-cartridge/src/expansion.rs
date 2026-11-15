@@ -135,6 +135,7 @@ pub fn from_crt(crt: &Crt) -> Result<Box<dyn ExpansionCart>, MediaError> {
     let scheme = match crt.hardware {
         hw::NORMAL => Scheme::Normal,
         hw::OCEAN => Scheme::Ocean,
+        hw::SIMONS_BASIC => Scheme::SimonsBasic,
         hw::FUN_PLAY => Scheme::FunPlay,
         hw::SUPER_GAMES => Scheme::SuperGames,
         hw::SYSTEM_3 => Scheme::System3,

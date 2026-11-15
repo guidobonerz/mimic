@@ -74,6 +74,7 @@
 pub mod disk;
 pub mod keyboard;
 pub mod stub;
+pub mod typing;
 
 use chips_ti::{vdp, Grom, Sn76489, Tms5220, Tms9901, Tms9918, VdpModel};
 use cpu_tms9900::{Tms9900, Tms9900Bus};
@@ -1062,6 +1063,16 @@ impl Machine for Ti99 {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    /// Text as key presses ([`typing`]), with a pause behind RETURN for BASIC to take the line in.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            typing::LINE_PAUSE,
+            typing::typed_events,
+        ))
     }
 
     fn controls(&self) -> Vec<emu_core::ControlInfo> {

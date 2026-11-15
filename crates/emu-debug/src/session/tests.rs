@@ -665,6 +665,8 @@ fn a_machine_without_basic_refuses_the_basic_commands() {
             line: 10,
             statement: None,
             enabled: None,
+            condition: None,
+            ignore: None,
         },
         Command::BasicStep { kind: None },
         Command::BasicRunTo {
@@ -676,4 +678,87 @@ fn a_machine_without_basic_refuses_the_basic_commands() {
         assert_eq!(v["error"], "fake has no BASIC the debugger can follow");
     }
     assert!(!s.is_running());
+}
+
+/// The keys the toy machine got so far ([`emu_core::testing::basic::KEYS`]).
+fn toy_keys(s: &mut Session) -> String {
+    use emu_core::testing::basic::KEYS;
+    let p = result(
+        s,
+        Command::Peek {
+            space: None,
+            addr: u32::from(KEYS),
+            len: 64,
+        },
+    );
+    let bytes: Vec<u8> = p["bytes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b.as_u64().unwrap() as u8)
+        .collect();
+    bytes[1..=usize::from(bytes[0])]
+        .iter()
+        .map(|&b| char::from(b))
+        .collect()
+}
+
+#[test]
+fn typed_text_goes_in_line_by_line_while_the_machine_runs() {
+    use emu_core::testing::basic::ToyBasic;
+    let mut s = Session::new(Box::new(ToyBasic::new(&[])), "toy");
+    assert_eq!(result(&mut s, Command::Capabilities)["type"], true);
+    let text = |t: &str| Command::Type {
+        text: Some(t.into()),
+    };
+    // Paused: the text waits.
+    let r = result(&mut s, text("10 A\r\n20 B\n"));
+    assert_eq!(r, json!({"queued": 10, "pending": 10, "active": true}));
+    assert_eq!(toy_keys(&mut s), "");
+    // More goes behind it.
+    assert_eq!(result(&mut s, text("RUN"))["pending"], 13);
+
+    s.set_running(true);
+    let mut slices = 0;
+    while s.typing() {
+        s.run_slice();
+        slices += 1;
+        assert!(slices < 200, "typing never ends");
+    }
+    assert!(slices > 2, "a line at a time");
+    s.set_running(false);
+    assert_eq!(toy_keys(&mut s), "10 A\n20 B\nRUN");
+    let idle = result(&mut s, Command::Type { text: None });
+    assert_eq!(idle, json!({"queued": 0, "pending": 0, "active": false}));
+}
+
+#[test]
+fn typed_text_can_be_dropped_and_needs_a_machine_that_types() {
+    use emu_core::testing::basic::ToyBasic;
+    let mut s = Session::new(Box::new(ToyBasic::new(&[])), "toy");
+    let text = |t: &str| Command::Type {
+        text: Some(t.into()),
+    };
+    result(&mut s, text("A\nB\nC\n"));
+    s.set_running(true);
+    s.run_slice();
+    assert_eq!(result(&mut s, Command::TypeCancel)["dropped"], 4);
+    for _ in 0..20 {
+        s.run_slice();
+    }
+    s.set_running(false);
+    assert_eq!(toy_keys(&mut s), "A\n", "the line handed over is typed");
+    assert!(!s.typing());
+
+    let too_much = "x".repeat(emu_core::input::MAX_FEED + 1);
+    let v = call(&mut s, text(&too_much));
+    assert_eq!(v["ok"], false, "{v}");
+
+    // The fake machine has no keyboard to type on.
+    let mut s = session();
+    assert_eq!(result(&mut s, Command::Capabilities)["type"], false);
+    for cmd in [text("A"), Command::Type { text: None }] {
+        assert_eq!(call(&mut s, cmd)["error"], "this machine cannot type text");
+    }
+    assert_eq!(result(&mut s, Command::TypeCancel)["dropped"], 0);
 }

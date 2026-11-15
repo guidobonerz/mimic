@@ -106,3 +106,32 @@ fn savestate_round_trip() {
         "bank 3 of 2"
     );
 }
+
+#[test]
+fn simons_basic_switches_its_upper_half() {
+    let mut image = crt(hw::SIMONS_BASIC, 1, 0x8000, false, true);
+    image.chips.push(Chip {
+        kind: 0,
+        bank: 0,
+        load: 0xa000,
+        data: vec![7; 0x2000],
+    });
+    let mut c = crate::expansion::from_crt(&image).unwrap();
+    assert_eq!(c.name(), "Simons' BASIC");
+    // 8 KB after a reset: the BASIC ROM stays where ROMH would be.
+    assert!(c.lines().exrom && !c.lines().game);
+    assert_eq!(
+        (c.peek_roml(0x8000), c.peek_romh(0xa000)),
+        (Some(0), Some(7))
+    );
+    c.write_io(0xde00, 0);
+    assert!(c.lines().exrom && c.lines().game, "16 KB");
+    // A debugger's look at the register changes nothing.
+    assert_eq!(c.peek_io(0xde00), None);
+    assert!(c.lines().game);
+    assert_eq!(c.read_io(0xde00), None);
+    assert!(!c.lines().game, "8 KB again");
+    c.write_io(0xde00, 0);
+    c.reset();
+    assert!(!c.lines().game);
+}

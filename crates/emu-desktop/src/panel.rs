@@ -75,6 +75,14 @@ pub fn save_mapping_control() -> ControlInfo {
     ControlInfo::button(SAVE_MAPPING, "SAVE MAPPING", false)
 }
 
+/// The frontend's PASTE button: the machine's keyboard types the text in
+/// the clipboard (Ctrl+V); shown for machines that can type text.
+pub const PASTE: u16 = 0xfffa;
+
+pub fn paste_control() -> ControlInfo {
+    ControlInfo::button(PASTE, "PASTE", false)
+}
+
 /// Cheats are shown as switches with ids from here on (the index into the
 /// list the emulation thread published).
 pub const CHEAT_BASE: u16 = 0xe000;

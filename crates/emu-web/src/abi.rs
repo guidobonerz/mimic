@@ -105,6 +105,8 @@ fn dispatch(a: &mut Abi, req: &Value) -> Result<Value, String> {
                 .key(&s("code"), req["down"].as_bool().unwrap_or(false));
             Ok(Value::Null)
         }
+        "paste" => a.emu.paste(&s("text")).map(|n| json!({"pending": n})),
+        "paste_cancel" => Ok(json!({"dropped": a.emu.paste_cancel()})),
         "button" => {
             let ok = a.emu.button(
                 n("pad") as u8,

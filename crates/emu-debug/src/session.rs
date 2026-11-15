@@ -129,6 +129,8 @@ pub struct Session {
     dbg_overlays: Vec<String>,
     /// BASIC breakpoints and steps.
     basic: basic::BasicDbg,
+    /// Text being typed into the machine (`type`, a frontend's paste).
+    feed: emu_core::input::TextFeed,
 }
 
 /// Called with the machine whenever its picture may have changed: after
@@ -173,6 +175,61 @@ impl Session {
             overlay_wants: emu_core::overlay::OverlayWants::default(),
             dbg_overlays: Vec::new(),
             basic: basic::BasicDbg::default(),
+            feed: emu_core::input::TextFeed::new(),
+        }
+    }
+
+    /// Whether text can be typed into this machine
+    /// ([`Machine::typed_keys`]).
+    pub fn can_type(&self) -> bool {
+        self.machine.typed_keys("", self.machine.now()).is_some()
+    }
+
+    /// Type `text` on the machine's keyboard, behind text still waiting
+    /// (a paste, the `type` command): handed to the machine line by line
+    /// while it runs, as input events like the user's own keys (and
+    /// recorded like them). Returns the characters taken.
+    pub fn type_text(&mut self, text: &str) -> Result<usize, String> {
+        if !self.can_type() {
+            return Err("this machine cannot type text".into());
+        }
+        if text.is_empty() {
+            return Ok(0);
+        }
+        match self.feed.push(text) {
+            0 => Err(format!(
+                "too much text (at most {} characters waiting)",
+                emu_core::input::MAX_FEED
+            )),
+            n => Ok(n),
+        }
+    }
+
+    /// Drop the text not yet typed; returns its length in characters.
+    pub fn type_cancel(&mut self) -> usize {
+        let n = self.feed.pending();
+        self.feed.clear();
+        n
+    }
+
+    /// Characters still waiting to be typed.
+    pub fn typing_pending(&self) -> usize {
+        self.feed.pending()
+    }
+
+    /// Text is waiting or keys of it are still going down: a frontend may
+    /// run the machine faster than real time meanwhile.
+    pub fn typing(&self) -> bool {
+        self.feed.active(self.machine.now())
+    }
+
+    /// The next piece of typed text, once the last is through.
+    fn pump_typing(&mut self) {
+        if self.feed.pending() == 0 {
+            return;
+        }
+        for ev in self.feed.pump(self.machine.as_ref()) {
+            self.input(ev);
         }
     }
 
@@ -313,6 +370,7 @@ impl Session {
             return;
         }
         self.apply_overlays();
+        self.pump_typing();
         let reason = match self.mode {
             RunMode::Free | RunMode::StepOver { .. } | RunMode::RunTo { .. } => self.run_filtered(),
             RunMode::Instr => {
@@ -815,7 +873,25 @@ impl Session {
                 line,
                 statement,
                 enabled,
-            } => self.basic_break_add(line, statement, enabled),
+                condition,
+                ignore,
+            } => self.basic_break_add(line, statement, enabled, condition, ignore),
+            Command::Type { text } => {
+                let queued = match text {
+                    Some(text) => self.type_text(&text)?,
+                    None if self.can_type() => 0,
+                    None => return Err("this machine cannot type text".into()),
+                };
+                Ok(json!({
+                    "queued": queued,
+                    "pending": self.typing_pending(),
+                    "active": self.typing(),
+                }))
+            }
+            Command::TypeCancel => Ok(json!({ "dropped": self.type_cancel() })),
+            Command::BasicBreakCondition { bp, condition } => {
+                self.basic_break_condition(bp, condition)
+            }
             Command::BasicBreakRemove { bp } => self.basic_break_remove(bp),
             Command::BasicBreakEnable { bp, enabled } => self.basic_break_enable(bp, enabled),
             Command::BasicBreakList => Ok(self.basic_break_list()),
@@ -1315,6 +1391,7 @@ impl Session {
             "beam": self.machine.beam().is_some(),
             "vectors": self.machine.vectors().is_some(),
             "basic": self.has_basic(),
+            "type": self.can_type(),
             // Machine-specific extensions (none yet); generic clients ignore them.
             "extensions": [],
         })

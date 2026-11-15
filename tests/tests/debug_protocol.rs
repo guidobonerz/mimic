@@ -999,7 +999,7 @@ fn basic_debugger() {
     )
     .unwrap();
     let mut c = Client::connect(&server);
-    assert_eq!(c.recv()["version"], 11);
+    assert_eq!(c.recv()["version"], PROTOCOL_VERSION);
     let caps = c.ok(json!({"cmd": "capabilities"}));
     assert_eq!(caps["basic"], true);
     for cmd in [
@@ -1013,6 +1013,7 @@ fn basic_debugger() {
         "basic_break_add",
         "basic_break_remove",
         "basic_break_enable",
+        "basic_break_condition",
         "basic_break_list",
         "basic_step",
         "basic_run_to",
@@ -1021,7 +1022,7 @@ fn basic_debugger() {
     }
     assert_eq!(
         c.ok(json!({"cmd": "basic_info"})),
-        json!({"dialect": "Toy BASIC", "granularity": "statement", "space": 0})
+        json!({"dialect": "Toy BASIC", "granularity": "statement", "space": 0, "name_len": 0})
     );
     assert_eq!(
         c.ok(json!({"cmd": "basic_state"})),
@@ -1061,10 +1062,31 @@ fn basic_debugger() {
     );
     assert_eq!(
         c.ok(json!({"cmd": "basic_break_list"})),
-        json!([{"bp": bp, "line": 100, "statement": null, "enabled": true, "hits": 1}])
+        json!([{"bp": bp, "line": 100, "statement": null, "enabled": true, "hits": 1,
+                "condition": null, "ignore": 0}])
     );
     c.ok(json!({"cmd": "basic_break_enable", "bp": bp, "enabled": false}));
+    // Protocol 12: a condition and an ignore count, replaced and listed.
+    c.ok(json!({"cmd": "basic_break_condition", "bp": bp, "condition": "A > 5"}));
+    assert_eq!(
+        c.ok(json!({"cmd": "basic_break_list"}))[0]["condition"],
+        "A > 5"
+    );
+    c.ok(json!({"cmd": "basic_break_condition", "bp": bp}));
     c.ok(json!({"cmd": "basic_break_remove", "bp": bp}));
+    let with = c.ok(
+        json!({"cmd": "basic_break_add", "line": 100, "enabled": false,
+                           "condition": "A = 5", "ignore": 2}),
+    )["bp"]
+        .clone();
+    assert_eq!(
+        c.ok(json!({"cmd": "basic_break_list"})),
+        json!([{"bp": with, "line": 100, "statement": null, "enabled": false, "hits": 0,
+                "condition": "A = 5", "ignore": 2}])
+    );
+    let bad = c.call(json!({"cmd": "basic_break_add", "line": 100, "condition": "A ="}));
+    assert_eq!(bad["ok"], false);
+    c.ok(json!({"cmd": "basic_break_remove", "bp": with}));
 
     // Variables: read, write, see the program use the new value.
     let vars = c.ok(json!({"cmd": "basic_vars"}));
@@ -1146,4 +1168,61 @@ fn basic_debugger() {
         assert_eq!(c.call(json!({"cmd": cmd}))["ok"], false);
     }
     other.shutdown();
+}
+
+/// Protocol 13: text typed on the machine's keyboard.
+#[test]
+fn typed_text() {
+    use emu_core::testing::basic::{ToyBasic, KEYS};
+    let server = DebugServer::start(
+        Session::new(Box::new(ToyBasic::new(&[])), "toybasic"),
+        ServerConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            vice: None,
+            run: false,
+            realtime: false,
+        },
+    )
+    .unwrap();
+    let mut c = Client::connect(&server);
+    assert_eq!(c.recv()["version"], 13);
+    let caps = c.ok(json!({"cmd": "capabilities"}));
+    assert_eq!(caps["type"], true);
+    for cmd in ["type", "type_cancel"] {
+        assert!(
+            caps["commands"].as_array().unwrap().contains(&json!(cmd)),
+            "{cmd}"
+        );
+    }
+
+    // Paused, the text waits; line ends of every kind are one RETURN.
+    assert_eq!(
+        c.ok(json!({"cmd": "type", "text": "10 A\r\n20 B\n"})),
+        json!({"queued": 10, "pending": 10, "active": true})
+    );
+    assert_eq!(c.ok(json!({"cmd": "type", "text": "RUN"}))["pending"], 13);
+    c.ok(json!({"cmd": "resume"}));
+    let mut polls = 0;
+    while c.ok(json!({"cmd": "type"}))["active"] == true {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        polls += 1;
+        assert!(polls < 2000, "typing never ends");
+    }
+    c.ok(json!({"cmd": "pause"}));
+    let p = c.ok(json!({"cmd": "peek", "addr": KEYS, "len": 14}));
+    let keys: Vec<u8> = p["bytes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b.as_u64().unwrap() as u8)
+        .collect();
+    assert_eq!(keys[0], 13);
+    assert_eq!(&keys[1..], b"10 A\n20 B\nRUN");
+
+    // Dropping what waits; text needs a machine with a keyboard to type on.
+    c.ok(json!({"cmd": "type", "text": "X\nY\n"}));
+    assert_eq!(c.ok(json!({"cmd": "type_cancel"})), json!({"dropped": 4}));
+    assert_eq!(c.ok(json!({"cmd": "type"}))["pending"], 0);
+    let bad = c.call(json!({"cmd": "type", "text": 5}));
+    assert_eq!(bad["ok"], false);
 }

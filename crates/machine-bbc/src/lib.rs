@@ -63,6 +63,7 @@ mod gfx;
 pub mod keyboard;
 pub mod serial;
 pub mod stub;
+pub mod typing;
 
 use chips_acorn::{Saa5050, VideoUla};
 use chips_amstrad::crtc::{Crtc, CrtcOut, CrtcType};
@@ -1274,6 +1275,16 @@ impl Machine for Bbc {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    /// Text as key presses ([`typing`]), with a pause behind RETURN for BASIC to take the line in.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            typing::LINE_PAUSE,
+            typing::typed_events,
+        ))
     }
 
     fn controls(&self) -> Vec<emu_core::ControlInfo> {

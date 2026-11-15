@@ -71,6 +71,9 @@ pub struct BasicInfo {
     pub granularity: BasicGranularity,
     /// The memory space the addresses of lines and variables are in.
     pub space: MemSpaceId,
+    /// The characters of a variable name the interpreter tells apart (2 in
+    /// Commodore BASIC: `COUNT` is `CO`); 0: all of them.
+    pub name_len: u8,
 }
 
 /// Where the interpreter is now.
@@ -153,6 +156,14 @@ pub enum BasicFrame {
         limit: BasicValue,
         step: BasicValue,
         /// The FOR statement; NEXT loops to the statement after it.
+        from: BasicPos,
+    },
+    /// An open loop without a counter: DO … LOOP (BASIC 3.5 and later),
+    /// REPEAT … UNTIL, LOOP … END LOOP (Simons' BASIC).
+    Loop {
+        /// The keyword that opened it ("DO", "REPEAT", "LOOP").
+        word: String,
+        /// The statement that opened it; the loop's end returns to it.
         from: BasicPos,
     },
 }

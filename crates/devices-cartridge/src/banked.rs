@@ -1,6 +1,6 @@
 //! ROM cartridges with 8 KB banks: normal 8 KB / 16 KB / Ultimax and the
 //! bank-switching schemes of Ocean, C64GS/System 3, Dinamic, Magic Desk,
-//! Fun Play/Power Play and Super Games.
+//! Fun Play/Power Play and Super Games, and the Simons' BASIC cartridge.
 //!
 //! | Scheme      | Mode   | Bank register                                         |
 //! | ----------- | ------ | ----------------------------------------------------- |
@@ -11,10 +11,15 @@
 //! | Magic Desk  | 8 KB   | write `$DE00`: bank (bits 0–6), bit 7 = cartridge off  |
 //! | Fun Play    | 8 KB   | write `$DE00`: bank = bits 3–5 + bit 0 × 8; `$86` = off |
 //! | Super Games | 16 KB  | write `$DF00`: bank (bits 0–1), bit 2 off, bit 3 locks |
+//! | Simons' BASIC | 8 KB | write `$DE00`: ROMH on (16 KB), read `$DE00`: ROMH off |
 //!
 //! A bank holds ROML (chip at `$8000`) and ROMH (chip at `$A000`/`$E000`,
 //! or the upper half of a 16 KB chip at `$8000`). Sources: the cartridge
 //! descriptions of the CRT format (VICE documentation) and the C64-Wiki.
+//! Simons' BASIC keeps its second 8 KB where the BASIC ROM is and only
+//! switches it in for its own commands; its register was read from the
+//! user's cartridge image (`STA $DE00` before a call into `$A000`,
+//! `LDA $DE00` before the return to BASIC).
 
 use emu_core::media::MediaError;
 use emu_core::{StateError, StateReader, StateWriter};
@@ -31,6 +36,7 @@ pub enum Scheme {
     MagicDesk,
     FunPlay,
     SuperGames,
+    SimonsBasic,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -48,7 +54,8 @@ pub struct Banked {
     exrom: bool,
     bank: usize,
     enabled: bool,
-    /// Super Games: the register is locked until reset.
+    /// Super Games: the register is locked until reset. Simons' BASIC:
+    /// ROMH is switched on.
     locked: bool,
 }
 
@@ -122,12 +129,14 @@ impl ExpansionCart for Banked {
             Scheme::MagicDesk => "Magic Desk",
             Scheme::FunPlay => "Fun Play",
             Scheme::SuperGames => "Super Games",
+            Scheme::SimonsBasic => "Simons' BASIC",
         }
     }
 
     fn lines(&self) -> CartLines {
+        let high = self.scheme == Scheme::SimonsBasic && self.locked;
         CartLines {
-            game: self.enabled && self.game,
+            game: self.enabled && (self.game || high),
             exrom: self.enabled && self.exrom,
             ..CartLines::default()
         }
@@ -142,8 +151,11 @@ impl ExpansionCart for Banked {
     }
 
     fn read_io(&mut self, addr: u16) -> Option<u8> {
-        if self.scheme == Scheme::Dinamic && addr & 0xff00 == 0xde00 {
-            self.select(usize::from(addr & 0xff));
+        let io1 = addr & 0xff00 == 0xde00;
+        match self.scheme {
+            Scheme::Dinamic if io1 => self.select(usize::from(addr & 0xff)),
+            Scheme::SimonsBasic if io1 => self.locked = false,
+            _ => {}
         }
         None
     }
@@ -153,6 +165,7 @@ impl ExpansionCart for Banked {
         match self.scheme {
             Scheme::Ocean if io1 => self.select(usize::from(v & 0x3f)),
             Scheme::System3 if io1 => self.select(usize::from(addr & 0xff)),
+            Scheme::SimonsBasic if io1 => self.locked = true,
             Scheme::MagicDesk if io1 => {
                 self.select(usize::from(v & 0x7f));
                 self.enabled = v & 0x80 == 0;

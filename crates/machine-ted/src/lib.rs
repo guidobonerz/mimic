@@ -90,6 +90,9 @@ use memory::{Area, Memory, Roms, TedView, ROM_SIZE};
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The CPU's banked view of memory.
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
+/// The RAM as it is behind the ROMs and the I/O area (the C16's 16 KB
+/// repeat through it).
+pub const RAM_SPACE: MemSpaceId = MemSpaceId(1);
 
 /// TED register names `$FF00–$FF1F`.
 const TED_REGS: [&str; 32] = [
@@ -454,6 +457,9 @@ pub const SLOT_CARTRIDGE: SlotId = SlotId(3);
 const PORT_NAMES: [&str; 2] = ["joystick 1", "joystick 2"];
 
 pub struct TedMachine {
+    /// The BASIC interpreter as the debugger sees it (derived from what
+    /// is mapped; not machine state).
+    basic: basic_dialects::cbm::CbmBasic,
     variant: Variant16,
     cpu: Cpu6502,
     port: IoPort,
@@ -564,6 +570,7 @@ impl TedMachine {
         });
         cpu.reset();
         Ok(Self {
+            basic: basic_dialects::cbm::CbmBasic::new(CPU_SPACE).with_ram(RAM_SPACE, 0),
             variant,
             cpu,
             port: IoPort::new(Variant::Mos7501.io_port_mask().unwrap_or(0xff)),
@@ -1022,6 +1029,13 @@ impl Machine for TedMachine {
         ted::gfx::views("TED")
     }
 
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
+    }
+
     /// The TED's views, read as the TED fetches (RAM, or ROM for
     /// character/bitmap data when `$FF12` bit 2 or option `rom` says so);
     /// addresses are CPU addresses.
@@ -1053,13 +1067,22 @@ impl Machine for TedMachine {
     }
 
     fn memory_spaces(&self) -> Vec<MemSpace> {
-        let mut spaces = vec![MemSpace {
-            id: CPU_SPACE,
-            name: "cpu",
-            device: CPU,
-            addr_bits: 16,
-            big_endian: false,
-        }];
+        let mut spaces = vec![
+            MemSpace {
+                id: CPU_SPACE,
+                name: "cpu",
+                device: CPU,
+                addr_bits: 16,
+                big_endian: false,
+            },
+            MemSpace {
+                id: RAM_SPACE,
+                name: "ram",
+                device: CPU,
+                addr_bits: 16,
+                big_endian: false,
+            },
+        ];
         if self.drive.as_ref().is_some_and(|d| d.is_true()) {
             spaces.push(MemSpace {
                 id: DRIVE_SPACE,
@@ -1147,6 +1170,16 @@ impl Machine for TedMachine {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    /// Text as key presses (upper-case letters; see [`keyboard::typed_events`]), with a pause behind RETURN for BASIC to take the line in.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            480_000,
+            keyboard::typed_events,
+        ))
     }
 
     fn controls(&self) -> Vec<emu_core::ControlInfo> {
@@ -1437,6 +1470,8 @@ impl Machine for TedMachine {
     }
 }
 
+basic_dialects::impl_basic_debug!(TedMachine, basic);
+
 impl DebugTarget for TedMachine {
     fn regs(&self) -> RegisterSet {
         self.cpu.regs()
@@ -1447,6 +1482,12 @@ impl DebugTarget for TedMachine {
     }
 
     fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
+        if space == RAM_SPACE {
+            return Some((0..size.bytes()).fold(0, |v, i| {
+                let a = (addr.wrapping_add(i) & 0xffff) as u16;
+                v | u32::from(self.mem.ram_read(a)) << (8 * i)
+            }));
+        }
         if space != CPU_SPACE {
             return None;
         }
@@ -1468,6 +1509,13 @@ impl DebugTarget for TedMachine {
 
     /// Pokes into ROM space write the RAM underneath, like the CPU does.
     fn poke(&mut self, space: MemSpaceId, addr: u32, size: Size, v: u32) -> bool {
+        if space == RAM_SPACE {
+            for i in 0..size.bytes() {
+                let a = (addr.wrapping_add(i) & 0xffff) as u16;
+                self.mem.ram_write(a, (v >> (8 * i)) as u8);
+            }
+            return true;
+        }
         if space != CPU_SPACE {
             return false;
         }

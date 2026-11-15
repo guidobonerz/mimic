@@ -33,6 +33,7 @@ pollster.workspace = true
 rfd.workspace = true
 wgpu.workspace = true
 winit.workspace = true
+arboard.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # AttachConsole for the terminal behind the GUI window (src/console.rs).

@@ -386,20 +386,22 @@ const fn b(row: u16, col: u16) -> u16 {
 /// PET keyboards by key label: each host key names the graphics and the
 /// business key with that label (see `machine-pet::keyboard`); the machine
 /// ignores the codes of the keyboard it does not have. Keypad keys map to
-/// the PC keypad; graphics-only symbols without a PC key of their own are
+/// the PC keypad (on the business keyboard the digits of the main row are
+/// the ones SHIFT turns into `!"#$%&'()`); graphics-only symbols without
+/// a PC key of their own are
 /// on Page Up (@) and Page Down (?).
 const PET_LABELLED: &[(&str, &[u16])] = &[
     ("Backquote", &[g(0, 5), b(9, 0)]), // ←
     ("Digit0", &[g(8, 6), b(1, 3)]),
-    ("Digit1", &[g(6, 6), b(8, 7)]),
-    ("Digit2", &[g(7, 6), b(7, 7)]),
-    ("Digit3", &[g(6, 7), b(6, 7)]),
-    ("Digit4", &[g(4, 6), b(5, 7)]),
-    ("Digit5", &[g(5, 6), b(2, 7)]),
-    ("Digit6", &[g(4, 7), b(3, 7)]),
-    ("Digit7", &[g(2, 6), b(1, 4)]),
-    ("Digit8", &[g(3, 6), b(0, 4)]),
-    ("Digit9", &[g(2, 7), b(1, 7)]),
+    ("Digit1", &[g(6, 6), b(1, 0)]),
+    ("Digit2", &[g(7, 6), b(0, 0)]),
+    ("Digit3", &[g(6, 7), b(9, 1)]),
+    ("Digit4", &[g(4, 6), b(1, 1)]),
+    ("Digit5", &[g(5, 6), b(0, 1)]),
+    ("Digit6", &[g(4, 7), b(9, 2)]),
+    ("Digit7", &[g(2, 6), b(1, 2)]),
+    ("Digit8", &[g(3, 6), b(0, 2)]),
+    ("Digit9", &[g(2, 7), b(9, 3)]),
     ("Minus", &[g(8, 7), b(0, 3)]),     // -
     ("Equal", &[g(9, 7)]),              // =
     ("Backspace", &[g(1, 7), b(4, 7)]), // DEL
@@ -441,7 +443,7 @@ const PET_LABELLED: &[(&str, &[u16])] = &[
     ("Semicolon", &[g(6, 4), b(2, 6)]),                   // ;
     ("Quote", &[g(5, 4), b(9, 5)]),                       // :
     ("Comma", &[g(7, 3), b(7, 3)]),                       // ,
-    ("Period", &[g(9, 6), b(6, 4)]),                      // .
+    ("Period", &[g(9, 6), b(6, 3)]),                      // .
     ("Slash", &[g(3, 7), b(8, 6)]),                       // /
     ("Enter", &[g(6, 5), b(3, 4)]),                       // RETURN
     ("NumpadEnter", &[g(6, 5), b(3, 4)]),                 // RETURN
@@ -453,16 +455,16 @@ const PET_LABELLED: &[(&str, &[u16])] = &[
     ("ArrowUp", &[g(8, 5), b(6, 6), g(1, 6), b(5, 4)]),   // SHIFT + CRSR DOWN
     ("ArrowLeft", &[g(8, 5), b(6, 6), g(0, 7), b(0, 5)]), // SHIFT + CRSR RIGHT
     ("Numpad0", &[g(8, 6), b(7, 4)]),
-    ("Numpad1", &[g(6, 6), b(1, 0)]),
-    ("Numpad2", &[g(7, 6), b(0, 0)]),
-    ("Numpad3", &[g(6, 7), b(9, 1)]),
-    ("Numpad4", &[g(4, 6), b(1, 1)]),
-    ("Numpad5", &[g(5, 6), b(0, 1)]),
-    ("Numpad6", &[g(4, 7), b(9, 2)]),
-    ("Numpad7", &[g(2, 6), b(1, 2)]),
-    ("Numpad8", &[g(3, 6), b(0, 2)]),
-    ("Numpad9", &[g(2, 7), b(9, 3)]),
-    ("NumpadDecimal", &[g(9, 6), b(6, 3)]),  // .
+    ("Numpad1", &[g(6, 6), b(8, 7)]),
+    ("Numpad2", &[g(7, 6), b(7, 7)]),
+    ("Numpad3", &[g(6, 7), b(6, 7)]),
+    ("Numpad4", &[g(4, 6), b(5, 7)]),
+    ("Numpad5", &[g(5, 6), b(2, 7)]),
+    ("Numpad6", &[g(4, 7), b(3, 7)]),
+    ("Numpad7", &[g(2, 6), b(1, 4)]),
+    ("Numpad8", &[g(3, 6), b(0, 4)]),
+    ("Numpad9", &[g(2, 7), b(1, 7)]),
+    ("NumpadDecimal", &[g(9, 6), b(6, 4)]),  // .
     ("NumpadSubtract", &[g(8, 7), b(0, 3)]), // -
     ("NumpadAdd", &[g(7, 7)]),               // +
     ("NumpadMultiply", &[g(5, 7)]),          // *

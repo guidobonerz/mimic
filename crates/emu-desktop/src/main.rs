@@ -730,6 +730,9 @@ struct App {
     swallow_i: bool,
     /// The D of a Ctrl+D is down; its release is not sent either.
     swallow_d: bool,
+    swallow_v: bool,
+    /// Text taken from the clipboard, waiting for Ctrl to go up.
+    pending_paste: Option<String>,
     /// The media side panel is open.
     side_open: bool,
     /// Its clickable areas and left edge (window pixels); width 0: none.
@@ -1073,7 +1076,33 @@ impl App {
         }
     }
 
-    fn panel_send(&self, id: u16, value: u8) {
+    /// Take the clipboard's text for the machine to type (Ctrl+V, PASTE).
+    /// It waits in `pending_paste` until Ctrl is up again: held down it
+    /// would turn the first characters into the machine's control codes.
+    fn paste_clipboard(&mut self) {
+        let text = arboard::Clipboard::new().and_then(|mut c| c.get_text());
+        match text {
+            Ok(text) if !text.is_empty() => self.pending_paste = Some(text),
+            Ok(_) => self.say("paste: the clipboard is empty"),
+            Err(e) => self.say(&format!("paste: {e}")),
+        }
+    }
+
+    /// Hand the text taken from the clipboard to the emulation thread.
+    fn send_paste(&mut self) {
+        if let Some(text) = self.pending_paste.take() {
+            if let Ok(mut p) = self.shared.paste.lock() {
+                *p = Some(text);
+            }
+        }
+    }
+
+    /// A line for the footer's status.
+    fn say(&self, text: &str) {
+        *self.shared.status.lock().unwrap_or_else(|p| p.into_inner()) = Some(text.into());
+    }
+
+    fn panel_send(&mut self, id: u16, value: u8) {
         if id == panel::PAUSE {
             // A press toggles; the release is nothing.
             if value != 0 {
@@ -1096,6 +1125,13 @@ impl App {
         if id == panel::SAVE_MAPPING {
             if value != 0 {
                 self.shared.save_mapping.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
+        if id == panel::PASTE {
+            if value != 0 {
+                self.paste_clipboard();
+                self.send_paste();
             }
             return;
         }
@@ -1319,6 +1355,9 @@ impl App {
             ));
         }
         controls.push(panel::save_mapping_control());
+        if self.shared.can_type.load(Ordering::Relaxed) {
+            controls.push(panel::paste_control());
+        }
         let mut items: Vec<panel::Item> = controls.iter().map(panel::Item::from).collect();
         if let Ok(cheats) = self.shared.cheats.lock() {
             items.extend(cheats.iter().enumerate().map(|(i, c)| panel::Item {
@@ -1738,6 +1777,26 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // Ctrl+V: the machine types the clipboard's text;
+                // Ctrl+Shift+V drops what is not typed yet.
+                if event.physical_key == PhysicalKey::Code(KeyCode::KeyV)
+                    && (self.ctrl || self.swallow_v)
+                {
+                    if event.state == ElementState::Pressed {
+                        if !event.repeat {
+                            if self.shift {
+                                self.pending_paste = None;
+                                self.shared.paste_cancel.store(true, Ordering::Relaxed);
+                            } else {
+                                self.paste_clipboard();
+                            }
+                        }
+                        self.swallow_v = true;
+                    } else {
+                        self.swallow_v = false;
+                    }
+                    return;
+                }
                 // Ctrl+D swaps the next disk into the first drive.
                 if event.physical_key == PhysicalKey::Code(KeyCode::KeyD)
                     && (self.ctrl || self.swallow_d)
@@ -1774,6 +1833,9 @@ impl ApplicationHandler for App {
                     _ => {}
                 }
                 self.ctrl = self.ctrl_left && !self.alt_gr;
+                if !self.ctrl_left {
+                    self.send_paste();
+                }
                 if let PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) =
                     event.physical_key
                 {
@@ -2227,6 +2289,8 @@ fn run() -> Result<(), String> {
         swallow_arrow: false,
         swallow_i: false,
         swallow_d: false,
+        swallow_v: false,
+        pending_paste: None,
         side_open: st.media_panel,
         side_hits: Vec::new(),
         side_left: 0.0,

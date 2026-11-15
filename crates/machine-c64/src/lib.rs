@@ -137,6 +137,9 @@ pub const RAM_SPACE: MemSpaceId = MemSpaceId(1);
 pub const COLOR_SPACE: MemSpaceId = MemSpaceId(2);
 /// The REU's memory (`options["reu"]`), 24-bit addresses.
 pub const REU_SPACE: MemSpaceId = MemSpaceId(4);
+/// The cartridge's ROM as it would answer /ROML (`$8000`–`$9FFF`) and
+/// /ROMH (`$A000`–`$BFFF`, `$E000`–`$FFFF`) now, whatever its lines say.
+pub const CART_SPACE: MemSpaceId = MemSpaceId(5);
 
 /// VIC-II register names $D000–$D02E (C64 Programmer's Reference Guide).
 const VIC_REGS: [&str; 47] = [
@@ -723,7 +726,9 @@ impl C64 {
         let mem = Memory::new(load_roms(config)?);
         let fastload = fastload && fastload::kernal_matches(&mem.roms.kernal[..]);
         let mut m = Self {
-            basic: basic_dialects::cbm::CbmBasic::new(CPU_SPACE),
+            basic: basic_dialects::cbm::CbmBasic::new(CPU_SPACE)
+                .with_ram(RAM_SPACE, 0)
+                .with_cartridge(CART_SPACE),
             cpu,
             mem,
             io: Io::new(vic, cia, sid),
@@ -1408,6 +1413,9 @@ impl Machine for C64 {
         if self.reu.is_some() {
             spaces.push(space(REU_SPACE, "reu", 24));
         }
+        if self.cart.cart().is_some() {
+            spaces.push(space(CART_SPACE, "cartridge", 16));
+        }
         if self.drive.as_ref().is_some_and(|d| d.is_true()) {
             spaces.push(MemSpace {
                 id: DRIVE_SPACE,
@@ -1544,6 +1552,16 @@ impl Machine for C64 {
 
     fn now(&self) -> Cycle {
         self.sched.now()
+    }
+
+    /// Text as key presses (upper-case letters; see [`keyboard::typed_events`]), with a pause behind RETURN for BASIC to take the line in.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        Some(emu_core::input::typed_lines(
+            text,
+            start,
+            240_000,
+            keyboard::typed_events,
+        ))
     }
 
     fn controls(&self) -> Vec<emu_core::ControlInfo> {
@@ -2086,6 +2104,16 @@ impl DebugTarget for C64 {
                     .reu
                     .as_ref()
                     .map(|r| u32::from(r.ram()[a as usize % r.size()])),
+                CART_SPACE => {
+                    let cart = self.cart.cart()?;
+                    let a = (a & 0xffff) as u16;
+                    let byte = match a {
+                        0x8000..=0x9fff => cart.peek_roml(a),
+                        0xa000..=0xbfff | 0xe000..=0xffff => cart.peek_romh(a),
+                        _ => None,
+                    };
+                    Some(u32::from(byte.unwrap_or(0xff)))
+                }
                 _ => None,
             }
         };
