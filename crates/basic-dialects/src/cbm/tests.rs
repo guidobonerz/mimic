@@ -1075,3 +1075,171 @@ mod extension {
         assert!(!new().rescan(&p).unwrap().ext.unwrap().in_cart);
     }
 }
+
+/// Applesoft: the same interpreter with its own tokens, ASCII text, LIST's
+/// blanks and a stack that ends at `$01F8`.
+mod applesoft {
+    use super::*;
+
+    const WORDS: &[&str] = &[
+        "END", "FOR", "NEXT", "DATA", "INPUT", "DEL", "DIM", "READ", "GR", "TEXT", "PR#", "IN#",
+        "CALL", "PLOT", "HLIN", "VLIN", "HGR2", "HGR", "HCOLOR=", "HPLOT", "DRAW", "XDRAW", "HTAB",
+        "HOME", "ROT=", "SCALE=", "SHLOAD", "TRACE", "NOTRACE", "NORMAL", "INVERSE", "FLASH",
+        "COLOR=", "POP", "VTAB", "HIMEM:", "LOMEM:", "ONERR", "RESUME", "RECALL", "STORE",
+        "SPEED=", "LET", "GOTO", "RUN", "IF", "RESTORE", "&", "GOSUB", "RETURN", "REM", "STOP",
+        "ON", "WAIT", "LOAD", "SAVE", "DEF", "POKE", "PRINT", "CONT", "LIST", "CLEAR", "GET",
+        "NEW", "TAB(", "TO", "FN", "SPC(", "THEN", "AT", "NOT", "STEP", "+", "-", "*", "/", "^",
+    ];
+    const GOSUB: u8 = 0xb0;
+    const REM: u8 = 0xb2;
+    const RETURN: u8 = 0xb1;
+    const PRINT: u8 = 0xba;
+    const POWER: u8 = 0xcc;
+
+    /// ```text
+    /// 10 GOSUB 100:REM A:B
+    /// 20 PRINT "a^b"^2
+    /// 100 RETURN
+    /// ```
+    fn machine() -> Mem {
+        let mut m = Mem {
+            ram: vec![0; 0x10000],
+            sp: 0xff,
+            rom_on: true,
+        };
+        let mut table = Vec::new();
+        for k in WORDS {
+            table.extend(k.bytes());
+            *table.last_mut().unwrap() |= 0x80;
+        }
+        table.push(0);
+        m.put(0xd0d0, &table);
+        // NEWSTT reads the text; the loop with the branch behind its JMP.
+        m.put(0xd7e5, &[0xa0, 0x00, 0xb1, 0xb8]);
+        m.put(
+            0xd81d,
+            &[
+                0x20, 0xb1, 0x00, 0x20, 0x28, 0xd8, 0x4c, 0xd2, 0xd7, 0xf0, 0x62,
+            ],
+        );
+        let lines: [(u16, Vec<u8>); 3] = [
+            (10, [&[GOSUB][..], b"100:", &[REM], b"A:B"].concat()),
+            (20, [&[PRINT][..], b"\"a^b\"", &[POWER], b"2"].concat()),
+            (100, vec![RETURN]),
+        ];
+        let mut at = 0x0801;
+        for (number, body) in lines {
+            let next = at + 4 + body.len() + 1;
+            m.word(at, next as u16);
+            m.word(at + 2, number);
+            m.put(at + 4, &body);
+            at = next;
+        }
+        let vartab = at + 2;
+        m.put(vartab, &[b'S', b'1' | 0x80, 3, 0xfd, 0x95, 0, 0]);
+        m.put(0x95fd, b"a~b");
+        for (zp, v) in [
+            (0x67, 0x0801),
+            (0x69, vartab),
+            (0x6b, vartab + 7),
+            (0x6d, vartab + 7),
+            (0x6f, 0x95fd),
+        ] {
+            m.word(zp, v as u16);
+        }
+        m.word(0x75, 0xff00);
+        m.word(0xb8, 0x0200);
+        m
+    }
+
+    fn decoder(m: &Mem) -> CbmBasic {
+        CbmBasic::new(SPACE)
+            .scan_from(0xd000)
+            .rescan(m)
+            .expect("Applesoft found")
+    }
+
+    #[test]
+    fn found_with_its_own_zero_page_and_tokens() {
+        let m = machine();
+        let basic = decoder(&m);
+        let rom = basic.rom.as_ref().unwrap();
+        assert_eq!(
+            (rom.dispatch, rom.txttab, rom.txtptr, rom.gosub, rom.rem),
+            (0xd81d, 0x67, 0xb8, GOSUB, REM)
+        );
+        assert!(rom.apple);
+        assert_eq!(rom.keywords.last().map(String::as_str), Some("^"));
+        assert_eq!(basic.info().dialect, "Applesoft BASIC");
+        assert_eq!(basic.state(&m).mode, BasicMode::Direct);
+    }
+
+    #[test]
+    fn the_listing_is_lists() {
+        let m = machine();
+        let p = decoder(&m).program(&m);
+        // A blank before and behind every keyword; no split behind REM.
+        assert_eq!(p[0].text, " GOSUB 100: REM A:B");
+        assert_eq!(p[0].statements, [0, 11]);
+        // ASCII as it is; the colon-free string keeps its lower case.
+        assert_eq!(p[1].text, " PRINT \"a^b\" ^ 2");
+        assert_eq!(p[2].text, " RETURN ");
+    }
+
+    #[test]
+    fn strings_are_ascii() {
+        let mut m = machine();
+        let basic = decoder(&m);
+        let vars = basic.variables(&m);
+        assert_eq!(vars[0].name, "S1$");
+        assert_eq!(vars[0].value, Some(BasicValue::Str("a~b".into())));
+        let writes = basic
+            .plan_set(&m, "S1$", None, &BasicValue::Str("x|z".into()))
+            .unwrap();
+        for (addr, byte) in writes {
+            m.ram[addr as usize] = byte;
+        }
+        assert_eq!(
+            basic.variables(&m)[0].value,
+            Some(BasicValue::Str("x|z".into()))
+        );
+        assert_eq!(
+            basic.plan_set(&m, "S1$", None, &BasicValue::Str("äöü".into())),
+            Err(BasicError::OutOfRange)
+        );
+    }
+
+    #[test]
+    fn a_gosub_frame_below_the_stack_reset_to_f8() {
+        let mut m = machine();
+        let basic = decoder(&m);
+        let l10 = basic.program(&m)[0].addr as u16;
+        let l100 = basic.program(&m)[2].addr as u16;
+        // Halted at line 100's stop point, called from line 10: the frame
+        // (token, CURLIN, TXTPTR), above it the loop's return address.
+        m.put(0x1f2, &[GOSUB, 10, 0]);
+        m.word(0x1f5, l10 + 8);
+        m.word(0x1f7, 0xd822);
+        m.sp = 0xf1;
+        m.word(0x75, 100);
+        m.word(0xb8, l100 + 3);
+        let s = basic.state(&m);
+        assert_eq!((s.mode, s.depth), (BasicMode::Running, 1));
+        assert_eq!(
+            s.pos,
+            Some(BasicPos {
+                line: 100,
+                statement: 0
+            })
+        );
+        assert_eq!(
+            basic.stack(&m),
+            [BasicFrame::Gosub {
+                from: BasicPos {
+                    line: 10,
+                    statement: 0
+                }
+            }]
+        );
+    }
+}

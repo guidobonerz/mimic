@@ -329,6 +329,8 @@ pub struct Zx81 {
     tape: PTape,
     /// T-state of the last field boundary (VSYNC end or forced).
     last_field: u64,
+    /// The BASIC debugger's decoder (found again from the ROM, not state).
+    basic: basic_dialects::sinclair::Sinclair,
 }
 
 /// Without a VSYNC for this long (a field and a half) the picture is
@@ -394,6 +396,7 @@ impl Zx81 {
             traps,
             tape: PTape::default(),
             last_field: 0,
+            basic: basic_dialects::sinclair::Sinclair::zx81(CPU_SPACE),
         };
         m.cpu.reset();
         Ok(m)
@@ -665,6 +668,13 @@ impl Machine for Zx81 {
         }]
     }
 
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
+    }
+
     fn chips(&self) -> Vec<ChipInfo> {
         let u = &self.ula;
         let reg = |name, value: u32, bits| ChipReg {
@@ -818,6 +828,8 @@ impl DebugTarget for Zx81 {
             .disassemble(&PeekBus(&self.mem, &self.ula, &self.keys), addr)
     }
 }
+
+basic_dialects::impl_basic_debug!(Zx81, basic);
 
 #[cfg(test)]
 mod tests;

@@ -104,13 +104,37 @@
 //! known: the ROM's frames come first, then EXEC, REPEAT and LOOP, each
 //! innermost first.
 //!
+//! # Applesoft
+//!
+//! Applesoft BASIC (Apple II+, IIe) is the same Microsoft BASIC and is
+//! decoded here too ([`CbmBasic::new`] with `scan_from($D000)`); it is
+//! told by its keyword `HIMEM:`. What differs:
+//!
+//! - the statement loop has a branch between its second `JSR` and the
+//!   routine it calls (`JSR CHRGET : JSR EXECUTE : JMP NEWSTT : BEQ … :
+//!   EXECUTE`), and TXTTAB is `$51` below TXTPTR, not `$4F` (`$67`, `$B8`;
+//!   CURLIN `$75` is TXTTAB + `$0E` as everywhere);
+//! - the tokens are others (GOSUB `$B0`, REM `$B2`): both are taken from
+//!   their place in the keyword table, for every version;
+//! - the text is ASCII, and the listing is LIST's: every byte from `$80`
+//!   is a keyword, also inside quotes, and is shown with a blank before
+//!   and behind it (the tokeniser drops the blanks typed);
+//! - CLEAR sets the stack pointer to `$F8`, so the frames end below
+//!   `$01F9`.
+//!
+//! Variables, arrays, floats and the GOSUB and FOR frames are those of
+//! BASIC V2, including the statement loop's return address above a GOSUB
+//! frame.
+//!
 //! Sources: Sheldon Leemon, "Mapping the Commodore 64" (zero page, stack
 //! frames, variable formats); the PET memory maps in Raeto West,
 //! "Programming the PET/CBM"; for BASIC 3.5 and 7.0 the layout was read
 //! from the machines' own ROMs (statement loop, GOSUB, FOR, DO and CLR
 //! routines), for Simons' BASIC and TSB from the user's disk images of them
-//! (vector setup, statement handler, dispatch table, REPEAT/LOOP/EXEC).
-//! No emulator source was used.
+//! (vector setup, statement handler, dispatch table, REPEAT/LOOP/EXEC),
+//! for Applesoft from the user's Apple II+ ROM (NEWSTT `$D7D2`, LIST
+//! `$D6DA`, GOSUB `$D921`, the stack reset `$D683`, the keyword table
+//! `$D0D0`). No emulator source was used.
 
 use emu_core::basic::{
     BasicError, BasicFrame, BasicGranularity, BasicInfo, BasicLine, BasicMode, BasicPos,
@@ -154,6 +178,12 @@ struct Rom {
     stack: Stack,
     keywords_at: u16,
     keywords: Vec<String>,
+    /// The tokens of REM and GOSUB, by their place in the table.
+    rem: u8,
+    gosub: u8,
+    /// Applesoft: ASCII text, LIST's blanks around keywords, the stack
+    /// reset to `$F8`.
+    apple: bool,
     /// BASIC 7.0: the words of the tokens `$FE nn` and `$CE nn`, from
     /// `nn` = 2.
     fe: Vec<String>,
@@ -310,6 +340,30 @@ fn push_petscii(out: &mut String, b: u8) {
     }
 }
 
+/// ASCII (Applesoft); what is not printable becomes `{$xx}`.
+fn push_ascii(out: &mut String, b: u8) {
+    match b {
+        0x20..=0x7e => out.push(char::from(b)),
+        _ => out.push_str(&format!("{{${b:02x}}}")),
+    }
+}
+
+fn push_char(out: &mut String, b: u8, ascii: bool) {
+    if ascii {
+        push_ascii(out, b);
+    } else {
+        push_petscii(out, b);
+    }
+}
+
+fn char_from(c: char, ascii: bool) -> Option<u8> {
+    if ascii {
+        (' '..='~').contains(&c).then_some(c as u8)
+    } else {
+        petscii_from(c)
+    }
+}
+
 fn petscii_from(c: char) -> Option<u8> {
     Some(match c {
         ' '..='Z' => c as u8,
@@ -381,11 +435,11 @@ fn int16(value: &BasicValue) -> Result<i16, BasicError> {
     Ok(f as i16)
 }
 
-fn var_name(b0: u8, b1: u8, kind: VarKind) -> String {
+fn var_name(b0: u8, b1: u8, kind: VarKind, ascii: bool) -> String {
     let mut name = String::new();
     for c in [b0 & 0x7f, b1 & 0x7f] {
         if c != 0 {
-            push_petscii(&mut name, c);
+            push_char(&mut name, c, ascii);
         }
     }
     match kind {
@@ -500,15 +554,29 @@ impl View<'_> {
         let mut statements = vec![0];
         let mut colons = Vec::new();
         let (mut quote, mut rem) = (false, false);
+        let apple = self.rom.apple;
         let mut at = line.addr.wrapping_add(4);
         while at != line.end {
             let b = self.b(at);
             match b {
+                // Applesoft's LIST knows no quotes: a blank, the word, a
+                // blank.
+                0x80..=0xff if apple => {
+                    rem |= b == self.rom.rem && !quote;
+                    match self.rom.keywords.get(usize::from(b - 0x80)) {
+                        Some(k) => {
+                            text.push(' ');
+                            text.push_str(k);
+                            text.push(' ');
+                        }
+                        None => push_ascii(&mut text, b),
+                    }
+                }
                 b'"' => {
                     quote = !quote;
                     text.push('"');
                 }
-                0xff if !quote => text.push('π'),
+                0xff if !quote && !apple => text.push('π'),
                 TOKEN_EXT if !quote && self.ext.is_some() && at.wrapping_add(1) != line.end => {
                     at = at.wrapping_add(1);
                     let n = self.b(at);
@@ -546,7 +614,7 @@ impl View<'_> {
                     }
                 }
                 0x80..=0xfe if !quote => {
-                    rem |= b == TOKEN_REM;
+                    rem |= b == self.rom.rem;
                     match self.rom.keywords.get(usize::from(b - 0x80)) {
                         Some(k) => text.push_str(k),
                         None => push_petscii(&mut text, b),
@@ -557,7 +625,7 @@ impl View<'_> {
                     statements.push(text.len() as u32);
                     colons.push(at);
                 }
-                _ => push_petscii(&mut text, b),
+                _ => push_char(&mut text, b, apple),
             }
             at = at.wrapping_add(1);
         }
@@ -653,15 +721,17 @@ impl View<'_> {
             .or_else(|| self.host.regs().get("S"))
             .unwrap_or(0xff) as u16
             & 0xff;
+        // Where the frames end: the stack pointer CLR sets, plus 1.
+        let end = if self.rom.apple { 0x1f9 } else { 0x1fa };
         let chain = |start: u16| -> Option<Vec<RawFrame>> {
             let mut out = Vec::new();
             let mut p = start;
             loop {
-                if (0x1fa..=0x200).contains(&p) {
+                if (end..=0x200).contains(&p) {
                     return Some(out);
                 }
                 match self.b(p) {
-                    TOKEN_GOSUB if p + FRAME_GOSUB <= 0x200 => {
+                    t if t == self.rom.gosub && p + FRAME_GOSUB <= 0x200 => {
                         out.push(RawFrame::Gosub {
                             line: self.w(p + 1),
                             txt: self.w(p + 3),
@@ -699,7 +769,7 @@ impl View<'_> {
             let (b0, b1) = (self.vb(at), self.vb(at + 1));
             let kind = VarKind::of(b0, b1);
             if kind != VarKind::Function {
-                out.push((at, var_name(b0, b1, kind), kind));
+                out.push((at, var_name(b0, b1, kind, self.rom.apple), kind));
             }
             at += 7;
         }
@@ -726,7 +796,7 @@ impl View<'_> {
                 })
                 .collect();
             let array = Array {
-                name: var_name(b0, b1, kind),
+                name: var_name(b0, b1, kind, self.rom.apple),
                 kind,
                 addr: at,
                 data: at + header,
@@ -747,7 +817,7 @@ impl View<'_> {
         let (len, ptr) = (self.vb(at), self.vw(at.wrapping_add(1)));
         let mut s = String::new();
         for i in 0..u16::from(len) {
-            push_petscii(&mut s, self.vb(ptr.wrapping_add(i)));
+            push_char(&mut s, self.vb(ptr.wrapping_add(i)), self.rom.apple);
         }
         s
     }
@@ -780,7 +850,7 @@ impl View<'_> {
                 };
                 let bytes = s
                     .chars()
-                    .map(petscii_from)
+                    .map(|c| char_from(c, self.rom.apple))
                     .collect::<Option<Vec<u8>>>()
                     .ok_or(BasicError::OutOfRange)?;
                 // Only in place: the same length, and not a literal in
@@ -989,7 +1059,7 @@ fn find_ext(mem: &[u8], in_cart: bool, txtptr: u8) -> Option<Ext> {
                 .collect();
             ("Simons' BASIC", list)
         }
-        [0xd3, _] => ("TSB", words(&mem[at..], 0x7f).0),
+        [0xd3, _] => ("TSB", words(&mem[at..], 0x7f, false).0),
         _ => return None,
     };
     // The statement dispatch: LDA table+1,Y : PHA : LDA table,Y : PHA : RTS.
@@ -1039,7 +1109,7 @@ fn find_ext(mem: &[u8], in_cart: bool, txtptr: u8) -> Option<Ext> {
 
 /// A keyword table: words that end with bit 7 set, up to a 0. Returns
 /// them and the bytes they take.
-fn words(mem: &[u8], max: usize) -> (Vec<String>, usize) {
+fn words(mem: &[u8], max: usize, ascii: bool) -> (Vec<String>, usize) {
     let mut out = Vec::new();
     let mut word = String::new();
     let mut used = 0;
@@ -1048,7 +1118,7 @@ fn words(mem: &[u8], max: usize) -> (Vec<String>, usize) {
             break;
         }
         used += 1;
-        push_petscii(&mut word, b & 0x7f);
+        push_char(&mut word, b & 0x7f, ascii);
         if b & 0x80 != 0 {
             out.push(std::mem::take(&mut word));
         }
@@ -1056,9 +1126,9 @@ fn words(mem: &[u8], max: usize) -> (Vec<String>, usize) {
     (out, used)
 }
 
-/// The statement loop of BASIC 1.0 to 4.0 and V2: (index of the loop,
-/// TXTTAB, TXTPTR).
-fn loop_v2(mem: &[u8], addr: impl Fn(usize) -> u16) -> Option<(usize, u16, u16)> {
+/// The statement loop of BASIC 1.0 to 4.0, V2 and Applesoft: (index of
+/// the loop, TXTPTR).
+fn loop_v2(mem: &[u8], addr: impl Fn(usize) -> u16) -> Option<(usize, u16)> {
     let word = |i: usize| u16::from_le_bytes([mem[i], mem[i + 1]]);
     (0x80..mem.len().saturating_sub(9)).find_map(|i| {
         let w = &mem[i..i + 9];
@@ -1066,7 +1136,8 @@ fn loop_v2(mem: &[u8], addr: impl Fn(usize) -> u16) -> Option<(usize, u16, u16)>
         let back = usize::from(here.wrapping_sub(word(i + 7)));
         let fits = w[0] == 0x20
             && w[3] == 0x20
-            && word(i + 4) == here.wrapping_add(9)
+            // Right behind the loop; Applesoft has a branch between.
+            && [9, 11].contains(&word(i + 4).wrapping_sub(here))
             && w[6] == 0x4c
             && (1..0x80).contains(&back);
         if !fits {
@@ -1077,8 +1148,7 @@ fn loop_v2(mem: &[u8], addr: impl Fn(usize) -> u16) -> Option<(usize, u16, u16)>
             .windows(4)
             .find(|c| c[..3] == [0xa0, 0x00, 0xb1])
             .map(|c| u16::from(c[3]))?;
-        // CHRGET is 7 bytes before TXTPTR, TXTTAB $48 before CHRGET.
-        Some((i, txtptr.checked_sub(0x4f)?, txtptr))
+        Some((i, txtptr))
     })
 }
 
@@ -1133,20 +1203,6 @@ fn find(host: &dyn DebugTarget, space: MemSpaceId, base: u16) -> Option<Rom> {
         .map(|a| peek(host, space, a as u32))
         .collect();
     let addr = |i: usize| (base + i) as u16;
-    let (dispatch, txttab, txtptr, stack) = match loop_v2(&mem, addr) {
-        Some((loop_at, txttab, txtptr)) => {
-            let dispatch = if mem[loop_at - 3..loop_at] == [0x6c, 0x08, 0x03] {
-                loop_at - 3
-            } else {
-                loop_at
-            };
-            let stack = Stack::Cpu {
-                gone_return: addr(loop_at).wrapping_add(5),
-            };
-            (dispatch, txttab, txtptr, stack)
-        }
-        None => loop_v35(&mem)?,
-    };
     const HEAD: &[u8] = &[
         b'E',
         b'N',
@@ -1160,16 +1216,43 @@ fn find(host: &dyn DebugTarget, space: MemSpaceId, base: u16) -> Option<Rom> {
         b'T' | 0x80,
     ];
     let table = mem.windows(HEAD.len()).position(|w| w == HEAD)?;
-    let (keywords, used) = words(&mem[table..], 0x7f);
+    let apple = mem[table..]
+        .windows(6)
+        .take(0x200)
+        .any(|w| w == [b'H', b'I', b'M', b'E', b'M', b':' | 0x80]);
+    let (dispatch, txttab, txtptr, stack) = match loop_v2(&mem, addr) {
+        Some((loop_at, txtptr)) => {
+            // CHRGET is 7 bytes before TXTPTR, TXTTAB $48 before CHRGET
+            // (Applesoft: $4A).
+            let txttab = txtptr.checked_sub(if apple { 0x51 } else { 0x4f })?;
+            let dispatch = if mem[loop_at - 3..loop_at] == [0x6c, 0x08, 0x03] {
+                loop_at - 3
+            } else {
+                loop_at
+            };
+            let stack = Stack::Cpu {
+                gone_return: addr(loop_at).wrapping_add(5),
+            };
+            (dispatch, txttab, txtptr, stack)
+        }
+        None => loop_v35(&mem)?,
+    };
+    let (keywords, used) = words(&mem[table..], 0x7f, apple);
+    let token = |word: &str, default: u8| {
+        keywords
+            .iter()
+            .position(|k| k == word)
+            .map_or(default, |i| 0x80 + i as u8)
+    };
     // BASIC 7.0: the tables of the $FE and the $CE tokens follow.
     let (mut fe, mut ce) = (Vec::new(), Vec::new());
     if let Some(rest) = mem.get(table + used + 1..) {
-        let (second, used) = words(rest, 0xfe);
+        let (second, used) = words(rest, 0xfe, false);
         if second.first().is_some_and(|w| w == "BANK") {
             fe = second;
             ce = rest
                 .get(used + 1..)
-                .map_or_else(Vec::new, |r| words(r, 0xfe).0);
+                .map_or_else(Vec::new, |r| words(r, 0xfe, false).0);
         }
     }
     Some(Rom {
@@ -1179,6 +1262,9 @@ fn find(host: &dyn DebugTarget, space: MemSpaceId, base: u16) -> Option<Rom> {
         txtptr,
         stack,
         keywords_at: addr(table),
+        rem: token("REM", TOKEN_REM),
+        gosub: token("GOSUB", TOKEN_GOSUB),
+        apple,
         keywords,
         fe,
         ce,
@@ -1196,7 +1282,9 @@ impl Dialect for CbmBasic {
                 .as_ref()
                 .is_some_and(|r| r.keywords.iter().any(|k| k == word))
         };
-        let dialect = if self.rom.is_none() {
+        let dialect = if self.rom.as_ref().is_some_and(|r| r.apple) {
+            "Applesoft BASIC"
+        } else if self.rom.is_none() {
             "Commodore BASIC"
         } else if self.rom.as_ref().is_some_and(|r| !r.fe.is_empty()) {
             "Commodore BASIC 7.0"
@@ -1366,7 +1454,7 @@ impl Dialect for CbmBasic {
                     let (b0, b1) = (v.vb(entry), v.vb(entry.wrapping_add(1)));
                     let magnitude = float_value(step, false);
                     BasicFrame::For {
-                        var: var_name(b0, b1, VarKind::of(b0, b1)),
+                        var: var_name(b0, b1, VarKind::of(b0, b1), v.rom.apple),
                         limit: BasicValue::Float(float_value(limit, true)),
                         step: BasicValue::Float(if sign & 0x80 != 0 {
                             -magnitude

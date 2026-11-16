@@ -49,8 +49,8 @@ pub mod keys {
     ];
 }
 
-/// Key and SHIFT for a character (UK layout; letters unshifted, which
-/// BASIC reads as well as capitals).
+/// Key and SHIFT for a character (UK layout; a capital letter with SHIFT,
+/// as the keyboard starts in lower case).
 pub fn key_for_char(c: char) -> Option<(MachineKey, bool)> {
     let plain = |k: u16| Some((MachineKey(k), false));
     let shifted = |k: u16| Some((MachineKey(k), true));
@@ -86,7 +86,8 @@ pub fn key_for_char(c: char) -> Option<(MachineKey, bool)> {
         })
     };
     if c.is_ascii_alphabetic() {
-        return letter(c.to_ascii_uppercase()).map(|k| (MachineKey(k), false));
+        // The keyboard starts in lower case: a capital takes SHIFT.
+        return letter(c.to_ascii_uppercase()).map(|k| (MachineKey(k), c.is_ascii_uppercase()));
     }
     match c {
         '1' => plain(k(8, 0)),
@@ -194,6 +195,7 @@ mod tests {
                 assert!(seen.insert((key.0, shift)), "{c:?} doubles a key");
             }
         }
-        assert_eq!(key_for_char('a'), key_for_char('A'));
+        let (small, capital) = (key_for_char('a').unwrap(), key_for_char('A').unwrap());
+        assert_eq!((small.0, small.1, capital.1), (capital.0, false, true));
     }
 }

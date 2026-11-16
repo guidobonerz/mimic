@@ -183,6 +183,14 @@ impl Memory {
         usize::from(self.paging >> 4 & 1).min(self.roms.len() - 1)
     }
 
+    /// Where `addr` is in the ROM space (the ROMs one behind the other),
+    /// if one of the machine's own ROMs answers there.
+    pub fn rom_at(&self, addr: u16) -> Option<u32> {
+        let own =
+            usize::from(addr) < ROM_SIZE && !self.mf_paged && !self.if1_paged && !self.beta_paged;
+        own.then(|| (self.rom_index() * ROM_SIZE) as u32 + u32::from(addr))
+    }
+
     /// The 48K BASIC ROM is paged in (with no expansion over it).
     pub fn basic_rom(&self) -> bool {
         !self.mf_paged

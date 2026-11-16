@@ -77,6 +77,10 @@ pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 /// All RAM by bank: the base 64 KB the Gate Array shows at 0–&FFFF, the
 /// 6128's extra banks 4–7 at &10000–&1FFFF.
 pub const RAM_SPACE: MemSpaceId = MemSpaceId(1);
+/// The ROMs one behind the other, 16 KB each: the OS, BASIC, and the disc
+/// ROM where fitted. Read-only; an execution breakpoint here hits only
+/// while that ROM is the one the Z80 runs from.
+pub const ROM_SPACE: MemSpaceId = MemSpaceId(2);
 
 /// Joystick 0 (the port) and joystick 1 (daisy-chained through it).
 pub const JOY0: PortId = PortId(0);
@@ -674,6 +678,8 @@ impl Bus for PeekBus<'_> {
 pub struct Cpc {
     /// `printer` option: the paper end of the printer port.
     printer: Option<Printer>,
+    /// The BASIC debugger's view of Locomotive BASIC (not machine state).
+    basic: basic_dialects::locomotive::Locomotive,
     model: Model,
     cpu: Z80,
     mem: Memory,
@@ -728,6 +734,7 @@ impl Cpc {
         let ram_kb = if model == Model::Cpc6128 { 128 } else { 64 };
         let mut m = Self {
             model,
+            basic: basic_dialects::locomotive::Locomotive::new(RAM_SPACE, ROM_SPACE),
             printer: Printer::from_config(config, devices_printer::Model::Fx80),
             cpu: Z80::new(),
             mem: Memory::new(load_roms(config, model)?, ram_kb),
@@ -891,6 +898,12 @@ impl Cpc {
             }
             if dbg.exec_armed(CPU_SPACE) {
                 dbg.check_exec(CPU_SPACE, next_pc);
+            }
+            if dbg.exec_armed(ROM_SPACE) {
+                let (lower, upper) = (self.io.ga.lower_rom(), self.io.ga.upper_rom());
+                if let Some(rom) = self.mem.rom_at(self.cpu.pc, lower, upper) {
+                    dbg.check_exec(ROM_SPACE, rom);
+                }
             }
             if dbg.raster_armed() {
                 let b = self.beam_pos();
@@ -1097,6 +1110,13 @@ impl Machine for Cpc {
                 addr_bits: self.mem.ram().len().trailing_zeros() as u8,
                 big_endian: false,
             },
+            MemSpace {
+                id: ROM_SPACE,
+                name: "rom",
+                device: CPU,
+                addr_bits: 16,
+                big_endian: false,
+            },
         ]
     }
 
@@ -1143,6 +1163,13 @@ impl Machine for Cpc {
             &ctx,
             opts,
         ))
+    }
+
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -1475,6 +1502,14 @@ impl DebugTarget for Cpc {
             }
             return Some(v);
         }
+        if space == ROM_SPACE {
+            let mut v = 0;
+            for i in 0..size.bytes() {
+                let b = self.mem.rom(addr.wrapping_add(i) as usize)?;
+                v |= u32::from(b) << (8 * i);
+            }
+            return Some(v);
+        }
         if space != CPU_SPACE {
             return None;
         }
@@ -1514,6 +1549,8 @@ impl DebugTarget for Cpc {
         self.cpu.disassemble(&PeekBus(&self.mem, &self.io), addr)
     }
 }
+
+basic_dialects::impl_basic_debug!(Cpc, basic);
 
 #[cfg(test)]
 mod tests;

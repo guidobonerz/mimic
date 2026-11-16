@@ -980,11 +980,27 @@ python tools/polydbg.py shell                  # interaktive Eingabe
 `type` (Protokoll 13: `type {text}`, `type_cancel`) tippt nur, während die
 Maschine läuft; `capabilities` meldet mit `"type"`, ob sie es kann.
 
-Der BASIC-Debugger (`basic …`) arbeitet auf C64, VIC-20, PET, C16, Plus/4
-und C128 (dort auch im C64-Modus): Er hält
+Der BASIC-Debugger (`basic …`) arbeitet auf C64, VIC-20, PET, C16, Plus/4,
+C128 (dort auch im C64-Modus), auf dem Apple II+ und IIe mit Applesoft
+(das Listing zeigt wie `LIST` ein Leerzeichen vor und hinter jedem
+Schlüsselwort; Integer BASIC des ersten Apple II noch nicht), auf dem
+TRS-80 Model I und III (Level II und Level I), auf MSX1/MSX2 mit einem
+echten BIOS (C-BIOS hat kein BASIC; `ELSE` und `'` zählen dort wie beim
+TRS-80 als eigene Anweisungen) und auf dem ZX81 und dem ZX Spectrum 48K,
+128K und +2 (auf dem Spectrum beginnt auch hinter `THEN` eine eigene
+Anweisung; Schleifen stehen dort nicht auf einem Stack, als offen gilt
+eine `FOR`-Variable, deren Wert die Grenze noch nicht überschritten hat;
+Variablennamen erscheinen in Großbuchstaben), auf dem Atari 400/800/XL/XE
+mit Atari BASIC (auch dort beginnt hinter `THEN` eine eigene Anweisung;
+eine Zeichenkette nimmt jede Länge bis zu ihrer `DIM`-Länge an) und auf dem
+CPC 464, 664 und 6128 mit Locomotive BASIC (offene `WHILE`-Schleifen stehen
+im Stack; `ELSE` und `'` zählen als eigene Anweisungen; eine Zeichenkette,
+die noch die Konstante im Programmtext ist, lässt sich nicht
+überschreiben): Er hält
 an BASIC-Zeilen und -Anweisungen, steppt zeilen- oder anweisungsweise, über
 ein GOSUB hinweg (`over`) oder aus ihm heraus (`out`) und zeigt und ändert
-Variablen. Zeichenketten lassen sich nur mit gleicher Länge überschreiben.
+Variablen. Zeichenketten lassen sich sonst nur mit gleicher Länge
+überschreiben.
 Auf dem C64 erkennt er die BASIC-Erweiterungen Simons' BASIC und TSB, wenn
 sie als Modul (CRT) eingesteckt sind: Ihre Befehle stehen im Listing, offene
 `REPEAT`- und `LOOP`-Schleifen im Stack, und ein `EXEC` zählt wie ein GOSUB.

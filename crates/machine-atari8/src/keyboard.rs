@@ -108,9 +108,10 @@ pub fn key_for_char(c: char) -> Option<(MachineKey, bool)> {
 /// Cycles a typed key stays down: two passes of POKEY's debounced scan
 /// (64 × 114 cycles each) plus margin.
 const TYPE_HOLD: u64 = 30_000;
-/// Gap to the next key; more than the OS's repeat delay for the same key
-/// (KEYDEL, 3 fields), so doubled letters register.
-const TYPE_GAP: u64 = 90_000;
+/// Gap to the next key: with the hold more than the OS's delay for the
+/// same key again (KEYDEL, 3 fields; 106,704 cycles on PAL) plus the time
+/// POKEY's scan takes to see the key, so doubled letters register.
+const TYPE_GAP: u64 = 120_000;
 
 /// Key events typing `text` from cycle `start`; returns them and the cycle
 /// after the last key.

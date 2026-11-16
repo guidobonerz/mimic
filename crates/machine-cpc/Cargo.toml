@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 devices-printer.workspace = true
 emu-core.workspace = true
+basic-dialects.workspace = true
 cpu-z80.workspace = true
 chips-amstrad.workspace = true
 drives-other.workspace = true

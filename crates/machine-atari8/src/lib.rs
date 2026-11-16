@@ -406,6 +406,8 @@ pub struct Atari8 {
     audio: Decimator,
     samples: Vec<i16>,
     field_done_pending: bool,
+    /// The BASIC debugger's view of Atari BASIC (not machine state).
+    basic: basic_dialects::atari::AtariBasic,
     /// `basic=off`: OPTION is held until this field.
     option_until: u64,
     basic_off: bool,
@@ -594,6 +596,7 @@ impl Atari8 {
             } else {
                 0
             },
+            basic: basic_dialects::atari::AtariBasic::new(CPU_SPACE),
             basic_off: basic_off && !model.is_old(),
             option_key: false,
             sio,
@@ -1202,6 +1205,13 @@ impl Machine for Atari8 {
         )
     }
 
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
+    }
+
     fn chips(&self) -> Vec<ChipInfo> {
         let io = &self.io;
         let a = &io.antic;
@@ -1694,6 +1704,8 @@ impl DebugTarget for Atari8 {
         self.cpu.disassemble(&PeekBus(&self.mem, &self.io), addr)
     }
 }
+
+basic_dialects::impl_basic_debug!(Atari8, basic);
 
 #[cfg(test)]
 mod tests;

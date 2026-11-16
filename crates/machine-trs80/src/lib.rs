@@ -254,6 +254,9 @@ pub struct Trs80 {
     timing: video::Timing,
     /// CPU clocks since power-on.
     sched: Scheduler,
+    /// The BASIC in ROM as the debugger sees it (derived from the ROM,
+    /// not machine state).
+    basic: Basic,
     input: InputQueue,
     /// Clock of the next field's start.
     next_field: u64,
@@ -339,6 +342,18 @@ impl Trs80 {
             m3: three.then(|| m3::Model3Io::new(CPU_HZ_III)),
             timing,
             sched: Scheduler::new(),
+            basic: if role == "level1" {
+                Basic::Level1(basic_dialects::level1::Level1::new(CPU_SPACE))
+            } else {
+                Basic::Level2(basic_dialects::msz80::Z80Basic::trs80(
+                    CPU_SPACE,
+                    if three {
+                        "TRS-80 Model III BASIC"
+                    } else {
+                        "TRS-80 Level II BASIC"
+                    },
+                ))
+            },
             input: InputQueue::new(),
             next_field: timing.t_per_field(),
             fields: 0,
@@ -607,6 +622,17 @@ impl Machine for Trs80 {
         }]
     }
 
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        let found = match &self.basic {
+            Basic::Level1(b) => b.rescan(&*self).map(Basic::Level1),
+            Basic::Level2(b) => b.rescan(&*self).map(Basic::Level2),
+        };
+        if let Some(found) = found {
+            self.basic = found;
+        }
+        Some(self)
+    }
+
     fn chips(&self) -> Vec<ChipInfo> {
         vec![ChipInfo {
             name: "io",
@@ -813,6 +839,74 @@ impl Machine for Trs80 {
         Ok(())
     }
 }
+
+/// The decoder of the BASIC in ROM.
+#[derive(Clone, Debug)]
+enum Basic {
+    Level1(basic_dialects::level1::Level1),
+    Level2(basic_dialects::msz80::Z80Basic),
+}
+
+impl Basic {
+    fn dialect(&self) -> &dyn basic_dialects::Dialect {
+        match self {
+            Basic::Level1(b) => b,
+            Basic::Level2(b) => b,
+        }
+    }
+}
+
+impl basic_dialects::Dialect for Basic {
+    fn space(&self) -> MemSpaceId {
+        self.dialect().space()
+    }
+
+    fn info(&self) -> emu_core::basic::BasicInfo {
+        self.dialect().info()
+    }
+
+    fn state(&self, host: &dyn DebugTarget) -> emu_core::basic::BasicState {
+        self.dialect().state(host)
+    }
+
+    fn program(&self, host: &dyn DebugTarget) -> Vec<emu_core::basic::BasicLine> {
+        self.dialect().program(host)
+    }
+
+    fn variables(&self, host: &dyn DebugTarget) -> Vec<emu_core::basic::BasicVar> {
+        self.dialect().variables(host)
+    }
+
+    fn array(
+        &self,
+        host: &dyn DebugTarget,
+        name: &str,
+        first: u32,
+        count: u32,
+    ) -> Result<Vec<emu_core::basic::BasicValue>, emu_core::basic::BasicError> {
+        self.dialect().array(host, name, first, count)
+    }
+
+    fn stack(&self, host: &dyn DebugTarget) -> Vec<emu_core::basic::BasicFrame> {
+        self.dialect().stack(host)
+    }
+
+    fn plan_set(
+        &self,
+        host: &dyn DebugTarget,
+        name: &str,
+        index: Option<u32>,
+        value: &emu_core::basic::BasicValue,
+    ) -> Result<Vec<(u32, u8)>, emu_core::basic::BasicError> {
+        self.dialect().plan_set(host, name, index, value)
+    }
+
+    fn stop_points(&self, host: &dyn DebugTarget) -> Vec<emu_core::basic::BasicStopPoint> {
+        self.dialect().stop_points(host)
+    }
+}
+
+basic_dialects::impl_basic_debug!(Trs80, basic);
 
 impl DebugTarget for Trs80 {
     fn regs(&self) -> RegisterSet {

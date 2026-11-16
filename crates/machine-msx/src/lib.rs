@@ -706,6 +706,9 @@ pub struct Msx {
     carts: [CartPort; 2],
     /// T-states since power-on.
     sched: Scheduler,
+    /// MSX BASIC as the debugger sees it (derived from what is mapped,
+    /// not machine state).
+    basic: basic_dialects::msz80::Z80Basic,
     input: InputQueue,
     field_done_pending: bool,
     /// Debug overlays switched on (kept over a power cycle) and whether
@@ -866,6 +869,14 @@ impl Msx {
             carts: mappers.map(CartPort::new),
             sched: Scheduler::new(),
             input: InputQueue::new(),
+            basic: basic_dialects::msz80::Z80Basic::msx(
+                CPU_SPACE,
+                if msx2 {
+                    "MSX BASIC 2.0"
+                } else {
+                    "MSX BASIC 1.0"
+                },
+            ),
             field_done_pending: false,
             overlay_ids: Vec::new(),
             overlay_fresh: false,
@@ -1220,6 +1231,13 @@ impl Machine for Msx {
         ]
     }
 
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
+    }
+
     fn chips(&self) -> Vec<ChipInfo> {
         let b = &self.board;
         let reg = |name, value: u32, bits| ChipReg {
@@ -1557,6 +1575,8 @@ impl Machine for Msx {
         Ok(())
     }
 }
+
+basic_dialects::impl_basic_debug!(Msx, basic);
 
 impl DebugTarget for Msx {
     fn regs(&self) -> RegisterSet {

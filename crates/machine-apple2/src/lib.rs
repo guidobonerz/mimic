@@ -654,6 +654,9 @@ pub struct Apple2 {
     palette: [Rgb8; 2],
     /// Debug overlay record (not machine state, see [`overlay`]).
     modes_rec: overlay::ModesRecord,
+    /// Applesoft as the debugger sees it (derived from what is mapped,
+    /// not machine state).
+    basic: basic_dialects::cbm::CbmBasic,
 }
 
 impl Apple2 {
@@ -781,6 +784,7 @@ impl Apple2 {
             input: InputQueue::new(),
             frame_done_pending: false,
             modes_rec: overlay::ModesRecord::default(),
+            basic: basic_dialects::cbm::CbmBasic::new(CPU_SPACE).scan_from(0xd000),
             palette: [
                 Rgb8 { r: 0, g: 0, b: 0 },
                 Rgb8 {
@@ -1058,6 +1062,13 @@ impl Machine for Apple2 {
             luma_chroma: None,
             signal: self.signal(),
         }
+    }
+
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
     }
 
     fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
@@ -1488,6 +1499,8 @@ impl Machine for Apple2 {
         Ok(())
     }
 }
+
+basic_dialects::impl_basic_debug!(Apple2, basic);
 
 impl DebugTarget for Apple2 {
     fn regs(&self) -> RegisterSet {

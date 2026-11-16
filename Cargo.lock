@@ -1323,6 +1323,7 @@ dependencies = [
  "machine-logophor16",
  "machine-mac",
  "machine-mega65",
+ "machine-msx",
  "machine-pet",
  "machine-snes",
  "machine-spectrum",
@@ -2215,6 +2216,7 @@ dependencies = [
 name = "machine-apple2"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-amstrad",
  "chips-cbm",
  "cpu-6502",
@@ -2248,6 +2250,7 @@ dependencies = [
 name = "machine-atari8"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-atari",
  "chips-cbm",
  "cpu-6502",
@@ -2321,6 +2324,7 @@ dependencies = [
 name = "machine-cpc"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-amstrad",
  "cpu-z80",
  "devices-input",
@@ -2398,6 +2402,7 @@ dependencies = [
 name = "machine-msx"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-amstrad",
  "chips-ti",
  "chips-yamaha",
@@ -2459,6 +2464,7 @@ dependencies = [
 name = "machine-spectrum"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-acorn",
  "chips-amstrad",
  "chips-sinclair",
@@ -2501,6 +2507,7 @@ dependencies = [
 name = "machine-trs80"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "cpu-z80",
  "drives-other",
  "emu-core",
@@ -2539,6 +2546,7 @@ dependencies = [
 name = "machine-zx81"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-sinclair",
  "cpu-z80",
  "emu-core",

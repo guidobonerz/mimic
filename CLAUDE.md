@@ -68,7 +68,7 @@ crates/
   emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
   emu-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends
   emu-cheats/      Cheat files with patches, POKE/VICE/code imports, CRC-32 database, memory search
-  basic-dialects/  BASIC interpreters' memory decoded for the BASIC debugger (program, variables, stack, stop points); Commodore BASIC so far; linked by the machines
+  basic-dialects/  BASIC interpreters' memory decoded for the BASIC debugger (program, variables, stack, stop points): Commodore BASIC and Applesoft, Microsoft's Z80 BASICs (TRS-80 Level II, MSX), TRS-80 Level I, Sinclair BASIC (ZX81, Spectrum), Atari BASIC, Locomotive BASIC (CPC); linked by the machines
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
   machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-bbc/  machine-mega65/  machine-nes/  machine-snes/  machine-vectrex/

@@ -11,7 +11,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod atari;
 pub mod cbm;
+pub mod level1;
+pub mod locomotive;
+pub mod msz80;
+pub mod sinclair;
 
 use emu_core::basic::{
     BasicError, BasicFrame, BasicInfo, BasicLine, BasicState, BasicStopPoint, BasicValue, BasicVar,

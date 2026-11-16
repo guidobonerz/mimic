@@ -10,5 +10,6 @@ workspace = true
 
 [dependencies]
 emu-core.workspace = true
+basic-dialects.workspace = true
 cpu-z80.workspace = true
 chips-sinclair.workspace = true

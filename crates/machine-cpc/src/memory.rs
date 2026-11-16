@@ -93,6 +93,32 @@ impl Memory {
         }
     }
 
+    /// The ROMs one behind the other, as the debugger's ROM space shows
+    /// them: the OS, BASIC, and the disc ROM where fitted.
+    pub fn rom(&self, addr: usize) -> Option<u8> {
+        let rom = match addr / ROM_SIZE {
+            0 => &self.roms.os,
+            1 => &self.roms.basic,
+            2 => self.roms.dos.as_ref()?,
+            _ => return None,
+        };
+        Some(rom[addr % ROM_SIZE])
+    }
+
+    /// Where in the ROM space the byte at `addr` comes from with these ROM
+    /// enables; `None` for RAM.
+    pub fn rom_at(&self, addr: u16, lower: bool, upper: bool) -> Option<u32> {
+        let offset = u32::from(addr & 0x3fff);
+        match addr >> 14 {
+            0 if lower => Some(offset),
+            3 if upper => Some(match (&self.roms.dos, self.upper) {
+                (Some(_), 7) => 2 * ROM_SIZE as u32 + offset,
+                _ => ROM_SIZE as u32 + offset,
+            }),
+            _ => None,
+        }
+    }
+
     /// A CPU read with the Gate Array's ROM enables.
     pub fn read(&self, addr: u16, lower: bool, upper: bool) -> u8 {
         match addr >> 14 {
@@ -178,6 +204,23 @@ mod tests {
         m.upper = 5;
         assert_eq!(m.read(0xc000, true, true), 2, "empty slot: BASIC");
         assert_eq!(m.read(0xc000, true, false), 8);
+        // The same in the ROM space.
+        assert_eq!(m.rom_at(0x0005, true, true), Some(5));
+        assert_eq!(m.rom_at(0x0005, false, true), None);
+        assert_eq!(m.rom_at(0x4005, true, true), None);
+        assert_eq!(
+            m.rom_at(0xc005, true, true),
+            Some(0x4005),
+            "empty slot: BASIC"
+        );
+        m.upper = 7;
+        assert_eq!(m.rom_at(0xc005, true, true), Some(0x8005));
+        assert_eq!(m.rom_at(0xc005, true, false), None);
+        assert_eq!(
+            (m.rom(0x3fff), m.rom(0x4000), m.rom(0x8000)),
+            (Some(1), Some(2), Some(3))
+        );
+        assert_eq!(m.rom(0xc000), None);
     }
 
     #[test]

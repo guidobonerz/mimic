@@ -556,6 +556,8 @@ pub struct Spectrum {
     autostart: bool,
     /// Autostart into TR-DOS: the next step and its frame.
     beta_run: (u8, u64),
+    /// The BASIC debugger's decoder (found again from the ROMs, not state).
+    basic: basic_dialects::sinclair::Sinclair,
 }
 
 /// Frame by which the ROMs are ready for input.
@@ -730,6 +732,7 @@ impl Spectrum {
             field_done_pending: false,
             autostart,
             beta_run: (0, 0),
+            basic: basic_dialects::sinclair::Sinclair::spectrum(CPU_SPACE, ROM_SPACE),
         })
     }
 
@@ -912,6 +915,12 @@ impl Spectrum {
             }
             if dbg.exec_armed(CPU_SPACE) {
                 dbg.check_exec(CPU_SPACE, next_pc);
+            }
+            // Breakpoints in one of the ROMs: only while it is paged in.
+            if dbg.exec_armed(ROM_SPACE) {
+                if let Some(rom) = self.mem.rom_at(self.cpu.pc) {
+                    dbg.check_exec(ROM_SPACE, rom);
+                }
             }
             if dbg.raster_armed() {
                 let b = self.beam_pos();
@@ -1155,6 +1164,13 @@ impl Machine for Spectrum {
             space(RAM_SPACE, "ram", 17),
             space(ROM_SPACE, "rom", 15),
         ]
+    }
+
+    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -1525,6 +1541,8 @@ impl DebugTarget for Spectrum {
         self.cpu.disassemble(&PeekBus(&self.mem), addr)
     }
 }
+
+basic_dialects::impl_basic_debug!(Spectrum, basic);
 
 #[cfg(test)]
 mod tests;

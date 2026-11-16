@@ -102,21 +102,21 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | VIC-20 | VICE `vic20-testlist.in` | 72/72 | 🟢 | screenshot entries not compared |
 | C16 / Plus/4 | VICE `plus4-testlist.in`, xplus4 traces and pictures | 12/12; FLI, palette, fetch pipeline pixel-equal | 🟡 | TED split (window writes), `flicnt` |
 | PET | VICE `pet-testlist.in` | 13/16 | 🟡 | `crtc3`, `crtc13` (references marked FIXME), `crtc10` (8296 behaviour) |
-| Atari 400/800/XL/XE | Acid800 | 57/57 (800XL, 130XE), 56/57 (800, correct), 56/56 (400) | 🟢 | – |
+| Atari 400/800/XL/XE | Acid800; BASIC debugger gate (`basic_debug`) | 57/57 (800XL, 130XE), 56/57 (800, correct), 56/56 (400) | 🟢 | – |
 | Atari 2600 | own TIA/RIOT tests, 24 games, Pitfall II | green | 🟡 | Supercharger, SECAM |
-| Amstrad CPC | Arnold acid tests (CRTC type 1) | 90/98 | 🟡 | PPI mode 1, VSYNC port read, `crtctest` R8 count (several fail on real CPCs too); CRTC 0 18/22, 2 18/23 |
+| Amstrad CPC | Arnold acid tests (CRTC type 1); BASIC debugger gate (`basic_debug`) | 90/98 | 🟡 | PPI mode 1, VSYNC port read, `crtctest` R8 count (several fail on real CPCs too); CRTC 0 18/22, 2 18/23 |
 | Amiga 500/1000/2000 (OCS) | WinUAE comparison, bus tests on a real A500 | 260/504; bus timing within 1.8 % | 🟡 | WinUAE rows, bus test 5 latency |
 | Amiga 500+ (ECS) | Kickstart 2.0/3.1 boot | insert-disk screen | 🟡 | programmable beam registers |
 | Amiga 1200 (AGA) | Kickstart 3.1 (40.068) and Workbench 3.1 boot from floppy, from an IDE hard disk and from a PCMCIA card (`amiga_boot`, 6 tests), bus tests on a real A1200 | Workbench desktop after 2100 frames (floppy), 400 (IDE, partition and RDB images; PCMCIA card CC0:); a blank PCMCIA SRAM card becomes fast RAM; bus timing within 4 %; AGA picture probes (`tools/amiga_agaprobe.py`) match photographs of the real A1200: scroll limit, BSCAN2/SSCAN2, BYPASS, when sprites show with wide fetches | 🟡 | the garbage of DDFSTRT ≡ $C mod 16 with high-resolution FMODE 3 (planes 1 and 3 lose their data on the real A1200) not built; no real HDF or PCMCIA card image tried |
-| ZX81 | boot, PRINT, .P files | works | 🟡 | no test suite |
-| ZX Spectrum 48K/128K/+2 | Fuse test | all pass | 🟢 | border timing beyond the Fuse test, SAVE to tape |
+| ZX81 | boot, PRINT, .P files; BASIC debugger gate (`basic_debug`) | works | 🟡 | no test suite |
+| ZX Spectrum 48K/128K/+2 | Fuse test; BASIC debugger gate (`basic_debug`) | all pass | 🟢 | border timing beyond the Fuse test, SAVE to tape |
 | ColecoVision | cartridge collection | 231/235 show a picture | 🟡 | TMS9918A reference pictures, VRAM timing |
-| MSX (MSX1, MSX2) | MSX BASIC 1.0 and 2.0, Disk BASIC and C-BIOS 0.29a (`msx_boot`, 12 tests), own stub BIOS and V9938 tests | BASIC computes, CSAVE/CLOAD through a CAS image, SAVE/LOAD on a disk, MSX-DOS 1.03 boots, a test cartridge calling the BIOS; one cartridge game (Championship Lode Runner), one cassette game (Afteroids) and one disk game (Colony) start; MSX2: MSX BASIC 2.0 starts, C-BIOS boots, one MSX2 disk game (Dokkin Minako Sensei!) runs, SCREEN 8 draws its 256 colours | 🟡 | more cartridges (Konami, SCC, battery RAM unchecked), more MSX2 software, the V9938 commands' speeds |
+| MSX (MSX1, MSX2) | MSX BASIC 1.0 and 2.0, Disk BASIC and C-BIOS 0.29a (`msx_boot`, 12 tests), own stub BIOS and V9938 tests; BASIC debugger gate (`basic_debug`) | BASIC computes, CSAVE/CLOAD through a CAS image, SAVE/LOAD on a disk, MSX-DOS 1.03 boots, a test cartridge calling the BIOS; one cartridge game (Championship Lode Runner), one cassette game (Afteroids) and one disk game (Colony) start; MSX2: MSX BASIC 2.0 starts, C-BIOS boots, one MSX2 disk game (Dokkin Minako Sensei!) runs, SCREEN 8 draws its 256 colours | 🟡 | more cartridges (Konami, SCC, battery RAM unchecked), more MSX2 software, the V9938 commands' speeds |
 | Robotron KC85/2, /3, /4, /5 | CAOS 2.2, 3.1, 4.2, 4.4 and HC-BASIC (`kc85_boot`, 3 tests), own stub ROM | all four boot to the CAOS menu; a typed BASIC program runs; LOAD reads a program from a cassette image and starts it | 🟡 | saving to tape, D004 floppy, real software, picture against hardware |
 | NES | nes-test-roms (blargg, nestest …) | 116/119 | 🟡 | `6-MMC3_alt`, `blargg_apu_2005` 10 and 11 |
 | SNES | Harte CPU sets, snes-tests (gilyon), PeterLemon's ROMs | snes-tests 3/3, PeterLemon 67/78, games run with sound, DSP-1 commands correct | 🟡 | mid-line register changes, input-driven PeterLemon pictures, coprocessors beyond the NEC DSPs |
 | Vectrex | executive, Mine Storm, Scramble | play | 🟡 | overlays, phosphor persistence |
-| Apple II / II+ / IIe | real ROMs, Zork I, test disks | all four boot | 🟡 | DOS 3.3/ProDOS, Mockingboard software, WOZ protections |
+| Apple II / II+ / IIe | real ROMs, Zork I, test disks; BASIC debugger gate on Applesoft (`basic_debug`) | all four boot; Applesoft programs are listed, stepped and inspected | 🟡 | DOS 3.3/ProDOS, Mockingboard software, WOZ protections; Integer BASIC (the ROM dump at hand is defective) |
 | Macintosh 128K–SE | real ROMs, test disk, System 6/7 | boot | 🟡 | 1.44 MB (SWIM), ADB handshake details |
 | Archimedes A310/A440 | RISC OS boot, ADFS | boots, reads discs | 🟡 | timing simplified, no podules/hard disc |
 | IMSAI 8080 | CP/M 2.2 from FIF floppy, card reader | boots | 🟡 | FIF interrupt jumper, 88-SIO status bits |
