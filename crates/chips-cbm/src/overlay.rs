@@ -1,4 +1,4 @@
-//! Shared pieces of the chips' debug overlays (see `emu_core::overlay`).
+//! Shared pieces of the chips' debug overlays (see `mimic_core::overlay`).
 //!
 //! A chip records what an overlay needs only while the overlay is switched
 //! on. The record lives in a [`Recorder`]: `None` when nothing is switched
@@ -7,7 +7,7 @@
 //! double-buffered per field so a view shows the last complete field below
 //! the beam and the field so far above it, as the frame buffer does.
 
-use emu_core::overlay::{colors, Shape};
+use mimic_core::overlay::{colors, Shape};
 
 /// A chip's overlay record, boxed so a switched-off recorder costs a null
 /// pointer. Equality ignores it: it is not machine state.

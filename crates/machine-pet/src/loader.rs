@@ -1,8 +1,8 @@
 //! Getting programs into the PET without a drive: the "program" media
 //! slot (PRG or T64), put into RAM at a frame boundary once BASIC is up.
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
 use media::{t64, Prg};
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot};
 
 /// Cycles after power-on before a program is injected: the editor
 /// reprograms the CRTC (frame length) during boot, so time is counted in

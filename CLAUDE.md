@@ -8,7 +8,7 @@ A cycle-accurate, multi-machine emulator for classic home computers — the whol
 
 ## Golden rules
 
-1. **Debugger and preview code must never import a `machine-*` crate.** They talk to `emu-core` traits only. If a feature seems to need machine knowledge, extend the trait (`capabilities`, `chips()`, `devices()`, `memory_spaces()`) instead.
+1. **Debugger and preview code must never import a `machine-*` crate.** They talk to `mimic-core` traits only. If a feature seems to need machine knowledge, extend the trait (`capabilities`, `chips()`, `devices()`, `memory_spaces()`) instead.
 2. **`peek` vs `read`:** `Bus::read` may have side effects (e.g. reading CIA ICR clears interrupts). The debugger, preview and any inspection code use `peek` exclusively. Every chip must implement a side-effect-free `peek`.
 3. **Determinism:** same inputs + same savestate ⇒ identical frames and cycle counts. No wall-clock time, no `HashMap` iteration order, no randomness without an explicit seeded RNG inside machine state. Tests rely on this.
 4. **Cycle granularity:** emulation advances per CPU cycle (and per DMA slot on the Amiga), not per instruction.
@@ -17,7 +17,7 @@ A cycle-accurate, multi-machine emulator for classic home computers — the whol
 7. **Licensing:** do not copy code from VICE, WinUAE, FS-UAE, vAmiga, Atari800, Caprice32 or Arnold (GPL/other). Use their documentation and observable behavior only.
 8. **Savestates for everything:** every chip/device struct implements state serialization from day one. A component without savestate support is not done.
 9. **CRT emulation is post-processing.** Machines output raw frames plus signal metadata; CRT/monitor effects run afterwards in `video-crt`. Regression tests and the debugger always compare/see raw frames. Exception: effects that change *what the guest can produce* (NTSC artifact colors, PAL delay-line color blending) are part of the optional composite signal path, still outside the machine crates.
-10. **Machines never see host devices.** No `gilrs`, `winit`, file-system or USB code inside `machine-*`, `chips-*` or `devices-*`. Host input and host storage enter only through the port/media abstractions in `emu-core` (see `docs/claude/devices.md`).
+10. **Machines never see host devices.** No `gilrs`, `winit`, file-system or USB code inside `machine-*`, `chips-*` or `devices-*`. Host input and host storage enter only through the port/media abstractions in `mimic-core` (see `docs/claude/devices.md`).
 
 ## Tech stack
 
@@ -32,7 +32,7 @@ A cycle-accurate, multi-machine emulator for classic home computers — the whol
 
 ```
 crates/
-  emu-core/        Traits (Cpu, Bus, Machine), scheduler, savestates, DebugHooks, FrameRef
+  mimic-core/        Traits (Cpu, Bus, Machine), scheduler, savestates, DebugHooks, FrameRef
   cpu-6502/        6502 family: 6502, 6510, 8502, 7501/8501, 6502C (SALLY), 2A03 (NES), CMOS 65C02 (Apple IIe) via variant flags
   cpu-45gs02/      MEGA65 45GS02 (4510/65CE02 core, MAP, flat [zp],Z, 32-bit Q instructions; C65 4510 as a speed)
   cpu-z80/         Z80 (C128, CPC, ZX81, Spectrum, MSX; internal T-states reported with their bus address for the Spectrum's contention)
@@ -61,13 +61,13 @@ crates/
   drives-other/    WD FD1771/FD1793 (TRS-80, TI-99/4A disk card, MSX), ATA/IDE hard disks (A1200), Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, MSX cassette, ZX Microdrives
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX, Kempston), light pens, keypads
   devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts, MSX ROMs with the MegaROM schemes, battery RAM and the Konami SCC sound chip; the battery RAM (`.srm`) slot
-  devices-net/     Devices that reach outside through emu-core::host: Ultimate 64 command interface (UCI), WiC64
-  devices-printer/ Printers: Epson FX-80, NEC P6+ and ImageWriter models with page pictures, Commodore bus end, output through emu-core::host
+  devices-net/     Devices that reach outside through mimic-core::host: Ultimate 64 command interface (UCI), WiC64
+  devices-printer/ Printers: Epson FX-80, NEC P6+ and ImageWriter models with page pictures, Commodore bus end, output through mimic-core::host
   media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR, MSX CAS, Amiga HDF (RDB), punched-card decks (.deck/.crd/.chx)
   media-backends/  Where media bytes come from: image file, copy-on-write overlay, host directory, real hardware
-  emu-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
-  emu-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends
-  emu-cheats/      Cheat files with patches, POKE/VICE/code imports, CRC-32 database, memory search
+  mimic-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
+  mimic-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends
+  mimic-cheats/      Cheat files with patches, POKE/VICE/code imports, CRC-32 database, memory search
   basic-dialects/  BASIC interpreters' memory decoded for the BASIC debugger (program, variables, stack, stop points): Commodore BASIC and Applesoft, Microsoft's Z80 BASICs (TRS-80 Level II, MSX), TRS-80 Level I, Sinclair BASIC (ZX81, Spectrum), Atari BASIC, Locomotive BASIC (CPC); linked by the machines
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
@@ -84,15 +84,15 @@ crates/
   machine-logophor16/ Logophor 16, the project's own fictional steampunk computer (spec: docs/logophor16/SPEC.md); ROM built from rom/ sources, shipped as a built-in profile
   machine-spectrum/ ZX Spectrum 48K, 128K, +2 as models: AY, tape traps, SNA/Z80, joysticks, Multiface 128, Interface 1 with Microdrives
   machine-sim6502/ Reference/test machine: 6502 + 64 KB RAM + minimal raster chip (not real hardware)
-  emu-machines/    Fills the machine registry; the only crate that links every machine-*
-  emu-debug/       Debug server: native protocol + adapter (VICE binary monitor)
-  emu-preview/     Frame encoders, snapshot endpoint, WebSocket stream, overlays
-  emu-desktop/  emu-web/  emu-headless/   Frontends
+  mimic-machines/    Fills the machine registry; the only crate that links every machine-*
+  mimic-debug/       Debug server: native protocol + adapter (VICE binary monitor)
+  mimic-preview/     Frame encoders, snapshot endpoint, WebSocket stream, overlays
+  mimic-desktop/  mimic-web/  mimic-headless/   Frontends
 tests/             Integration tests, reference frames, test-suite runners
 tools/             Python debug client, scripts
 ```
 
-Keep dependencies pointing downward: `machine-*` → `chips-*`/`cpu-*`/`basic-dialects` → `emu-core`. `emu-debug`/`emu-preview` depend on `emu-core` only (`emu-preview` may also use `video-crt`). Frontends pick machines via a registry in `emu-core`; the only machine-aware crate they may depend on is `emu-machines`, which registers all machines. `tools/check-deps.py` enforces these rules in CI — update its `RULES` table when adding a crate.
+Keep dependencies pointing downward: `machine-*` → `chips-*`/`cpu-*`/`basic-dialects` → `mimic-core`. `mimic-debug`/`mimic-preview` depend on `mimic-core` only (`mimic-preview` may also use `video-crt`). Frontends pick machines via a registry in `mimic-core`; the only machine-aware crate they may depend on is `mimic-machines`, which registers all machines. `tools/check-deps.py` enforces these rules in CI — update its `RULES` table when adding a crate.
 
 ## Core traits (contract — change deliberately)
 
@@ -123,17 +123,19 @@ pub trait Machine: Send {
     fn chips(&self) -> Vec<ChipInfo>;                   // register dumps for debugger views
     fn devices(&self) -> Vec<DeviceId>;                 // debug targets, main CPU first: "cpu", 1541, C128 Z80, Copper, Blitter
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget>; // regs, set_reg, peek/poke per MemSpace, disassemble
-    fn basic(&mut self) -> Option<&mut dyn BasicDebug> { None } // BASIC interpreter for the debugger: program, position, variables, stack, stop points (`emu-core::basic`)
+    fn basic(&mut self) -> Option<&mut dyn BasicDebug> { None } // BASIC interpreter for the debugger: program, position, variables, stack, stop points (`mimic-core::basic`)
     fn input(&mut self, ev: TimedInput);                // queued, applied exactly at ev.at (part of savestate)
     fn now(&self) -> Cycle;                             // master cycles since power-on, time base of TimedInput
-    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> { None } // key events that type text (paste, `type`); the caller queues them with input(), `emu-core::input::TextFeed` line by line
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> { None } // key events that type text (paste, `type`); the caller queues them with input(), `mimic-core::input::TextFeed` line by line
+    fn set_warp(&mut self, on: bool) {}                 // warp: the next frames are not looked at, the machine may leave out drawing them; everything a program can observe stays exact (not in the savestate)
+    fn paste_chars(&mut self, text: &str) -> Option<usize> { None } // pasted text straight into the OS's keyboard buffer (many times faster than keys); characters taken, None: no buffer, use typed_keys
     fn controls(&self) -> Vec<ControlInfo> { vec![] }    // console buttons/switches (power, reset, 2600 switches …) for panels
     fn ports(&self) -> Vec<PortInfo>;                   // physical connectors (see `docs/claude/devices.md`)
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError>;
     fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>>;
     fn media_slots(&self) -> Vec<MediaSlotInfo>;        // drive 8, DF0:, D1:, tape, cartridge port …
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot>;     // None for an unknown slot
-    fn attach_host(&mut self, host: HostServices) {}  // network + sandboxed folder (emu-core::host, in a Journal) for UCI/WiC64; PortDevice::attach_host likewise
+    fn attach_host(&mut self, host: HostServices) {}  // network + sandboxed folder (mimic-core::host, in a Journal) for UCI/WiC64; PortDevice::attach_host likewise
     fn save_state(&self) -> Vec<u8>;
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError>; // corrupt data never panics
 }
@@ -179,4 +181,4 @@ python tools/check-deps.py                   # dependency direction (golden rule
 ## When unsure
 
 - Accuracy questions: consult hardware docs (C64 Programmer's Reference, "VIC-II article" by Christian Bauer, Amiga Hardware Reference Manual, Altirra Hardware Reference, CPC CRTC docs) — not other emulators' source.
-- Architecture questions: prefer extending `emu-core` traits over special-casing in debugger/preview. Ask before changing a core trait signature.
+- Architecture questions: prefer extending `mimic-core` traits over special-casing in debugger/preview. Ask before changing a core trait signature.

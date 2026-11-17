@@ -19,7 +19,7 @@
 //! computes in double precision; the fixed-point formats are its
 //! interface.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::lithograph::ChipRamMut;
 

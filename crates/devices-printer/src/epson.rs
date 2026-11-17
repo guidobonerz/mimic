@@ -25,7 +25,7 @@
 //! skipped with their parameters where those are known, so a stream still
 //! prints.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 use noto_sans_mono_bitmap::{get_raster, get_raster_width, FontWeight, RasterHeight};
 
 const ESC: u8 = 0x1b;

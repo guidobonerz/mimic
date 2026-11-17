@@ -1,4 +1,4 @@
-//! Debug overlay of the Atari 2600 (see `emu_core::overlay`): where in the
+//! Debug overlay of the Atari 2600 (see `mimic_core::overlay`): where in the
 //! picture the program strobed the TIA's position registers (RESP0, RESP1,
 //! RESM0, RESM1, RESBL) and HMOVE in the last field. Recorded only while
 //! switched on; the record is debugger state, not machine state (not in
@@ -11,8 +11,8 @@
 //! blank is marked at column 0, like the beam position.
 
 use chips_atari::tia::{self, HMOVE, RESBL, RESM0, RESM1, RESP0, RESP1};
-use emu_core::frame::{Rgb8, VideoStandard};
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::frame::{Rgb8, VideoStandard};
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 pub const OBJECTS: &str = "objects";
 

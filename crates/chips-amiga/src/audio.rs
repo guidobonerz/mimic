@@ -23,7 +23,7 @@
 //! USE3VN/USE3PN only silence channel 3. The modulated channel plays as
 //! usual with the values written into it.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::chipram::ChipRam;
 

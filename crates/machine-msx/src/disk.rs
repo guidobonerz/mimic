@@ -32,7 +32,7 @@
 //! measured.
 
 use drives_other::wd17xx::{Chip, Drive, Fdc};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const DRIVES: usize = 2;
 /// The first of the interface's addresses, and of their repeat in page 2.
@@ -163,7 +163,7 @@ impl DiskInterface {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, MediaSlot};
+    use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, MediaSlot};
 
     struct Bytes(Vec<u8>);
 

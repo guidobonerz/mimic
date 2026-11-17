@@ -27,9 +27,9 @@ pub mod ffi;
 
 use std::collections::BTreeMap;
 
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
 use media::d64::{Format, SECTOR_SIZE};
 use media::D64;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind};
 
 /// The OpenCBM calls the drive layer needs (one method per library
 /// function, see [`ffi`]).

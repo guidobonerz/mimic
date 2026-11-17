@@ -9,7 +9,7 @@ changes from band to band, set by the Copper two lines before the band.
 Photograph the screen of the real machine; compare with
 
   python tools/amiga_winuae.py probe.adf winuae.png --shot 25 --model a1200
-  cargo run -p emu-headless -- --machine amiga --model 1200 --disk probe.adf --frames 600 --snapshot mimic.png
+  cargo run -p mimic-headless -- --machine amiga --model 1200 --disk probe.adf --frames 600 --snapshot mimic.png
 
 While it sets up, the CPU shows its progress in COLOR00: red (running,
 DMA off), yellow (planes filled), blue (sprite lists built), magenta

@@ -21,8 +21,8 @@
 //!
 //! [`VirtualDrive::tick`] is one microsecond.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaSlot};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaSlot};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 use crate::dos::VirtualDos;
 use crate::iec::IecLines;

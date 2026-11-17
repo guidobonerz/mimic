@@ -41,8 +41,8 @@ pub use prop_mouse::{PropMouse, PropMouseKind};
 pub use snes::{SnesController, SnesKind};
 pub use vectrex::{Imager, VectrexController, VectrexKind};
 
-use emu_core::port::{PortDevice, PortKind};
-use emu_core::registry::ConfigError;
+use mimic_core::port::{PortDevice, PortKind};
+use mimic_core::registry::ConfigError;
 
 /// The device a CBM control port option names: "joystick", "paddles",
 /// "mouse1351" (only where the port has POT lines, `analog`), the

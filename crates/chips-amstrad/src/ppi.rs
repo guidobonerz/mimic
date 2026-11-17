@@ -14,7 +14,7 @@
 //! on the CPC &2F (keyboard line 15, cassette out high, motor off, AY
 //! inactive; Arnold acid test `ppi`, `port_c_input`).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ppi {

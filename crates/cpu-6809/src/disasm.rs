@@ -1,6 +1,6 @@
 //! Disassembler (Motorola syntax). Reads with `M6809Bus::peek` only.
 
-use emu_core::{Flow, Instr};
+use mimic_core::{Flow, Instr};
 
 use crate::table::{self, Mode};
 use crate::M6809Bus;

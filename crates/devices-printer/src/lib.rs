@@ -25,11 +25,11 @@ pub mod epson;
 
 pub use epson::Model;
 
-use emu_core::host::{self, HostServices, OpenMode, SharedFiles};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::host::{self, HostServices, OpenMode, SharedFiles};
+use mimic_core::{StateError, StateReader, StateWriter};
 
-use emu_core::registry::MachineConfig;
 use epson::Epson;
+use mimic_core::registry::MachineConfig;
 
 /// Folder of the file host that takes the print jobs: frontends mount it.
 pub const FOLDER: &str = "/Printer";

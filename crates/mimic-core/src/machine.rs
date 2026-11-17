@@ -1,0 +1,309 @@
+//! The machine abstraction every frontend, debugger and preview talks to.
+
+use crate::audio::AudioFormat;
+use crate::beam::BeamPos;
+use crate::bus::Size;
+use crate::controls::ControlInfo;
+use crate::cpu::{Instr, RegisterSet};
+use crate::cycle::Cycle;
+use crate::debug::{BpId, DebugHooks};
+use crate::frame::{FrameRef, ScreenId, ScreenInfo};
+use crate::input::TimedInput;
+use crate::media::{MediaSlot, MediaSlotInfo, SlotId};
+use crate::port::{PortDevice, PortError, PortId, PortInfo};
+use crate::savestate::StateError;
+
+/// Identifies an address space of a machine (CPU view, chip RAM, drive RAM…).
+/// Small and dense: it indexes the per-space breakpoint bitmaps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MemSpaceId(pub u16);
+
+/// A debug target named after the hardware: `"cpu"`, `"drive8"`, `"z80"`,
+/// `"copper"`, `"blitter"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DeviceId(pub &'static str);
+
+/// Description of an address space for debugger memory views.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemSpace {
+    pub id: MemSpaceId,
+    pub name: &'static str,
+    /// The processor or chip this space belongs to.
+    pub device: DeviceId,
+    pub addr_bits: u8,
+    pub big_endian: bool,
+}
+
+/// One chip register for debugger views.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChipReg {
+    pub name: &'static str,
+    /// Bus address, if the register is memory-mapped.
+    pub addr: Option<u32>,
+    pub value: u32,
+    pub bits: u8,
+}
+
+/// Register dump of one chip (`vic2`, `cia1`, `agnus`…).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChipInfo {
+    pub name: &'static str,
+    pub regs: Vec<ChipReg>,
+}
+
+/// How a machine is reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetKind {
+    /// Pulse the RESET line: CPUs and chips restart, RAM keeps its contents.
+    Soft,
+    /// Power cycle: RAM back to its power-on pattern as well.
+    Hard,
+}
+
+/// Why `run_frame` / `step_cycle` returned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopReason {
+    /// A full frame was emulated.
+    FrameDone,
+    /// A single-step request completed.
+    StepDone,
+    Breakpoint(BpId),
+    Watchpoint {
+        id: BpId,
+        space: MemSpaceId,
+        addr: u32,
+        write: bool,
+    },
+    /// A processor halted itself (6502 JAM). Legitimate guest behaviour.
+    CpuJam {
+        device: DeviceId,
+        pc: u32,
+    },
+    /// The emulation reached an illegal state; never a panic.
+    Fault {
+        device: DeviceId,
+        reason: &'static str,
+    },
+}
+
+/// Debugger access to one processor of a machine (main CPU, 1541, C128 Z80,
+/// Copper…) and the address spaces it owns.
+pub trait DebugTarget {
+    fn regs(&self) -> RegisterSet;
+
+    /// Set a register by name. Unknown names are ignored.
+    fn set_reg(&mut self, name: &str, v: u32);
+
+    /// Side-effect-free read (golden rule 2). `None` if this target does not
+    /// own `space`.
+    fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32>;
+
+    /// Debugger write. Bypasses freezes and watchpoints; RAM is written
+    /// directly, I/O registers go through the chip like a guest write.
+    /// Returns false if the address is not writable (ROM) or `space` is not
+    /// owned by this target.
+    fn poke(&mut self, space: MemSpaceId, addr: u32, size: Size, v: u32) -> bool;
+
+    /// Disassemble at `addr` in this target's CPU view, using peeks only.
+    fn disassemble(&self, addr: u32) -> Instr;
+}
+
+/// An emulated computer. Debugger and preview depend only on this trait.
+pub trait Machine: Send {
+    /// Emulate until the end of the current frame or until a debug stop.
+    fn run_frame(&mut self, dbg: &mut DebugHooks) -> StopReason;
+
+    /// Emulate exactly one master cycle.
+    fn step_cycle(&mut self) -> StopReason;
+
+    /// Reset the machine. Connected devices, inserted media and the
+    /// configuration stay; queued input is dropped. The time base
+    /// ([`Machine::now`]) keeps counting.
+    fn reset(&mut self, kind: ResetKind);
+
+    /// The current field: full visible area including border, plus signal
+    /// metadata. While halted mid-frame it is the partially drawn field:
+    /// lines above [`Machine::beam`] are new, lines below are from the
+    /// previous field.
+    fn framebuffer(&self) -> FrameRef<'_>;
+
+    /// The machine's video outputs; the first is the one
+    /// [`Machine::framebuffer`] shows. Machines with one output keep the
+    /// default.
+    fn screens(&self) -> Vec<ScreenInfo> {
+        vec![ScreenInfo {
+            id: ScreenId::MAIN,
+            name: "main",
+            active: true,
+        }]
+    }
+
+    /// The current field of one output (see [`Machine::framebuffer`]);
+    /// `None` for an unknown id.
+    fn screen(&self, id: ScreenId) -> Option<FrameRef<'_>> {
+        (id == ScreenId::MAIN).then(|| self.framebuffer())
+    }
+
+    /// The last complete frame of a vector display (beam segments with
+    /// intensity); [`Machine::framebuffer`] shows the same rasterised.
+    /// `None` for raster machines (the default).
+    fn vectors(&self) -> Option<crate::vector::VectorFrame<'_>> {
+        None
+    }
+
+    /// The graphics data views this machine offers (sprites, character
+    /// sets, bitmaps, screen memory, tiles, palettes; see [`crate::gfx`]).
+    /// Default: none.
+    fn gfx_views(&self) -> Vec<crate::gfx::GfxViewInfo> {
+        Vec::new()
+    }
+
+    /// Decode view `id` of [`Machine::gfx_views`] with `opts`, from
+    /// side-effect-free reads; `None` for an unknown id.
+    fn gfx_view(&self, id: &str, opts: &crate::gfx::GfxOptions) -> Option<crate::gfx::GfxView> {
+        let _ = (id, opts);
+        None
+    }
+
+    /// The machine's BASIC interpreter for the debugger (program, position,
+    /// variables, stack, stop points; see [`crate::basic`]). `None` for
+    /// machines without a BASIC the debugger can follow (the default).
+    fn basic(&mut self) -> Option<&mut dyn crate::basic::BasicDebug> {
+        None
+    }
+
+    /// The debug overlays this machine offers (see [`crate::overlay`]).
+    /// Default: none.
+    fn overlays(&self) -> Vec<crate::overlay::OverlayInfo> {
+        Vec::new()
+    }
+
+    /// Switch recording on for the overlays in `ids` (and off for the
+    /// others). Overlays that need a record of the frame (DMA slots,
+    /// register changes per line) only collect it while switched on, so
+    /// the emulation pays nothing otherwise. The record is not machine
+    /// state (not in savestates). Default: nothing to record.
+    fn set_overlays(&mut self, ids: &[&str]) {
+        let _ = ids;
+    }
+
+    /// Overlay `id` for the current frame (recorded ones: the last complete
+    /// frame, or the frame so far while halted); `None` for an unknown id
+    /// or one that is not switched on.
+    fn overlay(&self, id: &str) -> Option<crate::overlay::Overlay> {
+        let _ = id;
+        None
+    }
+
+    /// The row of the main [`FrameRef`] that shows raster line `line`
+    /// ([`BeamPos::line`]), `None` outside the picture or for machines
+    /// without a beam. With it the preview draws the beam marker and the
+    /// raster grid ([`BeamPos::hpos`] already is the frame column).
+    fn frame_row(&self, line: u16) -> Option<u32> {
+        let _ = line;
+        None
+    }
+
+    /// Append the audio samples produced since the last call to `out`.
+    /// Machines without sound append nothing.
+    fn audio(&mut self, out: &mut Vec<i16>) -> AudioFormat;
+
+    /// Where the video beam is now. `None` for machines without a beam
+    /// (test machines). Raster breakpoints, line stepping, the raster trace
+    /// and beam overlays use this, never chip-specific registers.
+    fn beam(&self) -> Option<BeamPos>;
+
+    fn memory_spaces(&self) -> Vec<MemSpace>;
+
+    /// Register dumps for debugger views.
+    fn chips(&self) -> Vec<ChipInfo>;
+
+    /// All debug targets, main CPU first: "cpu", then 1541, C128 Z80, Copper, Blitter.
+    fn devices(&self) -> Vec<DeviceId>;
+
+    /// Debugger access to one of `devices()`; `None` for an unknown id.
+    fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget>;
+
+    /// Queue an input event. It is applied exactly at `ev.at` (immediately if
+    /// that cycle has passed); queued events are part of the savestate, so
+    /// recorded input replays bit-exactly.
+    fn input(&mut self, ev: TimedInput);
+
+    /// Master cycles since power-on; the time base of [`TimedInput::at`].
+    fn now(&self) -> Cycle;
+
+    /// Key events that type `text` on the machine's keyboard from cycle
+    /// `start` on, for pasting text (a BASIC listing) and scripted typing:
+    /// the events and the cycle at which more text may follow. Lines end
+    /// with `\n`; characters the keyboard has no key for are skipped. The
+    /// caller queues the events with [`Machine::input`] (so recordings
+    /// carry them); [`crate::input::TextFeed`] does that line by line.
+    /// `None` (the default): text cannot be typed into this machine.
+    fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
+        let _ = (text, start);
+        None
+    }
+
+    /// Warp: the frames run from now on are not looked at, so the machine
+    /// may leave out drawing them (and whatever else is output only) to
+    /// run faster. Everything a program can observe stays exactly as
+    /// without warp, cycle for cycle; only [`Machine::framebuffer`] (and
+    /// the picture inside a savestate) keeps an older frame until warp is
+    /// off again and a whole frame has run. A frontend that runs several
+    /// frames for every one it shows switches warp off for the one it
+    /// shows. Not part of the savestate. The default does nothing.
+    fn set_warp(&mut self, _on: bool) {}
+
+    /// Put the first characters of `text` straight into the operating
+    /// system's keyboard buffer, past the keyboard: pasted text arrives as
+    /// fast as the system reads its buffer instead of at typing speed.
+    /// Returns the characters taken off the front of `text` (those the
+    /// system has no code for are taken and dropped); 0 while the buffer
+    /// still holds earlier ones. `None` (the default): this machine, or
+    /// the system it runs now, has no such buffer and the text is typed
+    /// with [`Machine::typed_keys`]. Not an input event, so recordings do
+    /// not carry it: [`crate::input::TextFeed`] is told when to stay with
+    /// the keys.
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        let _ = text;
+        None
+    }
+
+    /// The buttons and switches on the case with their current state, for
+    /// control panels; operated with [`crate::input::InputEvent::Control`]
+    /// on [`crate::input::InputTarget::Panel`]. Default: none.
+    fn controls(&self) -> Vec<ControlInfo> {
+        Vec::new()
+    }
+
+    /// Physical connectors.
+    fn ports(&self) -> Vec<PortInfo>;
+
+    /// Plug a device into a port. Fails with [`PortError::Incompatible`] if
+    /// the device's [`crate::port::PortKind`] does not match the port.
+    fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError>;
+
+    fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>>;
+
+    /// Drive 8, DF0:, D1:, tape, cartridge port…
+    fn media_slots(&self) -> Vec<MediaSlotInfo>;
+
+    /// `None` for an unknown slot id.
+    fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot>;
+
+    /// Lend the machine the frontend's host services (network, a
+    /// sandboxed folder; see [`crate::host`]) for devices that reach
+    /// outside: the C64's Ultimate command interface and WiC64. The
+    /// frontend passes them wrapped in a [`crate::host::Journal`], so
+    /// recordings replay exactly. Attaching again replaces the services.
+    /// Machines without such devices ignore them (the default).
+    fn attach_host(&mut self, host: crate::host::HostServices) {
+        let _ = host;
+    }
+
+    fn save_state(&self) -> Vec<u8>;
+
+    /// Restore a state produced by `save_state`. Corrupt or incompatible data
+    /// is rejected with an error and leaves the machine unchanged.
+    fn load_state(&mut self, s: &[u8]) -> Result<(), StateError>;
+}

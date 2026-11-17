@@ -1,13 +1,13 @@
 //! CPC cassette: SAVE a BASIC program onto a blank CDT, LOAD it back and
 //! run it, with the real firmware (ROMs via `EMU_ROM_DIR`).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --test cpc_tape -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --test cpc_tape -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size, StopReason};
 use media_backends::image::MemoryBackend;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size, StopReason};
 
 fn boot(model: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
@@ -16,7 +16,7 @@ fn boot(model: &str) -> Box<dyn Machine> {
         model: Some(model.into()),
         ..MachineConfig::default()
     };
-    let mut m = emu_machines::registry().create("cpc", &config).unwrap();
+    let mut m = mimic_machines::registry().create("cpc", &config).unwrap();
     run(m.as_mut(), 150);
     m
 }
@@ -50,7 +50,7 @@ fn tape(m: &mut dyn Machine, command: &str) {
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()

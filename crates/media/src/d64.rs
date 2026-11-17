@@ -29,7 +29,7 @@
 //! count and a 32-bit map. Only the directory track is left out of BLOCKS
 //! FREE (2052, 4133 on a D82). Source: CBM 8050/8250 user's manual.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 use crate::prg::Prg;
 

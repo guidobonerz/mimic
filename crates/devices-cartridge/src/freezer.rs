@@ -38,9 +38,9 @@
 //! Sources: `C64/carts/nordicpower`, `aracidtest`, `retroreplay` of the
 //! VICE test programs (readmes, table of tested hardware, programs).
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
 use media::crt::Crt;
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::expansion::{CartLines, ExpansionCart};
 

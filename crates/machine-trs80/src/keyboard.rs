@@ -17,15 +17,15 @@
 //! `* + < = > ?`. Source: TRS-80 Model I Technical Reference Manual
 //! (keyboard matrix); Model III Technical Reference Manual.
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 pub const fn key(row: u16, bit: u16) -> u16 {
     row * 8 + bit
 }
 
 pub mod keys {
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     pub const ENTER: MachineKey = MachineKey(super::key(6, 0));
     pub const CLEAR: MachineKey = MachineKey(super::key(6, 1));

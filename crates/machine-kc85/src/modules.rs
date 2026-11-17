@@ -26,7 +26,7 @@
 //! manuals (M006, M011, M022, M026, M027, M033) for structure bytes and
 //! control bits.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const SLOTS: [u8; 2] = [0x08, 0x0c];
 

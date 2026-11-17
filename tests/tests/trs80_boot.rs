@@ -1,12 +1,12 @@
 //! TRS-80 Model I with the user's Level II ROM (`EMU_ROM_DIR`, a `trs80/`
 //! subfolder with `M1L2_1.3.bin` or another 12 KB Level II image).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test trs80_boot -- --ignored --nocapture
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test trs80_boot -- --ignored --nocapture
 
-use emu_core::machine::Machine;
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, StopReason};
 use machine_trs80::Trs80;
+use mimic_core::machine::Machine;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, StopReason};
 
 fn machine(options: &[(&str, &str)]) -> Option<Trs80> {
     let dir = media_backends::roms::env_dir()?;
@@ -75,16 +75,16 @@ fn level2_set_draws_a_block() {
 /// An in-memory tape for CSAVE/CLOAD.
 struct Mem(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
-impl emu_core::media::MediaBackend for Mem {
+impl mimic_core::media::MediaBackend for Mem {
     fn len(&self) -> u64 {
         self.0.lock().unwrap().len() as u64
     }
-    fn read(&mut self, off: u64, buf: &mut [u8]) -> Result<(), emu_core::media::MediaError> {
+    fn read(&mut self, off: u64, buf: &mut [u8]) -> Result<(), mimic_core::media::MediaError> {
         let d = self.0.lock().unwrap();
         buf.copy_from_slice(&d[off as usize..off as usize + buf.len()]);
         Ok(())
     }
-    fn write(&mut self, off: u64, buf: &[u8]) -> Result<(), emu_core::media::MediaError> {
+    fn write(&mut self, off: u64, buf: &[u8]) -> Result<(), mimic_core::media::MediaError> {
         let mut d = self.0.lock().unwrap();
         let end = off as usize + buf.len();
         if d.len() < end {
@@ -93,11 +93,11 @@ impl emu_core::media::MediaBackend for Mem {
         d[off as usize..end].copy_from_slice(buf);
         Ok(())
     }
-    fn set_len(&mut self, len: u64) -> Result<(), emu_core::media::MediaError> {
+    fn set_len(&mut self, len: u64) -> Result<(), mimic_core::media::MediaError> {
         self.0.lock().unwrap().resize(len as usize, 0);
         Ok(())
     }
-    fn commit(&mut self) -> Result<(), emu_core::media::MediaError> {
+    fn commit(&mut self) -> Result<(), mimic_core::media::MediaError> {
         Ok(())
     }
 }
@@ -105,9 +105,9 @@ impl emu_core::media::MediaBackend for Mem {
 fn tape(m: &mut Trs80, data: std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
     m.media_slot(machine_trs80::SLOT_TAPE)
         .unwrap()
-        .insert(emu_core::media::Media {
+        .insert(mimic_core::media::Media {
             name: "t.cas".into(),
-            kind: emu_core::media::MediaKind::Tape,
+            kind: mimic_core::media::MediaKind::Tape,
             backend: Box::new(Mem(data)),
         })
         .unwrap();
@@ -206,13 +206,13 @@ fn boot_disk() -> Vec<u8> {
 }
 
 fn disk(m: &mut Trs80, drive: u8, data: std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
-    m.media_slot(emu_core::media::SlotId(
+    m.media_slot(mimic_core::media::SlotId(
         machine_trs80::SLOT_DRIVE0.0 + drive,
     ))
     .unwrap()
-    .insert(emu_core::media::Media {
+    .insert(mimic_core::media::Media {
         name: "d.dsk".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(Mem(data)),
     })
     .unwrap();
@@ -258,19 +258,19 @@ fn level2_with_expansion_interface_and_break_starts_basic() {
     let Some(mut m) = machine(&[("ei", "on"), ("ram", "48k")]) else {
         return;
     };
-    m.input(emu_core::input::TimedInput {
-        at: emu_core::Cycle(0),
-        target: emu_core::input::InputTarget::Keyboard,
-        event: emu_core::input::InputEvent::Key {
+    m.input(mimic_core::input::TimedInput {
+        at: mimic_core::Cycle(0),
+        target: mimic_core::input::InputTarget::Keyboard,
+        event: mimic_core::input::InputEvent::Key {
             machine_key: machine_trs80::keyboard::keys::BREAK,
             down: true,
         },
     });
     run(&mut m, 30);
-    m.input(emu_core::input::TimedInput {
+    m.input(mimic_core::input::TimedInput {
         at: m.now(),
-        target: emu_core::input::InputTarget::Keyboard,
-        event: emu_core::input::InputEvent::Key {
+        target: mimic_core::input::InputTarget::Keyboard,
+        event: mimic_core::input::InputEvent::Key {
             machine_key: machine_trs80::keyboard::keys::BREAK,
             down: false,
         },
@@ -359,11 +359,11 @@ fn m3_boot_disk() -> Vec<u8> {
     bytes
 }
 
-fn press(m: &mut Trs80, key: emu_core::input::MachineKey, down: bool) {
-    m.input(emu_core::input::TimedInput {
+fn press(m: &mut Trs80, key: mimic_core::input::MachineKey, down: bool) {
+    m.input(mimic_core::input::TimedInput {
         at: m.now(),
-        target: emu_core::input::InputTarget::Keyboard,
-        event: emu_core::input::InputEvent::Key {
+        target: mimic_core::input::InputTarget::Keyboard,
+        event: mimic_core::input::InputEvent::Key {
             machine_key: key,
             down,
         },

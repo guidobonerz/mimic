@@ -12,8 +12,8 @@
 use std::path::PathBuf;
 
 use cpu_z80::Z80;
-use emu_core::testing::FlatBus;
-use emu_core::{Bus, Size};
+use mimic_core::testing::FlatBus;
+use mimic_core::{Bus, Size};
 
 fn program(name: &str) -> Vec<u8> {
     let dir = std::env::var_os("EMU_TESTDATA_DIR")

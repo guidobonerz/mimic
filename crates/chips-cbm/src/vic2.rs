@@ -48,8 +48,8 @@ pub mod gfx;
 pub mod overlay;
 pub mod palette;
 
-use emu_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
-use emu_core::{BeamPos, Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
+use mimic_core::{BeamPos, Savestate, StateError, StateReader, StateWriter};
 
 /// VIC-II type. Model variants are configuration, not savestate: a state
 /// only loads into a VIC-II of the same type.
@@ -438,6 +438,9 @@ pub struct Vic2 {
 
     /// Debug overlay record (not machine state; see `crate::overlay`).
     rec: crate::overlay::Recorder<overlay::Record>,
+    /// Warp: the picture is not looked at, pixels are not written (not
+    /// machine state; see [`Vic2::set_warp`]).
+    warp: bool,
 }
 
 /// The beam position at which a light pen sees its pixel drawn.
@@ -533,7 +536,16 @@ impl Vic2 {
             pen: None,
             pen_lit: 0,
             rec: crate::overlay::Recorder(None),
+            warp: false,
         }
+    }
+
+    /// Warp (`Machine::set_warp`): the pixels are not written into the
+    /// frame while it is on. Sequencer, sprites, collisions, borders and
+    /// every access run as always; with a light pen connected the pixels
+    /// are written too, since the pen sees them.
+    pub fn set_warp(&mut self, on: bool) {
+        self.warp = on;
     }
 
     pub fn model(&self) -> Model {
@@ -774,10 +786,16 @@ impl Vic2 {
         // BA: bad line from cycle 12 to 54; sprites from 3 cycles before their
         // slot to the end of its second cycle.
         let mut ba_low = self.bad_line && (12..=54).contains(&c);
-        for n in 0..8 {
-            let start = (t.sprite_slot(n) + t.cycles - 1 - 3) % t.cycles + 1;
-            if self.sprites[n].dma && t.in_ring(c, start, 5) {
-                ba_low = true;
+        if !ba_low {
+            for n in 0..8 {
+                if !self.sprites[n].dma {
+                    continue;
+                }
+                let start = (t.sprite_slot(n) + t.cycles - 1 - 3) % t.cycles + 1;
+                if t.in_ring(c, start, 5) {
+                    ba_low = true;
+                    break;
+                }
             }
         }
         self.ba = !ba_low;
@@ -794,9 +812,14 @@ impl Vic2 {
         self.phi2_sprite = None;
         self.g_slot = None;
         let mut phi1_value = 0xff;
-        for n in 0..8 {
-            let slot = t.sprite_slot(n);
-            if c == slot {
+        // The sprites' slots follow one another from sprite 0's, two
+        // cycles each (p-access, then the second cycle), around the end
+        // of the line: at most one sprite has this cycle.
+        let in_slots = (i16::from(c) - i16::from(t.sprite0_slot)).rem_euclid(i16::from(t.cycles));
+        if in_slots < 16 {
+            let n = (in_slots / 2) as usize;
+            let second = in_slots & 1 != 0;
+            if !second {
                 let p = mem.read(self.vm_base() | 0x3f8 | n as u16);
                 self.sprites[n].ptr = p;
                 phi1_value = p;
@@ -806,10 +829,10 @@ impl Vic2 {
                 } else {
                     self.sprites[n].data = 0xff_ffff;
                 }
-            } else if c == slot % t.cycles + 1 && self.sprites[n].dma {
+            } else if self.sprites[n].dma {
                 phi1_value = self.sprite_fetch(mem, n);
                 self.phi2_sprite = Some(n);
-            } else if c == slot % t.cycles + 1 {
+            } else {
                 // Without DMA the sprite's data latches still take what is
                 // on the bus in its slot: $FF in both CPU halves (or the
                 // byte of a CPU access to a VIC-II register, see `phi2`) and
@@ -1092,9 +1115,18 @@ impl Vic2 {
         let mut out = [(usize::MAX, 0u8); 8];
         let (mm, md) = std::mem::take(&mut self.coll_late);
         self.collide(mm, md);
+        // X only ever steps by one or falls back (the stall, the wrap):
+        // seven steps that add up to seven are all single steps.
+        let x0 = t.x_at(p0);
+        let linear = t.x_at(p0 + 7) == x0 + 7;
+        // A sprite that is neither displayed nor shifting a row out does
+        // nothing in `sprite_pixel`, and neither changes within a cycle
+        // for a sprite that is not one of the two.
+        let sprites_on = self.sprites.iter().any(|s| s.display || s.bits_left != 0);
+        let idle = self.idle_graphics();
 
         for (i, p) in (p0..p0 + 8).enumerate() {
-            let x = t.x_at(p);
+            let x = if linear { x0 + i as u16 } else { t.x_at(p) };
 
             // Border flip-flops.
             if x == right {
@@ -1112,8 +1144,15 @@ impl Vic2 {
                 self.no_load = self.vert_border;
             }
 
-            let (gfx_color, gfx_fg) = self.graphics_pixel(i);
-            let (sprite, colliding) = self.sprite_pixel(x, i);
+            let (gfx_color, gfx_fg) = match idle {
+                Some(colour) => (colour, false),
+                None => self.graphics_pixel(i),
+            };
+            let (sprite, colliding) = if sprites_on {
+                self.sprite_pixel(x, i)
+            } else {
+                (None, 0)
+            };
 
             // Collisions reach the registers with the pixel output, four
             // pixels after the cycle's own: those of the last four pixels
@@ -1171,8 +1210,9 @@ impl Vic2 {
         // types show light grey there.
         let lag = self.lag;
         let before_source = self.lag_before;
+        let unseen = self.warp && self.pen.is_none();
         for (k, &(index, source)) in lag.iter().chain(&out[..4]).enumerate() {
-            if index != usize::MAX {
+            if index != usize::MAX && !unseen {
                 let bit = source.wrapping_sub(src::BG0);
                 let written = k == 0 && bit < 15 && self.written & 1 << bit != 0;
                 self.pixels[index] = if written && self.model.grey_dot() {
@@ -1221,6 +1261,42 @@ impl Vic2 {
             s if s < src::SPRITE0 => self.sprite_mm[usize::from(s - src::MM0)],
             s => self.sprites[usize::from(s - src::SPRITE0) & 7].color,
         }
+    }
+
+    /// The colour of all eight pixels of this cycle if the graphics
+    /// sequencer runs empty through it: nothing waits to be loaded, the
+    /// shifter holds no bits and no mode or XSCROLL write is settling in
+    /// (the border, the blanking, lines without display). The same as
+    /// eight calls of `graphics_pixel` then, which shift zeros out.
+    fn idle_graphics(&mut self) -> Option<u8> {
+        if self.pending[0].is_some()
+            || self.pending[1].is_some()
+            || self.sr != 0
+            || self.cycle_mode != (self.ctrl1, self.ctrl2)
+        {
+            return None;
+        }
+        let ecm = self.ctrl1 & 0x40 != 0;
+        let bmm = self.ctrl1 & 0x20 != 0;
+        let mcm = self.ctrl2 & 0x10 != 0;
+        let cc = (self.sr_c & 0xff) as u8;
+        let color = (self.sr_c >> 8) as u8 & 0x0f;
+        if mcm && (bmm || color & 0x08 != 0) {
+            // In the second half of a pair its value still shows.
+            if self.sr_mc_phase {
+                return None;
+            }
+            self.sr_pair = 0;
+        } else {
+            self.late_bit = 0;
+        }
+        Some(match (ecm, bmm, mcm) {
+            (false, true, false) => cc & 0x0f,
+            (true, false, false) => src::BG0 + (cc >> 6),
+            (false, _, _) => src::BG0,
+            // Invalid modes output black.
+            _ => 0,
+        })
     }
 
     /// Next pixel of the graphics sequencer: (colour, is foreground).

@@ -57,11 +57,11 @@
 //! project's Z80 disassembler, and checked against the memory of a
 //! running program. No emulator source was used.
 
-use emu_core::basic::{
+use mimic_core::basic::{
     BasicError, BasicFrame, BasicGranularity, BasicInfo, BasicLine, BasicMode, BasicPos,
     BasicState, BasicStopPoint, BasicType, BasicValue, BasicVar,
 };
-use emu_core::{BreakpointKind, DebugTarget, MemSpaceId, Size};
+use mimic_core::{BreakpointKind, DebugTarget, MemSpaceId, Size};
 
 use crate::Dialect;
 

@@ -580,7 +580,7 @@ fn every_legal_word_encodes_back_and_has_text() {
 
 #[test]
 fn disassembly_and_registers() {
-    use emu_core::Cpu as _;
+    use mimic_core::Cpu as _;
     let (mut cpu, mut ram) = setup(&[Op::Branch { cond: 1, off: -1 }, Op::Jr { rs: 11 }]);
     let i = cpu.disassemble(&ram, Ada::linear(CODE_SEG, 0));
     assert_eq!(i.to_string(), "bne $0000");

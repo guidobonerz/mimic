@@ -42,8 +42,8 @@
 //! "UxROM", "CNROM", "MMC3", "Bus conflict" (read 2026-10-23). The
 //! implementation is this project's own.
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::slot::CartSlot;
 

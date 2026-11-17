@@ -1,0 +1,33 @@
+[package]
+name = "mimic-headless"
+description = "Headless runner"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "mimic-headless"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+mimic-core.workspace = true
+mimic-cheats.workspace = true
+mimic-machines.workspace = true
+mimic-debug.workspace = true
+mimic-preview.workspace = true
+video-crt.workspace = true
+media-backends.workspace = true
+mimic-input.workspace = true
+mimic-profile.workspace = true
+
+[features]
+default = []
+# Real hardware (see `--help`): Greaseweazle flux imports and real
+# Commodore drives through OpenCBM. Off by default; neither needs anything
+# at build time (OpenCBM is loaded at run time).
+greaseweazle = ["media-backends/greaseweazle"]
+opencbm = ["media-backends/opencbm"]
+real-hardware = ["greaseweazle", "opencbm"]

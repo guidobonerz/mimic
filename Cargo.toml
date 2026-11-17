@@ -12,7 +12,7 @@ publish = false
 unsafe_code = "forbid"
 
 [workspace.dependencies]
-emu-core = { path = "crates/emu-core" }
+mimic-core = { path = "crates/mimic-core" }
 cpu-6502 = { path = "crates/cpu-6502" }
 cpu-45gs02 = { path = "crates/cpu-45gs02" }
 cpu-65816 = { path = "crates/cpu-65816" }
@@ -46,9 +46,9 @@ devices-net = { path = "crates/devices-net" }
 devices-printer = { path = "crates/devices-printer" }
 media = { path = "crates/media" }
 media-backends = { path = "crates/media-backends" }
-emu-input = { path = "crates/emu-input" }
-emu-profile = { path = "crates/emu-profile" }
-emu-cheats = { path = "crates/emu-cheats" }
+mimic-input = { path = "crates/mimic-input" }
+mimic-profile = { path = "crates/mimic-profile" }
+mimic-cheats = { path = "crates/mimic-cheats" }
 basic-dialects = { path = "crates/basic-dialects" }
 video-crt = { path = "crates/video-crt" }
 machine-pet = { path = "crates/machine-pet" }
@@ -79,12 +79,12 @@ machine-keypunch = { path = "crates/machine-keypunch" }
 machine-logophor16 = { path = "crates/machine-logophor16" }
 machine-archimedes = { path = "crates/machine-archimedes" }
 machine-sim6502 = { path = "crates/machine-sim6502" }
-emu-machines = { path = "crates/emu-machines" }
-emu-debug = { path = "crates/emu-debug" }
-emu-preview = { path = "crates/emu-preview" }
-emu-desktop = { path = "crates/emu-desktop" }
-emu-web = { path = "crates/emu-web" }
-emu-headless = { path = "crates/emu-headless" }
+mimic-machines = { path = "crates/mimic-machines" }
+mimic-debug = { path = "crates/mimic-debug" }
+mimic-preview = { path = "crates/mimic-preview" }
+mimic-desktop = { path = "crates/mimic-desktop" }
+mimic-web = { path = "crates/mimic-web" }
+mimic-headless = { path = "crates/mimic-headless" }
 
 # External.
 cpal = "0.15"

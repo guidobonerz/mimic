@@ -28,11 +28,11 @@
 
 use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::sid::{Sid, SidModel};
-use emu_core::audio::Decimator;
+use mimic_core::audio::Decimator;
 
 use crate::keyboard::{self, Keyboard};
 use cpu_45gs02::{Speed, ADDR_MASK, UNMAPPED};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::vic::{Personality, Vic};
 
@@ -138,7 +138,7 @@ impl Board {
             cia2: Cia::new(CiaModel::Mos6526A),
             sids: std::array::from_fn(|_| Sid::new(SidModel::Mos6581, SID_HZ)),
             audio: [0, 1]
-                .map(|_| Decimator::new(SID_HZ, emu_core::SAMPLE_RATE).expect("valid rates")),
+                .map(|_| Decimator::new(SID_HZ, mimic_core::SAMPLE_RATE).expect("valid rates")),
             samples: Vec::new(),
             keyboard: Keyboard::default(),
             port_lines: [0; 2],
@@ -231,7 +231,7 @@ impl Board {
         let l = self.audio[0].push(left);
         let r = self.audio[1].push(right);
         if let (Some(l), Some(r)) = (l, r) {
-            if self.samples.len() < emu_core::SAMPLE_RATE as usize * 8 {
+            if self.samples.len() < mimic_core::SAMPLE_RATE as usize * 8 {
                 self.samples.push(l);
                 self.samples.push(r);
             }
@@ -557,7 +557,7 @@ impl Board {
     }
 
     pub fn save(&self, w: &mut StateWriter) {
-        use emu_core::Savestate;
+        use mimic_core::Savestate;
         w.raw(&self.chip);
         w.raw(&self.colour);
         w.raw(&self.charrom);
@@ -598,7 +598,7 @@ impl Board {
     }
 
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        use emu_core::Savestate;
+        use mimic_core::Savestate;
         r.raw_into(&mut self.chip)?;
         r.raw_into(&mut self.colour)?;
         r.raw_into(&mut self.charrom)?;

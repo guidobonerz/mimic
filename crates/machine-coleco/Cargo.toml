@@ -9,7 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-emu-core.workspace = true
+mimic-core.workspace = true
 cpu-z80.workspace = true
 chips-ti.workspace = true
 devices-input.workspace = true

@@ -97,16 +97,16 @@ use chips_cbm::cia::CiaModel;
 use chips_cbm::sid::SidModel;
 use chips_cbm::vic2;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::input::{InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::overlay::{Overlay, OverlayInfo};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::Cycle;
-use emu_core::{
+use mimic_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::input::{InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::Cycle;
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -120,12 +120,12 @@ use devices_printer::CbmPrinter;
 use drive::{Drive8, DRIVE8, DRIVE_SPACE};
 use drives_cbm::{DriveModel, DriveRoms, Sd2iec};
 use drives_other::Datasette;
-use emu_core::host::{HostServices, SharedFiles, SubFileHost};
-use emu_core::port::{user_port, PortLines};
 use io::{Io, VicView};
 use loader::{Autostart, ProgramSlot, BOOT_FRAMES};
 use media::tap::TapMachine;
 use memory::{Memory, Roms, BASIC_SIZE, CHARGEN_SIZE};
+use mimic_core::host::{HostServices, SharedFiles, SubFileHost};
+use mimic_core::port::{user_port, PortLines};
 use pla::Bank;
 
 pub const CPU: DeviceId = DeviceId("cpu");
@@ -154,7 +154,7 @@ pub fn entry() -> MachineEntry {
         id: "c64",
         name: "Commodore 64",
         models: &[],
-        video_formats: emu_core::registry::PAL_NTSC,
+        video_formats: mimic_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(C64::new(config)?)),
     }
 }
@@ -1038,7 +1038,7 @@ impl C64 {
     fn apply_input(&mut self, ev: TimedInput) {
         match ev.target {
             InputTarget::Keyboard => {
-                if let emu_core::input::InputEvent::Key { machine_key, down } = ev.event {
+                if let mimic_core::input::InputEvent::Key { machine_key, down } = ev.event {
                     self.io.keyboard.set(machine_key, down);
                 }
             }
@@ -1055,7 +1055,7 @@ impl C64 {
                 self.refresh_port(p);
             }
             InputTarget::Panel => {
-                if let emu_core::input::InputEvent::Control { id, value } = ev.event {
+                if let mimic_core::input::InputEvent::Control { id, value } = ev.event {
                     self.control(id.0, value);
                 }
             }
@@ -1065,8 +1065,8 @@ impl C64 {
     /// A console control from the panel (power, reset, RESTORE).
     fn control(&mut self, id: u16, value: u8) {
         match id {
-            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
-            1 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Soft),
+            0 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Hard),
+            1 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Soft),
             2 => {
                 self.io.keyboard.set(keyboard::RESTORE, value == 1);
             }
@@ -1327,10 +1327,16 @@ impl Machine for C64 {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    /// Warp: the VIC-II writes no pixels (see `Vic2::set_warp`); nothing
+    /// a program can observe changes.
+    fn set_warp(&mut self, on: bool) {
+        self.io.vic.set_warp(on);
+    }
+
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.io.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -1351,7 +1357,7 @@ impl Machine for C64 {
         self.io.vic.frame_row(line)
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
@@ -1554,9 +1560,16 @@ impl Machine for C64 {
         self.sched.now()
     }
 
+    /// Pasted text goes straight into the KERNAL's keyboard buffer
+    /// ([`chips_cbm::keybuf`]).
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        let has_key = |c| keyboard::key_for_char(c).is_some();
+        chips_cbm::keybuf::C64.paste(&mut self.mem.ram[..], text, has_key)
+    }
+
     /// Text as key presses (upper-case letters; see [`keyboard::typed_events`]), with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             240_000,
@@ -1564,8 +1577,8 @@ impl Machine for C64 {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        use emu_core::ControlInfo;
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        use mimic_core::ControlInfo;
         let mut controls = vec![
             ControlInfo::button(0, "POWER", false),
             ControlInfo::button(1, "RESET", false),

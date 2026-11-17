@@ -1,5 +1,5 @@
 use super::*;
-use emu_core::testing::FlatBus;
+use mimic_core::testing::FlatBus;
 
 /// 64 KB RAM plus a port log; port reads return the low port byte.
 struct TestBus {

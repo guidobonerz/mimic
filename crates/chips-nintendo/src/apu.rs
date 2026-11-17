@@ -23,7 +23,7 @@
 //! 159.79 / (1 / (t / 8227 + n / 12241 + d / 22638) + 100)), as a table in
 //! units of 1/65536.
 
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
 
 const LENGTHS: [u8; 32] = [
     10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14, 12, 16, 24, 18, 48, 20, 96, 22,

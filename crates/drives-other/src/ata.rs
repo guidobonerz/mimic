@@ -43,8 +43,8 @@
 //! capacity read as zeros, writes there are dropped. Writes go through to
 //! the image's backend (the copy-on-write overlay by default).
 
-use emu_core::media::{DriveStatus, Media, MediaBackend, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaBackend, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const BLOCK: usize = 512;
 /// The most blocks READ/WRITE MULTIPLE move per DRQ (IDENTIFY word 47).

@@ -2,12 +2,12 @@
 //! "SD card", [`FileHost`] from the machine's [`HostServices`]) or on a
 //! mounted disk image.
 //!
-//! [`HostServices`]: emu_core::host::HostServices
+//! [`HostServices`]: mimic_core::host::HostServices
 
-use emu_core::host::{lock, FileHost, FsError, OpenMode, SharedFiles};
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::{Format, D64};
+use mimic_core::host::{lock, FileHost, FsError, OpenMode, SharedFiles};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use super::names::{self, PRG, REL, SEQ, USR};
 use crate::dos::status;
@@ -1530,12 +1530,13 @@ impl Sd2iecDos {
         d.command = c.bytes()?.to_vec();
         d.status = c.string()?;
         d.cwd = c.string()?;
-        emu_core::host::check_path(&d.cwd).map_err(|_| StateError::Invalid("sd2iec directory"))?;
+        mimic_core::host::check_path(&d.cwd)
+            .map_err(|_| StateError::Invalid("sd2iec directory"))?;
         match c.u8()? {
             0 | 2 => {}
             1 => {
                 let p = c.string()?;
-                emu_core::host::check_path(&p)
+                mimic_core::host::check_path(&p)
                     .map_err(|_| StateError::Invalid("sd2iec image path"))?;
                 d.mount = Some(Mount {
                     source: Source::Host(p),
@@ -1556,7 +1557,7 @@ impl Sd2iecDos {
                 },
                 2 => {
                     let path = c.string()?;
-                    emu_core::host::check_path(&path)
+                    mimic_core::host::check_path(&path)
                         .map_err(|_| StateError::Invalid("sd2iec file path"))?;
                     Channel::Write {
                         target: Target::Host {

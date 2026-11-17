@@ -13,7 +13,7 @@
 //! written from memory of it (see `docs/sources.md`); MSX BASIC's own
 //! `CSAVE` output, recorded into such an image, loads again.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 /// The mark before each block.
 pub const MARK: [u8; 8] = [0x1f, 0xa6, 0xde, 0xba, 0xcc, 0x13, 0x7d, 0x74];

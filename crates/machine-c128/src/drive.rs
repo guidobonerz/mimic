@@ -14,7 +14,7 @@
 use chips_cbm::cia::Cia;
 use drives_cbm::IecLines;
 pub use drives_cbm::SerialDrive as Drive8;
-use emu_core::{DeviceId, MemSpaceId};
+use mimic_core::{DeviceId, MemSpaceId};
 
 pub const DRIVE8: DeviceId = DeviceId("drive8");
 /// The drive CPU's address space.

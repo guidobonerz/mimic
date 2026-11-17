@@ -10,7 +10,7 @@
 //! instruction does outside the Jacquard (a register write, an interrupt,
 //! an error). It restarts at list 1 when a field begins (line 0, x 0).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::lithograph::{ChipRamMut, Lithograph};
 use crate::lumiere::ChipRam;

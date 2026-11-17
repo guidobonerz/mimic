@@ -3,7 +3,7 @@
 //! (C. Dinu, "Decoding Z80 Opcodes"); DD/FD substitute IX/IY for HL,
 //! IXH/IXL for H/L and `(IX+d)` for `(HL)`.
 
-use emu_core::Size;
+use mimic_core::Size;
 
 use crate::flag::{C, H, N, PV, S, X, Y, Z};
 use crate::{Access, TimedBus, IO_BASE, Z80};

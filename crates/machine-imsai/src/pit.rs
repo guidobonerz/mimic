@@ -19,7 +19,7 @@
 //! Source: Intel 8253/8253-5 Programmable Interval Timer data sheet
 //! (control word, read/write order, counter latch, modes 0–5, BCD).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Read/write order of a counter's bytes (control word bits 5–4).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

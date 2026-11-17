@@ -8,8 +8,8 @@
 //! interface; nothing here knows C64 internals beyond the KERNAL entry
 //! points the suite itself uses.
 
-use emu_core::registry::{MachineConfig, Registry};
-use emu_core::{BreakpointKind, DebugHooks, DeviceId, Machine, MemSpaceId, Size, StopReason};
+use mimic_core::registry::{MachineConfig, Registry};
+use mimic_core::{BreakpointKind, DebugHooks, DeviceId, Machine, MemSpaceId, Size, StopReason};
 
 const BSOUT: u32 = 0xffd2;
 const EXIT_PORT: u32 = 0xd7ff;

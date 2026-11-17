@@ -45,7 +45,7 @@
 //! assumption.
 
 use devices_cartridge::atari::AtariCart;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// XL/XE OS ROM size.
 pub const OS_SIZE: usize = 0x4000;

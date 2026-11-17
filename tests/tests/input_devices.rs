@@ -2,13 +2,13 @@
 //! via `EMU_ROM_DIR`): paddles and the 1351 mouse through the SID's POTX on
 //! the C64 and C128, paddles through the VIC on the VIC-20.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test input_devices -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test input_devices -- --ignored
 
-use emu_core::input::{InputEvent, InputTarget, TimedInput};
-use emu_core::machine::Machine;
-use emu_core::port::PortId;
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, MemSpaceId, Size};
+use mimic_core::input::{InputEvent, InputTarget, TimedInput};
+use mimic_core::machine::Machine;
+use mimic_core::port::PortId;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, MemSpaceId, Size};
 
 struct Target {
     id: &'static str,
@@ -50,7 +50,7 @@ fn machine(t: &Target, device: &str) -> Box<dyn Machine> {
     };
     config.options.insert("port1".into(), device.into());
     config.options.insert("drive8".into(), "none".into());
-    emu_machines::registry().create(t.id, &config).unwrap()
+    mimic_machines::registry().create(t.id, &config).unwrap()
 }
 
 fn screen_text(m: &mut dyn Machine, t: &Target) -> String {

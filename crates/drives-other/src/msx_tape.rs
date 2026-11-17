@@ -32,9 +32,9 @@
 //! Keys ([`MediaSlot::control`]): "play", "record", "stop", "rewind",
 //! "forward".
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
 use media::msx_cas;
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Tape time: ticks of 1/4800 s, half a cycle of 2400 Hz.
 const TICK_HZ: u64 = 4800;
@@ -488,7 +488,7 @@ impl Savestate for MsxTape {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
+    use mimic_core::media::MediaBackend;
     use std::sync::{Arc, Mutex};
 
     const HZ: u32 = 3_579_545;

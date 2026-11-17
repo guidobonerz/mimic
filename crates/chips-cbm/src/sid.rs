@@ -33,7 +33,7 @@
 //! AND of their parts; the filter is a digital state-variable filter with a
 //! cutoff curve per model, not a model of the analog circuit.
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SidModel {

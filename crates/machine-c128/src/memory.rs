@@ -24,7 +24,7 @@ use chips_cbm::pla::{self, Bank, Lines};
 use chips_cbm::vic2::VicMemory;
 use cpu_6502::IoPort;
 use devices_cartridge::ExpansionCart;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const ROM_16K: usize = 0x4000;
 pub const CHARGEN_SIZE: usize = 0x2000;

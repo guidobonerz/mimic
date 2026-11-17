@@ -9,7 +9,7 @@
 //! in the first cycle of its time and then reports the remaining cycles
 //! as busy (SPEC.md 3.4 gives the counts; chip-bus wait states are the
 //! machine's, which holds the CPU while it waits for a slot). Memory goes
-//! through [`emu_core::Bus`] with linear addresses (segment × 65 536 +
+//! through [`mimic_core::Bus`] with linear addresses (segment × 65 536 +
 //! offset); words are little-endian (the bus's `Size::Word` access at an
 //! even address).
 //!
@@ -24,11 +24,11 @@ pub mod isa;
 #[cfg(test)]
 mod tests;
 
-use emu_core::{
+use isa::{Alu, Imm, Md, Mem, Op, Xop};
+use mimic_core::{
     Bus, CycleResult, Flow, Instr, Register, RegisterSet, Savestate, Size, StateError, StateReader,
     StateWriter,
 };
-use isa::{Alu, Imm, Md, Mem, Op, Xop};
 
 /// SR bits (SPEC.md 3.1).
 pub const C: u16 = 1 << 0;
@@ -686,7 +686,7 @@ impl Ada {
     }
 }
 
-impl emu_core::Cpu for Ada {
+impl mimic_core::Cpu for Ada {
     fn tick(&mut self, bus: &mut dyn Bus) -> CycleResult {
         Ada::tick(self, bus)
     }

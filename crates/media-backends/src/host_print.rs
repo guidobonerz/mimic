@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use emu_core::host::{DirEntry, FileHandle, FileHost, FileStat, FsError, OpenMode};
+use mimic_core::host::{DirEntry, FileHandle, FileHost, FileStat, FsError, OpenMode};
 
 use crate::host_fs::FsFolder;
 

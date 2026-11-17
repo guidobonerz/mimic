@@ -14,7 +14,7 @@
 use devices_cartridge::msx::{Mapper, MsxCart};
 use devices_cartridge::slot::BatterySlot;
 use devices_cartridge::CartSlot;
-use emu_core::media::{Media, MediaError, MediaSlot};
+use mimic_core::media::{Media, MediaError, MediaSlot};
 
 pub struct CartPort {
     pub inner: CartSlot<MsxCart>,

@@ -15,7 +15,7 @@
 //! 128 (1050), double 720 × 256. Source: the ATR format as published with
 //! the SIO2PC project (Nick Kennedy).
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 pub const HEADER: usize = 16;
 const MAGIC: [u8; 2] = [0x96, 0x02];

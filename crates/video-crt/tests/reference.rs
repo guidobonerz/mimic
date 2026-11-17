@@ -11,7 +11,7 @@
 mod common;
 
 use common::{diff, frame, pattern, read_png, reference_dir, write_png};
-use emu_core::frame::OutputType;
+use mimic_core::frame::OutputType;
 use video_crt::{Crt, Profile};
 
 fn check(name: &str, img: &video_crt::Image, exact: bool, failures: &mut Vec<String>) {

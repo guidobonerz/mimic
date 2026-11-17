@@ -4,7 +4,7 @@ Part of the project's instructions for Claude Code; the core is `CLAUDE.md` at t
 
 Two related features: a **software memory freezer** in the emulator core, and emulation of **freezer cartridges** (Action Replay & co.) as real hardware.
 
-### Software memory freezer (`emu-core::freeze`)
+### Software memory freezer (`mimic-core::freeze`)
 
 ```rust
 pub struct Freeze {

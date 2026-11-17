@@ -25,7 +25,7 @@
 //! "… Echo Registers", "SNES APU Low Level Timings" (read 2026-10-23). The
 //! implementation is this project's own.
 
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
 
 /// Gaussian interpolation weights (fullsnes, "SNES APU DSP BRR Pitch").
 #[rustfmt::skip]

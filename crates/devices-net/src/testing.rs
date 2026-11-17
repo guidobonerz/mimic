@@ -18,7 +18,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use emu_core::host::{
+use mimic_core::host::{
     ConnState, HostTime, HttpRequest, HttpResponse, HttpTicket, NetBackend, NetError, NetHandle,
     NetInfo, Recv, SocketKind,
 };

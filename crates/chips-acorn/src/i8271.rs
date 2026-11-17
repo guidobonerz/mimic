@@ -56,7 +56,7 @@
 //! project's own.
 
 use crate::wd1772::Floppy;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// 2 MHz clocks per millisecond.
 const MS: u32 = 2000;

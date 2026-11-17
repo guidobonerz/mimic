@@ -7,9 +7,9 @@
 //! and always to C64 RAM, whatever `$01` banks in. Source: `C64/carts/pagefox` of the VICE test
 //! programs (`writeram.s`, `godot.asm`).
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
 use media::crt::Crt;
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::expansion::{CartLines, ExpansionCart};
 

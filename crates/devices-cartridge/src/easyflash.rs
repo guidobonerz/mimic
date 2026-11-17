@@ -9,9 +9,9 @@
 //! back into the CRT (for the chips the image has). Source: EasyFlash
 //! programmer's documentation (skoe).
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
 use media::crt::{Chip, Crt};
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::expansion::{CartLines, ExpansionCart};
 use crate::flash::Flash;

@@ -166,7 +166,7 @@ fn sound_dma_plays_through_the_dac() {
 fn disks_go_in_by_size_only() {
     let mut m = stub("a310");
     struct Mem(Vec<u8>);
-    impl emu_core::media::MediaBackend for Mem {
+    impl mimic_core::media::MediaBackend for Mem {
         fn len(&self) -> u64 {
             self.0.len() as u64
         }

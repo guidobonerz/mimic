@@ -33,7 +33,7 @@
 //! verify error with length 1 sets end of block too; DMA reads of the
 //! REU's own registers see the open bus.
 
-use emu_core::{Bus, Size, StateError, StateReader, StateWriter};
+use mimic_core::{Bus, Size, StateError, StateReader, StateWriter};
 
 /// Command register bits.
 pub mod cmd {

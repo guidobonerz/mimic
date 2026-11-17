@@ -3,7 +3,7 @@
 //! set/clear registers) with the fixed level of each source. Network,
 //! timers, input and the SD card follow in later steps.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const INTREQ: u16 = 0x4280;
 pub const INTENA: u16 = 0x4282;

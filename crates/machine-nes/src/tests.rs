@@ -1,6 +1,6 @@
 use super::*;
-use emu_core::input::Dirs;
-use emu_core::media::{Media, MediaBackend, MediaError};
+use mimic_core::input::Dirs;
+use mimic_core::media::{Media, MediaBackend, MediaError};
 
 struct Bytes(Vec<u8>);
 
@@ -36,7 +36,7 @@ fn nrom(code: &[u8], nmi: &[u8]) -> Vec<u8> {
 
 fn machine(options: &[(&str, &str)], model: &str) -> Nes {
     let mut config = MachineConfig {
-        video_format: emu_core::frame::VideoStandard::parse(model),
+        video_format: mimic_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     for (k, v) in options {
@@ -367,7 +367,7 @@ fn gfx_views_read_the_ppu_space_through_the_cartridge() {
 
 #[test]
 fn overlays_show_sprites_the_hit_and_interrupts() {
-    use emu_core::overlay::{colors, Shape};
+    use mimic_core::overlay::{colors, Shape};
     let mut m = machine(&[], "ntsc");
     with_cart(&mut m, nmi_rom());
     frames(&mut m, 3);

@@ -22,15 +22,15 @@
 //! Fire 2 is the joystick's main button (BASIC's JOY() bit 4), fire 1 the
 //! extra one (bit 5).
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 const fn k(line: u16, bit: u16) -> u16 {
     line * 8 + bit
 }
 
 pub mod keys {
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     pub const RETURN: MachineKey = MachineKey(super::k(2, 2));
     pub const SHIFT: MachineKey = MachineKey(super::k(2, 5));

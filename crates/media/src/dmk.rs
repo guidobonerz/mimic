@@ -36,7 +36,7 @@
 //! block and an empty file directory; Thierry Nouspikel, "The TI-99/4A
 //! Tech Pages", disk structure).
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 use crate::mfm::crc16;
 

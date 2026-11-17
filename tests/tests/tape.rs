@@ -2,16 +2,16 @@
 //! LOAD from a TAP recorded by the CBM tape encoder, and SAVE onto a blank
 //! tape that then loads into a fresh machine.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test tape -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test tape -- --ignored
 
 use std::sync::{Arc, Mutex};
 
-use emu_core::input::TimedInput;
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, MemSpaceId, Size};
 use media::tap::{encode_cbm, encode_ted, Tap, TapMachine, Video};
+use mimic_core::input::TimedInput;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, MemSpaceId, Size};
 
 /// A tape whose backend keeps what the datasette records.
 struct Shared(Arc<Mutex<Vec<u8>>>);
@@ -118,7 +118,7 @@ fn machine(t: &Target) -> Box<dyn Machine> {
         ..MachineConfig::default()
     };
     config.options.insert("drive8".into(), "none".into());
-    emu_machines::registry().create(t.id, &config).unwrap()
+    mimic_machines::registry().create(t.id, &config).unwrap()
 }
 
 fn screen(m: &mut dyn Machine, t: &Target) -> Vec<u8> {

@@ -4,8 +4,8 @@
 //! drives and change the palette. The machine lends these to a running
 //! command through [`UciMachine`]; the UCI never sees a concrete machine.
 
-use emu_core::host::{lock, FsError, OpenMode, SharedFiles};
-use emu_core::media::{MediaBackend, MediaError};
+use mimic_core::host::{lock, FsError, OpenMode, SharedFiles};
+use mimic_core::media::{MediaBackend, MediaError};
 
 /// A drive as GET_DRVINFO reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +70,7 @@ pub trait UciMachine {
     }
 
     /// Insert `media` into the drive with IEC number `address`.
-    fn mount(&mut self, _address: u8, _media: emu_core::media::Media) -> Result<(), MediaError> {
+    fn mount(&mut self, _address: u8, _media: mimic_core::media::Media) -> Result<(), MediaError> {
         Err(MediaError::NoMedia)
     }
 
@@ -113,7 +113,7 @@ pub struct NoMachine;
 impl UciMachine for NoMachine {}
 
 /// A disk image from the UCI's folder: kept in memory while mounted,
-/// written back through the folder's [`emu_core::host::FileHost`] on
+/// written back through the folder's [`mimic_core::host::FileHost`] on
 /// commit (the drive's flush), as the Ultimate writes to its card.
 pub struct FolderImage {
     files: SharedFiles,
@@ -136,7 +136,7 @@ impl FolderImage {
 }
 
 /// A whole file of a folder.
-pub fn read_file(f: &mut dyn emu_core::host::FileHost, path: &str) -> Result<Vec<u8>, FsError> {
+pub fn read_file(f: &mut dyn mimic_core::host::FileHost, path: &str) -> Result<Vec<u8>, FsError> {
     let h = f.open(
         path,
         OpenMode {
@@ -159,7 +159,7 @@ pub fn read_file(f: &mut dyn emu_core::host::FileHost, path: &str) -> Result<Vec
 
 /// Create or replace the file at `path` with `data`.
 pub fn write_file(
-    f: &mut dyn emu_core::host::FileHost,
+    f: &mut dyn mimic_core::host::FileHost,
     path: &str,
     data: &[u8],
 ) -> Result<(), FsError> {

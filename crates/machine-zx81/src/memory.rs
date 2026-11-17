@@ -7,7 +7,7 @@
 //!
 //! Source: Sinclair ZX81 Service Manual (memory decoding).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const ROM_SIZE: usize = 0x2000;
 

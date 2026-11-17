@@ -1,4 +1,4 @@
-//! Graphics data views of the TIA (see `emu_core::gfx`). The TIA has no
+//! Graphics data views of the TIA (see `mimic_core::gfx`). The TIA has no
 //! frame memory, so the views show what its registers hold now: the
 //! movable objects and the playfield laid out on one 160-pixel line, and
 //! the palette. Side-effect free.
@@ -14,11 +14,11 @@
 //! HMOVE, derived from its position counter and the beam (pending HMOVE
 //! motion is not included).
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxPixels, GfxView, GfxViewInfo,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::*;
 

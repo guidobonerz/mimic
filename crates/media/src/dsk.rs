@@ -25,7 +25,7 @@
 //! Writing changes the bytes in place; formatting rewrites a track inside
 //! its block (the new layout must fit).
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 const STANDARD: &[u8] = b"MV - CPC";
 const EXTENDED: &[u8] = b"EXTENDED";

@@ -1,4 +1,4 @@
-//! Graphics data views (see `emu_core::gfx`), decoded side-effect free.
+//! Graphics data views (see `mimic_core::gfx`), decoded side-effect free.
 //!
 //! - **screen:** the 6912-byte screen of a RAM bank (default: the one
 //!   the ULA shows) with its attributes — 256 × 192, ink and paper with
@@ -14,8 +14,8 @@
 //! ROM Disassembly* (the character set at $3D00).
 
 use chips_sinclair::spectrum::{attr_row, bitmap_row, PALETTE};
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR};
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR};
 
 use crate::memory::BANK;
 use crate::{Spectrum, CPU_SPACE, RAM_SPACE};
@@ -133,8 +133,8 @@ impl Spectrum {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::registry::MachineConfig;
-    use emu_core::Machine;
+    use mimic_core::registry::MachineConfig;
+    use mimic_core::Machine;
 
     fn stub(model: &str) -> Spectrum {
         let mut config = MachineConfig {

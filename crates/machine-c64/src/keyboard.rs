@@ -18,8 +18,8 @@
 //! | 6       | £        | *      | ;      | HOME  | R-SHIFT| =    | ↑    | /         |
 //! | 7       | 1        | ←      | CTRL   | 2     | SPACE  | C=   | Q    | RUN/STOP  |
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 pub const RESTORE: MachineKey = MachineKey(64);
 

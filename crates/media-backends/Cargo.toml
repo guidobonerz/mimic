@@ -12,7 +12,7 @@ publish.workspace = true
 unsafe_code = "deny"
 
 [dependencies]
-emu-core.workspace = true
+mimic-core.workspace = true
 media.workspace = true
 libloading = { workspace = true, optional = true }
 serialport = { workspace = true, optional = true }

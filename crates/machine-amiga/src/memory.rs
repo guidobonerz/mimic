@@ -36,7 +36,7 @@ use chips_amiga::ChipRam;
 use drives_other::ata::Ata;
 
 use crate::pcmcia::{self, Pcmcia};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Kickstart image size in the map.
 pub const ROM_SIZE: usize = 0x8_0000;
@@ -905,26 +905,26 @@ mod tests {
 
     struct Mem(Vec<u8>);
 
-    impl emu_core::media::MediaBackend for Mem {
+    impl mimic_core::media::MediaBackend for Mem {
         fn len(&self) -> u64 {
             self.0.len() as u64
         }
-        fn read(&mut self, o: u64, b: &mut [u8]) -> Result<(), emu_core::media::MediaError> {
+        fn read(&mut self, o: u64, b: &mut [u8]) -> Result<(), mimic_core::media::MediaError> {
             b.copy_from_slice(&self.0[o as usize..o as usize + b.len()]);
             Ok(())
         }
-        fn write(&mut self, o: u64, d: &[u8]) -> Result<(), emu_core::media::MediaError> {
+        fn write(&mut self, o: u64, d: &[u8]) -> Result<(), mimic_core::media::MediaError> {
             self.0[o as usize..o as usize + d.len()].copy_from_slice(d);
             Ok(())
         }
-        fn commit(&mut self) -> Result<(), emu_core::media::MediaError> {
+        fn commit(&mut self) -> Result<(), mimic_core::media::MediaError> {
             Ok(())
         }
     }
 
     #[test]
     fn gayle_swaps_the_ide_data_bus_and_raises_int2_on_intrq() {
-        use emu_core::media::{Media, MediaKind, MediaSlot};
+        use mimic_core::media::{Media, MediaKind, MediaSlot};
         let mut g = Gayle::default();
         assert_eq!(g.read(0xda_201c), 0xff, "no drive: the floating bus");
         assert_eq!(g.read_word(0xda_2000), 0xffff);

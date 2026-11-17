@@ -7,7 +7,7 @@
 
 use super::*;
 use chips_logophor::telegraph_io;
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 use std::path::PathBuf;
 
 fn machine() -> Logophor {
@@ -132,7 +132,7 @@ fn assemble(src: &str) -> Vec<u8> {
 
 struct Mem(Vec<u8>);
 
-impl emu_core::media::MediaBackend for Mem {
+impl mimic_core::media::MediaBackend for Mem {
     fn len(&self) -> u64 {
         self.0.len() as u64
     }
@@ -935,7 +935,7 @@ fn press(m: &mut Logophor, ch: char) {
                 at,
                 target: InputTarget::Keyboard,
                 event: InputEvent::Key {
-                    machine_key: emu_core::input::MachineKey(u16::from(u)),
+                    machine_key: mimic_core::input::MachineKey(u16::from(u)),
                     down,
                 },
             });
@@ -1313,7 +1313,7 @@ struct HubNet {
     me: usize,
 }
 
-impl emu_core::host::NetBackend for HubNet {
+impl mimic_core::host::NetBackend for HubNet {
     fn connect(&mut self, _: SocketKind, _: &str, _: u16) -> Result<NetHandle, host::NetError> {
         Ok(1)
     }
@@ -2093,7 +2093,7 @@ fn keys(m: &mut Logophor, usages: &[u8], down: bool) {
             at,
             target: InputTarget::Keyboard,
             event: InputEvent::Key {
-                machine_key: emu_core::input::MachineKey(u16::from(u)),
+                machine_key: mimic_core::input::MachineKey(u16::from(u)),
                 down,
             },
         });
@@ -2448,7 +2448,7 @@ struct TestHost {
     asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
-impl emu_core::host::NetBackend for TestHost {
+impl mimic_core::host::NetBackend for TestHost {
     fn connect(
         &mut self,
         kind: SocketKind,

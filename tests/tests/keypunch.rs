@@ -2,11 +2,11 @@
 //! typing a FORTRAN program into the stacker's `.crd` file, committing it
 //! and reading it back; the picture is saved to `target/tmp/keypunch.png`.
 
-use emu_core::controls::ControlId;
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, Machine};
 use machine_keypunch::{ctl, keys, SLOT_STACKER};
+use mimic_core::controls::ControlId;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, Machine};
 
 fn send(m: &mut dyn Machine, target: InputTarget, event: InputEvent) {
     let at = m.now();
@@ -50,7 +50,7 @@ fn typ(m: &mut dyn Machine, s: &str) {
 
 #[test]
 fn a_fortran_deck_into_a_text_file() {
-    let registry = emu_machines::registry();
+    let registry = mimic_machines::registry();
     let mut m = registry
         .create("keypunch", &MachineConfig::default())
         .unwrap();
@@ -76,7 +76,7 @@ fn a_fortran_deck_into_a_text_file() {
     typ(m.as_mut(), "C HELLO FROM THE 029\n");
     typ(m.as_mut(), "\t\tPRINT *, 'HELLO (1+2)'\n");
     typ(m.as_mut(), "\t\tEND");
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp");
     std::fs::create_dir_all(&out).unwrap();
     std::fs::write(out.join("keypunch.png"), png).unwrap();

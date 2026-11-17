@@ -11,7 +11,7 @@ workspace = true
 [dependencies]
 asm-ada.workspace = true
 cpu-ada.workspace = true
-emu-core.workspace = true
+mimic-core.workspace = true
 
 [[bin]]
 name = "brass"

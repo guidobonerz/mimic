@@ -1,5 +1,5 @@
 //! Graphics data views of the CPC's CRTC 6845 and Gate Array (see
-//! `emu_core::gfx`): the screen memory as the two chips address it now,
+//! `mimic_core::gfx`): the screen memory as the two chips address it now,
 //! and the pens' hardware colours; side-effect free.
 //!
 //! Addressing (cpcwiki, "CRTC" and "Gate Array"): the CRTC counts the
@@ -13,11 +13,11 @@
 //! splits and mode or ink changes during the frame (rasters) are not
 //! reproduced, and the CRTC type 0 skew is ignored.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxPixels, GfxView, GfxViewInfo, OPT_ADDR,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use crate::crtc::Crtc;
 use crate::gate_array::{byte_pens, video_address, GateArray};

@@ -136,7 +136,7 @@ impl ICache {
         self.tag[Self::index(caar)] &= !VALID;
     }
 
-    pub(crate) fn save(&self, w: &mut emu_core::StateWriter) {
+    pub(crate) fn save(&self, w: &mut mimic_core::StateWriter) {
         for (t, d) in self.tag.iter().zip(&self.data) {
             w.u32(*t);
             w.u32(*d);
@@ -145,8 +145,8 @@ impl ICache {
 
     pub(crate) fn load(
         &mut self,
-        r: &mut emu_core::StateReader<'_>,
-    ) -> Result<(), emu_core::StateError> {
+        r: &mut mimic_core::StateReader<'_>,
+    ) -> Result<(), mimic_core::StateError> {
         for i in 0..64 {
             self.tag[i] = r.u32()?;
             self.data[i] = r.u32()?;
@@ -272,7 +272,7 @@ impl Pipe {
         }
     }
 
-    pub(crate) fn save(&self, w: &mut emu_core::StateWriter) {
+    pub(crate) fn save(&self, w: &mut mimic_core::StateWriter) {
         for v in [
             self.bus_free,
             self.ird_ready,
@@ -289,8 +289,8 @@ impl Pipe {
 
     pub(crate) fn load(
         &mut self,
-        r: &mut emu_core::StateReader<'_>,
-    ) -> Result<(), emu_core::StateError> {
+        r: &mut mimic_core::StateReader<'_>,
+    ) -> Result<(), mimic_core::StateError> {
         let mut n = Self::default();
         for v in [
             &mut n.bus_free,

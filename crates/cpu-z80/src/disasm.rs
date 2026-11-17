@@ -1,7 +1,7 @@
 //! Z80 disassembler (Zilog mnemonics, hex operands with `$`), decoded by
 //! the same opcode fields as the executor.
 
-use emu_core::{Bus, Flow, Instr, Size};
+use mimic_core::{Bus, Flow, Instr, Size};
 
 const R: [&str; 8] = ["B", "C", "D", "E", "H", "L", "(HL)", "A"];
 const RP: [&str; 4] = ["BC", "DE", "HL", "SP"];
@@ -376,7 +376,7 @@ pub fn disassemble(bus: &dyn Bus, addr: u16) -> Instr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::testing::FlatBus;
+    use mimic_core::testing::FlatBus;
 
     fn dis(code: &[u8]) -> (String, usize) {
         let mut bus = FlatBus::new(16);

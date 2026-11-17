@@ -397,8 +397,8 @@ impl Profile {
     /// profile to take for a frame of `output`, when it is not this one.
     /// Only the Logophor 16's pair does (its RGB tube and its green
     /// phosphor tube, chosen by the program); every other profile stays.
-    pub fn for_output(&self, output: emu_core::frame::OutputType) -> Option<Self> {
-        use emu_core::frame::OutputType;
+    pub fn for_output(&self, output: mimic_core::frame::OutputType) -> Option<Self> {
+        use mimic_core::frame::OutputType;
         let want = match (self.name.as_str(), output) {
             ("logophor", OutputType::Monochrome) => "logophor-scope",
             ("logophor-scope", o) if o != OutputType::Monochrome => "logophor",
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn the_logophor_monitor_follows_its_tube_switch() {
-        use emu_core::frame::OutputType;
+        use mimic_core::frame::OutputType;
         let rgb = Profile::default_for("logophor16");
         assert_eq!(rgb.name, "logophor");
         assert!(rgb.for_output(OutputType::Rgb).is_none());

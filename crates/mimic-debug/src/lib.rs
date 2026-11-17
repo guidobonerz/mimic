@@ -1,0 +1,21 @@
+//! Debug server: native protocol + adapter (VICE binary monitor).
+//!
+//! The native protocol (JSON lines over TCP, see [`protocol`]) covers
+//! execution control including asynchronous steps, all breakpoint kinds
+//! with conditions ([`expr`]), memory, registers, chips, savestates and the
+//! raster trace. It talks to machines only through `mimic-core` traits
+//! (golden rule 1).
+
+#![forbid(unsafe_code)]
+
+pub mod basic_expr;
+pub mod expr;
+pub mod host;
+pub mod protocol;
+pub mod server;
+pub mod session;
+pub mod symbols;
+pub mod vice;
+
+pub use server::{Control, DebugServer, Endpoint, ServerConfig, Service};
+pub use session::{FrameHook, IdleHook, Session};

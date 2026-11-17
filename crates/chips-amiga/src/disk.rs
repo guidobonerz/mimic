@@ -15,7 +15,7 @@
 //! - **DSKBYTR**: 15 DSKBYT (a byte arrived, cleared by reading), 14 DMAON,
 //!   13 DSKWRITE, 12 WORDEQUAL, 7–0 the last byte.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::chipram::ChipRam;
 use crate::int;

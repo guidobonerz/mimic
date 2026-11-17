@@ -7,7 +7,7 @@
 //! conversion below (BT.601 YUV → RGB, no gamma) is this project's own; CRT
 //! colour reproduction belongs to `video-crt`.
 
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 
 /// (luma 0–32, chroma angle in 1/16 turns, has chroma)
 const COLORS: [(u8, u8, bool); 16] = [

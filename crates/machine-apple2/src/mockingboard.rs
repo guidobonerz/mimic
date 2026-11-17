@@ -13,7 +13,7 @@
 
 use chips_amstrad::ay::Ay;
 use chips_cbm::via::Via;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mockingboard {

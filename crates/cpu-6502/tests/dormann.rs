@@ -6,8 +6,8 @@
 //! Run with `cargo test -p cpu-6502 --release -- --ignored dormann`.
 
 use cpu_6502::Cpu6502;
-use emu_core::testing::FlatBus;
-use emu_core::{Cpu, CycleResult};
+use mimic_core::testing::FlatBus;
+use mimic_core::{Cpu, CycleResult};
 
 const START: u32 = 0x0400;
 const SUCCESS: u32 = 0x3469;

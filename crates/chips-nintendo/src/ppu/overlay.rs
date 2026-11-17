@@ -1,4 +1,4 @@
-//! Debug overlays of the 2C02/2C07 (see `emu_core::overlay`): `sprites`,
+//! Debug overlays of the 2C02/2C07 (see `mimic_core::overlay`): `sprites`,
 //! a box per sprite on the lines sprite evaluation put it on (so a sprite
 //! moved or multiplexed during the frame shows where it really was), and
 //! `sprite0`, a mark where the sprite-0 hit happened (NESdev wiki, "PPU
@@ -9,7 +9,7 @@
 //! machine ends the frame with [`Ppu::overlay_end_frame`] at the start of
 //! vertical blank, where its frames end.
 
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 use super::{Ppu, BORDER, HEIGHT};
 use crate::overlay::{sprite_rects, Record, Span};

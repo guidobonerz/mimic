@@ -5,8 +5,8 @@ pub use machine_c64::keyboard::typed_events as type_text;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::input::InputEvent;
     use machine_c64::keyboard::keys;
+    use mimic_core::input::InputEvent;
 
     #[test]
     fn shifted_characters_hold_shift() {

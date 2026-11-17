@@ -1,11 +1,11 @@
 //! VIC-20 boot to BASIC with real ROMs (user-supplied via `EMU_ROM_DIR`,
 //! e.g. a `vic20/` subfolder).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --test vic20_boot -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --test vic20_boot -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size, StopReason};
+use mimic_core::machine::Machine;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size, StopReason};
 
 /// "READY." in screen codes.
 const READY: [u8; 6] = [0x12, 0x05, 0x01, 0x04, 0x19, 0x2e];
@@ -14,11 +14,11 @@ fn boot(model: &str, ram: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, "vic20").expect("ROMs"),
-        video_format: emu_core::frame::VideoStandard::parse(model),
+        video_format: mimic_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     config.options.insert("ram".into(), ram.into());
-    let mut m = emu_machines::registry().create("vic20", &config).unwrap();
+    let mut m = mimic_machines::registry().create("vic20", &config).unwrap();
     let mut dbg = DebugHooks::new();
     for _ in 0..150 {
         assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
@@ -51,7 +51,7 @@ fn find(screen: &[u8], text: &str) -> Option<usize> {
 fn vic20_boots_and_runs_basic() {
     let mut m = boot("pal", "none");
     let s = screen(m.as_mut(), 0x1e00);
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("vic20_boot.png");
     std::fs::write(&out, png).unwrap();
     assert!(

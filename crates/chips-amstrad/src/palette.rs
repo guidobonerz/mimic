@@ -3,7 +3,7 @@
 //! intensity measures nearer 40 % than 50 % on real machines; 50 % is used
 //! here, the monitor profile adjusts the rest.
 
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 
 /// Levels 0, ½, 1 of each hardware colour as (R, G, B).
 const LEVELS: [(u8, u8, u8); 32] = [

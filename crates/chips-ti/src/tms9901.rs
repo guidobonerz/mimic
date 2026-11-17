@@ -22,7 +22,7 @@
 //! data manual (1977): CRU bit assignments, clock mode, the decrementer
 //! and interrupt logic. The implementation is this project's own.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Tms9901 {

@@ -4,7 +4,7 @@
 //! comments: `n` an internal microcycle (2 clocks), `np` a prefetch, `nr`/
 //! `nR` reads (low/high word), `nw`/`nW` writes, `ns`/`nS` stack writes.
 
-use emu_core::Size;
+use mimic_core::Size;
 
 use crate::ea::{mode, Ea, Sz};
 use crate::exec020;

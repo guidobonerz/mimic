@@ -32,7 +32,7 @@
 //! "KC85/5 – CAOS 4.x Systembeschreibung" (KC-Club) for the KC85/5's RAM
 //! segments and USER ROM.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::modules::Modules;
 use crate::Model;

@@ -21,10 +21,10 @@
 //! (<https://www.astro.physik.uni-potsdam.de/~mwendt/2600scene/specs.html>),
 //! "Keyboard Controllers".
 
-use emu_core::input::InputEvent;
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::InputEvent;
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 use crate::joystick::pin;
 
@@ -132,7 +132,7 @@ impl PortDevice for Keypad {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     fn press(k: &mut Keypad, key: u16, down: bool) {
         k.input(&InputEvent::Key {

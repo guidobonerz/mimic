@@ -1,12 +1,12 @@
 //! ZX81 with the Sinclair ROM (user-supplied via `EMU_ROM_DIR`, e.g. a
 //! `zx81/` subfolder with `zx81.rom` or `zx81.edition3.rom`).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test zx81_boot -- --ignored --nocapture
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test zx81_boot -- --ignored --nocapture
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size, StopReason};
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size, StopReason};
 use std::sync::{Arc, Mutex};
 
 /// System variables: D_FILE (the display file) and E_LINE.
@@ -18,7 +18,7 @@ fn machine() -> Box<dyn Machine> {
         roms: media_backends::roms::load(&dir, "zx81").expect("ROMs"),
         ..MachineConfig::default()
     };
-    emu_machines::registry().create("zx81", &config).unwrap()
+    mimic_machines::registry().create("zx81", &config).unwrap()
 }
 
 fn run(m: &mut dyn Machine, fields: usize) {
@@ -90,7 +90,7 @@ fn type_text(m: &mut dyn Machine, text: &str) {
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()

@@ -1,0 +1,1418 @@
+//! One debugged machine: executes protocol commands. No I/O here; the
+//! server feeds requests in and ships responses and events out, and tests
+//! drive it directly.
+//!
+//! Breakpoint conditions and ignore counts live here, not in
+//! [`DebugHooks`]: the hooks stop on every hit, the session evaluates the
+//! condition with peeks and resumes silently if the hit does not count.
+//! Asynchronous steps (`step_over`, `step_out`, `run_to`) are run modes of
+//! the running session; [`Session::run_slice`] finishes them.
+
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use serde_json::{json, Value};
+
+use mimic_core::{
+    BeamPos, BpId, BreakpointKind, DebugHooks, DebugTarget, DeviceId, Flow, InterruptKind, Machine,
+    MemSpaceId, RegisterSet, ResetKind, Size, StopReason, TraceConfig, TraceEvent, TraceRange,
+};
+
+use crate::expr::{self, Expr};
+use crate::host::HostServices;
+use crate::protocol::{
+    self, BreakSpec, Command, RangeSpec, Request, MAX_DISASM, MAX_PEEK, MAX_STEP_COUNT,
+    MAX_TRACE_CAPACITY,
+};
+use crate::symbols::{self, SymbolTable};
+
+/// Frames a synchronous step may run before giving up (e.g. `step_instr` on
+/// a CPU held off the bus). Bounded so a command can never hang the session.
+const MAX_STEP_FRAMES: u32 = 500;
+
+/// Session-side breakpoint data.
+#[derive(Clone, Debug)]
+struct BpMeta {
+    condition: Option<(String, Expr)>,
+    ignore: u32,
+    /// Hits that counted (condition held).
+    hits: u32,
+    /// Where `[addr]` in the condition reads.
+    space: MemSpaceId,
+    /// Whose registers the condition sees.
+    device: DeviceId,
+}
+
+/// What the running session is doing besides running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunMode {
+    Free,
+    /// One instruction of the main CPU.
+    Instr,
+    /// A call is being stepped over: an internal breakpoint at the return
+    /// address that only counts at the caller's stack depth or above.
+    StepOver {
+        bp: BpId,
+        min_sp: Option<u32>,
+    },
+    /// Until an instruction with [`Flow::Return`] leaves the stack above
+    /// `sp0`. `current` is the flow of the instruction being executed.
+    StepOut {
+        sp0: u32,
+        current: Option<Flow>,
+    },
+    RunTo {
+        bp: BpId,
+    },
+}
+
+/// What breakpoint conditions see.
+struct CondCtx<'a> {
+    regs: RegisterSet,
+    target: Option<&'a dyn DebugTarget>,
+    space: MemSpaceId,
+    beam: Option<BeamPos>,
+}
+
+impl expr::Context for CondCtx<'_> {
+    fn reg(&self, name: &str) -> Option<u32> {
+        self.regs.get(name)
+    }
+
+    fn peek(&self, addr: u32) -> Option<u32> {
+        self.target?.peek(self.space, addr, Size::Byte)
+    }
+
+    fn beam(&self, name: &str) -> Option<u32> {
+        let b = self.beam?;
+        match name {
+            "line" => Some(u32::from(b.line)),
+            "cycle" => Some(u32::from(b.cycle)),
+            "frame" => Some(b.frame as u32),
+            _ => None,
+        }
+    }
+}
+
+/// The stack pointer by its conventional names.
+fn stack_pointer(regs: &RegisterSet) -> Option<u32> {
+    regs.get("SP").or_else(|| regs.get("S"))
+}
+
+pub struct Session {
+    machine: Box<dyn Machine>,
+    machine_id: String,
+    hooks: DebugHooks,
+    running: bool,
+    mode: RunMode,
+    bp_meta: BTreeMap<BpId, BpMeta>,
+    /// Events produced since the last [`Session::take_events`].
+    events: Vec<Value>,
+    /// Connections that want each optional event (`frame_ready` …).
+    subscribers: BTreeMap<String, u32>,
+    /// Why the last run ended (`None` while running or never run).
+    last_stop: Option<StopReason>,
+    symbols: SymbolTable,
+    frame_hook: Option<FrameHook>,
+    idle_hook: Option<IdleHook>,
+    host: Option<Box<dyn HostServices>>,
+    /// The journal of the machine's host services (network, folder), if
+    /// the frontend attached one: recordings carry it, replays install it.
+    journal: Option<mimic_core::host::Journal>,
+    recording: Option<devices::Recording>,
+    search: Option<mimic_cheats::search::Search>,
+    cheats_dir: Option<std::path::PathBuf>,
+    rewind: rewind::Rewind,
+    /// Overlays the machine records (shared with the preview) and the ones
+    /// this debugger asked for.
+    overlay_wants: mimic_core::overlay::OverlayWants,
+    dbg_overlays: Vec<String>,
+    /// BASIC breakpoints and steps.
+    basic: basic::BasicDbg,
+    /// Text being typed into the machine (`type`, a frontend's paste).
+    feed: mimic_core::input::TextFeed,
+}
+
+/// Called with the machine whenever its picture may have changed: after
+/// every frame while running (`true`), and after stops and commands while
+/// paused (`false`; the frame may be partial). The live preview feeds its
+/// frame copies from here; a frontend without its own audio output may also
+/// collect the machine's samples here.
+pub type FrameHook = Box<dyn FnMut(&mut dyn Machine, bool) + Send>;
+
+/// Called regularly (every few tens of milliseconds) while the machine is
+/// paused and nothing else happens: the preview answers its graphics view
+/// requests from here.
+pub type IdleHook = Box<dyn FnMut(&mut dyn Machine) + Send>;
+
+impl Session {
+    pub fn new(machine: Box<dyn Machine>, machine_id: impl Into<String>) -> Self {
+        // Multi-byte freezes and watch values follow each space's byte
+        // order (the Amiga's spaces are big-endian).
+        let mut hooks = DebugHooks::new();
+        for s in machine.memory_spaces() {
+            hooks.set_big_endian(s.id, s.big_endian);
+        }
+        Self {
+            machine,
+            machine_id: machine_id.into(),
+            hooks,
+            running: false,
+            mode: RunMode::Free,
+            bp_meta: BTreeMap::new(),
+            events: Vec::new(),
+            subscribers: BTreeMap::new(),
+            last_stop: None,
+            symbols: SymbolTable::default(),
+            frame_hook: None,
+            idle_hook: None,
+            host: None,
+            journal: None,
+            recording: None,
+            search: None,
+            cheats_dir: None,
+            rewind: rewind::Rewind::default(),
+            overlay_wants: mimic_core::overlay::OverlayWants::default(),
+            dbg_overlays: Vec::new(),
+            basic: basic::BasicDbg::default(),
+            feed: mimic_core::input::TextFeed::new(),
+        }
+    }
+
+    /// Whether text can be typed into this machine
+    /// ([`Machine::typed_keys`]).
+    pub fn can_type(&self) -> bool {
+        self.machine.typed_keys("", self.machine.now()).is_some()
+    }
+
+    /// Type `text` on the machine's keyboard, behind text still waiting
+    /// (a paste, the `type` command): handed to the machine line by line
+    /// while it runs, as input events like the user's own keys (and
+    /// recorded like them). Returns the characters taken.
+    pub fn type_text(&mut self, text: &str) -> Result<usize, String> {
+        if !self.can_type() {
+            return Err("this machine cannot type text".into());
+        }
+        if text.is_empty() {
+            return Ok(0);
+        }
+        match self.feed.push(text) {
+            0 => Err(format!(
+                "too much text (at most {} characters waiting)",
+                mimic_core::input::MAX_FEED
+            )),
+            n => Ok(n),
+        }
+    }
+
+    /// Drop the text not yet typed; returns its length in characters.
+    pub fn type_cancel(&mut self) -> usize {
+        let n = self.feed.pending();
+        self.feed.clear();
+        n
+    }
+
+    /// Characters still waiting to be typed.
+    pub fn typing_pending(&self) -> usize {
+        self.feed.pending()
+    }
+
+    /// Text is waiting or keys of it are still going down: a frontend may
+    /// run the machine faster than real time meanwhile.
+    pub fn typing(&self) -> bool {
+        self.feed.active(self.machine.now())
+    }
+
+    /// The next piece of typed text, once the last is through.
+    fn pump_typing(&mut self) {
+        if self.feed.pending() == 0 {
+            return;
+        }
+        // Straight into the system's keyboard buffer where there is one;
+        // a recording carries input events only, so then the keys type.
+        let events = if self.recording.is_some() {
+            self.feed.pump(self.machine.as_ref())
+        } else {
+            self.feed.feed(self.machine.as_mut())
+        };
+        for ev in events {
+            self.input(ev);
+        }
+    }
+
+    /// The freeze list in savestate form.
+    fn freeze_state(&self) -> Vec<u8> {
+        let mut w = mimic_core::StateWriter::new();
+        self.hooks.save_freezes(&mut w);
+        w.into_bytes()
+    }
+
+    fn load_freeze_state(&mut self, data: &[u8]) -> Result<(), String> {
+        self.hooks
+            .load_freezes(&mut mimic_core::StateReader::new(data))
+            .map_err(|e| format!("freezes rejected: {e:?}"))
+    }
+
+    /// Lend device and media services from the frontend.
+    pub fn set_host(&mut self, host: Box<dyn HostServices>) {
+        self.host = Some(host);
+    }
+
+    /// The journal the frontend wrapped the machine's host services in
+    /// ([`mimic_core::Machine::attach_host`]): `record_start`/`record_stop`
+    /// record it with the input, `replay_input` answers the host calls
+    /// from the recording.
+    pub fn set_host_journal(&mut self, journal: mimic_core::host::Journal) {
+        self.journal = Some(journal);
+    }
+
+    /// Queue an input event for the machine; recorded while
+    /// `record_start` is active. Frontends route all input through here.
+    pub fn input(&mut self, ev: mimic_core::input::TimedInput) {
+        if let Some(rec) = &mut self.recording {
+            if rec.events.len() < crate::host::MAX_EVENTS {
+                rec.events.push(ev);
+            }
+        }
+        self.machine.input(ev);
+        if !self.running {
+            self.mutated();
+        }
+    }
+
+    pub fn set_frame_hook(&mut self, hook: FrameHook) {
+        self.frame_hook = Some(hook);
+    }
+
+    pub fn set_idle_hook(&mut self, hook: IdleHook) {
+        self.idle_hook = Some(hook);
+    }
+
+    /// Run the idle hook (the emulation loop calls this while paused).
+    pub fn idle(&mut self) {
+        if let Some(hook) = &mut self.idle_hook {
+            hook(self.machine.as_mut());
+        }
+    }
+
+    /// Run the frame hook now (adapters call this after commands that
+    /// bypass [`Session::handle`]).
+    pub fn notify_frame(&mut self) {
+        if let Some(hook) = &mut self.frame_hook {
+            hook(self.machine.as_mut(), self.running);
+        }
+    }
+
+    pub fn machine_id(&self) -> &str {
+        &self.machine_id
+    }
+
+    pub fn machine(&self) -> &dyn Machine {
+        self.machine.as_ref()
+    }
+
+    pub fn machine_mut(&mut self) -> &mut dyn Machine {
+        self.machine.as_mut()
+    }
+
+    /// Why the session is paused: the end of the last run, `StepDone` for
+    /// `pause` and synchronous steps. `None` while running.
+    pub fn last_stop(&self) -> Option<StopReason> {
+        if self.running {
+            None
+        } else {
+            self.last_stop
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+
+    /// Start or stop free running (no events; for frontends at start-up).
+    pub fn set_running(&mut self, running: bool) {
+        self.cancel_mode();
+        self.running = running;
+    }
+
+    /// A connection subscribed to (`true`) or left (`false`) an optional
+    /// event.
+    pub fn subscriber(&mut self, event: &str, added: bool) {
+        let n = self.subscribers.entry(event.to_string()).or_default();
+        if added {
+            *n += 1;
+        } else {
+            *n = n.saturating_sub(1);
+        }
+    }
+
+    pub fn frame_subscriber(&mut self, added: bool) {
+        self.subscriber("frame_ready", added);
+    }
+
+    fn wanted(&self, event: &str) -> bool {
+        self.subscribers.get(event).is_some_and(|&n| n > 0)
+    }
+
+    /// Events produced by commands and [`Session::run_slice`] since the last call.
+    pub fn take_events(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.events)
+    }
+
+    /// Emulated duration of one field, for real-time pacing.
+    pub fn frame_duration(&self) -> Duration {
+        let s = self.machine.framebuffer().signal;
+        let pixels = u64::from(s.lines_per_field) * u64::from(s.total_pixels);
+        match u64::from(s.pixel_clock_hz) {
+            0 => Duration::from_millis(20),
+            hz => Duration::from_nanos(pixels.saturating_mul(1_000_000_000) / hz),
+        }
+    }
+
+    /// While running: emulate up to the end of the current frame. A run that
+    /// ends (breakpoint, finished step, jam) queues a `stopped` event; a
+    /// finished frame queues `frame_ready` if anyone subscribed.
+    pub fn run_slice(&mut self) {
+        if !self.running {
+            return;
+        }
+        self.apply_overlays();
+        self.pump_typing();
+        let reason = match self.mode {
+            RunMode::Free | RunMode::StepOver { .. } | RunMode::RunTo { .. } => self.run_filtered(),
+            RunMode::Instr => {
+                self.hooks.set_instr_step(true);
+                self.run_filtered()
+            }
+            RunMode::StepOut { .. } => self.run_step_out(),
+        };
+        if let Some(w) = self.hooks.take_blocked_write() {
+            if self.wanted("freeze_blocked_write") {
+                self.events.push(json!({
+                    "event": "freeze_blocked_write", "space": w.space.0, "addr": w.addr,
+                    "size": w.size.bytes(), "value": w.value,
+                    "beam": protocol::beam_json(self.machine.beam()),
+                }));
+            }
+        }
+        match reason {
+            StopReason::FrameDone => {
+                self.rewind_frame_done();
+                if self.wanted("frame_ready") {
+                    self.events.push(json!({
+                        "event": "frame_ready",
+                        "beam": protocol::beam_json(self.machine.beam()),
+                    }));
+                }
+            }
+            reason => {
+                self.cancel_mode();
+                self.running = false;
+                self.last_stop = Some(reason);
+                let mut ev = self.state_json(&reason);
+                ev["event"] = json!("stopped");
+                self.events.push(ev);
+                if self.wanted("stopped_frame") {
+                    self.events.extend(self.stopped_frame_event());
+                }
+            }
+        }
+        self.notify_frame();
+    }
+
+    /// Step out: instruction by instruction until the frame ends or a
+    /// return leaves the current subroutine.
+    fn run_step_out(&mut self) -> StopReason {
+        loop {
+            let RunMode::StepOut { sp0, current } = self.mode else {
+                return StopReason::StepDone;
+            };
+            let flow = match current {
+                Some(f) => f,
+                None => match self.main_pc() {
+                    Some(pc) => self.disasm_main(pc).map_or(Flow::Normal, |i| i.flow),
+                    None => return StopReason::StepDone,
+                },
+            };
+            self.mode = RunMode::StepOut {
+                sp0,
+                current: Some(flow),
+            };
+            self.hooks.set_instr_step(true);
+            match self.run_filtered() {
+                StopReason::StepDone => {
+                    self.mode = RunMode::StepOut { sp0, current: None };
+                    let sp = self.main_regs().as_ref().and_then(stack_pointer);
+                    if flow == Flow::Return && sp.is_some_and(|sp| sp > sp0) {
+                        return StopReason::StepDone;
+                    }
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// `run_frame`, resuming silently past hits that do not count.
+    fn run_filtered(&mut self) -> StopReason {
+        loop {
+            let reason = self.machine.run_frame(&mut self.hooks);
+            if let Some(reason) = self.counts(reason) {
+                return reason;
+            }
+        }
+    }
+
+    /// The stop to report for `reason`, or `None` to keep running.
+    fn counts(&mut self, reason: StopReason) -> Option<StopReason> {
+        let id = match reason {
+            StopReason::Breakpoint(id) | StopReason::Watchpoint { id, .. } => id,
+            other => return Some(other),
+        };
+        match self.mode {
+            RunMode::RunTo { bp } if bp == id => return Some(StopReason::StepDone),
+            RunMode::StepOver { bp, min_sp } if bp == id => {
+                let sp = self.main_regs().as_ref().and_then(stack_pointer);
+                return match (min_sp, sp) {
+                    (Some(min), Some(sp)) if sp < min => None,
+                    _ => Some(StopReason::StepDone),
+                };
+            }
+            _ => {}
+        }
+        if let Some(decision) = self.basic_hit(id) {
+            return decision;
+        }
+        let Some(meta) = self.bp_meta.get(&id).cloned() else {
+            return Some(reason);
+        };
+        if let Some((_, cond)) = &meta.condition {
+            if !self.condition_holds(cond, meta.device, meta.space) {
+                return None;
+            }
+        }
+        let meta = self.bp_meta.get_mut(&id)?;
+        meta.hits = meta.hits.saturating_add(1);
+        (meta.hits > meta.ignore).then_some(reason)
+    }
+
+    fn condition_holds(&mut self, cond: &Expr, device: DeviceId, space: MemSpaceId) -> bool {
+        let beam = self.machine.beam();
+        let regs = self
+            .machine
+            .debug_target(device)
+            .map(|t| t.regs())
+            .unwrap_or_default();
+        let owner = self.space_owner(space).unwrap_or(device);
+        let target = self.machine.debug_target(owner).map(|t| &*t);
+        cond.holds(&CondCtx {
+            regs,
+            target,
+            space,
+            beam,
+        })
+    }
+
+    /// End an asynchronous step: remove its internal breakpoint.
+    fn cancel_mode(&mut self) {
+        match std::mem::replace(&mut self.mode, RunMode::Free) {
+            RunMode::StepOver { bp, .. } | RunMode::RunTo { bp } => {
+                self.hooks.remove_breakpoint(bp);
+            }
+            RunMode::Instr | RunMode::StepOut { .. } => self.hooks.set_instr_step(false),
+            RunMode::Free => {}
+        }
+        self.basic_cancel();
+    }
+
+    /// Start an asynchronous run.
+    fn start(&mut self, mode: RunMode) -> Value {
+        self.basic_before_run();
+        self.mode = mode;
+        self.running = true;
+        let pc = self.main_pc();
+        self.events.push(json!({"event": "resumed", "pc": pc}));
+        json!({"running": true})
+    }
+
+    pub fn handle(&mut self, req: Request) -> Value {
+        let response = match self.execute(req.cmd) {
+            Ok(result) => protocol::ok(req.id, result),
+            Err(msg) => protocol::err(Some(req.id), msg),
+        };
+        if !self.running {
+            self.notify_frame();
+        }
+        response
+    }
+
+    /// Execute a command directly (adapters): the `result` of a response,
+    /// or its error message.
+    pub fn command(&mut self, cmd: Command) -> Result<Value, String> {
+        self.execute(cmd)
+    }
+
+    fn execute(&mut self, cmd: Command) -> Result<Value, String> {
+        // Changes from outside the emulation: older rewind states lack them.
+        let mutates = matches!(
+            cmd,
+            Command::Reset { .. }
+                | Command::SetReg { .. }
+                | Command::Poke { .. }
+                | Command::LoadState { .. }
+                | Command::FreezeAdd { .. }
+                | Command::FreezeRemove { .. }
+                | Command::FreezeToggle { .. }
+                | Command::CheatsLoad { .. }
+                | Command::ConnectDevice { .. }
+                | Command::DisconnectDevice { .. }
+                | Command::InsertMedia { .. }
+                | Command::EjectMedia { .. }
+                | Command::SetDriveMode { .. }
+                | Command::MediaControl { .. }
+                | Command::SetControl { .. }
+                | Command::Input { .. }
+                | Command::ReplayInput { .. }
+                | Command::BasicSetVar { .. }
+        );
+        let moves = matches!(
+            cmd,
+            Command::Resume
+                | Command::StepInstr { .. }
+                | Command::StepOver
+                | Command::StepOut
+                | Command::StepCycle
+                | Command::StepLine
+                | Command::StepFrame
+                | Command::RunTo { .. }
+                | Command::Reset { .. }
+                | Command::LoadState { .. }
+                | Command::Rewind { .. }
+                | Command::BasicStep { .. }
+                | Command::BasicRunTo { .. }
+        );
+        let instr = matches!(cmd, Command::StepInstr { .. });
+        if moves {
+            self.rewind.on_boundary = false;
+        }
+        let result = self.dispatch(cmd);
+        if instr
+            && result
+                .as_ref()
+                .is_ok_and(|r| r["reason"]["kind"] == "step_done")
+        {
+            self.rewind.on_boundary = true;
+        }
+        if mutates && result.is_ok() {
+            self.mutated();
+        }
+        result
+    }
+
+    fn dispatch(&mut self, cmd: Command) -> Result<Value, String> {
+        match cmd {
+            Command::Info => Ok(self.info()),
+            Command::Capabilities => Ok(self.capabilities()),
+            Command::Subscribe { events } => {
+                // The server keeps per-connection subscriptions; here only
+                // validate (a session without a server has one "connection").
+                for e in &events {
+                    if !protocol::OPTIONAL_EVENTS.contains(&e.as_str()) {
+                        return Err(format!("unknown optional event '{e}'"));
+                    }
+                }
+                Ok(json!({"events": events}))
+            }
+            Command::Pause => {
+                let was_running = self.running;
+                self.cancel_mode();
+                self.running = false;
+                if was_running {
+                    self.last_stop = Some(StopReason::StepDone);
+                }
+                let state = self.state_json(&StopReason::StepDone);
+                if was_running {
+                    // Clients of asynchronous runs wait for `stopped`.
+                    let mut ev = state.clone();
+                    ev["event"] = json!("stopped");
+                    self.events.push(ev);
+                }
+                Ok(state)
+            }
+            Command::Resume => {
+                self.cancel_mode();
+                Ok(self.start(RunMode::Free))
+            }
+            Command::StepInstr { count } => {
+                let count = count.unwrap_or(1);
+                if count == 0 || count > MAX_STEP_COUNT {
+                    return Err(format!("count must be 1–{MAX_STEP_COUNT}"));
+                }
+                self.stop_for_sync();
+                self.anchor_before_step();
+                let mut reason = StopReason::StepDone;
+                for _ in 0..count {
+                    self.hooks.set_instr_step(true);
+                    reason = self.run_until_stop();
+                    self.hooks.set_instr_step(false);
+                    if reason != StopReason::StepDone {
+                        break;
+                    }
+                }
+                Ok(self.state_json(&reason))
+            }
+            Command::StepOver => {
+                self.stop_for_sync();
+                let pc = self.main_pc().ok_or("main CPU has no PC")?;
+                let ins = self.disasm_main(pc).ok_or("no debug target")?;
+                if ins.flow != Flow::Call {
+                    return Ok(self.start(RunMode::Instr));
+                }
+                let space = self.main_space()?;
+                let ret = pc.wrapping_add(ins.bytes.len() as u32);
+                let bp = self
+                    .hooks
+                    .add_breakpoint(BreakpointKind::Exec { space, addr: ret });
+                let min_sp = self.main_regs().as_ref().and_then(stack_pointer);
+                Ok(self.start(RunMode::StepOver { bp, min_sp }))
+            }
+            Command::StepOut => {
+                self.stop_for_sync();
+                let regs = self.main_regs().ok_or("no debug target")?;
+                let sp0 = stack_pointer(&regs).ok_or("main CPU has no stack pointer")?;
+                Ok(self.start(RunMode::StepOut { sp0, current: None }))
+            }
+            Command::RunTo {
+                space,
+                addr,
+                symbol,
+            } => {
+                let (space, addr) = self.resolve(space, addr, symbol.as_deref())?;
+                self.stop_for_sync();
+                let bp = self
+                    .hooks
+                    .add_breakpoint(BreakpointKind::Exec { space, addr });
+                Ok(self.start(RunMode::RunTo { bp }))
+            }
+            Command::StepCycle => {
+                self.stop_for_sync();
+                self.anchor_before_step();
+                let reason = self.machine.step_cycle();
+                Ok(self.state_json(&reason))
+            }
+            Command::StepLine => {
+                if self.machine.beam().is_none() {
+                    return Err("machine has no video beam".into());
+                }
+                self.stop_for_sync();
+                self.anchor_before_step();
+                self.hooks.set_line_step(true);
+                let reason = self.run_until_stop();
+                self.hooks.set_line_step(false);
+                Ok(self.state_json(&reason))
+            }
+            Command::StepFrame => {
+                self.stop_for_sync();
+                self.anchor_before_step();
+                let reason = self.run_filtered();
+                Ok(self.state_json(&reason))
+            }
+            Command::Reset { kind } => {
+                let kind = match kind.as_deref() {
+                    None | Some("soft") => ResetKind::Soft,
+                    Some("hard") => ResetKind::Hard,
+                    Some(other) => return Err(format!("unknown reset kind '{other}'")),
+                };
+                self.stop_for_sync();
+                self.machine.reset(kind);
+                Ok(self.state_json(&StopReason::StepDone))
+            }
+            Command::Regs { device } => {
+                let dev = self.device(device.as_deref())?;
+                let target = self.machine.debug_target(dev).ok_or("no debug target")?;
+                let regs: Vec<Value> = target
+                    .regs()
+                    .0
+                    .iter()
+                    .map(|r| json!({"name": r.name, "value": r.value, "bits": r.bits}))
+                    .collect();
+                Ok(json!({"device": dev.0, "regs": regs}))
+            }
+            Command::SetReg {
+                device,
+                name,
+                value,
+            } => {
+                let dev = self.device(device.as_deref())?;
+                let target = self.machine.debug_target(dev).ok_or("no debug target")?;
+                if target.regs().get(&name).is_none() {
+                    return Err(format!("unknown register '{name}'"));
+                }
+                target.set_reg(&name, value);
+                Ok(json!({}))
+            }
+            Command::Peek { space, addr, len } => {
+                if len > MAX_PEEK {
+                    return Err(format!("len exceeds {MAX_PEEK}"));
+                }
+                let space = self.space(space)?;
+                let owner = self.space_owner(space)?;
+                let target = self.machine.debug_target(owner).ok_or("no debug target")?;
+                let bytes = (0..len)
+                    .map(|i| target.peek(space, addr.wrapping_add(i), Size::Byte))
+                    .collect::<Option<Vec<u32>>>()
+                    .ok_or("address space not readable")?;
+                let frozen = self.frozen_offsets(space, addr, len);
+                Ok(json!({"space": space.0, "addr": addr, "bytes": bytes, "frozen": frozen}))
+            }
+            Command::Poke { space, addr, bytes } => {
+                if bytes.len() > MAX_PEEK as usize {
+                    return Err(format!("more than {MAX_PEEK} bytes"));
+                }
+                let space = self.space(space)?;
+                let owner = self.space_owner(space)?;
+                let target = self.machine.debug_target(owner).ok_or("no debug target")?;
+                for (i, b) in bytes.iter().enumerate() {
+                    let a = addr.wrapping_add(i as u32);
+                    if !target.poke(space, a, Size::Byte, u32::from(*b)) {
+                        return Err(format!("address {a:#x} is not writable"));
+                    }
+                }
+                Ok(json!({}))
+            }
+            Command::Disasm {
+                device,
+                addr,
+                count,
+            } => {
+                let count = count.unwrap_or(10).min(MAX_DISASM);
+                let dev = self.device(device.as_deref())?;
+                // Labels of the device's own view of memory.
+                let space = self
+                    .machine
+                    .memory_spaces()
+                    .iter()
+                    .find(|s| s.device == dev)
+                    .map(|s| s.id);
+                let target = self.machine.debug_target(dev).ok_or("no debug target")?;
+                let mut addr = match addr {
+                    Some(a) => a,
+                    None => target.regs().get("PC").ok_or("device has no PC")?,
+                };
+                let mut lines = Vec::new();
+                for _ in 0..count {
+                    let ins = target.disassemble(addr);
+                    let mut line = json!({
+                        "addr": ins.addr,
+                        "bytes": ins.bytes,
+                        "text": ins.to_string(),
+                        "flow": format!("{:?}", ins.flow).to_ascii_lowercase(),
+                    });
+                    if let Some(space) = space {
+                        if let Some(l) = self.symbols.name_at(space, ins.addr) {
+                            line["label"] = json!(l);
+                        }
+                        if let Some(l) = ins.target.and_then(|t| self.symbols.name_at(space, t)) {
+                            line["target_label"] = json!(l);
+                        }
+                    }
+                    lines.push(line);
+                    addr = addr.wrapping_add(ins.bytes.len().max(1) as u32);
+                }
+                Ok(json!({"device": dev.0, "lines": lines}))
+            }
+            Command::Beam => Ok(protocol::beam_json(self.machine.beam())),
+            Command::Chips => {
+                let chips: Vec<Value> = self
+                    .machine
+                    .chips()
+                    .iter()
+                    .map(|c| {
+                        let regs: Vec<Value> = c
+                            .regs
+                            .iter()
+                            .map(|r| {
+                                json!({
+                                    "name": r.name, "addr": r.addr,
+                                    "value": r.value, "bits": r.bits,
+                                })
+                            })
+                            .collect();
+                        json!({"name": c.name, "regs": regs})
+                    })
+                    .collect();
+                Ok(json!(chips))
+            }
+            Command::RewindConfig { frames, budget_mb } => {
+                Ok(self.rewind_config(frames, budget_mb))
+            }
+            Command::RewindInfo => Ok(self.rewind_info()),
+            Command::Rewind { count } => self.rewind_back(count.unwrap_or(1)),
+            Command::StepBack { count } => self.step_back(count.unwrap_or(1)),
+            Command::OverlayList => Ok(self.overlay_list()),
+            Command::OverlaySet { overlays } => self.overlay_set(overlays),
+            Command::OverlayGet { overlay } => self.overlay_get(&overlay),
+            Command::Frame {
+                screen,
+                format,
+                scale,
+                overlays,
+            } => self.frame_image(screen.as_deref(), format.as_deref(), scale, &overlays),
+            Command::Vectors => self
+                .machine
+                .vectors()
+                .map(|v| mimic_preview::vectors_json(&v))
+                .ok_or_else(|| format!("{} has no vector display", self.machine_id)),
+            Command::GfxList => Ok(self.gfx_list()),
+            Command::GfxGet {
+                view,
+                format,
+                scale,
+                options,
+            } => self.gfx_get(&view, format.as_deref(), scale, &options),
+            Command::BasicInfo => self.basic_info(),
+            Command::BasicState => self.basic_state(),
+            Command::BasicList { from, to } => self.basic_list(from, to),
+            Command::BasicVars => self.basic_vars(),
+            Command::BasicArray { name, first, count } => self.basic_array(&name, first, count),
+            Command::BasicSetVar { name, index, value } => self.basic_set_var(&name, index, &value),
+            Command::BasicStack => self.basic_stack(),
+            Command::BasicBreakAdd {
+                line,
+                statement,
+                enabled,
+                condition,
+                ignore,
+            } => self.basic_break_add(line, statement, enabled, condition, ignore),
+            Command::Type { text } => {
+                let queued = match text {
+                    Some(text) => self.type_text(&text)?,
+                    None if self.can_type() => 0,
+                    None => return Err("this machine cannot type text".into()),
+                };
+                Ok(json!({
+                    "queued": queued,
+                    "pending": self.typing_pending(),
+                    "active": self.typing(),
+                }))
+            }
+            Command::TypeCancel => Ok(json!({ "dropped": self.type_cancel() })),
+            Command::BasicBreakCondition { bp, condition } => {
+                self.basic_break_condition(bp, condition)
+            }
+            Command::BasicBreakRemove { bp } => self.basic_break_remove(bp),
+            Command::BasicBreakEnable { bp, enabled } => self.basic_break_enable(bp, enabled),
+            Command::BasicBreakList => Ok(self.basic_break_list()),
+            Command::BasicStep { kind } => {
+                self.stop_for_sync();
+                self.basic_step(kind.as_deref())?;
+                Ok(self.start(RunMode::Free))
+            }
+            Command::BasicRunTo { line, statement } => {
+                self.stop_for_sync();
+                self.basic_run_to(line, statement)?;
+                Ok(self.start(RunMode::Free))
+            }
+            Command::BreakAdd(spec) => self.break_add(spec),
+            Command::BreakRemove { bp } => {
+                let id = BpId(bp);
+                if !self.bp_meta.contains_key(&id) {
+                    return Err(format!("no breakpoint {bp}"));
+                }
+                self.bp_meta.remove(&id);
+                self.hooks.remove_breakpoint(id);
+                Ok(json!({}))
+            }
+            Command::BreakCondition { bp, condition } => {
+                let condition = match condition {
+                    Some(text) => {
+                        let e = expr::parse(&text).map_err(|e| format!("condition: {e}"))?;
+                        Some((text, e))
+                    }
+                    None => None,
+                };
+                let meta = self
+                    .bp_meta
+                    .get_mut(&BpId(bp))
+                    .ok_or_else(|| format!("no breakpoint {bp}"))?;
+                meta.condition = condition;
+                Ok(json!({}))
+            }
+            Command::BreakEnable { bp, enabled } => {
+                let id = BpId(bp);
+                if !self.bp_meta.contains_key(&id) {
+                    return Err(format!("no breakpoint {bp}"));
+                }
+                self.hooks.set_breakpoint_enabled(id, enabled);
+                Ok(json!({}))
+            }
+            Command::BreakList => Ok(self.break_list()),
+            Command::SaveState => Ok(json!({
+                "data": protocol::base64_encode(&self.machine.save_state()),
+                "freezes": protocol::base64_encode(&self.freeze_state()),
+            })),
+            Command::LoadState { data, freezes } => {
+                let bytes = protocol::base64_decode(&data)?;
+                let freezes = freezes.map(|f| protocol::base64_decode(&f)).transpose()?;
+                self.stop_for_sync();
+                self.machine
+                    .load_state(&bytes)
+                    .map_err(|e| format!("savestate rejected: {e:?}"))?;
+                if let Some(f) = freezes {
+                    self.load_freeze_state(&f)?;
+                }
+                Ok(self.state_json(&StopReason::StepDone))
+            }
+            Command::FreezeAdd {
+                space,
+                addr,
+                symbol,
+                size,
+                value,
+                mode,
+                label,
+                enabled,
+            } => {
+                let (space, addr) = self.resolve(space, addr, symbol.as_deref())?;
+                self.freeze_add(freezer::FreezeSpec {
+                    space: Some(space.0),
+                    addr,
+                    size,
+                    value,
+                    mode,
+                    label,
+                    enabled,
+                })
+            }
+            Command::FreezeRemove { freeze } => self.freeze_remove(freeze),
+            Command::FreezeToggle { freeze, enabled } => self.freeze_toggle(freeze, enabled),
+            Command::FreezeList => Ok(self.freeze_list()),
+            Command::SearchStart {
+                space,
+                size,
+                addr,
+                len,
+            } => self.search_start(space, size, addr, len),
+            Command::SearchNext { op, value } => self.search_next(&op, value),
+            Command::SearchResults { max } => self.search_results(max),
+            Command::CheatsLoad { path, text, format } => {
+                self.cheats_load(path.as_deref(), text, format.as_deref())
+            }
+            Command::CheatsSave { path } => self.cheats_save(path.as_deref()),
+            Command::TraceStart {
+                instructions,
+                reads,
+                writes,
+                capacity,
+            } => {
+                let capacity = capacity.unwrap_or(65_536);
+                if capacity == 0 || capacity > MAX_TRACE_CAPACITY {
+                    return Err(format!("capacity must be 1–{MAX_TRACE_CAPACITY}"));
+                }
+                let ranges = |s: &Self, list: Vec<RangeSpec>| {
+                    list.into_iter()
+                        .map(|r| {
+                            if r.len > mimic_core::debug::MAX_RANGE {
+                                return Err(format!(
+                                    "range longer than {:#x}",
+                                    mimic_core::debug::MAX_RANGE
+                                ));
+                            }
+                            Ok(TraceRange {
+                                space: s.space(r.space)?,
+                                addr: r.addr,
+                                len: r.len,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                };
+                let config = TraceConfig {
+                    instructions,
+                    reads: ranges(self, reads)?,
+                    writes: ranges(self, writes)?,
+                    capacity: capacity as usize,
+                };
+                self.hooks.set_trace(config);
+                Ok(json!({}))
+            }
+            Command::SymbolsLoad {
+                path,
+                text,
+                format,
+                space,
+            } => {
+                let space = self.space(space)?;
+                let text = match (path, text) {
+                    (Some(path), None) => {
+                        let meta = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?;
+                        if meta.len() > symbols::MAX_FILE as u64 {
+                            return Err(format!("{path}: larger than {} bytes", symbols::MAX_FILE));
+                        }
+                        let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+                        String::from_utf8_lossy(&bytes).into_owned()
+                    }
+                    (None, Some(text)) => text,
+                    _ => return Err("give either path or text".into()),
+                };
+                let format = match format.as_deref() {
+                    Some(f) => symbols::Format::from_name(f)
+                        .ok_or_else(|| format!("unknown format '{f}'"))?,
+                    None => symbols::Format::detect(&text).ok_or("unknown symbol file format")?,
+                };
+                let (syms, bad) = symbols::parse(&text, format);
+                let count = syms.len();
+                for (name, addr) in syms {
+                    self.symbols.insert(space, name, addr);
+                }
+                Ok(json!({
+                    "format": format.name(), "loaded": count, "skipped": bad,
+                    "total": self.symbols.len(),
+                }))
+            }
+            Command::SymbolsList => {
+                let list: Vec<Value> = self
+                    .symbols
+                    .iter()
+                    .map(
+                        |(name, space, addr)| json!({"name": name, "space": space.0, "addr": addr}),
+                    )
+                    .collect();
+                Ok(json!(list))
+            }
+            Command::SymbolsClear => {
+                self.symbols.clear();
+                Ok(json!({}))
+            }
+            Command::ListPorts => Ok(self.list_ports()),
+            Command::ConnectDevice { port, device } => self.connect_device(port, &device),
+            Command::DisconnectDevice { port } => self.disconnect_device(port),
+            Command::ListMediaSlots => Ok(self.list_media_slots()),
+            Command::InsertMedia { slot, path } => self.insert_media(slot, &path),
+            Command::EjectMedia { slot } => self.eject_media(slot),
+            Command::FlushMedia { slot } => self.flush_media(slot),
+            Command::SetDriveMode { slot, mode } => self.set_drive_mode(slot, &mode),
+            Command::MediaControl { slot, command } => self.media_control(slot, &command),
+            Command::Controls => Ok(self.controls()),
+            Command::SetControl { control, value } => self.set_control(control, value),
+            Command::Input { events } => self.input_command(&events),
+            Command::RecordStart => Ok(self.record_start()),
+            Command::RecordStop => self.record_stop(),
+            Command::ReplayInput { replay } => self.replay_input(&replay),
+            Command::TraceStop => {
+                self.hooks.set_trace(TraceConfig::default());
+                Ok(json!({}))
+            }
+            Command::TraceRead => {
+                let dropped = self.hooks.trace_dropped();
+                let entries: Vec<Value> = self
+                    .hooks
+                    .drain_trace()
+                    .iter()
+                    .map(|e| {
+                        let mut v = match e.event {
+                            TraceEvent::Instr { device, pc } => {
+                                json!({"kind": "instr", "device": device.0, "pc": pc})
+                            }
+                            TraceEvent::Read {
+                                space, addr, value, ..
+                            } => json!({
+                                "kind": "read", "space": space.0, "addr": addr, "value": value,
+                            }),
+                            TraceEvent::Write {
+                                space, addr, value, ..
+                            } => json!({
+                                "kind": "write", "space": space.0, "addr": addr, "value": value,
+                            }),
+                        };
+                        v["beam"] = protocol::beam_json(Some(e.beam));
+                        v
+                    })
+                    .collect();
+                Ok(json!({"entries": entries, "dropped": dropped}))
+            }
+        }
+    }
+
+    /// Synchronous execution commands stop a running session first.
+    fn stop_for_sync(&mut self) {
+        self.cancel_mode();
+        self.running = false;
+        self.last_stop = Some(StopReason::StepDone);
+    }
+
+    /// Space and address from either `addr` or `symbol`.
+    fn resolve(
+        &self,
+        space: Option<u16>,
+        addr: Option<u32>,
+        symbol: Option<&str>,
+    ) -> Result<(MemSpaceId, u32), String> {
+        match (addr, symbol) {
+            (Some(addr), None) => Ok((self.space(space)?, addr)),
+            (None, Some(name)) => {
+                let (sym_space, addr) = self
+                    .symbols
+                    .lookup(name)
+                    .ok_or_else(|| format!("unknown symbol '{name}'"))?;
+                let space = match space {
+                    Some(_) => self.space(space)?,
+                    None => sym_space,
+                };
+                Ok((space, addr))
+            }
+            (Some(_), Some(_)) => Err("give either addr or symbol".into()),
+            (None, None) => Err("addr missing".into()),
+        }
+    }
+
+    fn break_add(&mut self, spec: BreakSpec) -> Result<Value, String> {
+        let located = match (spec.addr, spec.symbol.as_deref()) {
+            (None, None) => None,
+            (addr, symbol) => Some(self.resolve(spec.space, addr, symbol)?),
+        };
+        let space = match located {
+            Some((space, _)) => space,
+            None => self.space(spec.space)?,
+        };
+        let device = self.space_owner(space)?;
+        let addr = || located.map(|(_, a)| a).ok_or("addr missing");
+        let len = spec.len.unwrap_or(1);
+        if len == 0 || len > mimic_core::debug::MAX_RANGE {
+            return Err(format!("len must be 1–{:#x}", mimic_core::debug::MAX_RANGE));
+        }
+        let kind = match spec.kind.as_deref().unwrap_or("exec") {
+            "exec" => BreakpointKind::Exec {
+                space,
+                addr: addr()?,
+            },
+            "read" => BreakpointKind::Read {
+                space,
+                addr: addr()?,
+                len,
+            },
+            "write" => BreakpointKind::Write {
+                space,
+                addr: addr()?,
+                len,
+            },
+            "raster" => {
+                if self.machine.beam().is_none() {
+                    return Err("machine has no video beam".into());
+                }
+                BreakpointKind::Raster {
+                    line: spec.line.ok_or("line missing")?,
+                    cycle: spec.cycle,
+                }
+            }
+            "irq" => BreakpointKind::Interrupt(InterruptKind::Irq),
+            "nmi" => BreakpointKind::Interrupt(InterruptKind::Nmi),
+            other => return Err(format!("unknown breakpoint kind '{other}'")),
+        };
+        let condition = match spec.condition {
+            Some(text) => {
+                let e = expr::parse(&text).map_err(|e| format!("condition: {e}"))?;
+                Some((text, e))
+            }
+            None => None,
+        };
+        let id = self.hooks.add_breakpoint(kind);
+        if spec.enabled == Some(false) {
+            self.hooks.set_breakpoint_enabled(id, false);
+        }
+        self.bp_meta.insert(
+            id,
+            BpMeta {
+                condition,
+                ignore: spec.ignore.unwrap_or(0),
+                hits: 0,
+                space,
+                device,
+            },
+        );
+        Ok(json!({"bp": id.0}))
+    }
+
+    fn break_list(&self) -> Value {
+        let list: Vec<Value> = self
+            .hooks
+            .breakpoints()
+            .filter_map(|(id, bp)| {
+                let meta = self.bp_meta.get(&id)?;
+                let mut v = json!({
+                    "bp": id.0, "enabled": bp.enabled, "hits": meta.hits, "ignore": meta.ignore,
+                    "condition": meta.condition.as_ref().map(|(t, _)| t),
+                });
+                match bp.kind {
+                    BreakpointKind::Exec { space, addr } => {
+                        v["kind"] = json!("exec");
+                        v["space"] = json!(space.0);
+                        v["addr"] = json!(addr);
+                    }
+                    BreakpointKind::Read { space, addr, len }
+                    | BreakpointKind::Write { space, addr, len } => {
+                        let write = matches!(bp.kind, BreakpointKind::Write { .. });
+                        v["kind"] = json!(if write { "write" } else { "read" });
+                        v["space"] = json!(space.0);
+                        v["addr"] = json!(addr);
+                        v["len"] = json!(len);
+                    }
+                    BreakpointKind::Raster { line, cycle } => {
+                        v["kind"] = json!("raster");
+                        v["line"] = json!(line);
+                        v["cycle"] = json!(cycle.unwrap_or(0));
+                    }
+                    BreakpointKind::Interrupt(InterruptKind::Irq) => v["kind"] = json!("irq"),
+                    BreakpointKind::Interrupt(InterruptKind::Nmi) => v["kind"] = json!("nmi"),
+                }
+                Some(v)
+            })
+            .collect();
+        json!(list)
+    }
+
+    /// Run frames until something other than the end of a frame stops us.
+    fn run_until_stop(&mut self) -> StopReason {
+        for _ in 0..MAX_STEP_FRAMES {
+            match self.run_filtered() {
+                StopReason::FrameDone => continue,
+                reason => return reason,
+            }
+        }
+        StopReason::FrameDone
+    }
+
+    fn device(&self, name: Option<&str>) -> Result<DeviceId, String> {
+        let devices = self.machine.devices();
+        match name {
+            None => devices
+                .first()
+                .copied()
+                .ok_or_else(|| "machine has no devices".into()),
+            Some(n) => devices
+                .into_iter()
+                .find(|d| d.0 == n)
+                .ok_or_else(|| format!("unknown device '{n}'")),
+        }
+    }
+
+    fn space(&self, id: Option<u16>) -> Result<MemSpaceId, String> {
+        let spaces = self.machine.memory_spaces();
+        match id {
+            None => spaces
+                .first()
+                .map(|s| s.id)
+                .ok_or_else(|| "machine has no memory spaces".into()),
+            Some(id) => spaces
+                .iter()
+                .find(|s| s.id.0 == id)
+                .map(|s| s.id)
+                .ok_or_else(|| format!("unknown memory space {id}")),
+        }
+    }
+
+    fn space_owner(&self, space: MemSpaceId) -> Result<DeviceId, String> {
+        self.machine
+            .memory_spaces()
+            .iter()
+            .find(|s| s.id == space)
+            .map(|s| s.device)
+            .ok_or_else(|| format!("unknown memory space {}", space.0))
+    }
+
+    /// The main CPU's own view of memory: its first memory space.
+    fn main_space(&self) -> Result<MemSpaceId, String> {
+        let main = self.device(None)?;
+        self.machine
+            .memory_spaces()
+            .iter()
+            .find(|s| s.device == main)
+            .map(|s| s.id)
+            .ok_or_else(|| "main CPU has no memory space".into())
+    }
+
+    fn main_regs(&mut self) -> Option<RegisterSet> {
+        let dev = *self.machine.devices().first()?;
+        Some(self.machine.debug_target(dev)?.regs())
+    }
+
+    fn main_pc(&mut self) -> Option<u32> {
+        self.main_regs()?.get("PC")
+    }
+
+    fn disasm_main(&mut self, addr: u32) -> Option<mimic_core::Instr> {
+        let dev = *self.machine.devices().first()?;
+        Some(self.machine.debug_target(dev)?.disassemble(addr))
+    }
+
+    fn state_json(&mut self, reason: &StopReason) -> Value {
+        let mut reason_json = match self.basic.take_reason() {
+            Some(basic) => basic,
+            None => protocol::stop_json(reason),
+        };
+        if let StopReason::Breakpoint(id) | StopReason::Watchpoint { id, .. } = reason {
+            if let Some(meta) = self.bp_meta.get(id) {
+                reason_json["hits"] = json!(meta.hits);
+            }
+        }
+        json!({
+            "reason": reason_json,
+            "pc": self.main_pc(),
+            "beam": protocol::beam_json(self.machine.beam()),
+        })
+    }
+
+    fn info(&self) -> Value {
+        let spaces: Vec<Value> = self
+            .machine
+            .memory_spaces()
+            .iter()
+            .map(|s| {
+                json!({
+                    "id": s.id.0, "name": s.name, "device": s.device.0,
+                    "addr_bits": s.addr_bits, "big_endian": s.big_endian,
+                })
+            })
+            .collect();
+        let devices: Vec<&str> = self.machine.devices().iter().map(|d| d.0).collect();
+        json!({
+            "machine": self.machine_id,
+            "protocol_version": protocol::PROTOCOL_VERSION,
+            "devices": devices,
+            "memory_spaces": spaces,
+            "running": self.running,
+            "beam": protocol::beam_json(self.machine.beam()),
+        })
+    }
+
+    fn capabilities(&mut self) -> Value {
+        let mut kinds: Vec<&str> = protocol::BREAK_KINDS.to_vec();
+        if self.machine.beam().is_none() {
+            kinds.retain(|k| *k != "raster");
+        }
+        json!({
+            "protocol": protocol::PROTOCOL_NAME,
+            "version": protocol::PROTOCOL_VERSION,
+            "commands": protocol::COMMANDS,
+            "breakpoint_kinds": kinds,
+            "events": protocol::EVENTS,
+            "optional_events": protocol::OPTIONAL_EVENTS,
+            "beam": self.machine.beam().is_some(),
+            "vectors": self.machine.vectors().is_some(),
+            "basic": self.has_basic(),
+            "type": self.can_type(),
+            // Machine-specific extensions (none yet); generic clients ignore them.
+            "extensions": [],
+        })
+    }
+}
+
+mod basic;
+mod devices;
+mod freezer;
+mod gfx;
+mod overlay;
+pub mod rewind;
+
+pub use rewind::DEFAULT_BUDGET_MB;
+
+#[cfg(test)]
+mod tests;

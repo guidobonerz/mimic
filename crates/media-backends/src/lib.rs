@@ -41,7 +41,7 @@ pub fn host_journal(
     net: bool,
     folder: Option<std::path::PathBuf>,
     mounts: &[(String, std::path::PathBuf)],
-) -> Result<emu_core::host::Journal, String> {
+) -> Result<mimic_core::host::Journal, String> {
     host_journal_with_printer(net, folder, mounts, None)
 }
 
@@ -52,8 +52,8 @@ pub fn host_journal_with_printer(
     folder: Option<std::path::PathBuf>,
     mounts: &[(String, std::path::PathBuf)],
     printer: Option<host_print::PrinterOutput>,
-) -> Result<emu_core::host::Journal, String> {
-    use emu_core::host::{FileHost, MountFileHost};
+) -> Result<mimic_core::host::Journal, String> {
+    use mimic_core::host::{FileHost, MountFileHost};
     let root = folder.map(|f| Box::new(host_fs::FsFolder::new(f)) as Box<dyn FileHost>);
     let files = if mounts.is_empty() && printer.is_none() {
         root
@@ -70,7 +70,7 @@ pub fn host_journal_with_printer(
         }
         Some(Box::new(m) as Box<dyn FileHost>)
     };
-    Ok(emu_core::host::Journal::new(
+    Ok(mimic_core::host::Journal::new(
         Some(Box::new(net::StdNet::new(net))),
         files,
     ))
@@ -157,7 +157,7 @@ pub fn parse_mount(s: &str) -> Result<(String, std::path::PathBuf), String> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use emu_core::host::{lock, OpenMode};
+    use mimic_core::host::{lock, OpenMode};
 
     #[test]
     fn host_folders_mount_into_the_uci_root() {

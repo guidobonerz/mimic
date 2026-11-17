@@ -15,9 +15,9 @@
 //! Sources: Altirra Hardware Reference Manual, "Cartridges"; the CAR type
 //! list of the Atari800 project's documentation.
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
 use media::car::Car;
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::slot::CartSlot;
 

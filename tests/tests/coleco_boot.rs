@@ -1,26 +1,28 @@
 //! ColecoVision with the Coleco BIOS (user-supplied via `EMU_ROM_DIR`, e.g.
 //! a `coleco/` subfolder with `coleco.rom`), and optionally cartridges.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test coleco_boot -- --ignored --nocapture
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test coleco_boot -- --ignored --nocapture
 //!
 //! `EMU_COLECO_CARTS=/path` runs every `.col`/`.rom`/`.bin` there for a few
 //! seconds and saves a picture of each in the test's temporary folder
 //! (Phase 11 gate: "user-supplied cartridges run"); `EMU_FRAMES=n` the
 //! length (default 900 fields).
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, StopReason};
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, StopReason};
 
 fn machine(model: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let config = MachineConfig {
         roms: media_backends::roms::load(&dir, "coleco").expect("ROMs"),
-        video_format: emu_core::frame::VideoStandard::parse(model),
+        video_format: mimic_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
-    emu_machines::registry().create("coleco", &config).unwrap()
+    mimic_machines::registry()
+        .create("coleco", &config)
+        .unwrap()
 }
 
 fn run(m: &mut dyn Machine, fields: usize) {
@@ -31,7 +33,7 @@ fn run(m: &mut dyn Machine, fields: usize) {
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()

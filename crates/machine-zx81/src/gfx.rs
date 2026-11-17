@@ -1,4 +1,4 @@
-//! Graphics data views (see `emu_core::gfx`): the character set and the
+//! Graphics data views (see `mimic_core::gfx`): the character set and the
 //! display file, decoded from memory as the CPU sees it, side-effect free.
 //!
 //! **Character set** (Sinclair ZX81 BASIC Programming manual, appendix A,
@@ -17,8 +17,8 @@
 //! file the same way the display routine does (a line also ends after 32
 //! codes).
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR};
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR};
 
 use crate::{Zx81, CPU_SPACE};
 
@@ -160,8 +160,8 @@ impl Zx81 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::registry::MachineConfig;
-    use emu_core::Machine;
+    use mimic_core::registry::MachineConfig;
+    use mimic_core::Machine;
 
     const W: Rgb8 = Rgb8 {
         r: 255,

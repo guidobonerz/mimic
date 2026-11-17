@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 devices-printer.workspace = true
-emu-core.workspace = true
+mimic-core.workspace = true
 cpu-m68k.workspace = true
 chips-cbm.workspace = true
 devices-input.workspace = true

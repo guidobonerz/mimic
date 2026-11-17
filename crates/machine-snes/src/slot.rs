@@ -13,7 +13,7 @@
 //! it at the end of every frame the game changed them, on flush and on
 //! eject. A new cartridge starts from zeros (and ejects the old file).
 
-use emu_core::media::{Media, MediaError, MediaSlot};
+use mimic_core::media::{Media, MediaError, MediaSlot};
 
 use crate::dsp;
 pub use devices_cartridge::slot::BatterySlot;

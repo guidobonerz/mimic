@@ -1,20 +1,20 @@
 //! A disk change in drive 8 is noticed by the 1541's DOS: `LOAD"$",8`
 //! after an eject and an insert lists the new disk.
 //!
-//!     EMU_ROM_DIR=$PWD/roms EMU_DISK_A=a.d64 EMU_DISK_B=b.d64 cargo test -p emu-tests --release --test c64_disk_change -- --ignored --nocapture
+//!     EMU_ROM_DIR=$PWD/roms EMU_DISK_A=a.d64 EMU_DISK_B=b.d64 cargo test -p mimic-tests --release --test c64_disk_change -- --ignored --nocapture
 
-use emu_core::media::{MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, Size, StopReason};
+use mimic_core::media::{MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, Size, StopReason};
 
-fn frames(m: &mut dyn emu_core::Machine, n: usize) {
+fn frames(m: &mut dyn mimic_core::Machine, n: usize) {
     let mut dbg = DebugHooks::new();
     for _ in 0..n {
         assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
     }
 }
 
-fn type_text(m: &mut dyn emu_core::Machine, text: &str) {
+fn type_text(m: &mut dyn mimic_core::Machine, text: &str) {
     let (events, _) = machine_c64::keyboard::typed_events(text, m.now().0);
     for e in events {
         m.input(e);
@@ -22,7 +22,7 @@ fn type_text(m: &mut dyn emu_core::Machine, text: &str) {
 }
 
 /// The screen's first 10 lines as text (screen codes A-Z, 0-9, space).
-fn screen(m: &mut dyn emu_core::Machine) -> String {
+fn screen(m: &mut dyn mimic_core::Machine) -> String {
     let t = m.debug_target(machine_c64::CPU).unwrap();
     let mut out = String::new();
     for row in 0..12 {
@@ -50,7 +50,7 @@ fn a_changed_disk_shows_its_own_directory() {
         roms,
         ..MachineConfig::default()
     };
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     let slot = m
         .media_slots()
         .iter()
@@ -94,11 +94,11 @@ fn a_changed_disk_shows_its_own_directory() {
 }
 
 /// A hash of the picture, to see when it stands still.
-fn picture_hash(m: &dyn emu_core::Machine) -> u64 {
+fn picture_hash(m: &dyn mimic_core::Machine) -> u64 {
     use std::hash::{Hash, Hasher};
     let f = m.framebuffer();
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    if let emu_core::frame::PixelData::Indexed { pixels, .. } = f.pixels {
+    if let mimic_core::frame::PixelData::Indexed { pixels, .. } = f.pixels {
         pixels.hash(&mut h);
     }
     h.finish()
@@ -109,7 +109,7 @@ fn picture_hash(m: &dyn emu_core::Machine) -> u64 {
 /// then eject, wait EMU_GAP frames, insert EMU_DISK_B and see whether the
 /// picture moves on. Snapshots in target/tmp/disk-change-*.png.
 ///
-///     EMU_ROM_DIR=$PWD/roms EMU_DISK_A=EdgeOfDisgrace_0.d64 EMU_DISK_B=EdgeOfDisgrace_1a.d64 cargo test -p emu-tests --release --test c64_disk_change demo_continues -- --ignored --nocapture
+///     EMU_ROM_DIR=$PWD/roms EMU_DISK_A=EdgeOfDisgrace_0.d64 EMU_DISK_B=EdgeOfDisgrace_1a.d64 cargo test -p mimic-tests --release --test c64_disk_change demo_continues -- --ignored --nocapture
 #[test]
 #[ignore = "needs EMU_ROM_DIR and EMU_DISK_A/EMU_DISK_B"]
 fn demo_continues_after_the_disk_change() {
@@ -127,7 +127,7 @@ fn demo_continues_after_the_disk_change() {
             }
         }
     }
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     let slot = m
         .media_slots()
         .iter()
@@ -148,10 +148,10 @@ fn demo_continues_after_the_disk_change() {
         .unwrap_or(20000);
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/tmp");
     std::fs::create_dir_all(&out).unwrap();
-    let snap = |m: &dyn emu_core::Machine, name: &str| {
+    let snap = |m: &dyn mimic_core::Machine, name: &str| {
         std::fs::write(
             out.join(format!("disk-change-{name}.png")),
-            emu_preview::encode_png(&m.framebuffer()),
+            mimic_preview::encode_png(&m.framebuffer()),
         )
         .unwrap();
     };

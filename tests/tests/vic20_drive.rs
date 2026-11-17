@@ -1,13 +1,13 @@
 //! Loading from a true-emulated 1541 over the VIC-20's serial bus, with
 //! the real KERNAL and DOS (user-supplied via `EMU_ROM_DIR`).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test vic20_drive -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test vic20_drive -- --ignored
 
-use emu_core::media::{Media, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Machine, Size};
 use media::D64;
 use media_backends::image::MemoryBackend;
+use mimic_core::media::{Media, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Machine, Size};
 
 /// `10 PRINT "HI"` as a tokenised BASIC program saved on an unexpanded
 /// VIC-20 ($1001).
@@ -54,7 +54,7 @@ fn autostart_loads_and_runs_from_drive_8() {
         config.options.insert("drive8".into(), drive.into());
         config.options.insert("autostart".into(), "on".into());
         config.options.insert("ram".into(), ram.into());
-        let mut m = emu_machines::registry().create("vic20", &config).unwrap();
+        let mut m = mimic_machines::registry().create("vic20", &config).unwrap();
         let slot = m
             .media_slots()
             .into_iter()
@@ -74,7 +74,7 @@ fn autostart_loads_and_runs_from_drive_8() {
                 break;
             }
         }
-        let png = emu_preview::encode_png(&m.framebuffer());
+        let png = mimic_preview::encode_png(&m.framebuffer());
         let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("vic20_drive.png");
         std::fs::write(&out, png).unwrap();
         assert!(

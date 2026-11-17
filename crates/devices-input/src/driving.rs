@@ -15,10 +15,10 @@
 //! (<https://www.astro.physik.uni-potsdam.de/~mwendt/2600scene/specs.html>),
 //! "Driving Controllers".
 
-use emu_core::input::{Dirs, InputEvent};
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::{Dirs, InputEvent};
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 use crate::joystick::pin;
 

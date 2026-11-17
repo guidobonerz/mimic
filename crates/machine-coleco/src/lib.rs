@@ -73,16 +73,16 @@ use devices_cartridge::coleco::ColecoCart;
 use devices_cartridge::CartSlot;
 use devices_input::coleco::pin;
 use devices_input::{ColecoController, ColecoKind};
-use emu_core::audio::Decimator;
-use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::overlay::{Overlay, OverlayInfo};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -116,7 +116,7 @@ pub fn entry() -> MachineEntry {
         id: "coleco",
         name: "ColecoVision",
         models: &[],
-        video_formats: emu_core::registry::PAL_NTSC,
+        video_formats: mimic_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Coleco::new(config)?)),
     }
 }
@@ -497,7 +497,7 @@ impl Coleco {
                 chips_t: 0,
                 sample_due: 0,
                 field_done: false,
-                audio: Decimator::new(hz, emu_core::SAMPLE_RATE)
+                audio: Decimator::new(hz, mimic_core::SAMPLE_RATE)
                     .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
                 dc: [0; 2],
                 samples: Vec::new(),
@@ -783,10 +783,10 @@ impl Machine for Coleco {
         self.board.vdp.line_row(line)
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.board.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -883,10 +883,10 @@ impl Machine for Coleco {
         self.sched.now()
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
         vec![
-            emu_core::ControlInfo::button(0, "POWER", false),
-            emu_core::ControlInfo::button(1, "RESET", false),
+            mimic_core::ControlInfo::button(0, "POWER", false),
+            mimic_core::ControlInfo::button(1, "RESET", false),
         ]
     }
 

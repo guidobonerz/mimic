@@ -1,11 +1,11 @@
 //! The MEGA65 with the user's ROM (`~/.mimic/roms/mega65/mega65.rom` or
 //! `EMU_ROM_DIR`): the Open ROMs (LGPL-3), later the official 920xxx ROM.
 //!
-//!     cargo test -p emu-tests --release --test mega65_boot -- --ignored
+//!     cargo test -p mimic-tests --release --test mega65_boot -- --ignored
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Machine, MemSpaceId, Size};
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Machine, MemSpaceId, Size};
 
 fn mega65() -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("no ROM folder");
@@ -13,7 +13,9 @@ fn mega65() -> Box<dyn Machine> {
         roms: media_backends::roms::load(&dir, "mega65").expect("ROMs"),
         ..MachineConfig::default()
     };
-    emu_machines::registry().create("mega65", &config).unwrap()
+    mimic_machines::registry()
+        .create("mega65", &config)
+        .unwrap()
 }
 
 fn run(m: &mut dyn Machine, frames: u32) {
@@ -76,7 +78,7 @@ fn open_roms_boot_to_ready() {
 /// FNV-1a over the picture's RGB bytes.
 fn picture_hash(m: &dyn Machine) -> u64 {
     let f = m.framebuffer();
-    let emu_core::frame::PixelData::Rgb(pixels) = f.pixels else {
+    let mimic_core::frame::PixelData::Rgb(pixels) = f.pixels else {
         panic!("RGB frame")
     };
     pixels
@@ -100,7 +102,7 @@ fn open_roms_start_screen_matches_its_reference() {
     run(m, 200);
     let hash = picture_hash(m);
     if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
-        let png = emu_preview::encode_png(&m.framebuffer());
+        let png = mimic_preview::encode_png(&m.framebuffer());
         std::fs::write(std::path::Path::new(&d).join("mega65-open-roms.png"), png).unwrap();
         eprintln!("picture hash {hash:016x}");
     }
@@ -193,7 +195,7 @@ fn type_text(m: &mut dyn Machine, text: &str) {
             let now = m.now().0;
             for k in list {
                 m.input(TimedInput {
-                    at: emu_core::Cycle(now),
+                    at: mimic_core::Cycle(now),
                     target: InputTarget::Keyboard,
                     event: InputEvent::Key {
                         machine_key: MachineKey(k),
@@ -224,7 +226,7 @@ fn open_roms_type_list_and_run() {
     type_text(m, "RUN\n");
     run(m, 20);
     if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
-        let png = emu_preview::encode_png(&m.framebuffer());
+        let png = mimic_preview::encode_png(&m.framebuffer());
         std::fs::write(std::path::Path::new(&d).join("mega65-typed.png"), png).unwrap();
     }
     let t = screen(m);
@@ -240,7 +242,7 @@ fn open_roms_type_list_and_run() {
 
 /// A machine with a disk in drive 8.
 fn mega65_with_disk(image: Vec<u8>, name: &str) -> Box<dyn Machine> {
-    use emu_core::media::{Media, MediaKind};
+    use mimic_core::media::{Media, MediaKind};
     let mut m = mega65();
     let slot = m
         .media_slots()
@@ -296,7 +298,7 @@ fn open_roms_load_from_a_1541() {
     type_text(m, "RUN\n");
     run(m, 30);
     if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
-        let png = emu_preview::encode_png(&m.framebuffer());
+        let png = mimic_preview::encode_png(&m.framebuffer());
         std::fs::write(std::path::Path::new(&d).join("mega65-1541.png"), png).unwrap();
     }
     let t = screen(m);

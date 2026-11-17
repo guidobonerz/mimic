@@ -8,8 +8,8 @@
 //! --release -- --ignored dormann`.
 
 use cpu_45gs02::{Cpu45gs02, Speed};
-use emu_core::testing::FlatBus;
-use emu_core::{Cpu, CycleResult};
+use mimic_core::testing::FlatBus;
+use mimic_core::{Cpu, CycleResult};
 
 const SUCCESS: u32 = 0x3469;
 

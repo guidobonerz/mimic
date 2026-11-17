@@ -22,9 +22,9 @@
 //! A pick takes [`PICK_CLOCKS`] (a card's travel to the first column at
 //! 1000 cards a minute); the columns then wait for the program.
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::cards::{self, Card, Deck, DeckFormat, COLUMNS};
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// From PICK to the first column: 60 ms at 2 MHz.
 pub const PICK_CLOCKS: u64 = 120_000;
@@ -276,7 +276,7 @@ mod tests {
 
     struct Mem(Vec<u8>);
 
-    impl emu_core::media::MediaBackend for Mem {
+    impl mimic_core::media::MediaBackend for Mem {
         fn len(&self) -> u64 {
             self.0.len() as u64
         }

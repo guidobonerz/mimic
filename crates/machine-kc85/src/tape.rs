@@ -28,8 +28,8 @@
 //! `$E58E`); the KC-TAP layout from the files themselves (the format of
 //! Arne Fitzenreiter's KC emulator, used by KCemu and JKCEMU as well).
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 const TAP_MAGIC: &[u8; 16] = b"\xc3KC-TAPE by AF. ";
 

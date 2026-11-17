@@ -1,7 +1,7 @@
 use super::*;
 use devices_input::Joystick;
-use emu_core::input::{Dirs, InputEvent, MachineKey};
-use emu_core::media::{Media, MediaBackend, MediaError};
+use mimic_core::input::{Dirs, InputEvent, MachineKey};
+use mimic_core::media::{Media, MediaBackend, MediaError};
 
 struct Bytes(Vec<u8>);
 
@@ -35,7 +35,7 @@ fn stub_with(options: &[(&str, &str)], model: &str) -> Vic20 {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    config.video_format = emu_core::frame::VideoStandard::parse(model);
+    config.video_format = mimic_core::frame::VideoStandard::parse(model);
     Vic20::new(&config).unwrap()
 }
 
@@ -60,8 +60,8 @@ fn key_event(at: u64, k: MachineKey, down: bool) -> TimedInput {
     }
 }
 
-fn exec_breakpoint(dbg: &mut DebugHooks, addr: u16) -> emu_core::BpId {
-    dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+fn exec_breakpoint(dbg: &mut DebugHooks, addr: u16) -> mimic_core::BpId {
+    dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
         space: CPU_SPACE,
         addr: u32::from(addr),
     })
@@ -313,7 +313,7 @@ fn debugger_view() {
 
 #[test]
 fn paddles_turn_the_vic_pots() {
-    use emu_core::input::{InputTarget, TimedInput};
+    use mimic_core::input::{InputTarget, TimedInput};
     let mut m = stub_with(&[("port1", "paddles")], "pal");
     // Mid travel from the start.
     assert_eq!(m.peek(CPU_SPACE, 0x9008, Size::Byte), Some(0x80));
@@ -382,7 +382,7 @@ fn frame_rows_follow_the_vic() {
 
 #[test]
 fn four_player_adapter_in_the_user_port() {
-    use emu_core::input::Dirs;
+    use mimic_core::input::Dirs;
     let mut m = stub_with(&[("userport", "cga")], "pal");
     let names: Vec<&str> = m.ports().iter().map(|p| p.name).collect();
     assert_eq!(
@@ -398,7 +398,7 @@ fn four_player_adapter_in_the_user_port() {
         m.input(TimedInput {
             at,
             target: InputTarget::Port(PortId(port)),
-            event: emu_core::input::InputEvent::Digital {
+            event: mimic_core::input::InputEvent::Digital {
                 dirs,
                 buttons: u8::from(fire),
             },

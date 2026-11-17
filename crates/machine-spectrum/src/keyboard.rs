@@ -19,8 +19,8 @@
 //! Source: Sinclair ZX Spectrum Service Manual (keyboard matrix); ZX
 //! Spectrum 48K manual, chapter 23 (IN 65278 …).
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 /// The key code of a matrix position.
 pub const fn key(row: u16, col: u16) -> u16 {
@@ -29,7 +29,7 @@ pub const fn key(row: u16, col: u16) -> u16 {
 
 pub mod keys {
     use super::key;
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     pub const CAPS_SHIFT: MachineKey = MachineKey(key(0, 0));
     pub const SYMBOL_SHIFT: MachineKey = MachineKey(key(7, 1));

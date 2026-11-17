@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use cpu_upd7725::Upd7725;
 use devices_cartridge::snes::{Dsp, SnesCart};
-use emu_core::{
+use mimic_core::{
     DebugTarget, DeviceId, Flow, Instr, MemSpaceId, RegisterSet, Size, StateError, StateReader,
     StateWriter,
 };

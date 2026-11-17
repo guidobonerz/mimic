@@ -2,14 +2,14 @@
 //! cartridge built here; BASIC saves a program with CSAVE onto a blank CAS
 //! tape and loads it back with CLOAD.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --test atari_media -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --test atari_media -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size, StopReason};
 use machine_atari8::{CPU_SPACE, SLOT_CARTRIDGE, SLOT_TAPE};
 use media_backends::image::MemoryBackend;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size, StopReason};
 
 fn machine() -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
@@ -17,7 +17,9 @@ fn machine() -> Box<dyn Machine> {
         roms: media_backends::roms::load(&dir, "atari8").expect("ROMs"),
         ..MachineConfig::default()
     };
-    emu_machines::registry().create("atari8", &config).unwrap()
+    mimic_machines::registry()
+        .create("atari8", &config)
+        .unwrap()
 }
 
 fn run(m: &mut dyn Machine, fields: usize) {
@@ -48,7 +50,7 @@ fn find_all(screen: &[u8], text: &str) -> Vec<usize> {
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()

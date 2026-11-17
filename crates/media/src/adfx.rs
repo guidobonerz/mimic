@@ -18,7 +18,7 @@
 //! bytes (their length cannot change), writes to sector tracks go back as
 //! sectors. [`Image`] remembers where every track lies in the file.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 use crate::adf;
 

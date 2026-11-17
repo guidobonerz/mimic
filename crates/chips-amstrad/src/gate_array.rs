@@ -40,7 +40,7 @@
 //! (cpcwiki, "Z80" — CPC instruction timings; checked by
 //! `machine-cpc/tests/z80_timing.rs`).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 use crate::crtc::CrtcOut;
 

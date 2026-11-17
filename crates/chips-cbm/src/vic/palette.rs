@@ -6,7 +6,7 @@
 //! project's approximation of the hues on a monitor, not measurements; the
 //! composite signal stage in `video-crt` refines the look.
 
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 
 const COLORS: [(u8, u8, u8); 16] = [
     (0x00, 0x00, 0x00), // 0 black

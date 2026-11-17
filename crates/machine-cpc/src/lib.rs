@@ -52,16 +52,16 @@ use chips_amstrad::gate_array::{self, GateArray};
 use chips_amstrad::ppi::Ppi;
 use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
 use devices_printer::Printer;
-use emu_core::audio::Decimator;
-use emu_core::frame::{
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, InterruptKind,
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -759,7 +759,7 @@ impl Cpc {
             sched: Scheduler::new(),
             input: InputQueue::new(),
             palette: chips_amstrad::palette::palette(),
-            audio: Decimator::new(1_000_000, emu_core::SAMPLE_RATE)
+            audio: Decimator::new(1_000_000, mimic_core::SAMPLE_RATE)
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
             samples: Vec::new(),
             field_done_pending: false,
@@ -936,7 +936,7 @@ impl Cpc {
     /// A console control from the panel (power).
     fn control(&mut self, id: u16, value: u8) {
         match id {
-            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
+            0 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Hard),
             _ => {}
         }
     }
@@ -1082,10 +1082,10 @@ impl Machine for Cpc {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -1121,7 +1121,7 @@ impl Machine for Cpc {
     }
 
     /// `crtc`, `vsync` ([`overlay`]).
-    fn overlays(&self) -> Vec<emu_core::overlay::OverlayInfo> {
+    fn overlays(&self) -> Vec<mimic_core::overlay::OverlayInfo> {
         overlay::overlays()
     }
 
@@ -1129,7 +1129,7 @@ impl Machine for Cpc {
         self.io.rec = overlay::record(ids, self.io.rec.take());
     }
 
-    fn overlay(&self, id: &str) -> Option<emu_core::overlay::Overlay> {
+    fn overlay(&self, id: &str) -> Option<mimic_core::overlay::Overlay> {
         self.io.rec.as_deref()?.overlay(id, self.io.ga.beam().0)
     }
 
@@ -1138,14 +1138,14 @@ impl Machine for Cpc {
         (u32::from(line) < gate_array::HEIGHT).then_some(u32::from(line))
     }
 
-    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+    fn gfx_views(&self) -> Vec<mimic_core::GfxViewInfo> {
         chips_amstrad::gfx::views()
     }
 
     /// The CRTC/Gate Array views (`chips_amstrad::gfx`): the screen as
     /// the chips address it now and the pens, from the base 64 KB of RAM
     /// ([`RAM_SPACE`]).
-    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+    fn gfx_view(&self, id: &str, opts: &mimic_core::GfxOptions) -> Option<mimic_core::GfxView> {
         let info = chips_amstrad::gfx::views()
             .into_iter()
             .find(|v| v.id == id)?;
@@ -1165,7 +1165,7 @@ impl Machine for Cpc {
         ))
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
@@ -1261,7 +1261,7 @@ impl Machine for Cpc {
 
     /// Text as key presses, with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             1_200_000,
@@ -1269,8 +1269,8 @@ impl Machine for Cpc {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        use emu_core::ControlInfo;
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        use mimic_core::ControlInfo;
         vec![ControlInfo::button(0, "POWER", false)]
     }
 
@@ -1314,7 +1314,7 @@ impl Machine for Cpc {
         dev
     }
 
-    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+    fn attach_host(&mut self, host: mimic_core::host::HostServices) {
         if let Some(p) = &mut self.printer {
             p.attach(&host);
         }

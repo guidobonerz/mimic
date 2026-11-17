@@ -2,11 +2,11 @@
 //! a page while `record_start` runs; `replay_input` reproduces the run on
 //! a session whose journal has no network behind it.
 
-use emu_core::host::{Journal, JournalMode};
-use emu_core::registry::MachineConfig;
-use emu_core::{DeviceId, MemSpaceId, Size};
-use emu_debug::protocol::Command;
-use emu_debug::Session;
+use mimic_core::host::{Journal, JournalMode};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DeviceId, MemSpaceId, Size};
+use mimic_debug::protocol::Command;
+use mimic_debug::Session;
 
 /// Protocol-2 HTTP GET of the request at $E100, response bytes to $0400
 /// (see machine-c64's tests_net.rs for the annotated listing).
@@ -31,7 +31,7 @@ fn session(journal: &Journal) -> Session {
     config.roms.insert("chargen".into(), vec![0; 0x1000]);
     config.options.insert("userport".into(), "wic64".into());
     config.options.insert("uci".into(), "on".into());
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     m.attach_host(journal.services());
     let mut s = Session::new(m, "c64");
     s.set_host_journal(journal.clone());

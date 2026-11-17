@@ -8,8 +8,8 @@
 //! `EMU_ROM_DIR` supplies the ROMs; machines that cannot start without
 //! theirs are skipped and listed. Run with `--nocapture` for the table.
 
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, Machine, SAMPLE_RATE};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, Machine, SAMPLE_RATE};
 
 /// Frames to measure over, after a few to settle.
 const FRAMES: u64 = 300;
@@ -49,7 +49,7 @@ fn every_machine_makes_48_khz_at_its_frame_rate() {
         eprintln!("EMU_ROM_DIR not set");
         return;
     };
-    let registry = emu_machines::registry();
+    let registry = mimic_machines::registry();
     let mut bad = Vec::new();
     let mut skipped = Vec::new();
     // Every model, and the Logophor also with its system card (Panorama

@@ -61,17 +61,17 @@ use chips_cbm::ted::{self, Ted};
 use cpu_6502::{Config as CpuConfig, Cpu6502, IoPort, Variant};
 use devices_printer::CbmPrinter;
 use drives_cbm::{IecLines, Tcbm1551};
-use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::hooked::HookedBus;
-use emu_core::input::{InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::overlay::{Overlay, OverlayInfo};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::Cycle;
-use emu_core::{
+use mimic_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::hooked::HookedBus;
+use mimic_core::input::{InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::Cycle;
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -135,7 +135,7 @@ fn entry_for(id: &'static str, name: &'static str) -> MachineEntry {
         id,
         name,
         models: &[],
-        video_formats: emu_core::registry::PAL_NTSC,
+        video_formats: mimic_core::registry::PAL_NTSC,
         create: match id {
             "c16" => |config| Ok(Box::new(TedMachine::new(Variant16::C16, config)?)),
             _ => |config| Ok(Box::new(TedMachine::new(Variant16::Plus4, config)?)),
@@ -821,7 +821,7 @@ impl TedMachine {
     fn apply_input(&mut self, ev: TimedInput) {
         match ev.target {
             InputTarget::Keyboard => {
-                if let emu_core::input::InputEvent::Key { machine_key, down } = ev.event {
+                if let mimic_core::input::InputEvent::Key { machine_key, down } = ev.event {
                     self.io.keyboard.set(machine_key, down);
                 }
             }
@@ -832,7 +832,7 @@ impl TedMachine {
                 self.refresh_port(p);
             }
             InputTarget::Panel => {
-                if let emu_core::input::InputEvent::Control { id, value } = ev.event {
+                if let mimic_core::input::InputEvent::Control { id, value } = ev.event {
                     self.control(id.0, value);
                 }
             }
@@ -842,8 +842,8 @@ impl TedMachine {
     /// A console control from the panel (power, the reset button).
     fn control(&mut self, id: u16, value: u8) {
         match id {
-            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
-            1 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Soft),
+            0 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Hard),
+            1 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Soft),
             _ => {}
         }
     }
@@ -855,7 +855,7 @@ impl TedMachine {
         let i = usize::from(p.0);
         if i < self.io.port_lines.len() {
             self.io.port_lines[i] = self.ports[i].as_mut().map_or(0, |d| {
-                d.write_lines(emu_core::port::PortLines::default(), now);
+                d.write_lines(mimic_core::port::PortLines::default(), now);
                 d.read_lines(now).pulled_low
             });
         }
@@ -1029,7 +1029,7 @@ impl Machine for TedMachine {
         ted::gfx::views("TED")
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
@@ -1054,10 +1054,10 @@ impl Machine for TedMachine {
         )
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.io.ted.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -1172,9 +1172,16 @@ impl Machine for TedMachine {
         self.sched.now()
     }
 
+    /// Pasted text goes straight into the KERNAL's keyboard buffer
+    /// ([`chips_cbm::keybuf`]).
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        let has_key = |c| keyboard::key_for_char(c).is_some();
+        chips_cbm::keybuf::TED.paste(&mut self.mem.ram, text, has_key)
+    }
+
     /// Text as key presses (upper-case letters; see [`keyboard::typed_events`]), with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             480_000,
@@ -1182,8 +1189,8 @@ impl Machine for TedMachine {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        use emu_core::ControlInfo;
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        use mimic_core::ControlInfo;
         vec![
             ControlInfo::button(0, "POWER", false),
             ControlInfo::button(1, "RESET", false),
@@ -1226,7 +1233,7 @@ impl Machine for TedMachine {
         dev
     }
 
-    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+    fn attach_host(&mut self, host: mimic_core::host::HostServices) {
         if let Some(p) = &mut self.printer {
             p.printer.attach(&host);
         }

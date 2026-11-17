@@ -66,7 +66,7 @@
 
 use std::fmt;
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 use symphonia_core::audio::{Channels, SampleBuffer};
 use symphonia_core::codecs::{
     CodecParameters, Decoder, DecoderOptions, CODEC_TYPE_AAC, CODEC_TYPE_MP3,

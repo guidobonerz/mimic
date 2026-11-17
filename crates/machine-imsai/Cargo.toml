@@ -9,6 +9,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-emu-core.workspace = true
+mimic-core.workspace = true
 cpu-8080.workspace = true
 media.workspace = true

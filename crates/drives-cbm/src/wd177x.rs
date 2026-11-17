@@ -23,7 +23,7 @@
 //! 1772 does not compare the side byte. Source: Western Digital WD1770/
 //! 1772 data sheet.
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub use media::mfm::{crc16, MARK, TRACK_BYTES};
 

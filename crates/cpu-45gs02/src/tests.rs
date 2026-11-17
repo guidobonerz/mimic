@@ -1,8 +1,8 @@
 //! Per-instruction tests after the MEGA65 user guide's descriptions and
 //! examples.
 
-use emu_core::testing::FlatBus;
-use emu_core::{Bus, Cpu, CycleResult, Flow, Size};
+use mimic_core::testing::FlatBus;
+use mimic_core::{Bus, Cpu, CycleResult, Flow, Size};
 
 use crate::flag::{C, E, I, N, V, Z};
 use crate::{Cpu45gs02, Speed, UNMAPPED};
@@ -435,7 +435,7 @@ fn disassembly_knows_the_prefixes() {
 
 #[test]
 fn savestates_round_trip_mid_instruction() {
-    use emu_core::savestate::{Savestate, StateReader, StateWriter};
+    use mimic_core::savestate::{Savestate, StateReader, StateWriter};
     let (mut cpu, mut bus) = setup(&[0xee, 0x00, 0x20, 0xea]);
     cpu.set_speed(Speed::Mhz1);
     cpu.map.set(0x00, 0x10, 0x00, 0x00);

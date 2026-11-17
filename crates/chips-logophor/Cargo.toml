@@ -9,7 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-emu-core.workspace = true
+mimic-core.workspace = true
 symphonia-core.workspace = true
 symphonia-bundle-mp3.workspace = true
 symphonia-codec-aac.workspace = true

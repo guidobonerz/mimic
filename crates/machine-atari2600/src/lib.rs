@@ -71,20 +71,20 @@ use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use devices_cartridge::atari2600::{Cart2600, Scheme};
 use devices_cartridge::CartSlot;
 use devices_input::joystick::pin;
-use emu_core::audio::Decimator;
-use emu_core::frame::{
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::hooked::HookedBus;
-use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::overlay::{Overlay, OverlayInfo};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::Cycle;
-use emu_core::{
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::hooked::HookedBus;
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::Cycle;
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -102,7 +102,7 @@ pub const SLOT_CARTRIDGE: SlotId = SlotId(0);
 /// Machine key codes ([`InputEvent::Key`] on the keyboard target): the
 /// console switches and the keypads in the ports.
 pub mod keys {
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     pub const RESET: MachineKey = MachineKey(0);
     pub const SELECT: MachineKey = MachineKey(1);
@@ -128,7 +128,7 @@ pub fn entry() -> MachineEntry {
         id: "atari2600",
         name: "Atari 2600",
         models: &[],
-        video_formats: emu_core::registry::PAL_NTSC,
+        video_formats: mimic_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Atari2600::new(config)?)),
     }
 }
@@ -446,7 +446,7 @@ impl Atari2600 {
             input: InputQueue::new(),
             ports,
             palette: chips_atari::palette::tia(standard),
-            audio: Decimator::new(cpu_hz(standard), emu_core::SAMPLE_RATE)
+            audio: Decimator::new(cpu_hz(standard), mimic_core::SAMPLE_RATE)
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
             samples: Vec::new(),
             field_done_pending: false,
@@ -498,7 +498,7 @@ impl Atari2600 {
         }
         self.standard = standard;
         self.palette = chips_atari::palette::tia(standard);
-        if let Some(audio) = Decimator::new(cpu_hz(standard), emu_core::SAMPLE_RATE) {
+        if let Some(audio) = Decimator::new(cpu_hz(standard), mimic_core::SAMPLE_RATE) {
             self.audio = audio;
         }
     }
@@ -620,7 +620,7 @@ impl Atari2600 {
             }
         };
         match id {
-            0 if value == 1 => emu_core::Machine::reset(self, ResetKind::Hard),
+            0 if value == 1 => mimic_core::Machine::reset(self, ResetKind::Hard),
             1 => set(&mut self.switches, 0x01, value == 0),
             2 => set(&mut self.switches, 0x02, value == 0),
             3 => set(&mut self.switches, SWCHB_COLOUR, value == 0),
@@ -807,10 +807,10 @@ impl Machine for Atari2600 {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -942,8 +942,8 @@ impl Machine for Atari2600 {
         self.sched.now()
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        use emu_core::ControlInfo;
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        use mimic_core::ControlInfo;
         vec![
             ControlInfo::button(0, "POWER", false),
             ControlInfo::button(1, "RESET", self.switches & 0x01 == 0),
@@ -1086,7 +1086,7 @@ impl Machine for Atari2600 {
                 return Err(StateError::Invalid("TV standard"));
             }
             if standard != self.standard {
-                next.audio = Decimator::new(cpu_hz(standard), emu_core::SAMPLE_RATE)
+                next.audio = Decimator::new(cpu_hz(standard), mimic_core::SAMPLE_RATE)
                     .ok_or(StateError::Invalid("audio rate"))?;
             }
         }

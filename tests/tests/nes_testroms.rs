@@ -3,7 +3,7 @@
 //! nes-test-roms, fetched into `$EMU_TESTDATA_DIR/nes-test-roms` by
 //! `tools/fetch-testdata.sh`; never committed).
 //!
-//!     EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test nes_testroms -- --ignored --nocapture
+//!     EMU_TESTDATA_DIR=$PWD/testdata cargo test -p mimic-tests --release --test nes_testroms -- --ignored --nocapture
 //!
 //! Two ways the ROMs report:
 //! - the newer ones write $DE $B0 $61 to $6001–$6003, a status to $6000
@@ -17,10 +17,10 @@
 
 use std::path::{Path, PathBuf};
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, ResetKind, Size, StopReason};
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, ResetKind, Size, StopReason};
 
 struct Bytes(Vec<u8>);
 
@@ -48,7 +48,7 @@ fn root() -> PathBuf {
 }
 
 fn machine(path: &Path) -> Box<dyn Machine> {
-    let mut m = emu_machines::registry()
+    let mut m = mimic_machines::registry()
         .create("nes", &MachineConfig::default())
         .unwrap();
     let bytes = std::fs::read(path).unwrap();
@@ -67,7 +67,7 @@ fn peek(m: &mut dyn Machine, addr: u32) -> u8 {
     let cpu = m.devices()[0];
     m.debug_target(cpu)
         .unwrap()
-        .peek(emu_core::MemSpaceId(0), addr, Size::Byte)
+        .peek(mimic_core::MemSpaceId(0), addr, Size::Byte)
         .unwrap() as u8
 }
 
@@ -107,7 +107,7 @@ fn snapshot(m: &dyn Machine, path: &Path) {
         .and_then(Path::file_name)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     std::fs::write(dir.join(format!("{parent}-{name}.png")), png).unwrap();
 }
 

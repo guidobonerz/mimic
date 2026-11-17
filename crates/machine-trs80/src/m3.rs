@@ -17,7 +17,7 @@
 //! (INTRQ) — the ROM's boot reads its sector with `INI` that way and leaves
 //! the loop through the NMI the controller's INTRQ raises.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::fdc::{Chip, Drive, Fdc};
 

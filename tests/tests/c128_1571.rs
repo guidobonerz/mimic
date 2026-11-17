@@ -2,14 +2,14 @@
 //! the drive identifies itself, reads both sides of a D71, loads with fast
 //! serial transfers and formats double-sided disks.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test c128_1571 -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test c128_1571 -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size};
 use media::D64;
 use media_backends::image::MemoryBackend;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size};
 
 fn boot(drive: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
@@ -20,7 +20,7 @@ fn boot(drive: &str) -> Box<dyn Machine> {
     let role = format!("dos{drive}");
     assert!(config.roms.contains_key(&role), "{role} ROM missing");
     config.options.insert("drive8".into(), drive.into());
-    emu_machines::registry().create("c128", &config).unwrap()
+    mimic_machines::registry().create("c128", &config).unwrap()
 }
 
 /// The 40-column screen (screen codes).

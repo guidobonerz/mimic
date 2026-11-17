@@ -32,9 +32,9 @@
 
 use std::collections::VecDeque;
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::atr::{self, Atr};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const BAUD: u64 = 19_200;
 /// `Pending::unit` of a printer record.

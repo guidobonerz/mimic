@@ -19,7 +19,7 @@
 //! Writing: an uncompressed UEF with `&0110` carrier and `&0100` data
 //! chunks.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 use std::io::Read;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

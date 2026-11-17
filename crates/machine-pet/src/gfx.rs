@@ -1,4 +1,4 @@
-//! Graphics data views of the PET (see `emu_core::gfx`): the character
+//! Graphics data views of the PET (see `mimic_core::gfx`): the character
 //! ROM and the text screen in video RAM, decoded the way [`crate::video`]
 //! draws them, side-effect free.
 //!
@@ -14,8 +14,8 @@
 //! wiring, CA2 character set select), MOS 6545 data sheet (R1, R6, R9,
 //! R12/R13).
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR};
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR};
 
 use crate::{Pet, CHARGEN_SPACE, CPU_SPACE, PALETTE};
 

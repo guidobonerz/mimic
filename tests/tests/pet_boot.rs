@@ -1,12 +1,12 @@
 //! PET models boot to BASIC with real ROMs (user-supplied via
 //! `EMU_ROM_DIR`, e.g. a `pet/` subfolder) and take keyboard input.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --test pet_boot -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --test pet_boot -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size};
 use machine_pet::keyboard::Layout;
+use mimic_core::machine::Machine;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size};
 
 fn boot(model: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
@@ -15,7 +15,7 @@ fn boot(model: &str) -> Box<dyn Machine> {
         model: Some(model.into()),
         ..MachineConfig::default()
     };
-    let mut m = emu_machines::registry().create("pet", &config).unwrap();
+    let mut m = mimic_machines::registry().create("pet", &config).unwrap();
     let mut dbg = DebugHooks::new();
     while m.now().0 < 3_000_000 {
         m.run_frame(&mut dbg);
@@ -91,7 +91,7 @@ fn every_model_boots_and_runs_basic() {
     ] {
         let mut m = boot(model);
         let s = screen(m.as_mut(), columns);
-        let png = emu_preview::encode_png(&m.framebuffer());
+        let png = mimic_preview::encode_png(&m.framebuffer());
         let out =
             std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("pet_{model}.png"));
         std::fs::write(&out, png).unwrap();

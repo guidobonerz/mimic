@@ -46,7 +46,7 @@
 //! of the teletext standard the chip implements (Level 1). The
 //! implementation is this project's own.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Fig. 11: rows of 5 dots (bit 4 the left one), 9 rows, codes &20–&7F.
 const FONT: [[u8; 9]; 96] = [

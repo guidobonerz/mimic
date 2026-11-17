@@ -1,7 +1,7 @@
 //! Own per-instruction tests, from the data manual's descriptions.
 
 use super::*;
-use emu_core::Flow;
+use mimic_core::Flow;
 
 /// RAM with abort windows, counting cycles by kind.
 struct Ram {

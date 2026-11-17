@@ -6,12 +6,12 @@
 //! image (tolerance-based, CPU path).
 //!
 //! Regenerate the references after an intended change with
-//! `EMU_UPDATE_REFERENCE=1 cargo test -p emu-tests --test crt_profiles`
+//! `EMU_UPDATE_REFERENCE=1 cargo test -p mimic-tests --test crt_profiles`
 //! and explain the change in the commit.
 
 use std::path::PathBuf;
 
-use emu_core::frame::{
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
 use video_crt::{signal, Profile};
@@ -158,16 +158,18 @@ fn pet_card() -> Pattern {
 /// The Atari 800XL (built-in stub OS, no ROMs) showing a mode F screen:
 /// 50 lines of `$AA` (pixels on at even positions), then 50 of `$55`, white
 /// luminance on black — as the machine itself renders it.
-fn atari_card(format: emu_core::frame::VideoStandard) -> Pattern {
-    use emu_core::machine::Machine;
-    use emu_core::{DebugHooks, DeviceId, Size};
-    let mut config = emu_core::registry::MachineConfig {
+fn atari_card(format: mimic_core::frame::VideoStandard) -> Pattern {
+    use mimic_core::machine::Machine;
+    use mimic_core::{DebugHooks, DeviceId, Size};
+    let mut config = mimic_core::registry::MachineConfig {
         model: Some("800xl".into()),
         video_format: Some(format),
         ..Default::default()
     };
     config.options.insert("roms".into(), "stub".into());
-    let mut m = emu_machines::registry().create("atari8", &config).unwrap();
+    let mut m = mimic_machines::registry()
+        .create("atari8", &config)
+        .unwrap();
     let mut dbg = DebugHooks::new();
     for _ in 0..2 {
         m.run_frame(&mut dbg);
@@ -237,7 +239,7 @@ fn uv((r, g, b): (f64, f64, f64)) -> (f64, f64) {
 
 #[test]
 fn atari_ntsc_hires_stripes_show_artifact_colours() {
-    let card = atari_card(emu_core::frame::VideoStandard::Ntsc);
+    let card = atari_card(mimic_core::frame::VideoStandard::Ntsc);
     // Mode F starts at scan line 32 = frame row 24.
     let (aa, x55) = (24 + 25, 24 + 75);
     // The raw frame is white on black only.
@@ -272,8 +274,8 @@ fn atari_ntsc_hires_stripes_show_artifact_colours() {
 fn atari_pal_has_no_stable_artifact_colours() {
     // PAL machines' hires pixels are not locked to the colour carrier and
     // the delay line averages what cross-colour remains.
-    let ntsc = atari_card(emu_core::frame::VideoStandard::Ntsc);
-    let pal = atari_card(emu_core::frame::VideoStandard::Pal);
+    let ntsc = atari_card(mimic_core::frame::VideoStandard::Ntsc);
+    let pal = atari_card(mimic_core::frame::VideoStandard::Pal);
     let tv = Profile::preset("tv").unwrap();
     let n = signal::process(&ntsc.frame(), &tv).unwrap();
     let p = signal::process(&pal.frame(), &tv).unwrap();
@@ -409,8 +411,8 @@ fn profiles_match_reference_images() {
     let c64_ntsc = c64_card(VideoStandard::Ntsc);
     let vdc = vdc_card();
     let pet = pet_card();
-    let atari_ntsc = atari_card(emu_core::frame::VideoStandard::Ntsc);
-    let atari_pal = atari_card(emu_core::frame::VideoStandard::Pal);
+    let atari_ntsc = atari_card(mimic_core::frame::VideoStandard::Ntsc);
+    let atari_pal = atari_card(mimic_core::frame::VideoStandard::Pal);
     let cases: [(&str, &Pattern, &str); 12] = [
         ("raw", &c64_pal, "c64-pal-raw"),
         ("1702", &c64_pal, "c64-pal-1702"),

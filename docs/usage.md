@@ -10,8 +10,8 @@ Inhalt:
 2. [Bauen](#2-bauen)
 3. [ROMs](#3-roms)
 4. [Maschinen, Modelle und Optionen](#4-maschinen-modelle-und-optionen)
-5. [Desktop-Frontend `emu-desktop`](#5-desktop-frontend-emu-desktop)
-6. [Kommandozeilen-Frontend `emu-headless`](#6-kommandozeilen-frontend-emu-headless)
+5. [Desktop-Frontend `mimic-desktop`](#5-desktop-frontend-mimic-desktop)
+6. [Kommandozeilen-Frontend `mimic-headless`](#6-kommandozeilen-frontend-mimic-headless)
 7. [Medien: Disketten, Bänder, Module, Programme](#7-medien-disketten-bänder-module-programme)
    - [7a. Echte Hardware: Greaseweazle und ZoomFloppy](#7a-echte-hardware-greaseweazle-und-zoomfloppy)
 8. [Monitorprofile (CRT)](#8-monitorprofile-crt)
@@ -39,9 +39,9 @@ Inhalt:
 
 ```bash
 cargo build --workspace                 # alles (Debug)
-cargo build --release -p emu-desktop    # Desktop-Emulator, optimiert
-cargo build --release -p emu-headless   # Kommandozeilen-Frontend
-cargo build -p emu-web --target wasm32-unknown-unknown
+cargo build --release -p mimic-desktop    # Desktop-Emulator, optimiert
+cargo build --release -p mimic-headless   # Kommandozeilen-Frontend
+cargo build -p mimic-web --target wasm32-unknown-unknown
 ```
 
 Für flüssiges Arbeiten immer `--release` verwenden; der Debug-Build ist
@@ -52,8 +52,8 @@ Die fertigen Programme liegen danach in `target/release/` (unter Windows mit
 
 | Programm | Crate | Zweck |
 | --- | --- | --- |
-| `mimic-desktop` | `emu-desktop` | Emulator mit Fenster, Ton, Tastatur und Gamepad; optional Debug-Server |
-| `mimic-headless` | `emu-headless` | ohne Fenster: Snapshots, Skripte, CI, Debug-Server |
+| `mimic-desktop` | `mimic-desktop` | Emulator mit Fenster, Ton, Tastatur und Gamepad; optional Debug-Server |
+| `mimic-headless` | `mimic-headless` | ohne Fenster: Snapshots, Skripte, CI, Debug-Server |
 
 Sie lassen sich direkt starten oder an einen beliebigen Ort kopieren (keine
 weiteren Dateien nötig, ROMs aus `.mimic\roms` im Benutzerordner, über
@@ -64,7 +64,7 @@ weiteren Dateien nötig, ROMs aus `.mimic\roms` im Benutzerordner, über
 .\target\release\mimic-headless.exe --machine c64 --debug
 ```
 
-`cargo run --release -p emu-desktop -- …` bzw. `-p emu-headless` startet
+`cargo run --release -p mimic-desktop -- …` bzw. `-p mimic-headless` startet
 dieselben Programme; die Beispiele unten nutzen diese Form.
 
 Prüfungen vor einem Commit:
@@ -120,7 +120,7 @@ Programm statt der echten ROMs, nur für Tests.
 
 ## 4. Maschinen, Modelle und Optionen
 
-`cargo run --release -p emu-headless -- --list` zeigt alle Maschinen:
+`cargo run --release -p mimic-headless -- --list` zeigt alle Maschinen:
 
 | ID | Maschine | Modelle (`--model`) |
 | --- | --- | --- |
@@ -186,39 +186,39 @@ in gut 2 statt 43 Sekunden (den Rest braucht die LOAD-Schleife des KERNALs
 selbst). Das gilt nur mit dem Original-KERNAL (nicht mit JiffyDOS o. ä.)
 und nicht für Schnelllader, die den Bus selbst bedienen.
 
-## 5. Desktop-Frontend `emu-desktop`
+## 5. Desktop-Frontend `mimic-desktop`
 
 ```bash
-cargo run --release -p emu-desktop -- --machine c64
-cargo run --release -p emu-desktop -- --machine c64 --disk spiel.d64 --autostart
-cargo run --release -p emu-desktop -- --machine vic20 --tape spiel.tap
-cargo run --release -p emu-desktop -- --machine atari8 --disk spiel.atr
-cargo run --release -p emu-desktop -- --machine atari8 --model 130xe --disk spiel.atr
-cargo run --release -p emu-desktop -- --machine atari8 --model 800 --option port3=joystick --cart spiel.car
-cargo run --release -p emu-desktop -- --machine snes --cart spiel.sfc
-cargo run --release -p emu-desktop -- --machine nes --cart spiel.nes
-cargo run --release -p emu-desktop -- --machine nes --videoformat pal --cart spiel.nes --option port2=zapper
-cargo run --release -p emu-desktop -- --machine coleco --cart spiel.col
-cargo run --release -p emu-desktop -- --machine coleco --videoformat pal --cart spiel.rom --option port1=roller
-cargo run --release -p emu-desktop -- --machine msx --cart spiel.rom
-cargo run --release -p emu-desktop -- --machine msx --videoformat ntsc --cart spiel.rom --option mapper1=konami
-cargo run --release -p emu-desktop -- --machine kc85
-cargo run --release -p emu-desktop -- --machine kc85 --model 3 --tape spiel.kcc
-cargo run --release -p emu-desktop -- --machine kc85 --option slot8=m026
-cargo run --release -p emu-desktop -- --machine atari2600 --cart spiel.a26
-cargo run --release -p emu-desktop -- --machine atari2600 --videoformat pal --cart spiel.bin --option port1=paddles
-cargo run --release -p emu-desktop -- --machine cpc --disk spiel.dsk
-cargo run --release -p emu-desktop -- --machine cpc --model 464 --tape spiel.cdt
-cargo run --release -p emu-desktop -- --machine zx81 --tape programm.p
-cargo run --release -p emu-desktop -- --machine spectrum --tape spiel.tzx --autostart
-cargo run --release -p emu-desktop -- --machine spectrum --model 128k --prg spiel.z80
-cargo run --release -p emu-desktop -- --machine spectrum --option if1=on --option multiface=on --disk cartridge.mdr
-cargo run --release -p emu-desktop -- --machine amiga --disk workbench13.adf
-cargo run --release -p emu-desktop -- --machine amiga --disk demo-a.adf --disk demo-b.adf
-cargo run --release -p emu-desktop -- --machine amiga --option drives=2 --disk demo-a.adf --disk demo-b.adf
-cargo run --release -p emu-desktop -- --machine amiga --model 2000 --option fast=8m --disk spiel.dms
-cargo run --release -p emu-desktop -- --machine amiga --option kickstart=3.1 --option drivetype=hd --disk gross.adf
-cargo run --release -p emu-desktop -- --machine amiga --model 1200 --disk festplatte.hdf
+cargo run --release -p mimic-desktop -- --machine c64
+cargo run --release -p mimic-desktop -- --machine c64 --disk spiel.d64 --autostart
+cargo run --release -p mimic-desktop -- --machine vic20 --tape spiel.tap
+cargo run --release -p mimic-desktop -- --machine atari8 --disk spiel.atr
+cargo run --release -p mimic-desktop -- --machine atari8 --model 130xe --disk spiel.atr
+cargo run --release -p mimic-desktop -- --machine atari8 --model 800 --option port3=joystick --cart spiel.car
+cargo run --release -p mimic-desktop -- --machine snes --cart spiel.sfc
+cargo run --release -p mimic-desktop -- --machine nes --cart spiel.nes
+cargo run --release -p mimic-desktop -- --machine nes --videoformat pal --cart spiel.nes --option port2=zapper
+cargo run --release -p mimic-desktop -- --machine coleco --cart spiel.col
+cargo run --release -p mimic-desktop -- --machine coleco --videoformat pal --cart spiel.rom --option port1=roller
+cargo run --release -p mimic-desktop -- --machine msx --cart spiel.rom
+cargo run --release -p mimic-desktop -- --machine msx --videoformat ntsc --cart spiel.rom --option mapper1=konami
+cargo run --release -p mimic-desktop -- --machine kc85
+cargo run --release -p mimic-desktop -- --machine kc85 --model 3 --tape spiel.kcc
+cargo run --release -p mimic-desktop -- --machine kc85 --option slot8=m026
+cargo run --release -p mimic-desktop -- --machine atari2600 --cart spiel.a26
+cargo run --release -p mimic-desktop -- --machine atari2600 --videoformat pal --cart spiel.bin --option port1=paddles
+cargo run --release -p mimic-desktop -- --machine cpc --disk spiel.dsk
+cargo run --release -p mimic-desktop -- --machine cpc --model 464 --tape spiel.cdt
+cargo run --release -p mimic-desktop -- --machine zx81 --tape programm.p
+cargo run --release -p mimic-desktop -- --machine spectrum --tape spiel.tzx --autostart
+cargo run --release -p mimic-desktop -- --machine spectrum --model 128k --prg spiel.z80
+cargo run --release -p mimic-desktop -- --machine spectrum --option if1=on --option multiface=on --disk cartridge.mdr
+cargo run --release -p mimic-desktop -- --machine amiga --disk workbench13.adf
+cargo run --release -p mimic-desktop -- --machine amiga --disk demo-a.adf --disk demo-b.adf
+cargo run --release -p mimic-desktop -- --machine amiga --option drives=2 --disk demo-a.adf --disk demo-b.adf
+cargo run --release -p mimic-desktop -- --machine amiga --model 2000 --option fast=8m --disk spiel.dms
+cargo run --release -p mimic-desktop -- --machine amiga --option kickstart=3.1 --option drivetype=hd --disk gross.adf
+cargo run --release -p mimic-desktop -- --machine amiga --model 1200 --disk festplatte.hdf
 ```
 
 Amiga 1200: Festplattenabbilder (`.hdf`) kommen an den IDE-Anschluss
@@ -317,10 +317,15 @@ Disk B fragt. Im Debugger geht dasselbe mit `insert_media`.
 
 **Statuszeile:** Strg+Leertaste blendet unter dem Bild eine Statuszeile
 ein (`--footer` startet mit ihr). Links sitzt ein **Geschwindigkeitsregler**:
-ein Klick auf eine Stufe oder Ziehen des Knopfs stellt 10 %, 25 %, 50 %,
-100 %, 150 %, 200 %, 400 % oder 800 % der Echtzeit ein (ist der Rechner zu
-langsam für eine Stufe, läuft die Emulation so schnell sie kann); außerhalb von 100 %
-ist der Ton stumm. Bei 100 % läuft die Emulation, solange ein
+ein Klick auf eine Stufe oder Ziehen des Knopfs stellt -4x bis 10x ein: 1x
+ist Echtzeit, 2x bis 10x das Vielfache davon, -2x, -3x und -4x die halbe,
+drittel und viertel Geschwindigkeit (ist der Rechner zu langsam für eine
+Stufe, läuft die Emulation so schnell sie kann). Die letzte Stufe ist
+**warp**: so schnell, wie der Rechner kann; die Maschine rechnet dabei
+unverändert genau, lässt aber die Bilder weg, die niemand sieht
+(`--speed warp` startet so; C64, C128, Amiga und Atari 8-Bit sparen
+dabei auch das Zeichnen selbst). Abseits von 1x
+ist der Ton stumm. Bei 1x läuft die Emulation, solange ein
 Diskettenlaufwerk arbeitet (LED oder Motor, z. B. beim LOAD) und die Maschine
 seit einer Sekunde keinen Ton ausgibt, so schnell sie kann und stumm, wie VICE
 beim Autostart (Musik, die während des Ladens einer Demo spielt, läuft also
@@ -397,12 +402,23 @@ Zorro-II-Karte per Autoconfig, Kickstart 1.2 und neuer finden es).
 
 ### Text einfügen (BASIC-Listings)
 
-**Strg+V** tippt den Text aus der Zwischenablage in die Maschine – Zeile
-für Zeile über deren Tastatur, so als würde man ihn selbst eingeben. Das
+**Strg+V** gibt den Text aus der Zwischenablage in die Maschine ein. Das
 geht in jedem Programm, das Tasten liest, also im BASIC-Editor genauso wie
 unter Simons' BASIC oder TSB. Zeilenenden werden zu RETURN, Zeichen ohne
-Taste werden ausgelassen. Während des Tippens läuft die Maschine im Warp
+Taste werden ausgelassen. Währenddessen läuft die Maschine im Warp
 (ohne Ton), die Fußzeile zeigt, wie viele Zeichen noch warten.
+
+Wo das Betriebssystem einen Tastaturpuffer hat, landet der Text direkt
+darin und kommt so schnell an, wie das System ihn liest – nicht in
+Tippgeschwindigkeit: C64, VIC-20, PET, C16/Plus/4, C128, MSX, BBC Micro,
+Atari 8-Bit und Apple II. Am schnellsten sind BBC und MSX (über hundert-
+bzw. rund sechzigmal schneller als getippt), C64 und VIC-20 etwa
+fünfundzwanzigmal; Atari und Apple II nehmen nur ein Zeichen pro Bild an
+(drei- bis viermal schneller), und die PET-Modelle mit BASIC 1.0 und 2.0
+zeigen von sich aus nur etwa 40 Zeichen pro Sekunde an. Auf den übrigen
+Maschinen (CPC, TRS-80, Spectrum, TI-99/4A, KC85, MEGA65) und während
+einer Eingabeaufzeichnung wird der Text weiterhin Zeile für Zeile über
+die Tastatur getippt.
 **Strg+Umschalt+V** bricht ab; im Konsolen-Panel gibt es dafür den Knopf
 PASTE.
 
@@ -414,25 +430,25 @@ Die Maschine muss am Prompt stehen und Zeit für jede Zeile haben; das
 Tippen sieht nicht nach, ob sie bereit ist. Ist sie länger beschäftigt
 (etwa der TRS-80 bei `MEMORY SIZE?`), gehen Zeichen verloren.
 
-## 6. Kommandozeilen-Frontend `emu-headless`
+## 6. Kommandozeilen-Frontend `mimic-headless`
 
 Ohne Fenster und Ton – für Skripte, CI und als Debug-Server.
 
 ```bash
 # 300 Bilder laufen lassen und das letzte als PNG speichern
-cargo run --release -p emu-headless -- --machine c64 \
+cargo run --release -p mimic-headless -- --machine c64 \
     --prg demo.prg --frames 300 --snapshot out.png
 
 # C128 im 80-Zeichen-Modus, Bild des VDC
-cargo run --release -p emu-headless -- --machine c128 --option display=80 \
+cargo run --release -p mimic-headless -- --machine c128 --option display=80 \
     --frames 600 --screen vdc --snapshot c128.png
 
 # Amiga 500: Kickstart 1.3 bis zum Insert-Disk-Bildschirm
-cargo run --release -p emu-headless -- --machine amiga \
+cargo run --release -p mimic-headless -- --machine amiga \
     --frames 400 --snapshot amiga.png
 
 # Bild durch ein Monitorprofil, Ton als WAV, Savestate schreiben
-cargo run --release -p emu-headless -- --machine cpc \
+cargo run --release -p mimic-headless -- --machine cpc \
     --frames 150 --crt ctm644 --snapshot cpc.png --wav cpc.wav --save-state cpc.state
 ```
 
@@ -453,7 +469,7 @@ cargo run --release -p emu-headless -- --machine cpc \
 Text tippen lassen (ein Listing aus einer Datei, danach `run`):
 
 ```bash
-cargo run --release -p emu-headless -- --machine c64 \
+cargo run --release -p mimic-headless -- --machine c64 \
     --type-file listing.bas --type 'run\n' --type-at 150 \
     --frames 1500 --snapshot out.png
 ```
@@ -485,9 +501,9 @@ Optional, nur in `mimic-headless` und nur mit Cargo-Features gebaut (ohne
 sie ändert sich am normalen Build nichts):
 
 ```bash
-cargo build --release -p emu-headless --features greaseweazle   # Flux-Leser
-cargo build --release -p emu-headless --features opencbm        # echte 1541/1571/1581
-cargo build --release -p emu-headless --features real-hardware  # beides
+cargo build --release -p mimic-headless --features greaseweazle   # Flux-Leser
+cargo build --release -p mimic-headless --features opencbm        # echte 1541/1571/1581
+cargo build --release -p mimic-headless --features real-hardware  # beides
 ```
 
 **Greaseweazle** (USB, erscheint als serielle Schnittstelle: unter Windows
@@ -625,8 +641,8 @@ kein Netz (Browser erlauben keine Sockets); das UCI sieht dort die
 hochgeladenen Dateien als Ordner (Änderungen bleiben im Speicher).
 
 ```powershell
-cargo run --release -p emu-desktop -- --machine c64 --option userport=wic64
-cargo run --release -p emu-headless -- --machine c64 --option uci=on --uci-dir C:\c64\ultimate --uci-mount Usb0=E:\c64 --debug
+cargo run --release -p mimic-desktop -- --machine c64 --option userport=wic64
+cargo run --release -p mimic-headless -- --machine c64 --option uci=on --uci-dir C:\c64\ultimate --uci-mount Usb0=E:\c64 --debug
 ```
 
 **Aufnahme und Wiedergabe:** Läufe mit echtem Netz sind nicht
@@ -673,7 +689,7 @@ gilt ein hinzugefügtes PNG mit dem Namen der Cartridge, oder die Auswahl
 ## 9. Live-Preview im Browser
 
 ```bash
-cargo run --release -p emu-headless -- --machine c64 --preview
+cargo run --release -p mimic-headless -- --machine c64 --preview
 # Browser: http://127.0.0.1:6580/
 ```
 
@@ -723,10 +739,10 @@ das Bild so breit zeigt wie ein Fernseher. Der Server braucht
 dafür etwa ein Achtel der Zeit des PNG-Stroms; 50 fps sind lokal und im LAN
 kein Problem. Parameter: `screen=`, `fps=1..50` (Standard 50), `audio=0|1`
 (Ton als 16-Bit-PCM, 48 kHz). Das Nachrichtenformat steht in
-`crates/emu-preview/src/raw.rs`. Der Viewer nutzt den Rohstrom beim Filter
+`crates/mimic-preview/src/raw.rs`. Der Viewer nutzt den Rohstrom beim Filter
 „raw“ und spielt den Ton ab, wenn „Sound“ angehakt ist. Für gleichmäßigen
 Ton muss die Maschine in Echtzeit laufen; das ist der Standard, nur
-`emu-headless --no-realtime` läuft schneller und der Ton stottert dann.
+`mimic-headless --no-realtime` läuft schneller und der Ton stottert dann.
 
 Der Viewer schickt Tastatur-, Gamepad- und Mauseingaben als JSON zurück
 (`{"type": "key", "code": "KeyA", "down": true}` usw.), dadurch ist das
@@ -734,7 +750,7 @@ Vorschaubild bedienbar. Der Server läuft nur auf `127.0.0.1`.
 
 ## 9a. Web-Frontend (alle Maschinen im Browser)
 
-Das Web-Frontend (`crates/emu-web`) ist derselbe Emulator als
+Das Web-Frontend (`crates/mimic-web`) ist derselbe Emulator als
 WebAssembly. Gebündelt wird nichts: ROMs, Disketten, Bänder und Module
 lädt man im Browser hoch (auf Wunsch bleiben sie in diesem Browser
 gespeichert, IndexedDB).
@@ -778,7 +794,7 @@ node tools/web-smoke.mjs                      # alle Maschinen im WASM-Modul (Te
  Werkzeug (polydbg, eigenes Skript, VS64 …)
         │  TCP: JSON-Zeilen (nativ) / VICE-Binary-Monitor
         ▼
- Debug-Server (emu-debug)  ──Befehlswarteschlange──►  Emulations-Thread
+ Debug-Server (mimic-debug)  ──Befehlswarteschlange──►  Emulations-Thread
         ▲                   ◄──Ereigniskanal───────   (Machine + DebugHooks)
 ```
 
@@ -799,11 +815,11 @@ Starten:
 
 ```bash
 # angehalten starten, Debug-Server auf 127.0.0.1:6510
-cargo run --release -p emu-headless -- --machine c64 --debug
+cargo run --release -p mimic-headless -- --machine c64 --debug
 # mit Fenster und Ton, Debug-Server zusätzlich
-cargo run --release -p emu-desktop -- --machine c64 --debug
+cargo run --release -p mimic-desktop -- --machine c64 --debug
 # alles: nativ + VICE-Monitor + Live-Bild, sofort laufen lassen
-cargo run --release -p emu-headless -- --machine c64 --vice --preview --run
+cargo run --release -p mimic-headless -- --machine c64 --vice --preview --run
 ```
 
 ### 10.2 Protokoll (nativ, JSON-Zeilen)
@@ -1018,7 +1034,7 @@ Mit `--vice` spricht mimic zusätzlich das Binärprotokoll des VICE-Monitors
 Lite debuggen damit jede Maschine – nicht nur den C64.
 
 ```bash
-cargo run --release -p emu-headless -- --machine c64 --vice --preview --run
+cargo run --release -p mimic-headless -- --machine c64 --vice --preview --run
 ```
 
 VS64 `launch.json`:
@@ -1050,9 +1066,9 @@ den CPC). Sie werden nur ausgeführt, nie eingecheckt.
 | 6502 Harte (jeder 10. Test) | `cargo test -p cpu-6502 --release -- --ignored` |
 | Z80 Harte | `cargo test -p cpu-z80 --release --test harte -- --ignored` |
 | ZEXDOC/ZEXALL | `cargo test -p cpu-z80 --release --test zex -- --ignored --nocapture` |
-| Lorenz (C64, mit ROMs) | `cargo test -p emu-tests --release --test lorenz lorenz_suite -- --ignored --exact` |
-| Acid800 (Atari) | `cargo test -p emu-tests --release --test acid800 -- --ignored --nocapture` |
-| Arnold-Acid-Tests (CPC; Fetch braucht einen C++-Compiler für pasmo) | `cargo test -p emu-tests --release --test cpc_acid -- --ignored --nocapture` (ca. 10 min; `EMU_CPC_FILTER=ppi`, `EMU_CPC_CRTC=0`, `EMU_CPC_FRAMES=<Felder>`, `EMU_CPC_TAIL=<Zeichen>`; Bericht in `target/tmp/cpc-acid.txt`) |
+| Lorenz (C64, mit ROMs) | `cargo test -p mimic-tests --release --test lorenz lorenz_suite -- --ignored --exact` |
+| Acid800 (Atari) | `cargo test -p mimic-tests --release --test acid800 -- --ignored --nocapture` |
+| Arnold-Acid-Tests (CPC; Fetch braucht einen C++-Compiler für pasmo) | `cargo test -p mimic-tests --release --test cpc_acid -- --ignored --nocapture` (ca. 10 min; `EMU_CPC_FILTER=ppi`, `EMU_CPC_CRTC=0`, `EMU_CPC_FRAMES=<Felder>`, `EMU_CPC_TAIL=<Zeichen>`; Bericht in `target/tmp/cpc-acid.txt`) |
 
 Referenzbilder liegen in `tests/reference/`; `EMU_UPDATE_REFERENCE=1`
 erzeugt sie neu (nur mit Begründung im Commit).

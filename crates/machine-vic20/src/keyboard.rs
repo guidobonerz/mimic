@@ -20,8 +20,8 @@
 //! | 6       | Q     | E      | T    | U    | O    | @    | ↑       | F5       |
 //! | 7       | 2     | 4      | 6    | 8    | 0    | -    | HOME    | F7       |
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 pub const RESTORE: MachineKey = MachineKey(64);
 

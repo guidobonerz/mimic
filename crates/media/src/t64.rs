@@ -7,7 +7,7 @@
 //! with $20 or $A0). Many images in the wild carry a wrong end address; the
 //! data length is then taken from the next entry's offset or the image end.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 use crate::prg::Prg;
 

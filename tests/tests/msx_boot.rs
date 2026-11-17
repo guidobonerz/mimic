@@ -2,26 +2,26 @@
 //! subfolder `msx/`): a user-supplied MSX1 BIOS or C-BIOS, the free one
 //! (`python tools/fetch_cbios.py`), and optionally cartridges.
 //!
-//!     cargo test -p emu-tests --release --test msx_boot -- --ignored --nocapture
+//!     cargo test -p mimic-tests --release --test msx_boot -- --ignored --nocapture
 //!
 //! `EMU_MSX_CARTS=/path` runs every `.rom`/`.mx1`/`.bin` there for a few
 //! seconds and saves a picture of each in the test's temporary folder
 //! (Phase 34 gate: "user-supplied cartridges run"); `EMU_FRAMES=n` the
 //! length (default 900 fields).
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, StopReason};
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, StopReason};
 
 fn machine(format: Option<&str>) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("no ROM folder");
     let config = MachineConfig {
         roms: media_backends::roms::load(&dir, "msx").expect("ROMs"),
-        video_format: format.and_then(emu_core::frame::VideoStandard::parse),
+        video_format: format.and_then(mimic_core::frame::VideoStandard::parse),
         ..MachineConfig::default()
     };
-    emu_machines::registry().create("msx", &config).unwrap()
+    mimic_machines::registry().create("msx", &config).unwrap()
 }
 
 fn run(m: &mut dyn Machine, fields: usize) {
@@ -32,7 +32,7 @@ fn run(m: &mut dyn Machine, fields: usize) {
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()
@@ -128,12 +128,12 @@ fn a_cartridge_is_found_and_calls_the_bios() {
         run(m.as_mut(), 400);
         let path = snapshot(m.as_ref(), &format!("msx-bioscall-{slot}.png"));
         // Screen 1's name table is at $1800 in VRAM: the text is on it.
-        let vram = emu_core::MemSpaceId(1);
+        let vram = mimic_core::MemSpaceId(1);
         let cpu = m.devices()[0];
         let t = m.debug_target(cpu).unwrap();
         // (the BIOS leaves a margin at the left of the 32 columns).
         let row: Vec<u8> = (0..32)
-            .map(|i| t.peek(vram, 0x1800 + i, emu_core::Size::Byte).unwrap() as u8)
+            .map(|i| t.peek(vram, 0x1800 + i, mimic_core::Size::Byte).unwrap() as u8)
             .collect();
         assert!(
             row.windows(5).any(|w| w == b"MIMIC"),
@@ -196,7 +196,7 @@ fn user_cartridges_run() {
 #[test]
 #[ignore = "needs an MSX BIOS or C-BIOS in the ROM folder and EMU_MSX_ROM"]
 fn a_user_cartridge_reacts_to_space_and_trigger() {
-    use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
     let path = std::env::var("EMU_MSX_ROM").expect("EMU_MSX_ROM not set");
     let frames: usize = std::env::var("EMU_FRAMES")
         .ok()
@@ -241,9 +241,9 @@ fn a_user_cartridge_reacts_to_space_and_trigger() {
             let at = m.now();
             m.input(TimedInput {
                 at,
-                target: InputTarget::Port(emu_core::port::PortId(0)),
+                target: InputTarget::Port(mimic_core::port::PortId(0)),
                 event: InputEvent::Digital {
-                    dirs: emu_core::input::Dirs::NONE,
+                    dirs: mimic_core::input::Dirs::NONE,
                     buttons: u8::from(down),
                 },
             });
@@ -275,11 +275,11 @@ fn a_user_cartridge_reacts_to_space_and_trigger() {
 
 /// The 40 × 24 text screen (SCREEN 0: the name table at VRAM 0).
 fn screen_text(m: &mut dyn Machine) -> String {
-    let vram = emu_core::MemSpaceId(1);
+    let vram = mimic_core::MemSpaceId(1);
     let cpu = m.devices()[0];
     let t = m.debug_target(cpu).unwrap();
     (0..40 * 24)
-        .map(|i| t.peek(vram, i, emu_core::Size::Byte).unwrap() as u8)
+        .map(|i| t.peek(vram, i, mimic_core::Size::Byte).unwrap() as u8)
         .map(|b| if b.is_ascii_graphic() { b as char } else { ' ' })
         .collect()
 }
@@ -308,7 +308,7 @@ fn key_of(c: char) -> (u16, bool) {
 }
 
 fn type_text(m: &mut dyn Machine, text: &str) {
-    use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
     const SHIFT: u16 = 6 * 8;
     let key = |m: &mut dyn Machine, k: u16, down: bool| {
         let at = m.now();
@@ -618,7 +618,7 @@ fn msx2_machine() -> Box<dyn Machine> {
         ..MachineConfig::default()
     };
     config.options.insert("disk".into(), "off".into());
-    emu_machines::registry().create("msx", &config).unwrap()
+    mimic_machines::registry().create("msx", &config).unwrap()
 }
 
 #[test]
@@ -653,11 +653,11 @@ fn msx2_finds_a_cartridge_that_calls_the_bios() {
         .unwrap();
     run(m.as_mut(), 400);
     let path = snapshot(m.as_ref(), "msx2-bioscall.png");
-    let vram = emu_core::MemSpaceId(1);
+    let vram = mimic_core::MemSpaceId(1);
     let cpu = m.devices()[0];
     let t = m.debug_target(cpu).unwrap();
     let row: Vec<u8> = (0..32)
-        .map(|i| t.peek(vram, 0x1800 + i, emu_core::Size::Byte).unwrap() as u8)
+        .map(|i| t.peek(vram, 0x1800 + i, mimic_core::Size::Byte).unwrap() as u8)
         .collect();
     assert!(row.windows(5).any(|w| w == b"MIMIC"), "{row:?}, see {path}");
 }

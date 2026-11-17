@@ -1,13 +1,13 @@
 //! Loading from a true-emulated 1541 over the serial bus, with the real
 //! KERNAL and DOS (user-supplied via `EMU_ROM_DIR`).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test c64_drive -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test c64_drive -- --ignored
 
-use emu_core::media::{Media, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Machine, Size};
 use media::D64;
 use media_backends::image::MemoryBackend;
+use mimic_core::media::{Media, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Machine, Size};
 
 /// `10 PRINT "HI"` as a tokenised BASIC program at $0801.
 const PROGRAM: [u8; 15] = [
@@ -42,7 +42,7 @@ fn c64_options(autostart: bool, drive: &str, options: &[(&str, &str)]) -> Box<dy
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    emu_machines::registry().create("c64", &config).unwrap()
+    mimic_machines::registry().create("c64", &config).unwrap()
 }
 
 fn disk() -> Media {
@@ -110,7 +110,7 @@ fn load_and_run_with(drive: &str) {
     for _ in 0..5 {
         m.run_frame(&mut dbg);
     }
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("c64_{drive}.png"));
     std::fs::write(&out, png).unwrap();
     assert!(found, "program did not run; snapshot at {}", out.display());
@@ -126,7 +126,7 @@ fn screen_has(m: &mut dyn Machine, text: &str) -> bool {
 }
 
 fn type_and_wait(m: &mut dyn Machine, text: &str, until: &str, frames: u32) -> bool {
-    let (events, end) = emu_tests::typing::type_text(text, m.now().0);
+    let (events, end) = mimic_tests::typing::type_text(text, m.now().0);
     for e in events {
         m.input(e);
     }
@@ -315,7 +315,7 @@ fn fastload_is_fast_and_reports_missing_files() {
         for _ in 0..150 {
             m.run_frame(&mut dbg);
         }
-        let (events, end) = emu_tests::typing::type_text("LOAD\"BIG\",8,1\r", m.now().0);
+        let (events, end) = mimic_tests::typing::type_text("LOAD\"BIG\",8,1\r", m.now().0);
         for e in events {
             m.input(e);
         }

@@ -27,8 +27,8 @@
 mod disasm;
 mod exec;
 
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
-use emu_core::{InterruptKind, Register, RegisterSet};
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{InterruptKind, Register, RegisterSet};
 
 pub use disasm::disassemble;
 

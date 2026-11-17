@@ -6,9 +6,9 @@ use devices_cartridge::reu::Reu;
 use devices_cartridge::slot::ExpansionSlot;
 use devices_net::uci::{drive_kind, UciDrive, UciMachine, UciSid};
 use drives_cbm::DriveModel;
-use emu_core::frame::Rgb8;
-use emu_core::media::{Media, MediaError};
-use emu_core::{Bus, Size};
+use mimic_core::frame::Rgb8;
+use mimic_core::media::{Media, MediaError};
+use mimic_core::{Bus, Size};
 
 use crate::drive::Drive8;
 use crate::io::Io;

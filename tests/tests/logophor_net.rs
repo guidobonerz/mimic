@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use emu_core::host::HostServices;
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, Machine, MemSpaceId, Size, StopReason};
 use machine_logophor16::Logophor;
+use mimic_core::host::HostServices;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, Machine, MemSpaceId, Size, StopReason};
 
 struct Mem(Vec<u8>);
 
@@ -156,7 +156,7 @@ fn mouse(m: &mut Logophor, dx: i16, dy: i16, buttons: u8) {
     let at = m.now();
     m.input(TimedInput {
         at,
-        target: InputTarget::Port(emu_core::port::PortId(0)),
+        target: InputTarget::Port(mimic_core::port::PortId(0)),
         event: InputEvent::MouseRel { dx, dy, buttons },
     });
     frames(m, 3);

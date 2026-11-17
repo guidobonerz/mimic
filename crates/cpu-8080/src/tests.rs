@@ -1,5 +1,5 @@
 use super::*;
-use emu_core::Flow;
+use mimic_core::Flow;
 
 /// 64 KB of RAM counting T-states and recording the machine cycles.
 struct Ram {

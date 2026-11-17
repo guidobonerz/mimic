@@ -21,9 +21,9 @@
 //! user's cartridge image (`STA $DE00` before a call into `$A000`,
 //! `LDA $DE00` before the return to BASIC).
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
 use media::crt::Crt;
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::expansion::{CartLines, ExpansionCart};
 

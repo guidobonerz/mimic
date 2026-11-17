@@ -25,7 +25,7 @@
 //! alternate, hold). A channel sounds where its enabled sources are high
 //! (a disabled source counts as high).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Writable bits per register.
 const MASKS: [u8; 16] = [

@@ -26,7 +26,7 @@
 //! ("paddle") schematic 251925 (zimmers.net), the register use in the
 //! 1551 DOS (318008-01) and the Plus/4 KERNAL (318004-05).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 const TAG: [u8; 4] = *b"TIA1";
 const VERSION: u16 = 1;

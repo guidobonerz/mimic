@@ -1,5 +1,5 @@
 //! Text typed on the keyboard (pasted listings, scripted typing; see
-//! [`emu_core::Machine::typed_keys`]).
+//! [`mimic_core::Machine::typed_keys`]).
 //!
 //! The machine keys are the unshifted characters of the IIe's US keyboard
 //! ([`crate::keyboard`]), so a character is its own key, or SHIFT and the
@@ -9,7 +9,7 @@
 //! case on the II and II+, and on the IIe while CAPS LOCK is down, as at
 //! power-on).
 
-use emu_core::input::{typed_chars, TimedInput, TypeTiming};
+use mimic_core::input::{typed_chars, TimedInput, TypeTiming};
 
 use crate::keyboard::keys;
 

@@ -1,5 +1,5 @@
 use super::*;
-use emu_core::input::{InputEvent, MachineKey};
+use mimic_core::input::{InputEvent, MachineKey};
 
 fn stub_with(model: &str, options: &[(&str, &str)]) -> C128 {
     let mut config = MachineConfig::default();
@@ -7,7 +7,7 @@ fn stub_with(model: &str, options: &[(&str, &str)]) -> C128 {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    config.video_format = emu_core::frame::VideoStandard::parse(model);
+    config.video_format = mimic_core::frame::VideoStandard::parse(model);
     C128::new(&config).unwrap()
 }
 
@@ -32,8 +32,8 @@ fn key_event(at: u64, k: MachineKey, down: bool) -> TimedInput {
     }
 }
 
-fn exec_bp(dbg: &mut DebugHooks, space: MemSpaceId, addr: u16) -> emu_core::BpId {
-    dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+fn exec_bp(dbg: &mut DebugHooks, space: MemSpaceId, addr: u16) -> mimic_core::BpId {
+    dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
         space,
         addr: u32::from(addr),
     })
@@ -319,13 +319,13 @@ fn overlays_record_bad_lines_and_sprites() {
     assert_eq!(bad.shapes.len(), 25);
     assert!(matches!(
         bad.shapes[0],
-        emu_core::overlay::Shape::Band { y, .. } if y == m.frame_row(0x33).unwrap() as i32
+        mimic_core::overlay::Shape::Band { y, .. } if y == m.frame_row(0x33).unwrap() as i32
     ));
     let sp = m.overlay("sprites").unwrap();
     let row = m.frame_row(81).unwrap() as i32;
     assert!(matches!(
         sp.shapes[..],
-        [emu_core::overlay::Shape::Rect { x: 108, y, w: 24, h: 21, .. }] if y == row
+        [mimic_core::overlay::Shape::Rect { x: 108, y, w: 24, h: 21, .. }] if y == row
     ));
     m.set_overlays(&[]);
     assert!(m.overlay("sprites").is_none());
@@ -365,7 +365,7 @@ fn light_pen_in_control_port_1_latches_the_vic_iie() {
 
 #[test]
 fn four_player_adapter_in_the_user_port() {
-    use emu_core::input::Dirs;
+    use mimic_core::input::Dirs;
     let mut m = stub_with("pal", &[("userport", "cga")]);
     let names: Vec<&str> = m.ports().iter().map(|p| p.name).collect();
     assert_eq!(names[2..], ["user port", "joystick 3", "joystick 4"]);

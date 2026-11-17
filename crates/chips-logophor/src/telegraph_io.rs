@@ -16,7 +16,7 @@
 //! the card, a buffer beyond chip RAM, a write to a protected card) end
 //! the command with the error and done bits and the interrupt.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::lithograph::ChipRamMut;
 

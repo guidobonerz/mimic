@@ -9,7 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-emu-core.workspace = true
+mimic-core.workspace = true
 cpu-65816.workspace = true
 cpu-spc700.workspace = true
 cpu-upd7725.workspace = true

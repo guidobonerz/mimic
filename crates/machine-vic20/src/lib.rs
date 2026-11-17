@@ -42,16 +42,16 @@ use chips_cbm::via::Via;
 use chips_cbm::vic;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use devices_printer::CbmPrinter;
-use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::hooked::HookedBus;
-use emu_core::input::{InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::Cycle;
-use emu_core::{
+use mimic_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::hooked::HookedBus;
+use mimic_core::input::{InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::Cycle;
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -82,7 +82,7 @@ pub fn entry() -> MachineEntry {
         id: "vic20",
         name: "Commodore VIC-20",
         models: &[],
-        video_formats: emu_core::registry::PAL_NTSC,
+        video_formats: mimic_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Vic20::new(config)?)),
     }
 }
@@ -372,10 +372,10 @@ impl Vic20 {
         // The user port: VIA1's port B outputs go to the device, its lines
         // come back for this cycle's reads.
         if let Some(dev) = &mut self.user_port {
-            use emu_core::port::user_port;
+            use mimic_core::port::user_port;
             let now = self.sched.now();
             dev.write_lines(
-                emu_core::port::PortLines {
+                mimic_core::port::PortLines {
                     pulled_low: user_port::pb_lines(self.io.via1.port_b_out()),
                     analog: [u16::MAX; 2],
                 },
@@ -477,7 +477,7 @@ impl Vic20 {
     fn apply_input(&mut self, ev: TimedInput) {
         match ev.target {
             InputTarget::Keyboard => {
-                if let emu_core::input::InputEvent::Key { machine_key, down } = ev.event {
+                if let mimic_core::input::InputEvent::Key { machine_key, down } = ev.event {
                     self.io.keyboard.set(machine_key, down);
                 }
             }
@@ -495,7 +495,7 @@ impl Vic20 {
             }
             InputTarget::Port(_) => {}
             InputTarget::Panel => {
-                if let emu_core::input::InputEvent::Control { id, value } = ev.event {
+                if let mimic_core::input::InputEvent::Control { id, value } = ev.event {
                     self.control(id.0, value);
                 }
             }
@@ -505,7 +505,7 @@ impl Vic20 {
     /// A console control from the panel (power, RESTORE).
     fn control(&mut self, id: u16, value: u8) {
         match id {
-            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
+            0 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Hard),
             1 => {
                 self.io.keyboard.set(keyboard::RESTORE, value == 1);
             }
@@ -518,7 +518,7 @@ impl Vic20 {
     fn refresh_port(&mut self) {
         let now = self.sched.now();
         let lines = self.port.as_mut().map(|d| {
-            d.write_lines(emu_core::port::PortLines::default(), now);
+            d.write_lines(mimic_core::port::PortLines::default(), now);
             d.read_lines(now)
         });
         self.io.port_lines = lines.map_or(0, |l| l.pulled_low);
@@ -714,7 +714,7 @@ impl Machine for Vic20 {
         self.io.vic.frame_row(line)
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
@@ -744,10 +744,10 @@ impl Machine for Vic20 {
         )
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.io.vic.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -843,9 +843,16 @@ impl Machine for Vic20 {
         self.sched.now()
     }
 
+    /// Pasted text goes straight into the KERNAL's keyboard buffer
+    /// ([`chips_cbm::keybuf`]).
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        let has_key = |c| keyboard::key_for_char(c).is_some();
+        chips_cbm::keybuf::VIC20.paste(&mut self.mem.ram, text, has_key)
+    }
+
     /// Text as key presses (upper-case letters; see [`keyboard::typed_events`]), with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             240_000,
@@ -853,8 +860,8 @@ impl Machine for Vic20 {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        use emu_core::ControlInfo;
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        use mimic_core::ControlInfo;
         vec![
             ControlInfo::button(0, "POWER", false),
             ControlInfo::button(1, "RESTORE", self.io.keyboard.restore),
@@ -935,7 +942,7 @@ impl Machine for Vic20 {
         dev
     }
 
-    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+    fn attach_host(&mut self, host: mimic_core::host::HostServices) {
         if let Some(p) = &mut self.printer {
             p.printer.attach(&host);
         }

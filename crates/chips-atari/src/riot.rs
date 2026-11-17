@@ -23,7 +23,7 @@
 //! register", "Edge detect control"); Steve Wright, "Stella Programmer's
 //! Guide" (1979), section 12 ("PIA 6532").
 
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
 
 /// Prescaler intervals selected by A1 A0 of a timer write.
 const INTERVALS: [u16; 4] = [1, 8, 64, 1024];

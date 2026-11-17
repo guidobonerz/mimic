@@ -48,7 +48,7 @@
 //! Unverified (not documented, chosen plausibly): [`DELAY`]; the legacy
 //! protocol's error answer `!0`; the version reported (2.1.0); the MAC,
 //! SSID, RSSI and scan answers (fixed values from the host's
-//! [`emu_core::host::NetInfo`]); the time-zone table (`TIMEZONES`); POST
+//! [`mimic_core::host::NetInfo`]); the time-zone table (`TIMEZONES`); POST
 //! sends the data as the request body (`application/octet-stream`), not
 //! as a form field; a response over 64 KB in the legacy or standard
 //! protocol is a client error; the response of a request that is still
@@ -59,13 +59,13 @@
 //! HTTP request in flight are host handles: after loading, a live host
 //! answers them with errors, a replay from its journal.
 
-use emu_core::host::{
+use mimic_core::host::{
     lock, ConnState, HostServices, HttpResponse, HttpTicket, NetError, NetHandle, Recv, SharedNet,
     SocketKind,
 };
-use emu_core::input::InputEvent;
-use emu_core::port::{user_port, PortDevice, PortKind, PortLines};
-use emu_core::{Cycle, StateError, StateReader, StateWriter};
+use mimic_core::input::InputEvent;
+use mimic_core::port::{user_port, PortDevice, PortKind, PortLines};
+use mimic_core::{Cycle, StateError, StateReader, StateWriter};
 
 /// Cycles the ESP takes for a handshake (unverified).
 pub const DELAY: u64 = 20;
@@ -335,7 +335,7 @@ impl Wic64 {
         }
     }
 
-    fn online(&self) -> Result<emu_core::host::NetInfo, NetError> {
+    fn online(&self) -> Result<mimic_core::host::NetInfo, NetError> {
         match &self.net {
             Some(n) => lock(n).info(),
             None => Err(NetError::NoNetwork),

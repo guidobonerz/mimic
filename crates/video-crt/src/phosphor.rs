@@ -1,5 +1,5 @@
 //! Phosphor stage for vector displays (the Vectrex): the beam segments of
-//! a frame ([`emu_core::VectorFrame`]) drawn with the afterglow of each
+//! a frame ([`mimic_core::VectorFrame`]) drawn with the afterglow of each
 //! from the moment the beam drew it.
 //!
 //! **Model.** The beam excites the phosphor; the excitation decays as
@@ -16,15 +16,15 @@
 //! Energy is conserved: a still picture is as bright as without the stage,
 //! τ → 0 gives the machine's own picture, and moving lines leave trails
 //! that fade with τ. The light goes through the same rasteriser and
-//! saturating curve as the machine's picture ([`emu_core::vector::Raster`]).
+//! saturating curve as the machine's picture ([`mimic_core::vector::Raster`]).
 //! A gap in the frame numbers (frames not shown) lets the glow decay over
 //! the missing frames, an earlier frame number (a loaded savestate,
 //! rewind) starts without glow. The stage keeps its own state, never machine state
 //! (savestates stay CRT-independent); it is a frontend stage like
 //! [`crate::field::FieldStage`].
 
-use emu_core::frame::Rgb8;
-use emu_core::vector::{Raster, VectorFrame};
+use mimic_core::frame::Rgb8;
+use mimic_core::vector::{Raster, VectorFrame};
 
 #[derive(Clone, Debug, Default)]
 pub struct VectorPhosphor {
@@ -114,7 +114,7 @@ impl VectorPhosphor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::vector::{Segment, Style};
+    use mimic_core::vector::{Segment, Style};
 
     const WHITE: Rgb8 = Rgb8 {
         r: 255,

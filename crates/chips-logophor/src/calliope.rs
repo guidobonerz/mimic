@@ -28,7 +28,7 @@
 //! Channel 7 cannot modulate. The channels advance in batches of one
 //! output sample ([`CYCLES_PER_SAMPLE`]), the FIFO is filled at the fixed DMA's start.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::lumiere::ChipRam;
 

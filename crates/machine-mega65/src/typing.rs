@@ -1,5 +1,5 @@
 //! Text typed on the keyboard (pasted listings, scripted typing; see
-//! [`emu_core::Machine::typed_keys`]).
+//! [`mimic_core::Machine::typed_keys`]).
 //!
 //! The MEGA65's main keys sit in the C64's matrix ([`crate::keyboard`]:
 //! machine key = column × 8 + row), so a character is typed as on the
@@ -7,7 +7,7 @@
 //! character set), `!"#$%&'()` as the shifted digits 1 to 9, `< > ? [ ]`
 //! as the shifted `, . / : ;`.
 
-use emu_core::input::{typed_chars, TimedInput, TypeTiming};
+use mimic_core::input::{typed_chars, TimedInput, TypeTiming};
 
 use crate::keyboard::keys;
 

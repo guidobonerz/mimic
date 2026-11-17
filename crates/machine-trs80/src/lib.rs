@@ -56,20 +56,20 @@ pub mod stub;
 pub mod video;
 
 use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
-use emu_core::frame::{
+use memory::Memory;
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use memory::Memory;
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The Z80's view: memory at 0–$FFFF, I/O ports at `IO_BASE + port`.
@@ -601,9 +601,9 @@ impl Machine for Trs80 {
         }
     }
 
-    fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+    fn audio(&mut self, _out: &mut Vec<i16>) -> mimic_core::AudioFormat {
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -622,7 +622,7 @@ impl Machine for Trs80 {
         }]
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         let found = match &self.basic {
             Basic::Level1(b) => b.rescan(&*self).map(Basic::Level1),
             Basic::Level2(b) => b.rescan(&*self).map(Basic::Level2),
@@ -673,7 +673,7 @@ impl Machine for Trs80 {
     /// for three), with a pause behind ENTER for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
         let hold = self.timing.t_per_field() * 3;
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             hold * 4,
@@ -681,10 +681,10 @@ impl Machine for Trs80 {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
         vec![
-            emu_core::ControlInfo::button(CONTROL_RESET, "RESET", false),
-            emu_core::ControlInfo::button(CONTROL_POWER, "POWER", false),
+            mimic_core::ControlInfo::button(CONTROL_RESET, "RESET", false),
+            mimic_core::ControlInfo::button(CONTROL_POWER, "POWER", false),
         ]
     }
 
@@ -861,19 +861,19 @@ impl basic_dialects::Dialect for Basic {
         self.dialect().space()
     }
 
-    fn info(&self) -> emu_core::basic::BasicInfo {
+    fn info(&self) -> mimic_core::basic::BasicInfo {
         self.dialect().info()
     }
 
-    fn state(&self, host: &dyn DebugTarget) -> emu_core::basic::BasicState {
+    fn state(&self, host: &dyn DebugTarget) -> mimic_core::basic::BasicState {
         self.dialect().state(host)
     }
 
-    fn program(&self, host: &dyn DebugTarget) -> Vec<emu_core::basic::BasicLine> {
+    fn program(&self, host: &dyn DebugTarget) -> Vec<mimic_core::basic::BasicLine> {
         self.dialect().program(host)
     }
 
-    fn variables(&self, host: &dyn DebugTarget) -> Vec<emu_core::basic::BasicVar> {
+    fn variables(&self, host: &dyn DebugTarget) -> Vec<mimic_core::basic::BasicVar> {
         self.dialect().variables(host)
     }
 
@@ -883,11 +883,11 @@ impl basic_dialects::Dialect for Basic {
         name: &str,
         first: u32,
         count: u32,
-    ) -> Result<Vec<emu_core::basic::BasicValue>, emu_core::basic::BasicError> {
+    ) -> Result<Vec<mimic_core::basic::BasicValue>, mimic_core::basic::BasicError> {
         self.dialect().array(host, name, first, count)
     }
 
-    fn stack(&self, host: &dyn DebugTarget) -> Vec<emu_core::basic::BasicFrame> {
+    fn stack(&self, host: &dyn DebugTarget) -> Vec<mimic_core::basic::BasicFrame> {
         self.dialect().stack(host)
     }
 
@@ -896,12 +896,12 @@ impl basic_dialects::Dialect for Basic {
         host: &dyn DebugTarget,
         name: &str,
         index: Option<u32>,
-        value: &emu_core::basic::BasicValue,
-    ) -> Result<Vec<(u32, u8)>, emu_core::basic::BasicError> {
+        value: &mimic_core::basic::BasicValue,
+    ) -> Result<Vec<(u32, u8)>, mimic_core::basic::BasicError> {
         self.dialect().plan_set(host, name, index, value)
     }
 
-    fn stop_points(&self, host: &dyn DebugTarget) -> Vec<emu_core::basic::BasicStopPoint> {
+    fn stop_points(&self, host: &dyn DebugTarget) -> Vec<mimic_core::basic::BasicStopPoint> {
         self.dialect().stop_points(host)
     }
 }

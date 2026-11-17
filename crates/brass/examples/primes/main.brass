@@ -2,7 +2,7 @@
 //
 //   cargo run --release -p brass -- build crates/brass/examples/primes -o primes.bin
 //   cargo run --release -p asm-ada -- sd primes.img --boot primes.bin
-//   cargo run --release -p emu-desktop -- --profile logophor16 --disk primes.img
+//   cargo run --release -p mimic-desktop -- --profile logophor16 --disk primes.img
 //
 // (or `brass` and `ada-asm` after `cargo install --path crates/brass` and
 // `cargo install --path crates/asm-ada`)

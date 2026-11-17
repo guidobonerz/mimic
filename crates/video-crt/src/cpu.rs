@@ -48,7 +48,7 @@
 //! Everything is plain arithmetic on the frame: no randomness, no clock.
 //! Sources: see `docs/sources.md` ("CRT stage").
 
-use emu_core::frame::{FieldParity, FrameRef, PixelData, VideoStandard};
+use mimic_core::frame::{FieldParity, FrameRef, PixelData, VideoStandard};
 
 use crate::profile::{Mask, Profile};
 
@@ -531,7 +531,7 @@ pub fn apply_persistence(out: &mut [u8], prev: &[u8], keep: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::frame::{OutputType, Rgb8, SignalInfo};
+    use mimic_core::frame::{OutputType, Rgb8, SignalInfo};
 
     const PALETTE: [Rgb8; 2] = [
         Rgb8 { r: 0, g: 0, b: 0 },

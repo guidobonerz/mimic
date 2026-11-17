@@ -1,0 +1,42 @@
+[package]
+name = "mimic-machines"
+description = "Machine registry population: the only crate that links every machine-* crate"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mimic-core.workspace = true
+devices-input.workspace = true
+devices-net.workspace = true
+machine-pet.workspace = true
+machine-vic20.workspace = true
+machine-c64.workspace = true
+machine-ted.workspace = true
+machine-c128.workspace = true
+machine-amiga.workspace = true
+machine-atari8.workspace = true
+machine-atari2600.workspace = true
+machine-cpc.workspace = true
+machine-zx81.workspace = true
+machine-kc85.workspace = true
+machine-trs80.workspace = true
+machine-spectrum.workspace = true
+machine-coleco.workspace = true
+machine-msx.workspace = true
+machine-ti99.workspace = true
+machine-bbc.workspace = true
+machine-mega65.workspace = true
+machine-nes.workspace = true
+machine-snes.workspace = true
+machine-vectrex.workspace = true
+machine-apple2.workspace = true
+machine-mac.workspace = true
+machine-imsai.workspace = true
+machine-keypunch.workspace = true
+machine-logophor16.workspace = true
+machine-archimedes.workspace = true
+machine-sim6502.workspace = true

@@ -53,7 +53,7 @@
 //! own underflow sets the flag. CA2 as an input ([`Via::set_ca2`]) sets
 //! its flag on the edge PCR bits 3–1 select.
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub mod ifr {
     pub const CA2: u8 = 0x01;

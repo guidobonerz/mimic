@@ -18,8 +18,8 @@
 //! Interface article on Wikipedia, the TR-DOS 5.01 ROM's behaviour.
 
 use chips_acorn::wd1772::{Floppy, Wd1772};
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const DRIVES: usize = 4;
 const SECTOR: usize = 256;

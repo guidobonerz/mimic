@@ -15,7 +15,7 @@
 //! control register (figure 6), translator programming (figure 7), address
 //! generators (figure 8), sound buffer swap.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Where an address leads, after protection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

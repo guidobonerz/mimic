@@ -1,7 +1,7 @@
 //! Instruction execution: decoding the prefixes, the addressing modes, the
 //! 8-bit, 16-bit and 32-bit (Q) operations and the cycle counts.
 
-use emu_core::{Bus, Size};
+use mimic_core::{Bus, Size};
 
 use crate::flag::{B as FB, C, D, E, I, N, V, Z};
 use crate::table::{Mn, Op, COMPOUND, OPS};

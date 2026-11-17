@@ -39,7 +39,7 @@
 mod disasm;
 mod exec;
 
-use emu_core::{
+use mimic_core::{
     Bus, Cpu, CycleResult, Instr, InterruptKind, Register, RegisterSet, Savestate, Size,
     StateError, StateReader, StateWriter,
 };

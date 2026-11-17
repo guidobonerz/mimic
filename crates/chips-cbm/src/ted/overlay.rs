@@ -1,9 +1,9 @@
-//! Debug overlays of the TED (see `emu_core::overlay`): `badlines`, a band
+//! Debug overlays of the TED (see `mimic_core::overlay`): `badlines`, a band
 //! on every raster line on which the TED takes the bus for a DMA (the line
 //! before each character row and its first line, with the display
 //! enabled; see [`Ted`]'s timing notes). Recorded only while switched on; see `crate::overlay`.
 
-use emu_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::overlay::{Overlay, OverlayInfo};
 
 use super::Ted;
 use crate::overlay::{line_bands, LineMarks, Recorder};
@@ -77,7 +77,7 @@ impl Ted {
 mod tests {
     use super::*;
     use crate::ted::{Model, TedMemory};
-    use emu_core::overlay::Shape;
+    use mimic_core::overlay::Shape;
 
     struct Ram;
 

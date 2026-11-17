@@ -13,8 +13,8 @@
 //! the scheme as the MegaCart's homebrew documentation describes it (see
 //! `docs/sources.md`), not checked against a board.
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::slot::CartSlot;
 

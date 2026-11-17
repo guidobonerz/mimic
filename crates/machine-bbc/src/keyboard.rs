@@ -43,7 +43,7 @@
 //! numbers); the Master's keypad: Acorn, *Master Reference Manual* part 1
 //! (the INKEY numbers of the keypad keys).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// The panel control BREAK.
 pub const BREAK: u16 = 1;

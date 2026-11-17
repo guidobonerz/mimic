@@ -12,7 +12,7 @@
 //! so recordings fit into the file; a zero chunk type ends the tape.
 //! Source: the CAS format as documented with the A8CAS tools.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 /// The standard cassette rate.
 pub const BAUD: u16 = 600;

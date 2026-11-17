@@ -64,7 +64,7 @@
 //! character (`crtctest`, "hsync length measure (type 2)": R2 + width must
 //! stay below R0 + 1).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// The CRTC variant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

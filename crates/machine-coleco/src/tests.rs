@@ -1,11 +1,11 @@
 use super::*;
-use emu_core::input::Dirs;
-use emu_core::media::{Media, MediaBackend, MediaError};
-use emu_core::overlay::{colors, Shape};
+use mimic_core::input::Dirs;
+use mimic_core::media::{Media, MediaBackend, MediaError};
+use mimic_core::overlay::{colors, Shape};
 
 fn stub_with(model: Option<&str>, options: &[(&str, &str)]) -> Coleco {
     let mut config = MachineConfig {
-        video_format: model.and_then(emu_core::frame::VideoStandard::parse),
+        video_format: model.and_then(mimic_core::frame::VideoStandard::parse),
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());

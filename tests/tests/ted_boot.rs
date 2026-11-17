@@ -2,14 +2,14 @@
 //! `EMU_ROM_DIR`, e.g. a `plus4/` subfolder), take keyboard input and load
 //! from a true-emulated 1541 and from a 1551 on the TCBM bus.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test ted_boot -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test ted_boot -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size};
 use media::D64;
 use media_backends::image::MemoryBackend;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size};
 
 fn boot(machine: &str, model: &str, autostart: bool) -> Box<dyn Machine> {
     boot_with(machine, model, autostart, "1541")
@@ -19,7 +19,7 @@ fn boot_with(machine: &str, model: &str, autostart: bool, drive: &str) -> Box<dy
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, machine).expect("ROMs"),
-        video_format: emu_core::frame::VideoStandard::parse(model),
+        video_format: mimic_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     if autostart {
@@ -28,7 +28,7 @@ fn boot_with(machine: &str, model: &str, autostart: bool, drive: &str) -> Box<dy
     if config.roms.contains_key(&format!("dos{drive}")) || drive == "virtual" {
         config.options.insert("drive8".into(), drive.into());
     }
-    emu_machines::registry().create(machine, &config).unwrap()
+    mimic_machines::registry().create(machine, &config).unwrap()
 }
 
 fn run_frames(m: &mut dyn Machine, n: u32) {
@@ -63,7 +63,7 @@ fn row_of(screen: &[u8], text: &str) -> Option<usize> {
 
 fn snapshot(m: &dyn Machine, name: &str) -> std::path::PathBuf {
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
-    std::fs::write(&out, emu_preview::encode_png(&m.framebuffer())).unwrap();
+    std::fs::write(&out, mimic_preview::encode_png(&m.framebuffer())).unwrap();
     out
 }
 

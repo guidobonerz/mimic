@@ -6,7 +6,7 @@ use super::*;
 /// Bytes in memory as a medium.
 struct Bytes(Vec<u8>);
 
-impl emu_core::media::MediaBackend for Bytes {
+impl mimic_core::media::MediaBackend for Bytes {
     fn len(&self) -> u64 {
         self.0.len() as u64
     }

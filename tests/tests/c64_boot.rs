@@ -1,9 +1,9 @@
 //! C64 boot to BASIC with real ROMs (user-supplied via `EMU_ROM_DIR`).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --test c64_boot -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --test c64_boot -- --ignored
 
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size, StopReason};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size, StopReason};
 
 /// "READY." in screen codes.
 const READY: [u8; 6] = [0x12, 0x05, 0x01, 0x04, 0x19, 0x2e];
@@ -16,7 +16,7 @@ fn c64_boots_to_ready() {
         roms: media_backends::roms::load(&dir, "c64").expect("ROMs"),
         ..MachineConfig::default()
     };
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     let mut dbg = DebugHooks::new();
     for _ in 0..150 {
         assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
@@ -34,7 +34,7 @@ fn c64_boots_to_ready() {
         .collect();
     let found = screen.windows(READY.len()).position(|w| w == READY);
 
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("c64_boot.png");
     std::fs::write(&out, png).unwrap();
 
@@ -47,7 +47,7 @@ fn c64_boots_to_ready() {
     assert_eq!(row, Some(5), "READY. below the banner");
 
     // Type a BASIC line; the KERNAL scans the matrix through CIA1.
-    let (events, end) = emu_tests::typing::type_text("PRINT 6*7\n", m.now().0);
+    let (events, end) = mimic_tests::typing::type_text("PRINT 6*7\n", m.now().0);
     for e in events {
         m.input(e);
     }

@@ -76,21 +76,21 @@ bullets(
 h2("Bauen")
 p("Immer die optimierte Fassung (release) bauen; ein Debug-Build ist weit "
   "langsamer als Echtzeit.")
-code("""cargo build --release -p emu-desktop     # der Desktop-Emulator
-cargo build --release -p emu-headless    # das Kommandozeilen-Frontend""")
+code("""cargo build --release -p mimic-desktop     # der Desktop-Emulator
+cargo build --release -p mimic-headless    # das Kommandozeilen-Frontend""")
 p("""Die Programme landen in `target/release/` — unter Windows
 `mimic-desktop.exe` und `mimic-headless.exe`. Sie brauchen keine weiteren
 Dateien und können beliebig kopiert werden; ROMs liegen im Ordner
 `.mimic/roms` Ihres Benutzerordners oder werden über `--rom-dir` bzw. die
 Umgebungsvariable `EMU_ROM_DIR` gefunden.""")
-note("""Ältere Builds hinterließen Dateien namens `emu-desktop.exe` und
-`emu-headless.exe` in `target/release/`. Sie sind veraltet (sie kennen die
+note("""Ältere Builds hinterließen Dateien namens `mimic-desktop.exe` und
+`mimic-headless.exe` in `target/release/`. Sie sind veraltet (sie kennen die
 neueren Maschinen nicht); benutzen Sie `mimic-desktop.exe` und
 `mimic-headless.exe` oder starten Sie wie unten über `cargo run`, das immer
 zuerst die aktuelle Fassung baut.""", "Achtung")
 h2("Eine Maschine starten")
 p("Zwei gleichwertige Wege, den Desktop-Emulator zu starten:")
-code("""cargo run --release -p emu-desktop -- --machine c64
+code("""cargo run --release -p mimic-desktop -- --machine c64
 .\\target\\release\\mimic-desktop.exe --machine c64""")
 p("Alles nach `--` geht an den Emulator. Einige erste Schritte:")
 code("""# C64 mit einer Diskette, automatisch geladen und gestartet
@@ -257,8 +257,9 @@ die Seite lädt.""")
 h2("Die Statusfußzeile")
 p("""Strg+Leertaste zeigt eine Statuszeile unter dem Bild. Links sitzt der
 **Geschwindigkeitsregler**: Klick auf eine Stufe oder Ziehen des Knopfs für
-10 %, 25 %, 50 %, 100 %, 150 %, 200 %, 400 % oder 800 % der Echtzeit (abseits
-von 100 % ist der Ton stumm). Bei 100 % läuft der Emulator stumm so schnell
+-4x bis 10x: 1x ist Echtzeit, 2x bis 10x das Vielfache, -2x bis -4x die
+halbe bis viertel Geschwindigkeit, die letzte Stufe **warp** so schnell der
+Rechner kann (abseits von 1x ist der Ton stumm). Bei 1x läuft der Emulator stumm so schnell
 er kann, solange ein Diskettenlaufwerk arbeitet (LED oder Motor, etwa beim
 LOAD) und die Maschine eine Sekunde lang ohne Ton und mit stehendem Bild war,
 und nur, bis das geladene Programm zum ersten Mal Ton oder eine Animation
@@ -1137,8 +1138,8 @@ note("`127.0.0.1` benutzen, nicht `localhost`: die Server hören nur auf IPv4.",
 h1("Fehlersuche")
 table(["Problem", "Lösung"], [
     ["`unknown machine 'vectrex'` (oder eine andere neue Maschine)",
-     "Sie haben eine veraltete `emu-desktop.exe` gestartet. Benutzen Sie `mimic-desktop.exe` "
-     "oder `cargo run --release -p emu-desktop -- …`."],
+     "Sie haben eine veraltete `mimic-desktop.exe` gestartet. Benutzen Sie `mimic-desktop.exe` "
+     "oder `cargo run --release -p mimic-desktop -- …`."],
     ["`missing ROM '…'` oder `no … ROM`",
      "Prüfen Sie den mit `--rom-dir` angegebenen Ordner und die genaue Dateigröße; die "
      "Meldung nennt die akzeptierten Dateinamen."],
@@ -1366,8 +1367,8 @@ table(["Option", "Bedeutung"], [
     ["`--deinterlace MODUS`", "Zeilensprungbilder (Amiga LACE): `weave` (Standard, beide "
      "Halbbilder verschränkt) oder `bob` (die Zeilen des aktuellen Halbbilds verdoppelt); "
      "Strg+I schaltet im Betrieb um."],
-    ["`--speed PROZENT`", "Mit 10, 25, 50, 100, 150, 200, 400 oder 800 % Geschwindigkeit starten."],
-    ["`--warp-load on|off`", "Bei 100 %: stumm so schnell wie möglich laufen, solange ein "
+    ["`--speed FAKTOR`", "Mit ein- bis zehnfacher Geschwindigkeit starten (1 bis 10), mit -2 bis -4 entsprechend langsamer, mit `warp` so schnell der Rechner kann."],
+    ["`--warp-load on|off`", "Bei 1x: stumm so schnell wie möglich laufen, solange ein "
      "Diskettenlaufwerk arbeitet und die Maschine eine Sekunde ohne Ton mit stehendem Bild war, "
      "bis das geladene Programm zum ersten Mal Ton oder eine Animation zeigt (Standard `on`)."],
     ["`--rewind-mb N`", "Speicher fürs Zurückspulen mit Strg+R (Standard 128; 0 = aus)."],
@@ -1394,7 +1395,7 @@ table(["Taste", "Wirkung"], [
     ["PAUSE im Konsolenpanel", "Die ganze Maschine anhalten und weiterlaufen lassen "
      "(leuchtet im Stillstand, auch durch einen Debugger)."],
     ["Strg+Leertaste", "Statusfußzeile zeigen oder verbergen: Geschwindigkeitsregler "
-     "(10–800 %), Schnappschuss-Knopf (`<maschine>-NNN.png`), emulierte Zeit, "
+     "(-4x bis 10x, warp), Schnappschuss-Knopf (`<maschine>-NNN.png`), emulierte Zeit, "
      "Zeigerposition, Joystick-Richtungen, Laufwerksaktivität."],
     ["F12", "Zwischen den Bildschirmen einer Maschine wechseln: C128 VIC/VDC, IMSAI "
      "Frontplatte und Terminal."],
@@ -1449,7 +1450,7 @@ table(["Option", "Bedeutung"], [
     ["`--list`", "Die Maschinen mit ihren Modellen auflisten und beenden."],
 ], [0.26, 0.74])
 h2("Echte Hardware (Feature `real-hardware`)")
-p("""Mit `cargo build --release -p emu-headless --features real-hardware`
+p("""Mit `cargo build --release -p mimic-headless --features real-hardware`
 (oder `greaseweazle` / `opencbm` allein) gebaut, spricht das Programm auch
 mit einem Greaseweazle-Flussleser und über OpenCBM (`opencbm.dll` im PATH
 oder `MIMIC_OPENCBM`) mit einem ZoomFloppy samt echtem
@@ -1690,7 +1691,7 @@ table(["Schlüssel", "Bedeutung", "Entsprechung auf der Kommandozeile"], [
     ["`display.deinterlace`", "`weave` oder `bob`.", "`--deinterlace`"],
     ["`input.joykeys`", "`cursor`, `numpad` oder `off`.", "`--joykeys`"],
     ["`input.joyport`", "Anschluss, den Tastatur-Joystick und Gamepad spielen.", "`--joyport`"],
-    ["`input.speed`", "Prozent der Echtzeit.", "`--speed`"],
+    ["`input.speed`", "Vielfaches der Echtzeit, 1 bis 10; -2 bis -4: so viel langsamer; 0: warp.", "`--speed`"],
     ["`debug.server`", "`true` (127.0.0.1:6510) oder eine Adresse.", "`--debug [ADR]`"],
     ["`debug.preview`", "`true` (127.0.0.1:6580) oder eine Adresse.", "`--preview [ADR]`"],
     ["`debug.vice`", "`true` (127.0.0.1:6502) oder eine Adresse.", "`--vice [ADR]`"],

@@ -9,9 +9,9 @@
 //! 0.055 × 0.125 in (6 × 13 pixels). Source: IBM "Reference Manual, IBM 29
 //! Card Punch" (A24-3332), card dimensions; ANSI X3.21 (rectangular holes).
 
-use emu_core::font;
-use emu_core::frame::{FieldParity, OutputType, Rgb8, SignalInfo, VideoStandard};
 use media::cards::COLUMNS;
+use mimic_core::font;
+use mimic_core::frame::{FieldParity, OutputType, Rgb8, SignalInfo, VideoStandard};
 
 pub const WIDTH: u32 = 800;
 pub const HEIGHT: u32 = 440;

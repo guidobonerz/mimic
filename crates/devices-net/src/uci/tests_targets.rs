@@ -7,7 +7,7 @@ use super::siec::{code, ftype};
 use super::tests::{command, command_m, state, text, wait, CMD, STATUS};
 use super::*;
 use crate::testing::FakeNet;
-use emu_core::host::{MemFileHost, SharedFiles, SharedNet};
+use mimic_core::host::{MemFileHost, SharedFiles, SharedNet};
 
 /// A machine with 64 KB of RAM, an optional REU, drive 8 and a palette.
 struct TestMachine {

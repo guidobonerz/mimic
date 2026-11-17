@@ -6,14 +6,14 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
-use emu_core::registry::MachineConfig;
-use emu_debug::{DebugServer, ServerConfig, Session};
+use mimic_core::registry::MachineConfig;
+use mimic_debug::{DebugServer, ServerConfig, Session};
 use std::sync::{Arc, Mutex};
 
-use emu_core::AudioFormat;
-use emu_preview::raw::{self, RAW_VERSION, VIDEO_HEADER_LEN};
-use emu_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer, RemoteInput};
-use emu_preview::{HEADER_LEN, MAGIC};
+use mimic_core::AudioFormat;
+use mimic_preview::raw::{self, RAW_VERSION, VIDEO_HEADER_LEN};
+use mimic_preview::server::{FrameTap, InputSink, PreviewConfig, PreviewServer, RemoteInput};
+use mimic_preview::{HEADER_LEN, MAGIC};
 
 const AUDIO_MARK: i16 = 1234;
 use tokio_tungstenite::tungstenite::protocol::Role;
@@ -27,7 +27,7 @@ struct Setup {
 }
 
 fn start() -> Setup {
-    let machine = emu_machines::registry()
+    let machine = mimic_machines::registry()
         .create("sim6502", &MachineConfig::default())
         .unwrap();
     let mut session = Session::new(machine, "sim6502");
@@ -470,12 +470,12 @@ fn raw_stream_sends_indices_changed_lines_and_audio() {
 
 #[test]
 fn raw_stream_carries_the_pixel_aspect_ratio() {
-    use emu_preview::raw::RawEncoder;
-    use emu_preview::OwnedFrame;
+    use mimic_preview::raw::RawEncoder;
+    use mimic_preview::OwnedFrame;
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
     for (machine, want) in [("vic20", 1.66), ("c64", 0.936), ("atari2600", 1.714)] {
-        let m = emu_machines::registry().create(machine, &config).unwrap();
+        let m = mimic_machines::registry().create(machine, &config).unwrap();
         let msg = RawEncoder::new()
             .encode(&OwnedFrame::from_machine(m.as_ref(), true))
             .unwrap();

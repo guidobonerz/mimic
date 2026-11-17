@@ -9,10 +9,10 @@
 //! extends it. The device learns the time from [`PortDevice::write_lines`],
 //! which the machine calls before reading the lines.
 
-use emu_core::input::InputEvent;
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::InputEvent;
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 use crate::joystick::pin;
 

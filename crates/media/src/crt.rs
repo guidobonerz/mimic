@@ -12,7 +12,7 @@
 //! address (u16) and the image size (u16), then the data. Source: the CRT
 //! format as documented with the VICE cartridge tools.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 /// Which machine family a CRT is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

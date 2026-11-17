@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 cpu-ada.workspace = true
-emu-core.workspace = true
+mimic-core.workspace = true
 
 [[bin]]
 name = "ada-asm"

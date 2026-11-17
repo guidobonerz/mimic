@@ -1,4 +1,4 @@
-//! Graphics data views of the TED 7360/8360 (see `emu_core::gfx`): the
+//! Graphics data views of the TED 7360/8360 (see `mimic_core::gfx`): the
 //! character set, the bitmap, the screen (video matrix) and the 128-entry
 //! palette, decoded from the chip's registers and its view of memory,
 //! side-effect free.
@@ -18,12 +18,12 @@
 //! Flashing characters and the hardware cursor are shown steady (not
 //! flashing, no cursor): a view is a picture of memory, not of a frame.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR,
     OPT_COUNT, OPT_MULTICOLOR,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::{Ted, TedMemory};
 

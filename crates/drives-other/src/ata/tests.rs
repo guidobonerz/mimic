@@ -1,10 +1,10 @@
 use super::*;
-use emu_core::media::Media;
+use mimic_core::media::Media;
 
 /// A backend in memory (the tests' image).
 struct Mem(Vec<u8>);
 
-impl emu_core::media::MediaBackend for Mem {
+impl mimic_core::media::MediaBackend for Mem {
     fn len(&self) -> u64 {
         self.0.len() as u64
     }

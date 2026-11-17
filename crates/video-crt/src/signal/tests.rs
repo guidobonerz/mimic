@@ -1,5 +1,5 @@
 use super::*;
-use emu_core::frame::FieldParity;
+use mimic_core::frame::FieldParity;
 
 const C64_PAL_CLOCK: u32 = 7_881_984;
 /// Two pixels per NTSC subcarrier cycle, like the Atari's hires pixels.

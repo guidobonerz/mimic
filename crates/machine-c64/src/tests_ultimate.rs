@@ -5,7 +5,7 @@
 use super::*;
 use crate::memory::KERNAL_SIZE;
 use devices_net::testing::FakeNet;
-use emu_core::host::MemFileHost;
+use mimic_core::host::MemFileHost;
 
 /// A KERNAL that loops at $E000.
 fn config(options: &[(&str, &str)]) -> MachineConfig {

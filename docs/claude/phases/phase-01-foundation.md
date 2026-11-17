@@ -12,6 +12,6 @@ Phase 1 done 2026-10-20: 6502 Harte + Dormann green, CI green.
 
 ## Device, freezer and CRT work in this phase
 
-- Device work by phase (part of each gate): **Phase 1:** `PortDevice`, `MediaSlot`, `MediaBackend`, `InputEvent` and the input queue defined in `emu-core` (even if only stubbed) — they shape the `Machine` trait.
+- Device work by phase (part of each gate): **Phase 1:** `PortDevice`, `MediaSlot`, `MediaBackend`, `InputEvent` and the input queue defined in `mimic-core` (even if only stubbed) — they shape the `Machine` trait.
 - Memory freezer by phase: **Phase 1:** freeze bitmaps share the watchpoint mechanism in `DebugHooks`; `Freeze` in savestate format.
 - CRT work by phase: **Phase 1:** `FrameRef` with full overscan + signal metadata (pixel clock, line timing, standard, output type, field parity).

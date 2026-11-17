@@ -21,8 +21,8 @@ use chips_cbm::sid::{Sid, SidModel};
 use chips_cbm::vdc::Vdc;
 use chips_cbm::vic2::{self, Vic2};
 use drives_cbm::IecLines;
-use emu_core::frame::VideoStandard;
-use emu_core::{
+use mimic_core::frame::VideoStandard;
+use mimic_core::{
     ClockDivider, Decimator, Savestate, StateError, StateReader, StateWriter, SAMPLE_RATE,
 };
 
@@ -59,7 +59,7 @@ pub struct Io {
     /// Pins pulled low by the devices in control ports 1 and 2.
     pub port_lines: [u32; 2],
     /// Lines the user port's device pulls low (pin numbering of
-    /// `emu_core::port::user_port`); read each cycle, not state.
+    /// `mimic_core::port::user_port`); read each cycle, not state.
     pub user_lines: u32,
     /// POTX/POTY resistances of the devices in control ports 1 and 2
     /// (65535 = open).
@@ -178,10 +178,10 @@ impl Io {
     fn cia2_ext(&self) -> (u8, u8) {
         let mut pa =
             0x3f | if self.iec.clk { 0 } else { 0x40 } | if self.iec.data { 0 } else { 0x80 };
-        if self.user_lines & emu_core::port::user_port::PA2 != 0 {
+        if self.user_lines & mimic_core::port::user_port::PA2 != 0 {
             pa &= !0x04;
         }
-        (pa, emu_core::port::user_port::pb(self.user_lines))
+        (pa, mimic_core::port::user_port::pb(self.user_lines))
     }
 
     /// Side-effect-free read of an I/O address.

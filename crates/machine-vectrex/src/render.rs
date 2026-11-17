@@ -1,14 +1,14 @@
 //! The rasterised picture of a vector frame, drawn with the shared
-//! rasteriser ([`emu_core::vector::Raster`]): every segment at full
+//! rasteriser ([`mimic_core::vector::Raster`]): every segment at full
 //! weight, no persistence (decay across frames is `video-crt`'s job).
 //!
 //! Two looks ([`Style`], machine option `lines`): **fine** (default) and
 //! **soft** (the first look that worked; the user's "option 1",
-//! 2026-10-24); see [`emu_core::vector`].
+//! 2026-10-24); see [`mimic_core::vector`].
 
-use emu_core::frame::Rgb8;
-pub use emu_core::vector::Style;
-use emu_core::vector::{Raster, Segment};
+use mimic_core::frame::Rgb8;
+pub use mimic_core::vector::Style;
+use mimic_core::vector::{Raster, Segment};
 
 /// Picture size in pixels (the tube is 4:5, portrait).
 pub const WIDTH: u32 = 800;

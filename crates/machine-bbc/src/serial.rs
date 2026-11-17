@@ -35,9 +35,9 @@
 //! Microcomputer Advanced User Guide* (1983), the serial ULA and the
 //! cassette interface. The implementation is this project's own.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::uef::{Event, Tape};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::CPU_HZ;
 
@@ -574,7 +574,7 @@ mod tests {
     }
 
     struct Blank;
-    impl emu_core::media::MediaBackend for Blank {
+    impl mimic_core::media::MediaBackend for Blank {
         fn len(&self) -> u64 {
             0
         }

@@ -2,11 +2,11 @@
 //! on the C64 with a true 1541 and prints, per sub test, the first bytes
 //! the drive measured next to the reference from `viaNref.bin`.
 //!
-//!     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIA_TEST=via1 cargo test -p emu-tests --release --test via_dump -- --ignored --nocapture
+//!     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIA_TEST=via1 cargo test -p mimic-tests --release --test via_dump -- --ignored --nocapture
 
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, Size, StopReason};
-use emu_tests::lorenz;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, Size, StopReason};
+use mimic_tests::lorenz;
 
 #[test]
 #[ignore = "development aid"]
@@ -24,7 +24,7 @@ fn dump_via_test() {
         ..MachineConfig::default()
     };
     config.options.insert("debugcart".into(), "on".into());
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     let prg = std::fs::read(data.join(format!("{name}.prg"))).unwrap();
     let reference = std::fs::read(data.join(format!("{name}ref.bin"))).unwrap();
     let reference = &reference[2..];
@@ -35,7 +35,7 @@ fn dump_via_test() {
     }
     lorenz::load_and_run(m.as_mut(), &prg);
     let cpu = lorenz::space(m.as_ref(), "cpu");
-    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+    dbg.add_breakpoint(mimic_core::BreakpointKind::Write {
         space: cpu,
         addr: 0xd7ff,
         len: 1,
@@ -94,7 +94,7 @@ fn dump_via_test() {
 /// with its G64 and prints the drive's 16 result rows (bytes between
 /// syncs, the byte before and after each sync) next to the expected ones.
 ///
-///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test via_dump hls -- --ignored --nocapture
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata cargo test -p mimic-tests --release --test via_dump hls -- --ignored --nocapture
 #[test]
 #[ignore = "development aid"]
 fn dump_hls_test() {
@@ -108,11 +108,11 @@ fn dump_hls_test() {
         ..MachineConfig::default()
     };
     config.options.insert("debugcart".into(), "on".into());
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     let slot = m
         .media_slots()
         .iter()
-        .find(|s| s.kind == emu_core::media::MediaKind::Disk)
+        .find(|s| s.kind == mimic_core::media::MediaKind::Disk)
         .unwrap()
         .id;
     m.media_slot(slot)
@@ -140,7 +140,7 @@ fn dump_hls_test() {
     }
     lorenz::load_and_run(m.as_mut(), &prg);
     let cpu = lorenz::space(m.as_ref(), "cpu");
-    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+    dbg.add_breakpoint(mimic_core::BreakpointKind::Write {
         space: cpu,
         addr: 0xd7ff,
         len: 1,
@@ -176,7 +176,7 @@ fn dump_hls_test() {
 /// prints its 12 × 16 matrix of ENV3 readings (left half of the screen)
 /// next to the expected one (right half), differences marked.
 ///
-///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_ENV_TEST=env_test_adra_1 cargo test -p emu-tests --release --test via_dump env -- --ignored --nocapture
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_ENV_TEST=env_test_adra_1 cargo test -p mimic-tests --release --test via_dump env -- --ignored --nocapture
 #[test]
 #[ignore = "development aid"]
 fn dump_env_test() {
@@ -197,7 +197,7 @@ fn dump_env_test() {
         "sid".into(),
         std::env::var("EMU_SID").unwrap_or_else(|_| "8580".into()),
     );
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     let prg = std::fs::read(data.join(format!("{name}.prg"))).unwrap();
     let mut dbg = DebugHooks::new();
     for _ in 0..lorenz::BOOT_FRAMES {
@@ -205,7 +205,7 @@ fn dump_env_test() {
     }
     lorenz::load_and_run(m.as_mut(), &prg);
     let cpu = lorenz::space(m.as_ref(), "cpu");
-    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+    dbg.add_breakpoint(mimic_core::BreakpointKind::Write {
         space: cpu,
         addr: 0xd7ff,
         len: 1,
@@ -253,7 +253,7 @@ fn dump_env_test() {
 /// writes the debug cartridge or EMU_FRAMES frames pass, then print the
 /// CPU registers and the screen's text.
 ///
-///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_PRG=general/Lorenz-2.15/src/trap16.prg cargo test -p emu-tests --release --test via_dump prg -- --ignored --nocapture
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_PRG=general/Lorenz-2.15/src/trap16.prg cargo test -p mimic-tests --release --test via_dump prg -- --ignored --nocapture
 #[test]
 #[ignore = "development aid"]
 fn dump_prg() {
@@ -270,7 +270,7 @@ fn dump_prg() {
         ..MachineConfig::default()
     };
     config.options.insert("debugcart".into(), "on".into());
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     let prg = std::fs::read(data.join(&rel)).unwrap();
     let mut dbg = DebugHooks::new();
     for _ in 0..lorenz::BOOT_FRAMES {
@@ -281,7 +281,7 @@ fn dump_prg() {
         let slot = m
             .media_slots()
             .into_iter()
-            .find(|s| s.kind == emu_core::media::MediaKind::Disk)
+            .find(|s| s.kind == mimic_core::media::MediaKind::Disk)
             .unwrap()
             .id;
         m.media_slot(slot)
@@ -306,7 +306,7 @@ fn dump_prg() {
         lorenz::load_and_run(m.as_mut(), &prg);
     }
     let cpu = lorenz::space(m.as_ref(), "cpu");
-    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+    dbg.add_breakpoint(mimic_core::BreakpointKind::Write {
         space: cpu,
         addr: 0xd7ff,
         len: 1,
@@ -356,7 +356,7 @@ fn dump_prg() {
 /// bytes the program dumped (128 reads of the register 7 cycles apart,
 /// then the loop's reads) next to `dumpNN.bin`, with the differences marked.
 ///
-///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIASR_TEST=04 cargo test -p emu-tests --release --test via_dump dump_via_sr_test -- --ignored --nocapture
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIASR_TEST=04 cargo test -p mimic-tests --release --test via_dump dump_via_sr_test -- --ignored --nocapture
 #[test]
 #[ignore = "development aid"]
 fn dump_via_sr_test() {
@@ -378,24 +378,24 @@ fn dump_via_sr_test() {
     config
         .options
         .insert("ram".into(), if expanded { "8k" } else { "none" }.into());
-    let mut m = emu_machines::registry().create("vic20", &config).unwrap();
+    let mut m = mimic_machines::registry().create("vic20", &config).unwrap();
     let prg = std::fs::read(data.join(format!("viasr{name}.prg"))).unwrap();
     let ifr = name.contains("ifr") || name.contains("iex");
     let reference =
         std::fs::read(data.join(format!("dump{mode}{}.bin", if ifr { "i" } else { "" })))
             .unwrap_or_default();
     let media =
-        media_backends::image::from_bytes("t.prg", prg, emu_core::media::MediaKind::Program);
+        media_backends::image::from_bytes("t.prg", prg, mimic_core::media::MediaKind::Program);
     let slot = m
         .media_slots()
         .into_iter()
-        .find(|s| s.kind == emu_core::media::MediaKind::Program)
+        .find(|s| s.kind == mimic_core::media::MediaKind::Program)
         .unwrap()
         .id;
     m.media_slot(slot).unwrap().insert(media).unwrap();
     let cpu = lorenz::space(m.as_ref(), "cpu");
     let mut dbg = DebugHooks::new();
-    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+    dbg.add_breakpoint(mimic_core::BreakpointKind::Write {
         space: cpu,
         addr: 0x910f,
         len: 1,
@@ -409,7 +409,7 @@ fn dump_via_sr_test() {
     }
     println!("exit written: {hit}");
     let screen = if expanded { 0x1000 } else { 0x1e00 };
-    let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+    let t = m.debug_target(mimic_core::DeviceId("cpu")).unwrap();
     let ours: Vec<u8> = (0..388)
         .map(|i| t.peek(cpu, screen + i, Size::Byte).unwrap_or(0) as u8)
         .collect();
@@ -443,7 +443,7 @@ fn dump_via_sr_test() {
 /// the VICE test data; `EMU_VIC20_RAM=8k`) until it writes the debug
 /// register `$910F` and prints the text screen as hex, rows of 22.
 ///
-///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIC20_PRG=VIC20/via_wrap/via_T2wrap2a.prg EMU_VIC20_RAM=8k cargo test -p emu-tests --release --test via_dump dump_vic20_prg -- --ignored --nocapture
+///     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata EMU_VIC20_PRG=VIC20/via_wrap/via_T2wrap2a.prg EMU_VIC20_RAM=8k cargo test -p mimic-tests --release --test via_dump dump_vic20_prg -- --ignored --nocapture
 #[test]
 #[ignore = "development aid"]
 fn dump_vic20_prg() {
@@ -461,20 +461,20 @@ fn dump_vic20_prg() {
     };
     config.options.insert("debugcart".into(), "on".into());
     config.options.insert("ram".into(), ram.clone());
-    let mut m = emu_machines::registry().create("vic20", &config).unwrap();
+    let mut m = mimic_machines::registry().create("vic20", &config).unwrap();
     let prg = std::fs::read(data.join(&path)).unwrap();
     let media =
-        media_backends::image::from_bytes("t.prg", prg, emu_core::media::MediaKind::Program);
+        media_backends::image::from_bytes("t.prg", prg, mimic_core::media::MediaKind::Program);
     let slot = m
         .media_slots()
         .into_iter()
-        .find(|s| s.kind == emu_core::media::MediaKind::Program)
+        .find(|s| s.kind == mimic_core::media::MediaKind::Program)
         .unwrap()
         .id;
     m.media_slot(slot).unwrap().insert(media).unwrap();
     let cpu = lorenz::space(m.as_ref(), "cpu");
     let mut dbg = DebugHooks::new();
-    dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+    dbg.add_breakpoint(mimic_core::BreakpointKind::Write {
         space: cpu,
         addr: 0x910f,
         len: 1,
@@ -492,7 +492,7 @@ fn dump_vic20_prg() {
     }
     println!("exit code: {code:?}");
     let screen = if ram == "none" { 0x1e00 } else { 0x1000 };
-    let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+    let t = m.debug_target(mimic_core::DeviceId("cpu")).unwrap();
     for row in 0..23u32 {
         let line: Vec<String> = (0..22)
             .map(|c| {

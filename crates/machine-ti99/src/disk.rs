@@ -25,7 +25,7 @@
 //! motor one-shot). The implementation is this project's own.
 
 use drives_other::wd17xx::{Chip, Drive, Fdc};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// The card's first CRU bit (R12 = `>1100`).
 pub const CRU_BASE: u16 = 0x880;

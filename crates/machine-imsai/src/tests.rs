@@ -1,5 +1,5 @@
 use super::*;
-use emu_core::ControlId;
+use mimic_core::ControlId;
 
 fn machine() -> Imsai {
     Imsai::new(&MachineConfig::default()).unwrap()
@@ -268,7 +268,7 @@ fn terminal_control_codes_and_scrolling() {
 
 struct Mem(Vec<u8>);
 
-impl emu_core::media::MediaBackend for Mem {
+impl mimic_core::media::MediaBackend for Mem {
     fn len(&self) -> u64 {
         self.0.len() as u64
     }

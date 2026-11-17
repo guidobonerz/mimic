@@ -71,22 +71,22 @@ use chips_cbm::via::Via;
 use chips_ti::Sn76489;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use disc::Disc;
-use emu_core::audio::Decimator;
-use emu_core::frame::{
+use keyboard::Keyboard;
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::hooked::HookedBus;
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::hooked::HookedBus;
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, CycleResult, DebugHooks, DebugTarget, DeviceId, Instr,
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use keyboard::Keyboard;
 use serial::{Acia, Cassette};
 
 pub const CPU: DeviceId = DeviceId("cpu");
@@ -521,7 +521,7 @@ impl Board {
         for _ in 0..PSG_HZ / CPU_HZ {
             let level = self.psg.tick();
             if let Some(s) = self.audio.push(level - 16_382) {
-                if self.samples.len() < emu_core::SAMPLE_RATE as usize * 4 {
+                if self.samples.len() < mimic_core::SAMPLE_RATE as usize * 4 {
                     self.samples.push(s);
                 }
             }
@@ -902,7 +902,7 @@ impl Bbc {
                 video: Video::new(),
                 cycles: 0,
                 field_done: false,
-                audio: Decimator::new(PSG_HZ, emu_core::SAMPLE_RATE)
+                audio: Decimator::new(PSG_HZ, mimic_core::SAMPLE_RATE)
                     .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
                 samples: Vec::new(),
             },
@@ -1127,10 +1127,10 @@ impl Machine for Bbc {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.board.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -1251,13 +1251,13 @@ impl Machine for Bbc {
         chips
     }
 
-    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+    fn gfx_views(&self) -> Vec<mimic_core::GfxViewInfo> {
         gfx::views()
     }
 
     /// The 6845/Video ULA screen, the palette and the SAA5050's
     /// characters ([`gfx`]).
-    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+    fn gfx_view(&self, id: &str, opts: &mimic_core::GfxOptions) -> Option<mimic_core::GfxView> {
         gfx::view(&self.board, id, opts)
     }
 
@@ -1277,9 +1277,48 @@ impl Machine for Bbc {
         self.sched.now()
     }
 
+    /// Pasted text goes straight into the MOS's keyboard buffer (buffer
+    /// 0): 32 bytes at `$03E0`, a ring whose input index is at `$02E1` and
+    /// whose output index at `$02D8`, both counted from `$0300` (`$E0` to
+    /// `$FF`); empty while the two are equal, and filled only then. The
+    /// Master's MOS 3.20 keeps both indices a byte lower (`$02E0`,
+    /// `$02D7`). Letters go in upper case, as the keys type them with
+    /// CAPS LOCK on. Source: *The Advanced User Guide for the BBC
+    /// Microcomputer* (Bray, Dickens, Holmes, 1983), chapters 9 (buffers)
+    /// and 11 (memory usage), the same on the B+; the Master's places
+    /// seen in the running machine while keys were typed.
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        const FIRST: u32 = 0xe0;
+        let lower = u32::from(self.board.model.master());
+        let (input_at, output_at) = (0x02e1 - lower, 0x02d8 - lower);
+        let input = DebugTarget::peek(self, CPU_SPACE, input_at, Size::Byte)?;
+        let output = DebugTarget::peek(self, CPU_SPACE, output_at, Size::Byte)?;
+        if input != output || input < FIRST {
+            return Some(0);
+        }
+        let code = |c: char| {
+            typing::keys_for_char(c)?;
+            Some(match c {
+                '\n' | '\r' => 0x0d,
+                '\u{a3}' => 0x60,
+                c => c.to_ascii_uppercase() as u8,
+            })
+        };
+        // One place stays free: a full ring would look empty.
+        let mut bytes = Vec::new();
+        let used = mimic_core::input::fill_key_buffer(text, 31, code, |_, b| bytes.push(b));
+        let mut at = input;
+        for b in bytes {
+            DebugTarget::poke(self, CPU_SPACE, 0x0300 + at, Size::Byte, u32::from(b));
+            at = if at == 0xff { FIRST } else { at + 1 };
+        }
+        DebugTarget::poke(self, CPU_SPACE, input_at, Size::Byte, at);
+        Some(used)
+    }
+
     /// Text as key presses ([`typing`]), with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             typing::LINE_PAUSE,
@@ -1287,10 +1326,10 @@ impl Machine for Bbc {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
         vec![
-            emu_core::ControlInfo::button(0, "POWER", false),
-            emu_core::ControlInfo::button(keyboard::BREAK, "BREAK", false),
+            mimic_core::ControlInfo::button(0, "POWER", false),
+            mimic_core::ControlInfo::button(keyboard::BREAK, "BREAK", false),
         ]
     }
 

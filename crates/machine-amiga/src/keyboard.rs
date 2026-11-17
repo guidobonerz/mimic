@@ -22,7 +22,7 @@
 use std::collections::VecDeque;
 
 use chips_cbm::cia::Cia;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Raw key codes the machine reacts to.
 pub mod code {

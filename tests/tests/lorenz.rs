@@ -3,10 +3,10 @@
 //!     bash tools/fetch-testdata.sh
 //!     # with real ROMs (KERNAL boots, RUN):
 //!     EMU_ROM_DIR=~/roms EMU_TESTDATA_DIR=$PWD/testdata \
-//!         cargo test -p emu-tests --release --test lorenz lorenz_suite -- --ignored --exact --nocapture
+//!         cargo test -p mimic-tests --release --test lorenz lorenz_suite -- --ignored --exact --nocapture
 //!     # without ROMs (stub KERNAL, CI):
 //!     EMU_TESTDATA_DIR=$PWD/testdata \
-//!         cargo test -p emu-tests --release --test lorenz lorenz_suite_stub -- --ignored --nocapture
+//!         cargo test -p mimic-tests --release --test lorenz lorenz_suite_stub -- --ignored --nocapture
 //!
 //! `EMU_LORENZ_FILTER=cia` runs only matching tests, `EMU_LORENZ_CIA=new`
 //! uses a 6526A and the suite's `*new` program variants.
@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use emu_core::registry::MachineConfig;
-use emu_tests::lorenz::{self, Outcome, Verdict};
+use mimic_core::registry::MachineConfig;
+use mimic_tests::lorenz::{self, Outcome, Verdict};
 
 /// Emulated time limit per test: 10 minutes.
 const MAX_FRAMES: u32 = 50 * 600;
@@ -64,7 +64,7 @@ fn run_suite(mut config: MachineConfig, data: &Path, skip: &[&str], report_name:
         })
         .collect();
 
-    let registry = emu_machines::registry();
+    let registry = mimic_machines::registry();
     let next = AtomicUsize::new(0);
     let results: Mutex<Vec<(String, Outcome)>> = Mutex::new(Vec::new());
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -109,7 +109,7 @@ fn run_suite(mut config: MachineConfig, data: &Path, skip: &[&str], report_name:
         .iter()
         .map(|(name, o)| (name.clone(), o.verdict == Verdict::Pass))
         .collect();
-    let trend = emu_tests::trend::record(tmp, report_name.trim_end_matches(".txt"), &outcomes);
+    let trend = mimic_tests::trend::record(tmp, report_name.trim_end_matches(".txt"), &outcomes);
     report.push_str(&trend);
     report.push('\n');
     let out = tmp.join(report_name);

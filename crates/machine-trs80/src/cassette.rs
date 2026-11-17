@@ -14,8 +14,8 @@
 //! the cell length and pulse spacing are the Level II ROM's own output,
 //! measured in this emulator (see the tests).
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Clocks per bit cell at 500 baud: the Level II ROM's clock pulses come
 /// this far apart (measured: 3 560–3 580 within a byte, about 3 700 across

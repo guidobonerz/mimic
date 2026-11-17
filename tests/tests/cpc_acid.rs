@@ -3,7 +3,7 @@
 //!
 //!     bash tools/fetch-testdata.sh          # needs a C++ compiler (pasmo)
 //!     EMU_ROM_DIR=~/roms EMU_TESTDATA_DIR=$PWD/testdata \
-//!         cargo test -p emu-tests --release --test cpc_acid -- --ignored --nocapture
+//!         cargo test -p mimic-tests --release --test cpc_acid -- --ignored --nocapture
 //!
 //! Runs every assembled test program (`testdata/cpc-acid/<suite>/*.bin`)
 //! and counts the result lines of those that finish ("Done."). Visual and
@@ -17,10 +17,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use emu_core::media::{Media, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_tests::cpc_acid::{self, Outcome};
 use media_backends::image::MemoryBackend;
+use mimic_core::media::{Media, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_tests::cpc_acid::{self, Outcome};
 
 /// Emulated time limit per program: 15 minutes (some decode tests wait
 /// for a VSYNC on each of the 65536 ports; the emulation runs about nine
@@ -92,7 +92,7 @@ fn cpc_acid_suite() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(MAX_FRAMES);
-    let registry = emu_machines::registry();
+    let registry = mimic_machines::registry();
     let next = AtomicUsize::new(0);
     let results: Mutex<Vec<(String, Result<Outcome, String>)>> = Mutex::new(Vec::new());
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -195,7 +195,7 @@ fn cpc_acid_suite() {
         })
         .collect();
     let tmp = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let trend = emu_tests::trend::record(&tmp, &format!("cpc-acid-crtc{crtc}"), &outcomes);
+    let trend = mimic_tests::trend::record(&tmp, &format!("cpc-acid-crtc{crtc}"), &outcomes);
     println!("{trend}");
     report.push_str(&trend);
     report.push('\n');

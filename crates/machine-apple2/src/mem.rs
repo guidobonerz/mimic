@@ -27,7 +27,7 @@
 //! to $CFFF.
 
 use crate::video::Modes;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Auxiliary memory of a IIe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

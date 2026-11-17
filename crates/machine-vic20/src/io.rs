@@ -22,7 +22,7 @@
 use chips_cbm::via::Via;
 use chips_cbm::vic::{self, Vic};
 use drives_cbm::IecLines;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 use crate::keyboard::Keyboard;
 
@@ -42,7 +42,7 @@ pub struct Io {
     /// Pins pulled low by the device in the control port.
     pub port_lines: u32,
     /// Lines the user port's device pulls low (pin numbering of
-    /// `emu_core::port::user_port`); read each cycle, not state.
+    /// `mimic_core::port::user_port`); read each cycle, not state.
     pub user_lines: u32,
     /// Serial bus levels after the last drive update.
     pub iec: IecLines,
@@ -108,7 +108,7 @@ impl Io {
         }
         (
             self.via1.port_a_out() & ext,
-            emu_core::port::user_port::pb(self.user_lines),
+            mimic_core::port::user_port::pb(self.user_lines),
         )
     }
 

@@ -1,4 +1,4 @@
-//! Debug overlays of the Atari 8-bit computers (see `emu_core::overlay`):
+//! Debug overlays of the Atari 8-bit computers (see `mimic_core::overlay`):
 //! the display list's mode lines, where players and missiles were shown and
 //! where display-list interrupts fired, recorded per field while switched
 //! on. The record is debugger state, not machine state: it is not in
@@ -19,8 +19,8 @@
 
 use chips_atari::antic::{Antic, CYCLES_PER_LINE, FIRST_LINE, VBLANK_LINE};
 use chips_atari::gtia::Gtia;
-use emu_core::frame::Rgb8;
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::frame::Rgb8;
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 /// Overlay ids, in the order of [`Recorder`]'s switches.
 pub const DLIST: &str = "dlist";

@@ -38,10 +38,10 @@
 //! "Zapper", "Arkanoid controller" (read 2026-10-23). The implementation
 //! is this project's own.
 
-use emu_core::input::{Dirs, InputEvent};
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::{Dirs, InputEvent};
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 pub mod pin {
     /// Data lines (set: the console reads 1).
@@ -296,7 +296,7 @@ impl PortDevice for NesController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     fn write(d: &mut NesController, bits: u32) {
         d.write_lines(

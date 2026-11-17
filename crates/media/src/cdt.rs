@@ -37,7 +37,7 @@
 //! length and the bytes from the flag to the checksum) as standard-speed
 //! blocks with a second's pause each.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 /// TZX T-states per second.
 pub const TZX_HZ: u32 = 3_500_000;

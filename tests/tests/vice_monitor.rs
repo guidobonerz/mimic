@@ -8,9 +8,9 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use emu_core::registry::MachineConfig;
-use emu_debug::vice::{cmd, error, event, EVENT_ID};
-use emu_debug::{DebugServer, ServerConfig, Session};
+use mimic_core::registry::MachineConfig;
+use mimic_debug::vice::{cmd, error, event, EVENT_ID};
+use mimic_debug::{DebugServer, ServerConfig, Session};
 
 #[derive(Debug)]
 struct Frame {
@@ -205,7 +205,7 @@ fn subroutines() -> MachineConfig {
 }
 
 fn server(machine: &str, config: MachineConfig) -> DebugServer {
-    let m = emu_machines::registry().create(machine, &config).unwrap();
+    let m = mimic_machines::registry().create(machine, &config).unwrap();
     DebugServer::start(
         Session::new(m, machine),
         ServerConfig {

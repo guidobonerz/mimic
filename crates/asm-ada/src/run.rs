@@ -5,7 +5,7 @@
 //! reads $C016. Everything else in segment FFFF reads 0.
 
 use cpu_ada::Ada;
-use emu_core::{Bus, Size};
+use mimic_core::{Bus, Size};
 
 const RAM_SEGMENTS: u32 = 0x200;
 const ROM_FIRST: u32 = 0xfffb;

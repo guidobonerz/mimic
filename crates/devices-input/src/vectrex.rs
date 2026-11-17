@@ -45,10 +45,10 @@
 //! interrupt handler, disassembled with this project's tools). The
 //! implementation is this project's own.
 
-use emu_core::input::{Dirs, InputEvent};
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::{Dirs, InputEvent};
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 pub mod pin {
     /// Buttons 1–4 (pins 1–4).
@@ -359,7 +359,7 @@ impl PortDevice for Imager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     fn lines(d: &VectrexController) -> PortLines {
         d.read_lines(Cycle(0))

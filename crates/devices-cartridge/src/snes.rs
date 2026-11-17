@@ -39,8 +39,8 @@
 //! DSP-n/ST010/ST011 - NEC uPD77C25 / uPD96050" (read 2026-11-09). The
 //! implementation is this project's own.
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::slot::CartSlot;
 

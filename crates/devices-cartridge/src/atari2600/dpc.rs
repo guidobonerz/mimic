@@ -52,7 +52,7 @@
 //! only (Pitfall II does not use them); the oscillator's exact frequency
 //! is an RC value that varies between boards.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// The music oscillator's frequency (nominal, the board's RC oscillator).
 pub const OSC_HZ: u32 = 20_000;

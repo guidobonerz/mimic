@@ -2,14 +2,14 @@
 //! `EMU_ROM_DIR`): on the C128 (fast serial) it identifies itself, lists,
 //! loads and formats; on the C64 (slow serial) it autostarts and saves.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test c128_1581 -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test c128_1581 -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, MemSpaceId, Size};
 use media::{Format, D64};
 use media_backends::image::MemoryBackend;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, MemSpaceId, Size};
 
 fn machine(id: &str, options: &[(&str, &str)]) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
@@ -22,7 +22,7 @@ fn machine(id: &str, options: &[(&str, &str)]) -> Box<dyn Machine> {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    emu_machines::registry().create(id, &config).unwrap()
+    mimic_machines::registry().create(id, &config).unwrap()
 }
 
 /// The 40-column screen at `$0400` (screen codes).
@@ -81,7 +81,7 @@ fn type_text(m: &mut dyn Machine, c128: bool, text: &str) {
     let (events, end) = if c128 {
         machine_c128::keyboard::typed_events(text, m.now().0)
     } else {
-        emu_tests::typing::type_text(text, m.now().0)
+        mimic_tests::typing::type_text(text, m.now().0)
     };
     for e in events {
         m.input(e);

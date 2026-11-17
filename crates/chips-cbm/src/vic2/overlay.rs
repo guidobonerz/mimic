@@ -1,4 +1,4 @@
-//! Debug overlays of the VIC-II (see `emu_core::overlay`):
+//! Debug overlays of the VIC-II (see `mimic_core::overlay`):
 //!
 //! - `badlines`: a band on every raster line on which the VIC-II did its
 //!   c-accesses (Bauer 3.5, "Bad Lines": the CPU is stopped for 40–43
@@ -11,7 +11,7 @@
 //! Both are recorded only while switched on ([`Vic2::set_overlays`]); see
 //! `crate::overlay` for the record's rules.
 
-use emu_core::overlay::{colors, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{colors, Overlay, OverlayInfo, Shape};
 
 use super::{Timing, Vic2};
 use crate::overlay::{line_bands, LineMarks, Recorder};
@@ -237,7 +237,7 @@ impl Vic2 {
 mod tests {
     use super::*;
     use crate::vic2::{Model, VicMemory};
-    use emu_core::{Savestate, StateReader, StateWriter};
+    use mimic_core::{Savestate, StateReader, StateWriter};
 
     struct Ram;
 

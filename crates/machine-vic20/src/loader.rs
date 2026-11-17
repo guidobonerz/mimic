@@ -7,8 +7,8 @@
 //! the current start and its line links are rebuilt, as `LOAD"x",8` does;
 //! anything else loads at its own address like `LOAD"x",8,1`.
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
 use media::{t64, Prg};
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot};
 
 /// Frames after power-on before a program is injected or typed.
 pub const BOOT_FRAMES: u64 = 150;

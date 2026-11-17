@@ -2,14 +2,14 @@
 //! built here, whose boot code writes and reads a sector through the OS's
 //! DSKINV), and the program slot loads an XEX with INITAD and RUNAD.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --test atari_sio -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --test atari_sio -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size, StopReason};
 use machine_atari8::{CPU_SPACE, SLOT_D1, SLOT_PROGRAM};
 use media_backends::image::MemoryBackend;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size, StopReason};
 
 fn machine(options: &[(&str, &str)]) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
@@ -20,7 +20,9 @@ fn machine(options: &[(&str, &str)]) -> Box<dyn Machine> {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    emu_machines::registry().create("atari8", &config).unwrap()
+    mimic_machines::registry()
+        .create("atari8", &config)
+        .unwrap()
 }
 
 fn run(m: &mut dyn Machine, fields: usize) {

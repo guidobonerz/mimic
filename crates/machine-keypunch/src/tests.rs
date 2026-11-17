@@ -1,7 +1,7 @@
 use super::*;
-use emu_core::controls::ControlId;
-use emu_core::input::MachineKey;
-use emu_core::media::MediaBackend;
+use mimic_core::controls::ControlId;
+use mimic_core::input::MachineKey;
+use mimic_core::media::MediaBackend;
 
 /// Bytes in memory that can grow, as a deck file behind the overlay.
 #[derive(Default)]

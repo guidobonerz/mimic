@@ -1,4 +1,4 @@
-//! Debug overlay (see `emu_core::overlay`): `modes`, the video mode each
+//! Debug overlay (see `mimic_core::overlay`): `modes`, the video mode each
 //! visible line was drawn in.
 //!
 //! The mode of a line is sampled at its first visible cycle (horizontal
@@ -11,7 +11,7 @@
 //! switched on, double-buffered (the frame being drawn and the last
 //! complete one) and never saved.
 
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 use crate::video::{self, Modes, Video};
 
@@ -19,7 +19,7 @@ use crate::video::{self, Modes, Video};
 const NONE: u8 = u8::MAX;
 
 /// Mode names and colours, by code.
-const MODES: [(&str, emu_core::frame::Rgb8); 6] = [
+const MODES: [(&str, mimic_core::frame::Rgb8); 6] = [
     ("TEXT", colors::WHITE),
     ("80COL", colors::CYAN),
     ("LORES", colors::GREEN),
@@ -136,8 +136,8 @@ impl ModesRecord {
 mod tests {
     use super::*;
     use crate::Apple2;
-    use emu_core::registry::MachineConfig;
-    use emu_core::{DebugHooks, Machine, StopReason};
+    use mimic_core::registry::MachineConfig;
+    use mimic_core::{DebugHooks, Machine, StopReason};
 
     fn machine() -> Apple2 {
         let mut config = MachineConfig {

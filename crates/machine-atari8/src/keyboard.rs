@@ -14,11 +14,11 @@
 //! | 69   | OPTION  | GTIA CONSOL bit 2            |
 //! | 70   | RESET   | system reset line            |
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 pub mod keys {
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     pub const L: MachineKey = MachineKey(0x00);
     pub const RETURN: MachineKey = MachineKey(0x0c);

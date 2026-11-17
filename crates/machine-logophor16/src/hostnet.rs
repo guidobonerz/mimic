@@ -3,7 +3,7 @@
 //! into the machine, so a single Logophor 16 reaches the Internet without
 //! a hub program. The network unit's frames go to the gateway, its
 //! answers come back as received frames; the outside is the host's
-//! network services (`emu_core::host::NetBackend`, journalled like every
+//! network services (`mimic_core::host::NetBackend`, journalled like every
 //! host access), never a host socket of the machine's own.
 //!
 //! The host services take names, not addresses, and have no name lookup
@@ -24,7 +24,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use asm_ada::hub::outside::{Connect, Outside, TcpRead};
 use asm_ada::hub::{fcs, Gateway};
-use emu_core::host::{ConnState, NetBackend, NetHandle, Recv, SocketKind};
+use mimic_core::host::{ConnState, NetBackend, NetHandle, Recv, SocketKind};
 
 /// The stand-in addresses: 198.18.0.0/15.
 const STAND_IN_BASE: u32 = u32::from_be_bytes([198, 18, 0, 0]);

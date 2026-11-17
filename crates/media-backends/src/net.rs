@@ -1,4 +1,4 @@
-//! The host's network for emulated devices ([`emu_core::host::NetBackend`]):
+//! The host's network for emulated devices ([`mimic_core::host::NetBackend`]):
 //! the Ultimate command interface's sockets and the WiC64's HTTP and TCP.
 //!
 //! Everything the emulation thread calls returns at once: name lookups,
@@ -23,7 +23,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use emu_core::host::{
+use mimic_core::host::{
     lock, ConnState, HostTime, HttpRequest, HttpResponse, HttpTicket, NetBackend, NetError,
     NetHandle, NetInfo, Recv, SocketKind,
 };

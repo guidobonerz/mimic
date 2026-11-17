@@ -1,7 +1,7 @@
 //! Disassembler with TI's mnemonics and operand syntax (`*R1+`,
 //! `@>8C00(R2)`, hexadecimal with `>`).
 
-use emu_core::{Bus, Flow, Instr, Size};
+use mimic_core::{Bus, Flow, Instr, Size};
 
 const FORMAT1: [&str; 12] = [
     "SZC", "SZCB", "S", "SB", "C", "CB", "A", "AB", "MOV", "MOVB", "SOC", "SOCB",

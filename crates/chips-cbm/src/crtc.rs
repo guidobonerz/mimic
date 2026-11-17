@@ -32,7 +32,7 @@
 //! and `crtc13`, readme there). The scan line counter ends a row only on
 //! equality with R9 as well (5 bits: a row of up to 32 lines, `crtc10`).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Writable bits per register (the address registers are 14 bits wide).
 const MASKS: [u8; 18] = [

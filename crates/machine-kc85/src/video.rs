@@ -35,7 +35,7 @@
 //! two colour bytes `$20` apart). The colour values are this project's
 //! estimate of the RGB output, not measured.
 
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 
 use crate::memory::{BLOCK, P84_IMAGE_SHOWN, P84_LOW_COLOUR};
 

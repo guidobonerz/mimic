@@ -2,12 +2,12 @@
 //! (user-supplied via `EMU_ROM_DIR`, else `~/.mimic/roms`). Each test types
 //! a program in, then works on it with the commands of the native protocol.
 //!
-//!     cargo test -p emu-tests --release --test basic_debug -- --ignored
+//!     cargo test -p mimic-tests --release --test basic_debug -- --ignored
 
-use emu_core::input::TimedInput;
-use emu_core::registry::MachineConfig;
-use emu_debug::protocol::{Command, Request};
-use emu_debug::Session;
+use mimic_core::input::TimedInput;
+use mimic_core::registry::MachineConfig;
+use mimic_debug::protocol::{Command, Request};
+use mimic_debug::Session;
 use serde_json::{json, Value};
 
 /// Typed without blanks, so the listing is known to the character.
@@ -37,7 +37,7 @@ impl Gate {
     fn with_key_held(
         machine: &str,
         model: Option<&str>,
-        key: emu_core::input::MachineKey,
+        key: mimic_core::input::MachineKey,
         typist: Typist,
     ) -> Self {
         let mut gate = Self::build(machine, model, &[], typist);
@@ -45,8 +45,8 @@ impl Gate {
             let at = gate.s.machine().now();
             gate.s.input(TimedInput {
                 at,
-                target: emu_core::input::InputTarget::Keyboard,
-                event: emu_core::input::InputEvent::Key {
+                target: mimic_core::input::InputTarget::Keyboard,
+                event: mimic_core::input::InputEvent::Key {
                     machine_key: key,
                     down,
                 },
@@ -78,7 +78,7 @@ impl Gate {
                 .collect(),
             ..MachineConfig::default()
         };
-        let m = emu_machines::registry().create(machine, &config).unwrap();
+        let m = mimic_machines::registry().create(machine, &config).unwrap();
         Self {
             s: Session::new(m, machine),
             typist,
@@ -501,7 +501,7 @@ fn msx_extras(mut g: Gate) {
     let target = g.s.machine_mut().debug_target(cpu).unwrap();
     let screen: String = (0..960)
         .map(|a| {
-            let b = target.peek(machine_msx::VRAM_SPACE, a, emu_core::Size::Byte);
+            let b = target.peek(machine_msx::VRAM_SPACE, a, mimic_core::Size::Byte);
             char::from(b.unwrap_or(0) as u8)
         })
         .filter(|c| *c != ' ')
@@ -785,11 +785,11 @@ fn keyword_keys(
     text: &str,
     at: u64,
     plain: &Typing<'_>,
-    key: &dyn Fn(char) -> emu_core::input::MachineKey,
-    shift: emu_core::input::MachineKey,
+    key: &dyn Fn(char) -> mimic_core::input::MachineKey,
+    shift: mimic_core::input::MachineKey,
     (hold, gap): (u64, u64),
 ) -> (Vec<TimedInput>, u64) {
-    use emu_core::input::{InputEvent, InputTarget};
+    use mimic_core::input::{InputEvent, InputTarget};
     let mut events = Vec::new();
     let mut t = at;
     let mut rest = text;
@@ -805,7 +805,7 @@ fn keyword_keys(
             (shift, false, t + hold + 1),
         ] {
             events.push(TimedInput {
-                at: emu_core::Cycle(at),
+                at: mimic_core::Cycle(at),
                 target: InputTarget::Keyboard,
                 event: InputEvent::Key { machine_key, down },
             });
@@ -1199,7 +1199,7 @@ fn zx81() {
     let cpu = g.s.machine().devices()[0];
     let target = g.s.machine_mut().debug_target(cpu).unwrap();
     let peek = |a: u32| {
-        let b = target.peek(machine_zx81::CPU_SPACE, a, emu_core::Size::Byte);
+        let b = target.peek(machine_zx81::CPU_SPACE, a, mimic_core::Size::Byte);
         b.unwrap_or(0) as u8
     };
     let d_file = u32::from(peek(0x400c)) | u32::from(peek(0x400d)) << 8;
@@ -1512,7 +1512,7 @@ fn extension(mut g: Gate, dialect: &str) {
 /// A C64 with the user's cartridge image `file` plugged in, looked for
 /// in `EMU_BASIC_EXT_DIR`, else beside the ROM folder (`~/.mimic`).
 fn c64_with_cartridge(name: &str, file: &str) -> Gate {
-    use emu_core::media::{Media, MediaKind};
+    use mimic_core::media::{Media, MediaKind};
     let dir = std::env::var_os("EMU_BASIC_EXT_DIR")
         .map(std::path::PathBuf::from)
         .or_else(|| {
@@ -1563,7 +1563,7 @@ fn atari_screen(g: &mut Gate) -> String {
     let cpu = g.s.machine().devices()[0];
     let target = g.s.machine_mut().debug_target(cpu).unwrap();
     let peek = |a: u32| {
-        let b = target.peek(machine_atari8::CPU_SPACE, a, emu_core::Size::Byte);
+        let b = target.peek(machine_atari8::CPU_SPACE, a, mimic_core::Size::Byte);
         b.unwrap_or(0) as u8
     };
     // SAVMSC; screen codes are ATASCII with the first three quarters turned.
@@ -1910,7 +1910,7 @@ fn cpc() {
 fn cpc_screen(g: &mut Gate) -> String {
     let cpu = g.s.machine().devices()[0];
     let target = g.s.machine_mut().debug_target(cpu).unwrap();
-    let peek = |space, a: u32| target.peek(space, a, emu_core::Size::Byte).unwrap_or(0) as u8;
+    let peek = |space, a: u32| target.peek(space, a, mimic_core::Size::Byte).unwrap_or(0) as u8;
     let font: Vec<(char, [u8; 8])> = (33..127u8)
         .map(|c| {
             let at = 0x3800 + 8 * u32::from(c);
@@ -2099,11 +2099,11 @@ fn disassemble() {
             .collect(),
         ..MachineConfig::default()
     };
-    let mut m = emu_machines::registry().create(p[0], &config).unwrap();
+    let mut m = mimic_machines::registry().create(p[0], &config).unwrap();
     // `BASIC_DIS_RUN=100`: frames to run first, for ROMs the machine's
     // start-up code switches in.
     let frames = std::env::var("BASIC_DIS_RUN").map_or(0, |n| n.parse().unwrap());
-    let mut hooks = emu_core::DebugHooks::default();
+    let mut hooks = mimic_core::DebugHooks::default();
     for _ in 0..frames {
         m.run_frame(&mut hooks);
     }
@@ -2116,7 +2116,7 @@ fn disassemble() {
         let space = m.memory_spaces()[0].id;
         let t = m.debug_target(cpu).unwrap();
         for (i, b) in std::fs::read(file).unwrap().into_iter().enumerate() {
-            t.poke(space, at + i as u32, emu_core::Size::Byte, u32::from(b));
+            t.poke(space, at + i as u32, mimic_core::Size::Byte, u32::from(b));
         }
     }
     let dump = p[2].starts_with('x');
@@ -2128,7 +2128,7 @@ fn disassemble() {
     while a < end {
         if dump {
             let bytes: Vec<u8> = (0..16)
-                .map(|i| t.peek(space, a + i, emu_core::Size::Byte).unwrap_or(0) as u8)
+                .map(|i| t.peek(space, a + i, mimic_core::Size::Byte).unwrap_or(0) as u8)
                 .collect();
             let hex: Vec<_> = bytes.iter().map(|b| format!("{b:02X}")).collect();
             let text: String = bytes

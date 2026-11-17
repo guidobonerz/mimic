@@ -40,7 +40,7 @@
 //! pulses CIA-B /FLAG.
 //!
 //! **Keyboard.** [`keyboard::Keyboard`] sends raw key codes
-//! ([`emu_core::input::MachineKey`] = the raw code, 0–$67) to CIA-A's
+//! ([`mimic_core::input::MachineKey`] = the raw code, 0–$67) to CIA-A's
 //! serial port; Ctrl + both Amiga keys reset the machine (RAM stays).
 //!
 //! **Audio.** Paula's channels 0+3 (left) and 1+2 (right) at the colour
@@ -122,20 +122,20 @@ use cpu_m68k::Model as CpuModel;
 use cpu_m68k::{Access, Step, TimedBus68, M68000};
 use devices_printer::Printer;
 use drives_other::amiga_drive::AmigaDrive;
-use emu_core::audio::Decimator;
-use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use keyboard::Keyboard;
+use memory::{Memory, Region};
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use keyboard::Keyboard;
-use memory::{Memory, Region};
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The A1200's IDE drives 0 and 1: media slots 4 and 5 (after DF0:–DF3:).
@@ -180,7 +180,7 @@ pub fn entry() -> MachineEntry {
         id: "amiga",
         name: "Commodore Amiga 500/1000/2000/500+/1200",
         models: &["500", "1000", "2000", "500plus", "1200"],
-        video_formats: emu_core::registry::PAL_NTSC,
+        video_formats: mimic_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Amiga::new(config)?)),
     }
 }
@@ -1097,7 +1097,7 @@ pub struct Amiga {
     printer: Option<Printer>,
     /// `parallel=4player`: the adapter's joysticks 3 and 4 (directions,
     /// buttons).
-    four_player: Option<[(emu_core::input::Dirs, u8); 2]>,
+    four_player: Option<[(mimic_core::input::Dirs, u8); 2]>,
     model: Model,
     standard: Standard,
     cpu: M68000,
@@ -1117,8 +1117,8 @@ impl Amiga {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
         let model = parse_model(config.model.as_deref())?;
         let standard = match config.video_format {
-            None | Some(emu_core::frame::VideoStandard::Pal) => Standard::Pal,
-            Some(emu_core::frame::VideoStandard::Ntsc) => Standard::Ntsc,
+            None | Some(mimic_core::frame::VideoStandard::Pal) => Standard::Pal,
+            Some(mimic_core::frame::VideoStandard::Ntsc) => Standard::Ntsc,
         };
         let (chip_default, slow_default, chipset_default, kick_default) = match model {
             Model::A500 => ("512k", "512k", Chipset::OCS, "1.3"),
@@ -1203,7 +1203,7 @@ impl Amiga {
                         "parallel=4player and a printer both need the parallel port".into(),
                     ));
                 }
-                Some([(emu_core::input::Dirs::NONE, 0); 2])
+                Some([(mimic_core::input::Dirs::NONE, 0); 2])
             }
             Some(other) => {
                 return Err(ConfigError::Invalid(format!(
@@ -1244,7 +1244,7 @@ impl Amiga {
                 fire_low: 0,
                 cck_hz: cck_hz(standard),
                 disk_acc: 0,
-                decimators: [Decimator::new(cck_hz(standard), emu_core::SAMPLE_RATE)
+                decimators: [Decimator::new(cck_hz(standard), mimic_core::SAMPLE_RATE)
                     .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?;
                     2],
                 filter: [[0; 5]; 2],
@@ -1424,7 +1424,7 @@ impl Amiga {
 
     /// The four-player adapter's switches on the parallel port's lines.
     fn parallel_lines(&mut self) {
-        use emu_core::input::Dirs;
+        use mimic_core::input::Dirs;
         let (mut data, mut status) = (0xffu8, 0xffu8);
         if let Some(sticks) = &self.four_player {
             // Joystick 3: data bits 0–3, fire SEL; joystick 4: bits 4–7,
@@ -1639,16 +1639,22 @@ impl Machine for Amiga {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    /// Warp: Denise's pixels are not put into the frame (see
+    /// `Custom::set_warp`); nothing a program can observe changes.
+    fn set_warp(&mut self, on: bool) {
+        self.board.custom.set_warp(on);
+    }
+
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.board.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 2,
         }
     }
 
     /// `dma`, `sprites`, `copper` (`chips_amiga::custom::overlay`).
-    fn overlays(&self) -> Vec<emu_core::overlay::OverlayInfo> {
+    fn overlays(&self) -> Vec<mimic_core::overlay::OverlayInfo> {
         Custom::overlays()
     }
 
@@ -1656,7 +1662,7 @@ impl Machine for Amiga {
         self.board.custom.set_overlays(ids);
     }
 
-    fn overlay(&self, id: &str) -> Option<emu_core::overlay::Overlay> {
+    fn overlay(&self, id: &str) -> Option<mimic_core::overlay::Overlay> {
         self.board.custom.overlay(id)
     }
 
@@ -1666,7 +1672,7 @@ impl Machine for Amiga {
         self.board.custom.frame_row(line)
     }
 
-    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+    fn gfx_views(&self) -> Vec<mimic_core::GfxViewInfo> {
         self.board.custom.gfx_views()
     }
 
@@ -1674,7 +1680,7 @@ impl Machine for Amiga {
     /// bitplanes and palette, decoded from chip RAM ([`CHIP_SPACE`]) and
     /// the registers as they are now (option `copper=1`: the pointers the
     /// Copper list sets at the top of the frame).
-    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+    fn gfx_view(&self, id: &str, opts: &mimic_core::GfxOptions) -> Option<mimic_core::GfxView> {
         let custom = &self.board.custom;
         let info = custom.gfx_views().into_iter().find(|v| v.id == id)?;
         let ctx = chips_amiga::custom::gfx::GfxContext {
@@ -1888,8 +1894,8 @@ impl Machine for Amiga {
         self.sched.now()
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        use emu_core::ControlInfo;
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        use mimic_core::ControlInfo;
         vec![
             ControlInfo::button(0, "POWER", false),
             ControlInfo::button(1, "RESET", false),
@@ -1947,7 +1953,7 @@ impl Machine for Amiga {
         dev
     }
 
-    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+    fn attach_host(&mut self, host: mimic_core::host::HostServices) {
         if let Some(p) = &mut self.printer {
             p.attach(&host);
         }
@@ -2194,11 +2200,11 @@ impl Machine for Amiga {
         }
         // The adapter's joysticks (a state without them: nothing held).
         if let Some(sticks) = &mut self.four_player {
-            *sticks = [(emu_core::input::Dirs::NONE, 0); 2];
+            *sticks = [(mimic_core::input::Dirs::NONE, 0); 2];
             if let Ok((_, mut c)) = StateReader::new(s).chunk(*b"A4JY", 1) {
                 for stick in sticks.iter_mut() {
                     if let (Ok(d), Ok(b)) = (c.u8(), c.u8()) {
-                        *stick = (emu_core::input::Dirs(d & 0x0f), b & 0x07);
+                        *stick = (mimic_core::input::Dirs(d & 0x0f), b & 0x07);
                     }
                 }
             }
@@ -2216,7 +2222,7 @@ impl Machine for Amiga {
 fn register_set(values: &[(&'static str, u32, u8)]) -> RegisterSet {
     let mut set = RegisterSet::default();
     for &(name, value, bits) in values {
-        set.0.push(emu_core::Register { name, value, bits });
+        set.0.push(mimic_core::Register { name, value, bits });
     }
     set
 }
@@ -2373,7 +2379,7 @@ impl DebugTarget for Amiga {
                     mnemonic,
                     operand,
                     target: None,
-                    flow: emu_core::Flow::Normal,
+                    flow: mimic_core::Flow::Normal,
                 }
             }
             BLITTER => {
@@ -2384,7 +2390,7 @@ impl DebugTarget for Amiga {
                     mnemonic: "DC.W".into(),
                     operand: format!("${w:04X}"),
                     target: None,
-                    flow: emu_core::Flow::Normal,
+                    flow: mimic_core::Flow::Normal,
                 }
             }
             _ => self.cpu.disassemble(&PeekBus(&self.board), addr),

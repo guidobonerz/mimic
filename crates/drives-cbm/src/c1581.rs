@@ -25,13 +25,13 @@
 
 use chips_cbm::cia::{Cia, CiaModel};
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{
+use media::mfm::{self, TRACK_BYTES};
+use media::{Format, D64};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{
     Bus, Cpu, CycleResult, DebugHooks, DebugTarget, HookedBus, Instr, MemSpaceId, RegisterSet,
     Savestate, Size, StateError, StateReader, StateWriter,
 };
-use media::mfm::{self, TRACK_BYTES};
-use media::{Format, D64};
 
 use crate::iec::IecLines;
 use crate::wd177x::{FloppyIo, Pulse, Wd177x, BYTE_US};
@@ -433,7 +433,7 @@ impl Drive1581 {
             inner: &mut b,
             dbg: dbg.as_deref_mut(),
             space,
-            beam: emu_core::BeamPos::default(),
+            beam: mimic_core::BeamPos::default(),
         };
         let r = self.cpu.tick(&mut hooked);
         let _ = self.cpu.take_interrupt();

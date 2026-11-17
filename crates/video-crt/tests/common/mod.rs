@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use emu_core::frame::{
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
 

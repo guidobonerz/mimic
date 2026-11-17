@@ -166,7 +166,7 @@ impl SiecState {
     }
 }
 
-use emu_core::host::check_path;
+use mimic_core::host::check_path;
 
 /// A CBM DOS file name taken apart.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

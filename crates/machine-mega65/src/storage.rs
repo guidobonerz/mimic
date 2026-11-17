@@ -44,8 +44,8 @@
 //! (the F011 registers and commands); the `@IO` lines of `sdcardio.vhdl`
 //! ($D080–$D09F, $D680–$D69F).
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// A D81 image's size.
 pub const D81_SIZE: usize = 819_200;

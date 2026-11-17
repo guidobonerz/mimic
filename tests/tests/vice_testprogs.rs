@@ -4,7 +4,7 @@
 //!
 //!     python tools/fetch_vice_testprogs.py
 //!     EMU_ROM_DIR=$PWD/roms EMU_TESTDATA_DIR=$PWD/testdata \
-//!         cargo test -p emu-tests --release --test vice_testprogs -- --ignored --nocapture
+//!         cargo test -p mimic-tests --release --test vice_testprogs -- --ignored --nocapture
 //!
 //! `EMU_VICE_FILTER=CIA/` runs only entries whose path contains the text,
 //! `EMU_VICE_SKIP=zex128` leaves out those that contain it.
@@ -43,11 +43,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use emu_core::frame::{PixelData, VideoStandard};
-use emu_core::media::MediaKind;
-use emu_core::registry::MachineConfig;
-use emu_core::{BreakpointKind, DebugHooks, Machine, StopReason};
-use emu_tests::lorenz;
+use mimic_core::frame::{PixelData, VideoStandard};
+use mimic_core::media::MediaKind;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{BreakpointKind, DebugHooks, Machine, StopReason};
+use mimic_tests::lorenz;
 
 /// Pepto's PAL palette (the testbench's reference screenshots use it).
 const PEPTO_PAL: [[u8; 3]; 16] = [
@@ -233,7 +233,7 @@ fn config(t: Target, base: &MachineConfig, e: &Entry) -> Result<MachineConfig, S
             }
             match o.as_str() {
                 "vicii-ntsc" | "vicii-ntscold" => {
-                    c.video_format = Some(emu_core::frame::VideoStandard::Ntsc);
+                    c.video_format = Some(mimic_core::frame::VideoStandard::Ntsc);
                 }
                 "sid-old" => {
                     c.options.insert("sid".into(), "6581".into());
@@ -288,7 +288,7 @@ fn config(t: Target, base: &MachineConfig, e: &Entry) -> Result<MachineConfig, S
             return Err(format!("{u} not emulated"));
         }
         match o.as_str() {
-            "vicii-ntsc" => c.video_format = Some(emu_core::frame::VideoStandard::Ntsc),
+            "vicii-ntsc" => c.video_format = Some(mimic_core::frame::VideoStandard::Ntsc),
             "cia-old" => {
                 c.options.insert("cia".into(), "6526".into());
             }
@@ -304,7 +304,7 @@ fn config(t: Target, base: &MachineConfig, e: &Entry) -> Result<MachineConfig, S
             _ => {}
         }
     }
-    let ntsc = c.video_format == Some(emu_core::frame::VideoStandard::Ntsc);
+    let ntsc = c.video_format == Some(mimic_core::frame::VideoStandard::Ntsc);
     let vic = match (ntsc, old_vic) {
         (false, false) => "8565",
         (false, true) => "6569",
@@ -341,9 +341,9 @@ fn insert(m: &mut dyn Machine, kind: MediaKind, path: &Path) -> Result<(), Strin
 fn type_and_wait(m: &mut dyn Machine, dbg: &mut DebugHooks, text: &str, ready_prompt: bool) {
     let ready = |m: &mut dyn Machine| -> usize {
         let cpu = lorenz::space(m, "cpu");
-        let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+        let t = m.debug_target(mimic_core::DeviceId("cpu")).unwrap();
         let screen: Vec<u8> = (0..1000)
-            .map(|i| t.peek(cpu, 0x400 + i, emu_core::Size::Byte).unwrap_or(0) as u8)
+            .map(|i| t.peek(cpu, 0x400 + i, mimic_core::Size::Byte).unwrap_or(0) as u8)
             .collect();
         screen
             .windows(6)
@@ -721,7 +721,7 @@ fn judge(t: Target, base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
     if !e.prg.is_empty() && !data.join(&e.dir).join(&e.prg).is_file() {
         return Verdict::Skipped("program not in the repository".into());
     }
-    let registry = emu_machines::registry();
+    let registry = mimic_machines::registry();
     let mut m = match registry.create(t.machine, &config) {
         Ok(m) => m,
         Err(err) => return Verdict::Error(format!("{err:?}")),
@@ -744,7 +744,7 @@ fn judge(t: Target, base: &MachineConfig, e: &Entry, data: &Path) -> Verdict {
         }
         Ok(None) => Verdict::Timeout,
         Ok(Some(code)) if e.kind == "screenshot" => {
-            let ntsc = config.video_format == Some(emu_core::frame::VideoStandard::Ntsc);
+            let ntsc = config.video_format == Some(mimic_core::frame::VideoStandard::Ntsc);
             match reference(e, data, ntsc) {
                 None => Verdict::Skipped("reference picture missing".into()),
                 Some(r) => match if t.machine == "plus4" {
@@ -890,7 +890,7 @@ fn suite(t: Target) {
         })
         .collect();
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
-    let trend = emu_tests::trend::record(tmp, t.name, &outcomes);
+    let trend = mimic_tests::trend::record(tmp, t.name, &outcomes);
     report.push('\n');
     report.push_str(&trend);
     report.push('\n');

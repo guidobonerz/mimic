@@ -43,18 +43,18 @@
 
 mod picture;
 
-use emu_core::frame::{FrameRef, PixelData};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use media::cards::{self, Card, Deck, DeckFormat, COLUMNS};
+use mimic_core::frame::{FrameRef, PixelData};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, ChipInfo, ControlInfo, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, Register, RegisterSet, ResetKind, Savestate, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use media::cards::{self, Card, Deck, DeckFormat, COLUMNS};
 
 pub use picture::{HEIGHT, WIDTH};
 
@@ -764,9 +764,9 @@ impl Machine for Keypunch {
         }
     }
 
-    fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+    fn audio(&mut self, _out: &mut Vec<i16>) -> mimic_core::AudioFormat {
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }

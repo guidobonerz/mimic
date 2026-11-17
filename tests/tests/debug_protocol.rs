@@ -6,9 +6,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use emu_core::registry::MachineConfig;
-use emu_debug::protocol::PROTOCOL_VERSION;
-use emu_debug::{DebugServer, ServerConfig, Session};
+use mimic_core::registry::MachineConfig;
+use mimic_debug::protocol::PROTOCOL_VERSION;
+use mimic_debug::{DebugServer, ServerConfig, Session};
 use serde_json::{json, Value};
 
 struct Client {
@@ -101,7 +101,9 @@ fn subroutines() -> MachineConfig {
 }
 
 fn server_with(config: MachineConfig) -> DebugServer {
-    let machine = emu_machines::registry().create("sim6502", &config).unwrap();
+    let machine = mimic_machines::registry()
+        .create("sim6502", &config)
+        .unwrap();
     DebugServer::start(
         Session::new(machine, "sim6502"),
         ServerConfig {
@@ -228,7 +230,7 @@ fn errors_do_not_close_the_connection() {
 
 #[test]
 fn refuses_non_loopback_bind() {
-    let machine = emu_machines::registry()
+    let machine = mimic_machines::registry()
         .create("sim6502", &MachineConfig::default())
         .unwrap();
     let r = DebugServer::start(
@@ -419,24 +421,24 @@ fn symbols_label_disassembly_and_breakpoints() {
     server.shutdown();
 }
 
-/// Devices from the `emu-machines` catalogue, images from files: what a
+/// Devices from the `mimic-machines` catalogue, images from files: what a
 /// frontend lends the session.
 struct TestHost;
 
-impl emu_debug::host::HostServices for TestHost {
-    fn device_names(&self, kind: emu_core::port::PortKind) -> Vec<&'static str> {
-        emu_machines::device_names(kind)
+impl mimic_debug::host::HostServices for TestHost {
+    fn device_names(&self, kind: mimic_core::port::PortKind) -> Vec<&'static str> {
+        mimic_machines::device_names(kind)
     }
 
     fn create_device(
         &self,
         name: &str,
-        kind: emu_core::port::PortKind,
-    ) -> Option<Box<dyn emu_core::port::PortDevice>> {
-        emu_machines::create_device(name, kind)
+        kind: mimic_core::port::PortKind,
+    ) -> Option<Box<dyn mimic_core::port::PortDevice>> {
+        mimic_machines::create_device(name, kind)
     }
 
-    fn open_media(&self, path: &str) -> Result<emu_core::media::Media, String> {
+    fn open_media(&self, path: &str) -> Result<mimic_core::media::Media, String> {
         media_backends::image::open(std::path::Path::new(path)).map_err(|e| e.to_string())
     }
 }
@@ -444,7 +446,7 @@ impl emu_debug::host::HostServices for TestHost {
 fn c64_server() -> DebugServer {
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
-    let machine = emu_machines::registry().create("c64", &config).unwrap();
+    let machine = mimic_machines::registry().create("c64", &config).unwrap();
     let mut session = Session::new(machine, "c64");
     session.set_host(Box::new(TestHost));
     DebugServer::start(
@@ -682,7 +684,7 @@ fn cheat_search_finds_the_counter_and_a_freeze_pins_it() {
 fn console_panel_controls() {
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
-    let machine = emu_machines::registry()
+    let machine = mimic_machines::registry()
         .create("atari2600", &config)
         .unwrap();
     let server = DebugServer::start(
@@ -772,9 +774,9 @@ fn graphics_data_views() {
         (Some(320), Some(200))
     );
     assert_eq!(screen["format"], "png");
-    let raw = emu_debug::protocol::base64_decode(screen["raw"].as_str().unwrap()).unwrap();
+    let raw = mimic_debug::protocol::base64_decode(screen["raw"].as_str().unwrap()).unwrap();
     assert_eq!((raw.len(), raw[0]), (1000, 0x42));
-    let png = emu_debug::protocol::base64_decode(screen["image"].as_str().unwrap()).unwrap();
+    let png = mimic_debug::protocol::base64_decode(screen["image"].as_str().unwrap()).unwrap();
     assert_eq!(&png[1..4], b"PNG");
     // Indexed pixels with the palette; options select one sprite.
     let s = c.ok(
@@ -785,12 +787,12 @@ fn graphics_data_views() {
         (s["width"].as_u64(), s["height"].as_u64()),
         (Some(24), Some(21))
     );
-    let px = emu_debug::protocol::base64_decode(s["pixels"].as_str().unwrap()).unwrap();
+    let px = mimic_debug::protocol::base64_decode(s["pixels"].as_str().unwrap()).unwrap();
     assert_eq!(px.len(), 24 * 21);
     assert_eq!(s["palette"].as_array().unwrap().len(), 17);
     assert!(s["params"]["ptr2"].is_u64());
     let q = c.ok(json!({"cmd": "gfx_get", "view": "palette", "format": "qoi"}));
-    let qoi = emu_debug::protocol::base64_decode(q["image"].as_str().unwrap()).unwrap();
+    let qoi = mimic_debug::protocol::base64_decode(q["image"].as_str().unwrap()).unwrap();
     assert_eq!(&qoi[..4], b"qoif");
     for bad in [
         json!({"cmd": "gfx_get", "view": "nothing"}),
@@ -915,7 +917,7 @@ fn overlays_frames_and_the_stopped_frame_event() {
     c.ok(json!({"cmd": "resume"}));
     c.event("stopped");
     let ev = c.event("stopped_frame");
-    let png = emu_debug::protocol::base64_decode(ev["image"].as_str().unwrap()).unwrap();
+    let png = mimic_debug::protocol::base64_decode(ev["image"].as_str().unwrap()).unwrap();
     assert_eq!(&png[1..4], b"PNG");
     assert_eq!(ev["partial"], true);
     server.shutdown();
@@ -927,7 +929,9 @@ fn overlays_frames_and_the_stopped_frame_event() {
 fn vector_display_segments() {
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
-    let machine = emu_machines::registry().create("vectrex", &config).unwrap();
+    let machine = mimic_machines::registry()
+        .create("vectrex", &config)
+        .unwrap();
     let server = DebugServer::start(
         Session::new(machine, "vectrex"),
         ServerConfig {
@@ -970,7 +974,7 @@ fn vector_display_segments() {
 }
 
 /// Protocol 11: the BASIC debugger (`basic_*`), announced in
-/// `capabilities`, against the toy BASIC machine of `emu-core` (no ROM
+/// `capabilities`, against the toy BASIC machine of `mimic-core` (no ROM
 /// needed); machines without a BASIC answer with an error.
 ///
 /// ```text
@@ -981,7 +985,7 @@ fn vector_display_segments() {
 /// ```
 #[test]
 fn basic_debugger() {
-    use emu_core::testing::basic::{ToyBasic, ToyStmt::*};
+    use mimic_core::testing::basic::{ToyBasic, ToyStmt::*};
     let machine = ToyBasic::new(&[
         (10, &[Let('A', 5), Gosub(100), Add('A', -2)]),
         (20, &[For('I', 1, 2), Add('B', 10), Next]),
@@ -1043,7 +1047,7 @@ fn basic_debugger() {
         (json!(20), json!(0x100e), json!("FOR I=1 TO 2:B=B+10:NEXT"))
     );
     assert_eq!(line["statements"], json!([0, 13, 20]));
-    let raw = emu_debug::protocol::base64_decode(line["raw"].as_str().unwrap()).unwrap();
+    let raw = mimic_debug::protocol::base64_decode(line["raw"].as_str().unwrap()).unwrap();
     assert_eq!(raw[..3], [14, 20, 0]);
     assert_eq!(list["lines"].as_array().unwrap().len(), 2);
 
@@ -1173,7 +1177,7 @@ fn basic_debugger() {
 /// Protocol 13: text typed on the machine's keyboard.
 #[test]
 fn typed_text() {
-    use emu_core::testing::basic::{ToyBasic, KEYS};
+    use mimic_core::testing::basic::{ToyBasic, KEYS};
     let server = DebugServer::start(
         Session::new(Box::new(ToyBasic::new(&[])), "toybasic"),
         ServerConfig {

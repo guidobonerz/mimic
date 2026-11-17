@@ -1,5 +1,5 @@
 //! Text typed on the keyboard (pasted listings, scripted typing; see
-//! [`emu_core::Machine::typed_keys`]).
+//! [`mimic_core::Machine::typed_keys`]).
 //!
 //! Characters by the keys of the TI-99/4A ([`crate::keyboard`]: machine
 //! key = column × 8 + row). SHIFT gives `!@#$%^&*()` on the digits and
@@ -10,7 +10,7 @@
 //! either case: they arrive in upper case whatever ALPHA LOCK says, and
 //! TI BASIC takes its keywords in upper case only.
 
-use emu_core::input::{typed_chars, TimedInput, TypeTiming};
+use mimic_core::input::{typed_chars, TimedInput, TypeTiming};
 
 const FCTN: u16 = 4;
 const SHIFT: u16 = 5;

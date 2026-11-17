@@ -2,7 +2,7 @@
 //! ROMs with their keyword tables, programs, variables of every kind and
 //! GOSUB frames below RAMTOP.
 
-use emu_core::cpu::{Flow, Instr, RegisterSet};
+use mimic_core::cpu::{Flow, Instr, RegisterSet};
 
 use super::*;
 

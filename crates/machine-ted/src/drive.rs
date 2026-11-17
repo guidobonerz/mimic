@@ -5,9 +5,9 @@
 //! is in the crate docs.
 
 use drives_cbm::{DriveModel, DriveRoms, IecLines, SerialDrive, Tcbm1551};
-use emu_core::media::{DriveStatus, MediaSlot};
-use emu_core::registry::ConfigError;
-use emu_core::{
+use mimic_core::media::{DriveStatus, MediaSlot};
+use mimic_core::registry::ConfigError;
+use mimic_core::{
     DebugHooks, DebugTarget, DeviceId, MemSpaceId, StateError, StateReader, StateWriter, StopReason,
 };
 

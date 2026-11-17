@@ -1,5 +1,5 @@
 //! Graphics data views (golden rule 1: the debugger sees them through
-//! [`emu_core::Machine::gfx_views`]):
+//! [`mimic_core::Machine::gfx_views`]):
 //!
 //! - `screen`: the picture the 6845 and the Video ULA make from memory now,
 //!   one character row after the other without borders: the start address
@@ -18,9 +18,9 @@
 //! view never changes the machine.
 
 use chips_acorn::Saa5050;
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{palette_canvas, Canvas, GfxPixels, OPT_ADDR};
-use emu_core::{GfxKind, GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{palette_canvas, Canvas, GfxPixels, OPT_ADDR};
+use mimic_core::{GfxKind, GfxOptions, GfxView, GfxViewInfo};
 
 use crate::{Board, CPU_SPACE, PALETTE};
 

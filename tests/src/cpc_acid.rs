@@ -21,10 +21,10 @@
 //! Everything goes through the generic `Machine`/`DebugHooks` interface
 //! plus the CPC's key codes.
 
-use emu_core::input::{InputEvent, InputTarget, TimedInput};
-use emu_core::media::Media;
-use emu_core::registry::{MachineConfig, Registry};
-use emu_core::{
+use mimic_core::input::{InputEvent, InputTarget, TimedInput};
+use mimic_core::media::Media;
+use mimic_core::registry::{MachineConfig, Registry};
+use mimic_core::{
     BreakpointKind, Cycle, DebugHooks, DeviceId, Machine, MemSpaceId, Size, StopReason,
 };
 

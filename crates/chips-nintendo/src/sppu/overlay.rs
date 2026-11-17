@@ -1,4 +1,4 @@
-//! Debug overlay of the S-PPU (see `emu_core::overlay`): `sprites`, a box
+//! Debug overlay of the S-PPU (see `mimic_core::overlay`): `sprites`, a box
 //! per object on the lines the sprite scan found it in range (fullsnes,
 //! "SNES PPU Sprites (OBJ)": the 32 objects a line), so objects changed
 //! during the frame show where they really were. Frame columns are two
@@ -10,7 +10,7 @@
 //! frame with [`SPpu::overlay_end_frame`] where its frames end (the start
 //! of vertical blank).
 
-use emu_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::overlay::{Overlay, OverlayInfo};
 
 use super::{SPpu, LINES};
 use crate::overlay::{sprite_rects, Record, Span};
@@ -98,7 +98,7 @@ impl SPpu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::overlay::{colors, Shape};
+    use mimic_core::overlay::{colors, Shape};
 
     #[test]
     fn sprite_boxes_follow_the_line_scan() {

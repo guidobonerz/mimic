@@ -1,6 +1,6 @@
 use super::*;
-use emu_core::input::Dirs;
-use emu_core::media::{Media, MediaBackend, MediaError};
+use mimic_core::input::Dirs;
+use mimic_core::media::{Media, MediaBackend, MediaError};
 
 struct Bytes(Vec<u8>);
 
@@ -41,7 +41,7 @@ fn lorom(code: &[u8], nmi: &[u8], irq: &[u8], data: &[u8]) -> Vec<u8> {
 
 fn machine(options: &[(&str, &str)], model: &str, image: Vec<u8>) -> Snes {
     let mut config = MachineConfig {
-        video_format: emu_core::frame::VideoStandard::parse(model),
+        video_format: mimic_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     for (k, v) in options {
@@ -320,7 +320,7 @@ fn gfx_views_show_the_ppu_memories() {
 
 #[test]
 fn overlays_show_hdma_lines_interrupts_and_sprites() {
-    use emu_core::overlay::{colors, Shape};
+    use mimic_core::overlay::{colors, Shape};
     let mut m = machine(&[], "ntsc", upload_rom());
     frames(&mut m, 2);
     let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();

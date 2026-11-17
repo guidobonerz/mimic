@@ -1,6 +1,6 @@
 use super::*;
-use emu_core::media::MediaBackend;
-use emu_core::registry::MachineConfig;
+use mimic_core::media::MediaBackend;
+use mimic_core::registry::MachineConfig;
 
 fn stub(model: &str) -> Spectrum {
     let mut config = MachineConfig {
@@ -179,7 +179,7 @@ fn kempston_and_sinclair_joysticks() {
         target: InputTarget::Port(port),
         event: InputEvent::Digital { dirs, buttons: 1 },
     };
-    use emu_core::input::Dirs;
+    use mimic_core::input::Dirs;
     m.input(digital(PORT_KEMPSTON, Dirs::LEFT));
     m.input(digital(PORT_SINCLAIR1, Dirs::UP));
     // IN A,($1F); then LD A,$EF; IN A,($FE) (keys 6–0).

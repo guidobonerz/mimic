@@ -245,7 +245,7 @@ fn gfx_views_decode_the_screen_palette_and_charset() {
     frames(&mut m, 20);
     let views = m.gfx_views();
     assert_eq!(views.len(), 3);
-    let opts = emu_core::GfxOptions::new();
+    let opts = mimic_core::GfxOptions::new();
     for v in &views {
         let g = m.gfx_view(v.id, &opts).unwrap();
         assert!(g.width > 0 && g.height > 0, "{}", v.id);
@@ -268,7 +268,7 @@ fn the_break_key_resets_the_cpu_and_leaves_the_matrix_alone() {
         at,
         target: InputTarget::Keyboard,
         event: InputEvent::Key {
-            machine_key: emu_core::input::MachineKey(keyboard::keys::BREAK),
+            machine_key: mimic_core::input::MachineKey(keyboard::keys::BREAK),
             down: true,
         },
     });

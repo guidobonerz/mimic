@@ -1,4 +1,4 @@
-//! Graphics data view (see `emu_core::gfx`): the screen buffer, decoded
+//! Graphics data view (see `mimic_core::gfx`): the screen buffer, decoded
 //! from RAM as stored, side-effect free.
 //!
 //! The compact Macintosh shows 512 × 342 pixels of one bit each, 64 bytes
@@ -9,8 +9,8 @@
 //! selects the main buffer ([`crate::video`]). The view follows the same
 //! rule as the video circuit for every model and RAM size.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR};
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR};
 
 use crate::{video, Mac, RAM_SPACE};
 
@@ -94,8 +94,8 @@ impl Mac {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::registry::MachineConfig;
-    use emu_core::Machine;
+    use mimic_core::registry::MachineConfig;
+    use mimic_core::Machine;
 
     fn mac(model: &str) -> Mac {
         let mut config = MachineConfig {

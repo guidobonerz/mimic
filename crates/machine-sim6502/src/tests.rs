@@ -1,6 +1,6 @@
 use super::*;
-use emu_core::beam::{TraceConfig, TraceEvent, TraceRange};
-use emu_core::{BreakpointKind, Freeze};
+use mimic_core::beam::{TraceConfig, TraceEvent, TraceRange};
+use mimic_core::{BreakpointKind, Freeze};
 use video::{CYCLES_PER_LINE, LINES, PALETTE};
 
 fn demo() -> Sim6502 {

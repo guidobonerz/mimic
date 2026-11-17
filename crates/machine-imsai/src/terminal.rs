@@ -7,9 +7,9 @@
 //! use it in their strings). Source: Lear Siegler, "ADM-3A Operator's
 //! Manual".
 
-use emu_core::font;
-use emu_core::frame::{FieldParity, OutputType, Rgb8, SignalInfo, VideoStandard};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::font;
+use mimic_core::frame::{FieldParity, OutputType, Rgb8, SignalInfo, VideoStandard};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const COLS: usize = 80;
 pub const ROWS: usize = 24;

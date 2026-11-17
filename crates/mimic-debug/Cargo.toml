@@ -1,0 +1,18 @@
+[package]
+name = "mimic-debug"
+description = "Debug server: native protocol + adapter (VICE binary monitor)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mimic-core.workspace = true
+mimic-preview.workspace = true
+mimic-cheats.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tokio.workspace = true

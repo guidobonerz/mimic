@@ -32,10 +32,10 @@
 //! status bits, write track codes, step rates). The timing model (search,
 //! byte stream from the turning track) is this project's own.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::dmk::{decode_sectors, Image, Track, SD_TRACK_BYTES};
 use media::mfm::crc16;
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const ST_BUSY: u8 = 0x01;
 pub const ST_DRQ: u8 = 0x02;
@@ -70,7 +70,7 @@ pub struct Drive {
     pub cylinder: u8,
     pub write_protected: bool,
     pub dirty: bool,
-    pub media: Option<emu_core::media::Media>,
+    pub media: Option<mimic_core::media::Media>,
     pub original: Vec<u8>,
     /// Images are TI-99/4A sector dumps ([`Image::parse_ti_dsk`]).
     pub ti_dsk: bool,

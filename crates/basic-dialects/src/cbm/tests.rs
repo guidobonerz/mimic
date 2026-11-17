@@ -2,7 +2,7 @@
 //! the two ROM patterns at `$A000`, a tokenised program at `$0801`,
 //! variables, an array, a string in the heap and two frames on the stack.
 
-use emu_core::cpu::{Flow, Instr, Register, RegisterSet};
+use mimic_core::cpu::{Flow, Instr, Register, RegisterSet};
 
 use super::*;
 

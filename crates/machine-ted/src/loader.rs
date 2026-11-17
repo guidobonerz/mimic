@@ -2,8 +2,8 @@
 //! media slot (PRG or T64, put into RAM at frame boundaries once BASIC is
 //! up) and disk autostart (type `LOAD"*",8` / `RUN`).
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
 use media::{t64, Prg};
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot};
 
 /// Frames after power-on before a program is injected or typed.
 pub const BOOT_FRAMES: u64 = 150;

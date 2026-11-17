@@ -22,7 +22,7 @@
 //! The other end of the line is the machine's business; [`Uart::loopback`]
 //! ties TXD to RXD (tests, diagnostics software).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::int;
 

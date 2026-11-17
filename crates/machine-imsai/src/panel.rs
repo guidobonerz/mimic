@@ -7,8 +7,8 @@
 //! Lamps have 16 brightness levels, from the share of the frame's time the
 //! line was active, so a program's bus pattern shows as on a real panel.
 
-use emu_core::font;
-use emu_core::frame::{FieldParity, OutputType, Rgb8, SignalInfo, VideoStandard};
+use mimic_core::font;
+use mimic_core::frame::{FieldParity, OutputType, Rgb8, SignalInfo, VideoStandard};
 
 pub const WIDTH: u32 = 1000;
 pub const HEIGHT: u32 = 392;

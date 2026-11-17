@@ -8,9 +8,9 @@
 //! (returning to [`INIT_TRAP`]) and finally jumps to RUNAD, or to the
 //! first segment without one.
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::xex::{Segment, Xex};
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Where the boot sector's continuation (load address + 6) is called.
 pub const BOOT_TRAP: u16 = 0x0706;

@@ -10,9 +10,9 @@
 //! protocol hands over the bytes it receives ([`VirtualDos::received`])
 //! and takes the bytes to send ([`VirtualDos::next_byte`]).
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::{Format, D64};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// An open channel.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

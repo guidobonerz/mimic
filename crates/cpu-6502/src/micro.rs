@@ -9,7 +9,7 @@
 //! W65C02S data sheet ("Table 5-7, Operation, Operational Codes and Cycle
 //! Timing") and Tom Harte's `synertek65c02` bus traces.
 
-use emu_core::{Bus, CycleResult, InterruptKind, Size};
+use mimic_core::{Bus, CycleResult, InterruptKind, Size};
 
 use crate::table::{Kind, Mode, Op, CMOS_TABLE, TABLE};
 

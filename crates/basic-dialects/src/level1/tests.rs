@@ -1,7 +1,7 @@
 //! The decoder against a hand-built memory image: the two patterns of
 //! the ROM, a program of four lines, loops and a GOSUB frame on the stack.
 
-use emu_core::cpu::{Flow, Instr, Register, RegisterSet};
+use mimic_core::cpu::{Flow, Instr, Register, RegisterSet};
 
 use super::*;
 

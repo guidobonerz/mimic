@@ -1,5 +1,5 @@
-use emu_core::savestate::{StateReader, StateWriter};
-use emu_core::Flow;
+use mimic_core::savestate::{StateReader, StateWriter};
+use mimic_core::Flow;
 
 use super::*;
 

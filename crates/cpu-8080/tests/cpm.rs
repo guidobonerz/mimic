@@ -6,7 +6,7 @@
 //!     EMU_TESTDATA_DIR=$PWD/testdata cargo test -p cpu-8080 --release --test cpm -- --ignored --nocapture
 
 use cpu_8080::{StatusBus, I8080};
-use emu_core::{Bus, Size};
+use mimic_core::{Bus, Size};
 
 struct Ram(Vec<u8>);
 

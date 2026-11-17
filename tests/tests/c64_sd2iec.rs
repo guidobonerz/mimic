@@ -1,14 +1,14 @@
 //! The SD2IEC on the C64's serial bus, with the real KERNAL (user-supplied
 //! via `EMU_ROM_DIR`): next to a true 1541 as device 9, and as drive 8.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test c64_sd2iec -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test c64_sd2iec -- --ignored
 
-use emu_core::host::{lock, HostServices, MemFileHost, OpenMode, SharedFiles};
-use emu_core::media::{Media, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Machine, Size};
 use media::D64;
 use media_backends::image::MemoryBackend;
+use mimic_core::host::{lock, HostServices, MemFileHost, OpenMode, SharedFiles};
+use mimic_core::media::{Media, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Machine, Size};
 
 /// `10 PRINT "HI"` as a tokenised BASIC program at $0801.
 const PROGRAM: [u8; 15] = [
@@ -25,7 +25,7 @@ fn c64(options: &[(&str, &str)]) -> (Box<dyn Machine>, SharedFiles) {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     let mut card = MemFileHost::new();
     card.insert("/SD2IEC/hello", PROGRAM.to_vec()).unwrap();
     card.insert("/SD2IEC/games/hi2", PROGRAM.to_vec()).unwrap();
@@ -83,7 +83,7 @@ fn clear(m: &mut dyn Machine) {
 /// screen (`times` = 1) or as often as asked.
 fn type_until(m: &mut dyn Machine, text: &str, until: &str, times: usize, frames: u32) -> bool {
     clear(m);
-    let (events, end) = emu_tests::typing::type_text(text, m.now().0);
+    let (events, end) = mimic_tests::typing::type_text(text, m.now().0);
     for e in events {
         m.input(e);
     }
@@ -242,7 +242,7 @@ fn sd2iec_lists_disk_images_of_the_host_folder() {
         ..MachineConfig::default()
     };
     config.options.insert("drive8".into(), "sd2iec".into());
-    let mut m = emu_machines::registry().create("c64", &config).unwrap();
+    let mut m = mimic_machines::registry().create("c64", &config).unwrap();
     let mounts = vec![("SD2IEC".to_string(), card.clone())];
     let journal =
         media_backends::host_journal(false, Some(root.join("ultimate")), &mounts).unwrap();

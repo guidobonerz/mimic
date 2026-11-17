@@ -179,16 +179,16 @@ use devices_cartridge::msx::{Mapper, MsxCart};
 use devices_input::joystick::pin;
 use disk::DiskInterface;
 use drives_other::msx_tape::MsxTape;
-use emu_core::audio::Decimator;
-use emu_core::frame::{FieldParity, FrameRef, OutputType, SignalInfo, VideoStandard};
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::overlay::{Overlay, OverlayInfo};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{FieldParity, FrameRef, OutputType, SignalInfo, VideoStandard};
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, MachineKey, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -234,7 +234,7 @@ pub fn entry() -> MachineEntry {
         id: "msx",
         name: "MSX",
         models: &["msx1", "msx2"],
-        video_formats: emu_core::registry::PAL_NTSC,
+        video_formats: mimic_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Msx::new(config)?)),
     }
 }
@@ -860,7 +860,7 @@ impl Msx {
                 level: 0,
                 chips_t: 0,
                 field_done: false,
-                audio: Decimator::new(CPU_HZ, emu_core::SAMPLE_RATE)
+                audio: Decimator::new(CPU_HZ, mimic_core::SAMPLE_RATE)
                     .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
                 dc: [0; 2],
                 samples: Vec::new(),
@@ -1200,10 +1200,10 @@ impl Machine for Msx {
         self.board.vdp.line_row(line)
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.board.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -1231,7 +1231,7 @@ impl Machine for Msx {
         ]
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
@@ -1328,9 +1328,46 @@ impl Machine for Msx {
         self.sched.now()
     }
 
+    /// Pasted text goes straight into the BIOS's keyboard buffer: KEYBUF
+    /// (`$FBF0`–`$FC17`), a ring the interrupt's key scan writes at PUTPNT
+    /// (`$F3F8`) and CHGET reads at GETPNT (`$F3FA`); empty while the two
+    /// are equal, and filled only then. Source: *MSX2 Technical Handbook*
+    /// (ASCII, 1987), chapter 4 (system work area); the same on MSX1.
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        const PUTPNT: u32 = 0xf3f8;
+        const GETPNT: u32 = 0xf3fa;
+        const KEYBUF: u32 = 0xfbf0;
+        const SIZE: u32 = 40;
+        let put = DebugTarget::peek(self, CPU_SPACE, PUTPNT, Size::Word)?;
+        let get = DebugTarget::peek(self, CPU_SPACE, GETPNT, Size::Word)?;
+        if put != get || !(KEYBUF..KEYBUF + SIZE).contains(&put) {
+            return Some(0);
+        }
+        let code = |c: char| {
+            typing::keys_for_char(c)?;
+            Some(if c == '\n' || c == '\r' {
+                0x0d
+            } else {
+                c as u8
+            })
+        };
+        // One place stays free: a full ring would look empty.
+        let mut bytes = Vec::new();
+        let used = mimic_core::input::fill_key_buffer(text, SIZE as usize - 1, code, |_, b| {
+            bytes.push(b);
+        });
+        let mut at = put;
+        for b in bytes {
+            DebugTarget::poke(self, CPU_SPACE, at, Size::Byte, u32::from(b));
+            at = KEYBUF + (at + 1 - KEYBUF) % SIZE;
+        }
+        DebugTarget::poke(self, CPU_SPACE, PUTPNT, Size::Word, at);
+        Some(used)
+    }
+
     /// Text as key presses ([`typing`]), with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             typing::LINE_PAUSE,
@@ -1338,10 +1375,10 @@ impl Machine for Msx {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
         vec![
-            emu_core::ControlInfo::button(0, "POWER", false),
-            emu_core::ControlInfo::button(1, "RESET", false),
+            mimic_core::ControlInfo::button(0, "POWER", false),
+            mimic_core::ControlInfo::button(1, "RESET", false),
         ]
     }
 

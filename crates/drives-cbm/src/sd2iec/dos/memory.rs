@@ -14,8 +14,8 @@
 //! - Everything else reads as zero (the sd2iec answers "more-or-less
 //!   random data").
 
-use emu_core::host::lock;
 use media::Format;
+use mimic_core::host::lock;
 
 use super::Sd2iecDos;
 

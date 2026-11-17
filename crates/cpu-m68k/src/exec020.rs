@@ -4,7 +4,7 @@
 //! 68020's timing comes from its own tables (`crate::timing020`); the
 //! internal clocks of the 68000 sequences here are ignored on it.
 
-use emu_core::Size;
+use mimic_core::Size;
 
 use crate::ea::{mode, Ea, Sz};
 use crate::exec::{control, data_alterable, illegal, mem_alterable, privileged, trap_now};

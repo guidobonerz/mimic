@@ -25,7 +25,7 @@
 //! power-on (machines never read the host's clock, golden rule 3); the
 //! parameter RAM starts cleared, so the ROM writes its defaults.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Seconds from 1904-01-01 to 1990-01-01.
 pub const START_TIME: u32 = 2_713_996_800;

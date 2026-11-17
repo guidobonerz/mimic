@@ -1,16 +1,16 @@
 //! Archimedes with real ROMs (`EMU_ROM_DIR`, ROMs in `archimedes/`).
 //!
-//!     EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test archimedes -- --ignored --nocapture
+//!     EMU_ROM_DIR=$PWD/roms cargo test -p mimic-tests --release --test archimedes -- --ignored --nocapture
 //!
 //! `trace_boot`: EMU_ARC_OS=3.11, EMU_FRAMES=n: where the ROM spends its
 //! time, a histogram of PCs per 64 KB and the last frame's chips.
 
-use emu_core::input::{InputEvent, InputTarget, TimedInput};
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::port::PortId;
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, Machine, StopReason};
 use machine_archimedes::Archimedes;
+use mimic_core::input::{InputEvent, InputTarget, TimedInput};
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::port::PortId;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, Machine, StopReason};
 
 fn machine(os: &str) -> Option<Archimedes> {
     let dir = std::env::var("EMU_ROM_DIR").ok()?;
@@ -50,7 +50,7 @@ fn trace_boot() {
             m.step_cycle();
             if m.cpu().next_pc() == stop {
                 println!("step {i} clocks {}", m.clocks());
-                use emu_core::{DebugTarget, MemSpaceId, Size};
+                use mimic_core::{DebugTarget, MemSpaceId, Size};
                 for a in [0x10u32, 0x2010, 0x20] {
                     println!(
                         "phys {a:x}: {:08x} logical: {:08x}",
@@ -59,7 +59,7 @@ fn trace_boot() {
                     );
                 }
                 for (pc, r, psr) in &ring {
-                    let text = emu_core::DebugTarget::disassemble(&m, *pc).to_string();
+                    let text = mimic_core::DebugTarget::disassemble(&m, *pc).to_string();
                     println!("{pc:07x} {text:32} r0 {:08x} r1 {:08x} r2 {:08x} r3 {:08x} r13 {:08x} r14 {:08x} psr {:08x}", r[0], r[1], r[2], r[3], r[13], r[14], psr);
                 }
                 break;
@@ -129,7 +129,7 @@ fn trace_boot() {
         let a = around
             .unwrap_or(m.cpu().next_pc().wrapping_sub(16))
             .wrapping_add(i * 4);
-        format!("{a:07x} {}", emu_core::DebugTarget::disassemble(&m, a))
+        format!("{a:07x} {}", mimic_core::DebugTarget::disassemble(&m, a))
     });
     for line in dis {
         println!("{line}");
@@ -170,7 +170,7 @@ fn riscos_reaches_the_desktop() {
         m.run_frame(&mut dbg);
     }
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("archimedes-desktop.png");
-    std::fs::write(&out, emu_preview::encode_png(&m.framebuffer())).unwrap();
+    std::fs::write(&out, mimic_preview::encode_png(&m.framebuffer())).unwrap();
     assert!(lit(&m) > 20_000, "the Desktop's pinboard and icon bar");
 }
 
@@ -271,7 +271,7 @@ fn adfs_disc_loads() {
         m.run_frame(&mut dbg);
     }
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("archimedes-adfs.png");
-    std::fs::write(&out, emu_preview::encode_png(&m.framebuffer())).unwrap();
+    std::fs::write(&out, mimic_preview::encode_png(&m.framebuffer())).unwrap();
     // The six names and four header lines; "Drive empty" is a tenth of it.
     let listing = lit(&m) - before;
     assert!(
@@ -352,7 +352,7 @@ fn adfs_program_runs() {
         }
     }
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("archimedes-run.png");
-    std::fs::write(&out, emu_preview::encode_png(&m.framebuffer())).unwrap();
+    std::fs::write(&out, mimic_preview::encode_png(&m.framebuffer())).unwrap();
     println!("{} pc {:07x}", out.display(), m.cpu().next_pc());
 }
 

@@ -409,7 +409,7 @@ impl Video {
         }
     }
 
-    pub fn save(&self, w: &mut emu_core::StateWriter) {
+    pub fn save(&self, w: &mut mimic_core::StateWriter) {
         w.chunk(*b"A2VD", 1, |w| {
             w.u16(self.h);
             w.u16(self.line);
@@ -424,7 +424,10 @@ impl Video {
     }
 
     /// Atomic: on error the video is unchanged.
-    pub fn load(&mut self, r: &mut emu_core::StateReader<'_>) -> Result<(), emu_core::StateError> {
+    pub fn load(
+        &mut self,
+        r: &mut mimic_core::StateReader<'_>,
+    ) -> Result<(), mimic_core::StateError> {
         let (_, mut c) = r.chunk(*b"A2VD", 1)?;
         let mut n = self.clone();
         n.h = c.u16()?;
@@ -437,7 +440,7 @@ impl Video {
         n.burst = c.bool()?;
         let px = c.bytes()?;
         if n.h >= CYCLES_PER_LINE || n.line >= LINES || px.len() != n.pixels.len() {
-            return Err(emu_core::StateError::Invalid("apple2 video"));
+            return Err(mimic_core::StateError::Invalid("apple2 video"));
         }
         n.pixels = px.iter().map(|&p| p & 1).collect();
         *self = n;

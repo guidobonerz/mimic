@@ -1,4 +1,4 @@
-//! The NES's debug overlays (see `emu_core::overlay`): the PPU's
+//! The NES's debug overlays (see `mimic_core::overlay`): the PPU's
 //! `sprites` and `sprite0` (recorded by `chips-nintendo`) and `irq`, a
 //! mark at the line and dot where an interrupt request rose: the PPU's
 //! /NMI (vertical blank), the cartridge's /IRQ (MMC3 scanline counter) and
@@ -7,7 +7,7 @@
 //! state: never saved.
 
 use chips_nintendo::ppu::{BORDER, HEIGHT, WIDTH};
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 use chips_nintendo::overlay::Record;
 
@@ -28,7 +28,7 @@ impl Source {
         }
     }
 
-    fn color(self) -> emu_core::frame::Rgb8 {
+    fn color(self) -> mimic_core::frame::Rgb8 {
         match self {
             Source::Nmi => colors::MAGENTA,
             Source::Cart => colors::CYAN,
@@ -49,7 +49,7 @@ pub(crate) struct Overlays {
     pub fresh: bool,
 }
 
-/// The frame column of PPU dot `dot` ([`emu_core::BeamPos::hpos`]): dot
+/// The frame column of PPU dot `dot` ([`mimic_core::BeamPos::hpos`]): dot
 /// d (1–256) outputs picture pixel d − 1 at column `BORDER + d − 1`; dot 0
 /// (idle) is the left border's last column, and the dots after the
 /// picture (257–340: horizontal blank) clamp to the right edge.

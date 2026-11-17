@@ -11,7 +11,7 @@
 //! Source: Western Digital, "WD1770/1772/1773 Floppy Disk Controller" data
 //! sheet: command set, status bits, DRQ/INTRQ.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 const BYTE_CLOCKS: u32 = 256;
 const FIRST_BYTE_CLOCKS: u32 = 8000;

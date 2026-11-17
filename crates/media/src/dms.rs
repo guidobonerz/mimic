@@ -35,7 +35,7 @@
 //! Every track's checksum is verified, so a decoding error is reported
 //! rather than silently producing a wrong disk.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 use crate::adf;
 

@@ -5,7 +5,7 @@
 //! not here, because it belongs to the chips.
 
 use cpu_6502::IoPort;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 use chips_cbm::pla::{self, Bank, Lines, Map};
 

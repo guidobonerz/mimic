@@ -20,7 +20,7 @@
 //! [`Sn76489::tick`] is one input clock; the output level is the sum of
 //! the four channels (0–4 × 8191).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Levels for the attenuation values 0–15 (2 dB steps, 15 = off).
 const VOLUME: [i32; 16] = [

@@ -20,7 +20,7 @@
 //! The answer shifts into the VIA only once the Mac has set the shift
 //! register to receive.
 //!
-//! **Key numbers** ([`emu_core::input::MachineKey`]): the Macintosh key
+//! **Key numbers** ([`mimic_core::input::MachineKey`]): the Macintosh key
 //! codes as Inside Macintosh lists them (the ADB keyboard's codes): the
 //! main block $00–$3A (raw code = key code), keypad $41–$5C, arrows
 //! $7B left, $7C right, $7D down, $7E up. The SE's ADB keyboard uses the
@@ -29,7 +29,7 @@
 use std::collections::VecDeque;
 
 use chips_cbm::via::Via;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// CPU clocks (7.8336 MHz) for the Mac's command byte and for the
 /// keyboard's answer.

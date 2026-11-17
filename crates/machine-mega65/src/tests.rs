@@ -584,7 +584,7 @@ fn key(m: &mut Mega65, k: u16, down: bool) {
         at: m.now(),
         target: InputTarget::Keyboard,
         event: InputEvent::Key {
-            machine_key: emu_core::input::MachineKey(k),
+            machine_key: mimic_core::input::MachineKey(k),
             down,
         },
     });
@@ -678,16 +678,16 @@ fn separate_cursor_keys_virtual_keys_and_restore() {
 struct Stick(u32);
 
 impl PortDevice for Stick {
-    fn kind(&self) -> emu_core::port::PortKind {
-        emu_core::port::PortKind::CbmControl
+    fn kind(&self) -> mimic_core::port::PortKind {
+        mimic_core::port::PortKind::CbmControl
     }
-    fn read_lines(&self, _now: Cycle) -> emu_core::port::PortLines {
-        emu_core::port::PortLines {
+    fn read_lines(&self, _now: Cycle) -> mimic_core::port::PortLines {
+        mimic_core::port::PortLines {
             pulled_low: self.0,
             analog: [0, u16::MAX],
         }
     }
-    fn write_lines(&mut self, _lines: emu_core::port::PortLines, _now: Cycle) {}
+    fn write_lines(&mut self, _lines: mimic_core::port::PortLines, _now: Cycle) {}
     fn input(&mut self, _ev: &InputEvent) {}
     fn save_state(&self) -> Vec<u8> {
         Vec::new()
@@ -850,27 +850,27 @@ fn the_math_unit_multiplies_and_divides() {
 /// An image in memory (the frontends' backends live outside the machine).
 struct Mem(Vec<u8>);
 
-impl emu_core::media::MediaBackend for Mem {
+impl mimic_core::media::MediaBackend for Mem {
     fn len(&self) -> u64 {
         self.0.len() as u64
     }
-    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), emu_core::media::MediaError> {
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), mimic_core::media::MediaError> {
         let o = offset as usize;
         buf.copy_from_slice(&self.0[o..o + buf.len()]);
         Ok(())
     }
-    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), emu_core::media::MediaError> {
+    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), mimic_core::media::MediaError> {
         let o = offset as usize;
         self.0[o..o + data.len()].copy_from_slice(data);
         Ok(())
     }
-    fn commit(&mut self) -> Result<(), emu_core::media::MediaError> {
+    fn commit(&mut self) -> Result<(), mimic_core::media::MediaError> {
         Ok(())
     }
 }
 
 fn insert(m: &mut Mega65, slot: SlotId, name: &str, data: Vec<u8>) {
-    use emu_core::media::{Media, MediaKind};
+    use mimic_core::media::{Media, MediaKind};
     m.media_slot(slot)
         .unwrap()
         .insert(Media {
@@ -956,7 +956,7 @@ fn f011_drive_swap_missing_sectors_and_steps() {
     b.write(cpu(0xd081), 0x10);
     assert_eq!(b.read(cpu(0xd082)) & 1, 1);
     // A wrong image size is refused.
-    use emu_core::media::{Media, MediaKind};
+    use mimic_core::media::{Media, MediaKind};
     assert!(m
         .media_slot(SLOT_FLOPPY0)
         .unwrap()
@@ -1038,7 +1038,7 @@ fn gfx_views_show_the_screen_charset_sprites_and_palette() {
     m.board.vic.regs[0x27] = 2;
     let views = m.gfx_views();
     assert_eq!(views.len(), 4);
-    let opts = emu_core::GfxOptions::new();
+    let opts = mimic_core::GfxOptions::new();
     let before = m.save_state();
     for v in &views {
         let g = m.gfx_view(v.id, &opts).unwrap();
@@ -1058,7 +1058,7 @@ fn gfx_views_show_the_screen_charset_sprites_and_palette() {
         "character 1, row 0 from the character ROM"
     );
     let s = m
-        .gfx_view("sprites", &emu_core::GfxOptions::new().with("index", 0))
+        .gfx_view("sprites", &mimic_core::GfxOptions::new().with("index", 0))
         .unwrap();
     assert_eq!((s.width, s.height), (24, 21));
     assert_eq!(s.frame().rgb_at(0, 0), Some(rom_colour(2)));

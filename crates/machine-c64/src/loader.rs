@@ -6,8 +6,8 @@
 //! KERNAL has finished its cold start, and goes through the input queue, so
 //! runs stay deterministic.
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
 use media::{t64, Prg};
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot};
 
 /// Frames after power-on before a program is injected or typed.
 pub const BOOT_FRAMES: u64 = 150;

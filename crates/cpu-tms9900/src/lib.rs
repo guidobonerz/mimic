@@ -41,7 +41,7 @@ mod exec;
 #[cfg(test)]
 mod tests;
 
-use emu_core::{
+use mimic_core::{
     Bus, Cpu, CycleResult, Instr, Register, RegisterSet, Savestate, Size, StateError, StateReader,
     StateWriter,
 };

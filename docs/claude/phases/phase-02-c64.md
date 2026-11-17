@@ -12,5 +12,5 @@ Phase 2 done 2026-10-20: Lorenz 264/264 with ROMs, PAL + NTSC C64.
 
 ## Device, freezer and CRT work in this phase
 
-- Device work by phase (part of each gate): **Phase 2:** C64 control ports with digital joystick, keyboard matrix + keymaps, `emu-input` with gamepad and keyboard-as-joystick, 1541 slot with image + copy-on-write backend.
+- Device work by phase (part of each gate): **Phase 2:** C64 control ports with digital joystick, keyboard matrix + keymaps, `mimic-input` with gamepad and keyboard-as-joystick, 1541 slot with image + copy-on-write backend.
 - CRT work by phase: **Phase 2:** `video-crt` skeleton: aspect correction, integer scaling, simple scanline shader; C64 1702/1084S composite profiles without signal stage.

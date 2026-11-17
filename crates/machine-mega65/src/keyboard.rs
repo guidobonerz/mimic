@@ -41,7 +41,7 @@
 
 use std::collections::VecDeque;
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::keytable;
 

@@ -1,6 +1,6 @@
 use super::*;
-use emu_core::input::Dirs;
-use emu_core::media::{Media, MediaBackend, MediaError};
+use mimic_core::input::Dirs;
+use mimic_core::media::{Media, MediaBackend, MediaError};
 
 fn stub_with(options: &[(&str, &str)]) -> Vectrex {
     let mut config = MachineConfig::default();

@@ -46,8 +46,8 @@
 //! transmission); the pauses CAOS accepts and the key numbers are read
 //! from the user's CAOS ROMs (interrupt routines and key table KTAB).
 
-use emu_core::input::{typed_chars, TimedInput, TypeTiming};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::input::{typed_chars, TimedInput, TypeTiming};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const SHIFT: u16 = 64;
 pub const ENTER: u16 = 63;

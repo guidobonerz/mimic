@@ -2,7 +2,7 @@
 //! the M68000 Family Programmer's Reference Manual (no bus-trace suite
 //! exists for the 68020, see the crate doc).
 
-use emu_core::{Bus, Savestate, Size, StateReader, StateWriter};
+use mimic_core::{Bus, Savestate, Size, StateReader, StateWriter};
 
 use crate::{cacr, fc, sr, Access, Model, NoWait, Step, TimedBus68, M68000};
 
@@ -409,7 +409,7 @@ fn savestate_keeps_the_control_registers() {
     let mut other = M68000::with_model(Model::Mc68020);
     other.load(&mut StateReader::new(&data)).unwrap();
     assert_eq!((other.vbr, other.cacr), (0x1234, 1));
-    use emu_core::Cpu;
+    use mimic_core::Cpu;
     assert_eq!(other.regs(), cpu.regs());
 }
 
@@ -752,7 +752,7 @@ fn steps_on(cpu: &mut M68000, bus: &mut TBus, n: usize) {
 }
 
 fn set_cacr(cpu: &mut M68000, v: u32) {
-    use emu_core::Cpu;
+    use mimic_core::Cpu;
     cpu.set_reg("CACR", v);
 }
 

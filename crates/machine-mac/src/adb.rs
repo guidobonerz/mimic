@@ -34,7 +34,7 @@
 use std::collections::VecDeque;
 
 use chips_cbm::via::Via;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// CPU clocks a byte takes on the bus (about 1 ms).
 pub const BYTE_CLOCKS: u64 = 7_834;

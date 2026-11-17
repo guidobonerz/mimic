@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn reports_changes_against_the_previous_run() {
-        let tmp = std::env::temp_dir().join(format!("emu-trend-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("mimic-trend-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let first = record(
             &tmp,

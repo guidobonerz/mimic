@@ -3,8 +3,8 @@
 //! What the machine wrote into flash goes back to the media on flush and
 //! eject (same size: the chips of the image keep their layout).
 
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot};
 use media::crt::Crt;
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot};
 
 use crate::expansion::{self, ExpansionCart};
 

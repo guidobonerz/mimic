@@ -19,10 +19,10 @@
 //! [`InputEvent::MouseRel`] turns paddle 0 (dx) and its button,
 //! [`InputEvent::Digital`] buttons.
 
-use emu_core::input::{Dirs, InputEvent};
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::{Dirs, InputEvent};
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 /// Centre of a joystick axis.
 pub const CENTRE: u16 = 0x8000;
@@ -168,7 +168,7 @@ impl PortDevice for AppleJoystick {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     #[test]
     fn joystick_lines() {

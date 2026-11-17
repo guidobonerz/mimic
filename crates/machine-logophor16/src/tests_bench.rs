@@ -7,7 +7,7 @@
 //! console) is the same as with every cycle through `Logophor::cycle`.
 
 use super::*;
-use emu_core::input::{Dirs, MachineKey};
+use mimic_core::input::{Dirs, MachineKey};
 use std::time::Instant;
 
 /// FNV-1a, 64 bit.
@@ -286,7 +286,7 @@ done:   rti
 
 struct Bytes(Vec<u8>);
 
-impl emu_core::media::MediaBackend for Bytes {
+impl mimic_core::media::MediaBackend for Bytes {
     fn len(&self) -> u64 {
         self.0.len() as u64
     }
@@ -444,7 +444,7 @@ fn bench_savestate_in_panorama() {
     m.run_frame(&mut dbg);
     let b = m.save_state();
     let t = std::time::Instant::now();
-    let d = emu_core::rewind::diff(&b, &a);
+    let d = mimic_core::rewind::diff(&b, &a);
     eprintln!(
         "state {len} bytes, save {save:?}, diff {:?} ({} bytes), segments touched {}",
         t.elapsed(),

@@ -1,6 +1,6 @@
 use super::*;
 use devices_input::Joystick;
-use emu_core::input::{Dirs, InputEvent, MachineKey};
+use mimic_core::input::{Dirs, InputEvent, MachineKey};
 
 fn stub_with(variant: Variant16, model: &str, options: &[(&str, &str)]) -> TedMachine {
     let mut config = MachineConfig::default();
@@ -8,7 +8,7 @@ fn stub_with(variant: Variant16, model: &str, options: &[(&str, &str)]) -> TedMa
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    config.video_format = emu_core::frame::VideoStandard::parse(model);
+    config.video_format = mimic_core::frame::VideoStandard::parse(model);
     TedMachine::new(variant, &config).unwrap()
 }
 
@@ -37,13 +37,13 @@ fn key_event(at: u64, k: MachineKey, down: bool) -> TimedInput {
 fn stub_boots_and_takes_raster_interrupts() {
     let mut m = stub();
     let mut dbg = DebugHooks::new();
-    let idle = dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+    let idle = dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
         space: CPU_SPACE,
         addr: u32::from(stub::IDLE),
     });
     assert_eq!(m.run_frame(&mut dbg), StopReason::Breakpoint(idle));
     dbg.remove_breakpoint(idle);
-    let irq = dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+    let irq = dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
         space: CPU_SPACE,
         addr: u32::from(stub::IRQ),
     });

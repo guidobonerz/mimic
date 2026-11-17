@@ -3,14 +3,14 @@
 //! test builds through the Disk II boot PROM, and the colours a composite
 //! monitor makes of the hi-res dot patterns.
 //!
-//!     cargo test -p emu-tests --release --test apple2
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test apple2 -- --include-ignored --nocapture
+//!     cargo test -p mimic-tests --release --test apple2
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test apple2 -- --include-ignored --nocapture
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, MemSpaceId, Size, StopReason};
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, MemSpaceId, Size, StopReason};
 
 fn stub(model: &str) -> Box<dyn Machine> {
     let mut config = MachineConfig {
@@ -18,7 +18,9 @@ fn stub(model: &str) -> Box<dyn Machine> {
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());
-    emu_machines::registry().create("apple2", &config).unwrap()
+    mimic_machines::registry()
+        .create("apple2", &config)
+        .unwrap()
 }
 
 fn with_roms(model: &str, options: &[(&str, &str)], drop: &[&str]) -> Box<dyn Machine> {
@@ -35,7 +37,9 @@ fn with_roms(model: &str, options: &[(&str, &str)], drop: &[&str]) -> Box<dyn Ma
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    emu_machines::registry().create("apple2", &config).unwrap()
+    mimic_machines::registry()
+        .create("apple2", &config)
+        .unwrap()
 }
 
 fn run(m: &mut dyn Machine, frames: usize) {
@@ -46,7 +50,7 @@ fn run(m: &mut dyn Machine, frames: usize) {
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()
@@ -55,7 +59,7 @@ fn snapshot(m: &dyn Machine, name: &str) -> String {
 const MAIN: MemSpaceId = MemSpaceId(1);
 
 fn peek(m: &mut dyn Machine, space: MemSpaceId, addr: u32) -> u8 {
-    let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+    let t = m.debug_target(mimic_core::DeviceId("cpu")).unwrap();
     t.peek(space, addr, Size::Byte).unwrap() as u8
 }
 
@@ -123,8 +127,8 @@ fn hires_patterns_decode_to_the_four_colours() {
     run(m.as_mut(), 2);
     // Stop at an instruction boundary (the stub's keyboard loop).
     let mut dbg = DebugHooks::new();
-    dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
-        space: emu_core::MemSpaceId(0),
+    dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
+        space: mimic_core::MemSpaceId(0),
         addr: 0xf02c,
     });
     assert!(matches!(
@@ -135,7 +139,7 @@ fn hires_patterns_decode_to_the_four_colours() {
     let prog: [u8; 12] = [
         0xad, 0x50, 0xc0, 0xad, 0x52, 0xc0, 0xad, 0x57, 0xc0, 0x4c, 0x09, 0x03,
     ];
-    let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+    let t = m.debug_target(mimic_core::DeviceId("cpu")).unwrap();
     for (i, &b) in prog.iter().enumerate() {
         t.poke(MAIN, 0x300 + i as u32, Size::Byte, u32::from(b));
     }
@@ -152,7 +156,7 @@ fn hires_patterns_decode_to_the_four_colours() {
     t.set_reg("PC", 0x300);
     run(m.as_mut(), 3);
     let f = m.framebuffer();
-    assert_eq!(f.signal.output, emu_core::frame::OutputType::Composite);
+    assert_eq!(f.signal.output, mimic_core::frame::OutputType::Composite);
     let profile = video_crt::Profile::preset("ntsc-tv").unwrap();
     let rgb = video_crt::signal::process(&f, &profile).expect("composite decoding");
     snapshot(m.as_ref(), "apple2-hires-raw.png");
@@ -315,7 +319,7 @@ fn user_disk_boots() {
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     std::fs::write(
         out.join(format!("apple2-disk-{model}-tv.png")),
-        emu_preview::encode_png_crt(&f, &profile, 1),
+        mimic_preview::encode_png_crt(&f, &profile, 1),
     )
     .unwrap();
     eprintln!(
@@ -344,7 +348,7 @@ fn monitor_saves_and_loads_through_the_cassette() {
     type_text(m.as_mut(), "CALL -151\n");
     let pattern = |i: u32| (i * 7 + 3) as u8;
     {
-        let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+        let t = m.debug_target(mimic_core::DeviceId("cpu")).unwrap();
         for i in 0..256 {
             t.poke(MAIN, 0x800 + i, Size::Byte, u32::from(pattern(i)));
         }
@@ -364,7 +368,7 @@ fn monitor_saves_and_loads_through_the_cassette() {
     run(m.as_mut(), 900);
     m.media_slot(tape).unwrap().control("stop").unwrap();
     {
-        let t = m.debug_target(emu_core::DeviceId("cpu")).unwrap();
+        let t = m.debug_target(mimic_core::DeviceId("cpu")).unwrap();
         for i in 0..256 {
             t.poke(MAIN, 0x800 + i, Size::Byte, 0);
         }

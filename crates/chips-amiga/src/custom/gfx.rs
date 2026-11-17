@@ -1,4 +1,4 @@
-//! Graphics data views of Agnus/Alice and Denise/Lisa (see `emu_core::gfx`):
+//! Graphics data views of Agnus/Alice and Denise/Lisa (see `mimic_core::gfx`):
 //! the eight hardware sprites, the bitplanes and the colour registers,
 //! decoded from chip RAM and the chips' registers, side-effect free.
 //!
@@ -37,12 +37,12 @@
 //! DIWSTRT's; jumps and SKIPs are not followed), which is what most
 //! programs show at the top of their display.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     grey_palette, palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxPixels, GfxView,
     GfxViewInfo, OPT_ADDR, OPT_COUNT, OPT_INDEX,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::Custom;
 use crate::chipram::ChipRam;

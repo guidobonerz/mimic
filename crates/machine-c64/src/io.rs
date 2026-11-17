@@ -18,7 +18,7 @@ use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::sid::{Sid, SidModel};
 use chips_cbm::vic2::{self, Vic2, VicMemory};
 use devices_cartridge::ExpansionCart;
-use emu_core::{
+use mimic_core::{
     ClockDivider, Decimator, Savestate, StateError, StateReader, StateWriter, SAMPLE_RATE,
 };
 
@@ -57,7 +57,7 @@ pub struct Io {
     /// Serial bus levels after the last drive update.
     pub iec: IecLines,
     /// User port pins pulled low by the device there (`PortLines`, see
-    /// `emu_core::port::user_port`), read at the start of each cycle; not
+    /// `mimic_core::port::user_port`), read at the start of each cycle; not
     /// saved, the device drives them again in the next cycle.
     pub user_lines: u32,
     /// CIA2 PC2 pulsed in this cycle: the CPU accessed port B. Consumed
@@ -201,10 +201,10 @@ impl Io {
         let mut pa =
             0x3f | if self.iec.clk { 0 } else { 0x40 } | if self.iec.data { 0 } else { 0x80 };
         // A user port device may pull PA2 (pin M) low.
-        if self.user_lines & emu_core::port::user_port::PA2 != 0 {
+        if self.user_lines & mimic_core::port::user_port::PA2 != 0 {
             pa &= !0x04;
         }
-        (pa, emu_core::port::user_port::pb(self.user_lines))
+        (pa, mimic_core::port::user_port::pb(self.user_lines))
     }
 
     pub fn read(&mut self, mem: &Memory, addr: u16) -> u8 {

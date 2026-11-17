@@ -43,7 +43,7 @@
 //! estimates of this model, the same with the display and the sprites on
 //! or off; the real chip is faster while the screen is blanked.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use super::{mode, V9938};
 

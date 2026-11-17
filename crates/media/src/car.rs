@@ -5,7 +5,7 @@
 //! Source: the CAR format as published with Atari800 and Altirra's
 //! documentation (type numbers).
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Car {

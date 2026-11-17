@@ -41,8 +41,8 @@
 //! FAQ "Contended memory", "128K timings"; Sinclair ZX Spectrum Service
 //! Manual. The implementation is this project's own.
 
-use emu_core::frame::Rgb8;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Picture: 256 × 192 display plus 48 pixels of border on each side.
 pub const WIDTH: u32 = 352;

@@ -7,7 +7,7 @@
 //!
 //! Not yet modelled: the slow fall-off of undriven input bits (C64 bits 6/7).
 
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
 
 const STATE_TAG: [u8; 4] = *b"IOPT";
 const STATE_VERSION: u16 = 1;

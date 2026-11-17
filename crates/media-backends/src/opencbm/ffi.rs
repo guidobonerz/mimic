@@ -28,7 +28,7 @@ use std::ffi::{c_char, c_int, c_uchar, c_void, CString};
 
 use libloading::Library;
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 use super::CbmBus;
 

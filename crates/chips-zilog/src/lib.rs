@@ -27,7 +27,7 @@ pub mod pio;
 pub use ctc::Ctc;
 pub use pio::Pio;
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// The interrupt sources of one device, highest priority first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

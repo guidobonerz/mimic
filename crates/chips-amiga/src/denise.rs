@@ -103,8 +103,8 @@
 //! Colours are 24-bit RGB (`$RRGGBB`) throughout; a 12-bit register value
 //! becomes `$RRGGBB` with each nibble doubled ([`expand12`]).
 
-use emu_core::frame::Rgb8;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// First colour clock of a Denise line; earlier clocks finish the previous
 /// line's right border.

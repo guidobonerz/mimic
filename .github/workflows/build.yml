@@ -53,7 +53,7 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build mimic-desktop and mimic-headless
-        run: cargo build --release --locked --target ${{ matrix.target }} -p emu-desktop -p emu-headless
+        run: cargo build --release --locked --target ${{ matrix.target }} -p mimic-desktop -p mimic-headless
       - name: Version from the tag (v0.2.0 → 0.2.0)
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
@@ -65,7 +65,7 @@ jobs:
           mkdir "$dir"
           # The desktop frontend ships as plain "mimic".
           release="target/${{ matrix.target }}/release"
-          cp "$release/mimic-desktop${{ matrix.exe }}" "$dir/mimic${{ matrix.exe }}"
+          cp "$release/mimic${{ matrix.exe }}" "$dir/"
           cp "$release/mimic-headless${{ matrix.exe }}" "$dir/"
           cp README.md docs/mimic-user-guide-en.pdf docs/mimic-user-guide-de.pdf "$dir/"
       # Linux and Windows only: UPX leaves macOS binaries unsupported (macOS

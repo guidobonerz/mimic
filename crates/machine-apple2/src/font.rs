@@ -3,7 +3,7 @@
 //! 7×8 character cell (row 7 blank). Each row is five bits, bit 4 the
 //! leftmost dot.
 
-use emu_core::font::GLYPHS;
+use mimic_core::font::GLYPHS;
 
 /// Dots of `ascii` ($20–$7F; others show the checkerboard) in cell row
 /// `row` (0–7) as seven bits, bit 0 the leftmost dot (the order the video

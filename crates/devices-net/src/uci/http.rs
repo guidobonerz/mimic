@@ -4,7 +4,7 @@
 //!
 //! A request is a header handle (verb, URL, header fields) and an optional
 //! body handle (binary, JSON object, JSON array or URL-encoded); an
-//! exchange sends them through [`emu_core::host::NetBackend::http_request`]
+//! exchange sends them through [`mimic_core::host::NetBackend::http_request`]
 //! and either hands back new handles for the response's header and body
 //! (`$31`, JSON bodies parsed so they can be queried) or the raw body with
 //! the response header on the status channel (`$32`). 16 header and 16

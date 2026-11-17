@@ -32,8 +32,8 @@
 //! info and size bytes, CISTPL_FORMAT, CISTPL_GEOMETRY, CISTPL_VERS_1),
 //! from memory of it.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const COMMON: u32 = 0x60_0000;
 pub const COMMON_END: u32 = 0x9f_ffff;

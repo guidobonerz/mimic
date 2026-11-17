@@ -33,8 +33,8 @@
 //! Blink and cursor alternate every 32 fields (about 0.53 s) **[S]**. All
 //! registers are 0 after reset (display off, border palette entry 0).
 
-use emu_core::frame::Rgb8;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Picture size (SPEC.md 2): SVGA, modes 0-4.
 pub const WIDTH: u32 = 800;

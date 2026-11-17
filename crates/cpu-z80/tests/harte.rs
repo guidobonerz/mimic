@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 
 use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
-use emu_core::{Bus, Size};
+use mimic_core::{Bus, Size};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

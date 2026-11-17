@@ -4,8 +4,8 @@
 //!     cargo test -p cpu-45gs02 --release --test speed_probe -- --ignored --nocapture
 
 use cpu_45gs02::{Cpu45gs02, Speed};
-use emu_core::testing::FlatBus;
-use emu_core::Cpu;
+use mimic_core::testing::FlatBus;
+use mimic_core::Cpu;
 
 #[test]
 #[ignore = "timing probe"]

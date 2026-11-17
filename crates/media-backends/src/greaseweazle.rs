@@ -27,7 +27,7 @@
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 use crate::flux::disk::FluxSource;
 use crate::flux::Flux;

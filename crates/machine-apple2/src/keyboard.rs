@@ -15,7 +15,7 @@
 //! its keycaps show; the II+'s own key layout (Shift-2 for ", Shift-P for
 //! @) is not reproduced.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Machine key codes (see the module docs).
 pub mod keys {

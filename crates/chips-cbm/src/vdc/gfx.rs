@@ -1,4 +1,4 @@
-//! Graphics data views of the VDC 8563 (see `emu_core::gfx`): the
+//! Graphics data views of the VDC 8563 (see `mimic_core::gfx`): the
 //! character set and the 80-column screen in VDC RAM, and the 16 RGBI
 //! colours, decoded from the registers, side-effect free.
 //!
@@ -18,12 +18,12 @@
 //! shown steady and the cursor is left out: a view is a picture of memory,
 //! not of a frame.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR,
     OPT_COUNT,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::Vdc;
 
@@ -307,7 +307,7 @@ impl Vdc {
 mod tests {
     use super::*;
     use crate::vdc::palette;
-    use emu_core::frame::VideoStandard;
+    use mimic_core::frame::VideoStandard;
 
     fn view(v: &Vdc, id: &str, opts: &GfxOptions) -> GfxView {
         let pal = palette();

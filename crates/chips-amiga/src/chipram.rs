@@ -2,7 +2,7 @@
 //! 16-bit words; addresses wrap at its size (a 512 KB A500 sees its chip
 //! RAM mirrored up to $1FFFFF).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChipRam {

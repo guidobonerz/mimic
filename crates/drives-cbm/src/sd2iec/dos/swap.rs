@@ -11,8 +11,8 @@
 //! images and uses that. Such a found list ends with the next `CD`. The
 //! lines are taken relative to the directory the list is in.
 
-use emu_core::host::lock;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::host::lock;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use super::super::names;
 use super::{fs_error, DosResult, Sd2iecDos, NOT_FOUND, OK, SYNTAX};
@@ -82,7 +82,7 @@ pub(super) fn load(c: &mut StateReader<'_>) -> Result<Option<Swap>, StateError> 
         return Ok(None);
     }
     let dir = c.string()?;
-    emu_core::host::check_path(&dir).map_err(|_| StateError::Invalid("sd2iec swap list"))?;
+    mimic_core::host::check_path(&dir).map_err(|_| StateError::Invalid("sd2iec swap list"))?;
     let n = c.u32()? as usize;
     let mut lines = Vec::new();
     for _ in 0..n {

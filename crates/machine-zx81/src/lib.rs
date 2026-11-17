@@ -45,22 +45,22 @@ pub mod stub;
 
 use chips_sinclair::ula::{self, Ula};
 use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
-use emu_core::frame::{
+use memory::{Memory, ROM_SIZE};
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{
     DriveStatus, Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId,
 };
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use memory::{Memory, ROM_SIZE};
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The Z80's view: memory at 0–$FFFF, I/O ports at `IO_BASE + port`.
@@ -631,7 +631,7 @@ impl Machine for Zx81 {
         }
     }
 
-    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+    fn gfx_views(&self) -> Vec<mimic_core::GfxViewInfo> {
         self.views()
     }
 
@@ -643,13 +643,13 @@ impl Machine for Zx81 {
     }
 
     /// See [`gfx`]: the character set and the display file.
-    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+    fn gfx_view(&self, id: &str, opts: &mimic_core::GfxOptions) -> Option<mimic_core::GfxView> {
         self.view(id, opts)
     }
 
-    fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+    fn audio(&mut self, _out: &mut Vec<i16>) -> mimic_core::AudioFormat {
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -668,7 +668,7 @@ impl Machine for Zx81 {
         }]
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
@@ -712,8 +712,8 @@ impl Machine for Zx81 {
         self.sched.now()
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        vec![emu_core::ControlInfo::button(0, "POWER", false)]
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        vec![mimic_core::ControlInfo::button(0, "POWER", false)]
     }
 
     fn ports(&self) -> Vec<PortInfo> {

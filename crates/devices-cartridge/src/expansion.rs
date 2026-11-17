@@ -8,9 +8,9 @@
 //! Source: Commodore 64 Programmer's Reference Guide, appendix (expansion
 //! port); C64 memory map and PLA.
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
 use media::crt::{hw, Crt, CrtMachine};
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::banked::{Banked, Scheme};
 use crate::easyflash::EasyFlash;

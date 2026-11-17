@@ -48,8 +48,8 @@
 //! of the MEGA65 core (`@IO` lines of `viciv.vhdl`); the C65 system
 //! specification (VIC-III registers).
 
-use emu_core::frame::Rgb8;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// The I/O personality of `$D000`–`$DFFF`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

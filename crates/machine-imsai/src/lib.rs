@@ -102,18 +102,18 @@ use std::collections::VecDeque;
 
 use cardreader::CardReader;
 use cpu_8080::{status, StatusBus, I8080, IO_BASE};
-use emu_core::frame::{FrameRef, PixelData, ScreenId, ScreenInfo};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use fif::{Disk, Fif};
+use mimic_core::frame::{FrameRef, PixelData, ScreenId, ScreenInfo};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, ControlInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr,
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use fif::{Disk, Fif};
 use panel::{Hit, Lamps, Paddle, Panel};
 use pit::Pit;
 use terminal::Terminal;
@@ -836,7 +836,7 @@ impl MediaSlot for PunchSlot {
 /// A drive of the FIF as a media slot: the disk and what the drive shows.
 struct DiskSlot {
     disk: Disk,
-    shown: emu_core::media::DriveStatus,
+    shown: mimic_core::media::DriveStatus,
 }
 
 impl MediaSlot for DiskSlot {
@@ -860,8 +860,8 @@ impl MediaSlot for DiskSlot {
         self.disk.dirty()
     }
 
-    fn status(&self) -> emu_core::media::DriveStatus {
-        emu_core::media::DriveStatus {
+    fn status(&self) -> mimic_core::media::DriveStatus {
+        mimic_core::media::DriveStatus {
             error: self.disk.write_error(),
             ..self.shown
         }
@@ -1642,9 +1642,9 @@ impl Machine for Imsai {
         })
     }
 
-    fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+    fn audio(&mut self, _out: &mut Vec<i16>) -> mimic_core::AudioFormat {
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }

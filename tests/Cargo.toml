@@ -1,5 +1,5 @@
 [package]
-name = "emu-tests"
+name = "mimic-tests"
 description = "Integration tests, reference frames, test-suite runners"
 version.workspace = true
 edition.workspace = true
@@ -9,9 +9,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-emu-core.workspace = true
-emu-machines.workspace = true
-emu-cheats.workspace = true
+mimic-core.workspace = true
+mimic-machines.workspace = true
+mimic-cheats.workspace = true
 machine-c64.workspace = true
 machine-vic20.workspace = true
 machine-pet.workspace = true
@@ -37,9 +37,9 @@ machine-mega65.workspace = true
 [dev-dependencies]
 machine-logophor16.workspace = true
 asm-ada.workspace = true
-emu-debug.workspace = true
+mimic-debug.workspace = true
 devices-net.workspace = true
-emu-preview.workspace = true
+mimic-preview.workspace = true
 media.workspace = true
 drives-other.workspace = true
 devices-cartridge.workspace = true

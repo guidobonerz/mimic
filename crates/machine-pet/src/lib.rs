@@ -45,21 +45,21 @@ use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use devices_printer::CbmPrinter;
 use drives_cbm::{IeeeDrive, IeeeLines};
 use drives_other::Datasette;
-use emu_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::hooked::HookedBus;
-use emu_core::input::{InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::Cycle;
-use emu_core::{
+use media::tap::TapMachine;
+use mimic_core::frame::{FrameRef, PixelData, Rgb8, VideoStandard};
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::hooked::HookedBus;
+use mimic_core::input::{InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::Cycle;
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, Decimator, DeviceId, Instr,
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason, SAMPLE_RATE,
 };
-use media::tap::TapMachine;
 
 use keyboard::{Keyboard, Layout};
 use loader::{ProgramSlot, BASIC_START, BOOT_CYCLES};
@@ -779,10 +779,10 @@ impl Pet {
 
     fn apply_input(&mut self, ev: TimedInput) {
         match (ev.target, ev.event) {
-            (InputTarget::Keyboard, emu_core::input::InputEvent::Key { machine_key, down }) => {
+            (InputTarget::Keyboard, mimic_core::input::InputEvent::Key { machine_key, down }) => {
                 self.io.keyboard.set(machine_key, down);
             }
-            (InputTarget::Panel, emu_core::input::InputEvent::Control { id, value }) => {
+            (InputTarget::Panel, mimic_core::input::InputEvent::Control { id, value }) => {
                 self.control(id.0, value);
             }
             _ => {}
@@ -792,7 +792,7 @@ impl Pet {
     /// A console control from the panel (power).
     fn control(&mut self, id: u16, value: u8) {
         match id {
-            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
+            0 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Hard),
             _ => {}
         }
     }
@@ -941,9 +941,9 @@ impl Machine for Pet {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.samples);
-        emu_core::AudioFormat {
+        mimic_core::AudioFormat {
             sample_rate: SAMPLE_RATE,
             channels: 1,
         }
@@ -976,7 +976,7 @@ impl Machine for Pet {
         self.video.frame_row(line)
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
@@ -1057,9 +1057,22 @@ impl Machine for Pet {
         self.sched.now()
     }
 
+    /// Pasted text goes straight into the KERNAL's keyboard buffer
+    /// ([`chips_cbm::keybuf`]).
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        let buffer = if self.model.basic1() {
+            chips_cbm::keybuf::PET_BASIC1
+        } else {
+            chips_cbm::keybuf::PET
+        };
+        let layout = self.layout();
+        let has_key = |c| layout.key_for_char(c).is_some();
+        buffer.paste(&mut self.mem.ram, text, has_key)
+    }
+
     /// Text as key presses on this model's keyboard, with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             240_000,
@@ -1067,8 +1080,8 @@ impl Machine for Pet {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        use emu_core::ControlInfo;
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        use mimic_core::ControlInfo;
         vec![ControlInfo::button(0, "POWER", false)]
     }
 
@@ -1084,7 +1097,7 @@ impl Machine for Pet {
         None
     }
 
-    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+    fn attach_host(&mut self, host: mimic_core::host::HostServices) {
         if let Some(p) = &mut self.printer {
             p.printer.attach(&host);
         }

@@ -16,7 +16,7 @@
 //! KERNALs of the PET, VIC-20, C64 and C128; [`encode_ted`] in that of the
 //! C16 and Plus/4.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 const HEADER: usize = 20;
 

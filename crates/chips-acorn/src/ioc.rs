@@ -15,7 +15,7 @@
 //! Source: "Acorn RISC Machine Family Data Manual", VL86C410 chapter; Acorn
 //! A500 Series Service Manual, part 1 (the interrupt wiring).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const IRQ_A_FLYBACK: u8 = 0x08;
 pub const IRQ_A_POWER_ON: u8 = 0x10;

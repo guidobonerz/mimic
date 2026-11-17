@@ -1,6 +1,6 @@
 //! Disassembler with the Intel mnemonics.
 
-use emu_core::{Bus, Flow, Instr, Size};
+use mimic_core::{Bus, Flow, Instr, Size};
 
 const REG: [&str; 8] = ["B", "C", "D", "E", "H", "L", "M", "A"];
 const PAIR: [&str; 4] = ["B", "D", "H", "SP"];

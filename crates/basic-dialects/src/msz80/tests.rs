@@ -2,7 +2,7 @@
 //! at `$1D25` and an MSX with its loop at `$4601`, each with a keyword
 //! table of a few words (the tokens follow from the table).
 
-use emu_core::cpu::{Flow, Instr, RegisterSet};
+use mimic_core::cpu::{Flow, Instr, RegisterSet};
 
 use super::*;
 

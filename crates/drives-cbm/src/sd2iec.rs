@@ -4,7 +4,7 @@
 //! The device speaks the standard Commodore serial bus protocol at line
 //! level ([`IecProtocol`], shared with the virtual drive); its storage is
 //! the sandboxed folder the frontend lends the machine
-//! ([`emu_core::host::HostServices::files`], recorded in the host journal,
+//! ([`mimic_core::host::HostServices::files`], recorded in the host journal,
 //! so runs stay deterministic). Without a folder it answers
 //! `74,DRIVE NOT READY`. It runs no fast loader (no JiffyDOS either): LOAD,
 //! SAVE, OPEN/PRINT#/GET# and the command channel work at KERNAL speed.
@@ -48,9 +48,9 @@
 pub mod dos;
 pub mod names;
 
-use emu_core::host::SharedFiles;
-use emu_core::media::{DriveStatus, Media, MediaError, MediaSlot};
-use emu_core::{ClockDivider, Savestate, StateError, StateReader, StateWriter};
+use mimic_core::host::SharedFiles;
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaSlot};
+use mimic_core::{ClockDivider, Savestate, StateError, StateReader, StateWriter};
 
 pub use dos::{Sd2iecDos, SwapButton};
 

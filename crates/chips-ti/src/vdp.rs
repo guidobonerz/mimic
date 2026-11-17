@@ -58,8 +58,8 @@
 //! refused: the data manual's minimum time between VRAM accesses during
 //! the active display is not enforced.
 
-use emu_core::frame::Rgb8;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// VRAM size.
 pub const VRAM: usize = 0x4000;

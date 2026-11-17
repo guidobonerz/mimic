@@ -4,9 +4,9 @@
 
 use std::path::Path;
 
-use emu_core::machine::Machine;
-use emu_core::registry::MachineConfig;
-use emu_core::DebugHooks;
+use mimic_core::machine::Machine;
+use mimic_core::registry::MachineConfig;
+use mimic_core::DebugHooks;
 
 /// A 32 KB LoROM image with 2 KB battery RAM: `code` at $8000.
 fn image(code: &[u8]) -> Vec<u8> {
@@ -21,7 +21,7 @@ fn image(code: &[u8]) -> Vec<u8> {
 }
 
 fn run(cart: &Path, frames: u32) -> Box<dyn Machine> {
-    let mut m = emu_machines::registry()
+    let mut m = mimic_machines::registry()
         .create("snes", &MachineConfig::default())
         .unwrap();
     let media = media_backends::image::open_cart(cart).unwrap();

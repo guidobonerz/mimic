@@ -58,9 +58,9 @@
 //! The disk is media, not state: savestates keep the controller and the
 //! mechanics.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::macdisk::{self, Image, MacDisk};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// The disk's position advances by `rate` / `TURN_DEN` bit cells a CPU
 /// clock (7.8336 MHz), `rate` = cells a turn × rpm × 1000.
@@ -692,8 +692,8 @@ impl Iwm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
     use macdisk::{ImageKind, BLOCK, SIDE_BLOCKS, TAG};
+    use mimic_core::media::MediaBackend;
 
     struct Mem(Vec<u8>);
 

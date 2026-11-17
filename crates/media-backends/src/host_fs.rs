@@ -1,7 +1,7 @@
-//! A host folder as the sandbox of [`emu_core::host::FileHost`] (the
+//! A host folder as the sandbox of [`mimic_core::host::FileHost`] (the
 //! Ultimate command interface's DOS targets).
 //!
-//! Paths arrive canonical (`/a/b`, see [`emu_core::host::check_path`]) and
+//! Paths arrive canonical (`/a/b`, see [`mimic_core::host::check_path`]) and
 //! are checked again here: no `.`/`..`, no drive letters or backslashes,
 //! no Windows device names (`CON`, `NUL`, `COM1` …) and no names ending in
 //! a dot or space. Symbolic links (and Windows junctions) are never
@@ -15,7 +15,7 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use emu_core::host::{check_path, DirEntry, FileHandle, FileHost, FileStat, FsError, OpenMode};
+use mimic_core::host::{check_path, DirEntry, FileHandle, FileHost, FileStat, FsError, OpenMode};
 
 struct Open {
     file: File,

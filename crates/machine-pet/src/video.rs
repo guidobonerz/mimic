@@ -22,8 +22,8 @@
 //! to the machine would show it.
 
 use chips_cbm::crtc::{Crtc, CrtcOut};
-use emu_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
-use emu_core::{BeamPos, Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
+use mimic_core::{BeamPos, Savestate, StateError, StateReader, StateWriter};
 
 /// Margin around the display window in pixels (per 40-column character
 /// width: 2 character clocks) and lines.

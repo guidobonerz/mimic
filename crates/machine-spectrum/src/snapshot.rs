@@ -21,7 +21,7 @@
 //! formats.htm). The implementation is this project's own.
 
 use cpu_z80::Z80;
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 use crate::memory::BANK;
 

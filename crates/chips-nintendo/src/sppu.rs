@@ -34,8 +34,8 @@
 //! register document for offset-per-tile. The implementation is this
 //! project's own.
 
-use emu_core::frame::Rgb8;
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
 
 pub const WIDTH: usize = 512;
 pub const LINES: usize = 239;

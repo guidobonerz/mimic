@@ -3,7 +3,7 @@
 
 use super::*;
 use devices_input::{FourPlayer, FourPlayerKind};
-use emu_core::input::{Dirs, InputEvent, InputTarget, TimedInput};
+use mimic_core::input::{Dirs, InputEvent, InputTarget, TimedInput};
 
 const JOY3: PortId = PortId(3);
 const JOY4: PortId = PortId(4);

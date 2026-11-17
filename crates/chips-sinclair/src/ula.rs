@@ -33,7 +33,7 @@
 //! placed so the ROM's 32 × 24 display sits centred with equal borders.
 //! Colour 0 is the white background, 1 black.
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// T-states per line (3.25 MHz: 64 µs minus a bit — the ULA counts 207).
 pub const T_PER_LINE: u32 = 207;

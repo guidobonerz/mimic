@@ -85,23 +85,23 @@ mod tests;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use drives_other::apple_tape::AppleTape;
 use drives_other::disk2::Disk2;
-use emu_core::audio::Decimator;
-use emu_core::frame::{
+use keyboard::Keyboard;
+use mem::{Aux, Mem, Target};
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::hooked::HookedBus;
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::hooked::HookedBus;
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, CycleResult, DebugHooks, DebugTarget, DeviceId, Instr,
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use keyboard::Keyboard;
-use mem::{Aux, Mem, Target};
 use mockingboard::Mockingboard;
 use video::{Charset, Modes, Video};
 
@@ -749,7 +749,7 @@ impl Apple2 {
         } else {
             Variant::Nmos6502
         };
-        let audio = Decimator::new(CPU_HZ, emu_core::SAMPLE_RATE)
+        let audio = Decimator::new(CPU_HZ, mimic_core::SAMPLE_RATE)
             .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?;
         let mut m = Self {
             model,
@@ -1064,23 +1064,23 @@ impl Machine for Apple2 {
         }
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
         Some(self)
     }
 
-    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+    fn gfx_views(&self) -> Vec<mimic_core::GfxViewInfo> {
         self.views()
     }
 
     /// See [`gfx`]: character generator, text page, lo-res, hi-res, colours.
-    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+    fn gfx_view(&self, id: &str, opts: &mimic_core::GfxOptions) -> Option<mimic_core::GfxView> {
         self.view(id, opts)
     }
 
-    fn overlays(&self) -> Vec<emu_core::overlay::OverlayInfo> {
+    fn overlays(&self) -> Vec<mimic_core::overlay::OverlayInfo> {
         vec![overlay::ModesRecord::info()]
     }
 
@@ -1089,7 +1089,7 @@ impl Machine for Apple2 {
     }
 
     /// See [`overlay`]: the video mode per line.
-    fn overlay(&self, id: &str) -> Option<emu_core::overlay::Overlay> {
+    fn overlay(&self, id: &str) -> Option<mimic_core::overlay::Overlay> {
         match id {
             overlay::MODES_ID => self.modes_rec.overlay(self.board.video.line),
             _ => None,
@@ -1101,10 +1101,10 @@ impl Machine for Apple2 {
         (line < video::ACTIVE_LINES).then(|| u32::from(line) + video::BORDER_Y)
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.board.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: if self.board.mb.is_some() { 2 } else { 1 },
         }
     }
@@ -1260,9 +1260,33 @@ impl Machine for Apple2 {
         Cycle(self.board.cycle)
     }
 
+    /// Pasted text goes straight into the keyboard's latch (`$C000`), the
+    /// one character the encoder holds: the next goes in whenever the
+    /// program has cleared the strobe (`$C010`), one a call, without keys
+    /// going down and up. Letters go in upper case, as the II and II+ type
+    /// them and the IIe with CAPS LOCK down.
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        if self.board.kbd.latch & 0x80 != 0 {
+            return Some(0);
+        }
+        let code = |c: char| {
+            typing::keys_for_char(c)?;
+            Some(match c {
+                '\n' | '\r' => 0x0d,
+                c => c.to_ascii_uppercase() as u8,
+            })
+        };
+        let mut key = None;
+        let used = mimic_core::input::fill_key_buffer(text, 1, code, |_, b| key = Some(b));
+        if let Some(key) = key {
+            self.board.kbd.latch = key | 0x80;
+        }
+        Some(used)
+    }
+
     /// Text as key presses ([`typing`]), with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             typing::LINE_PAUSE,
@@ -1270,10 +1294,10 @@ impl Machine for Apple2 {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
         vec![
-            emu_core::ControlInfo::button(0, "POWER", false),
-            emu_core::ControlInfo::button(1, "RESET", false),
+            mimic_core::ControlInfo::button(0, "POWER", false),
+            mimic_core::ControlInfo::button(1, "RESET", false),
         ]
     }
 

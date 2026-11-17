@@ -37,7 +37,7 @@
 
 #![forbid(unsafe_code)]
 
-use emu_core::{Register, RegisterSet, StateError, StateReader, StateWriter};
+use mimic_core::{Register, RegisterSet, StateError, StateReader, StateWriter};
 
 pub const PROGRAM_WORDS: usize = 2048;
 pub const DATA_WORDS: usize = 1024;

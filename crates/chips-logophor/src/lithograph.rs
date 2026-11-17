@@ -12,7 +12,7 @@
 //! **[S]** Slot costs: a row costs, for each channel it uses, the 32-bit
 //! words its bytes touch; a line pixel costs two slots (read and write).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const LTHCON0: u16 = 0x0100;
 pub const LTHCON1: u16 = 0x0102;

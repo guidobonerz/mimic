@@ -10,10 +10,10 @@
 //! MSX's general-purpose port has trigger A on pin 6 and trigger B on pin 7
 //! (MSX Technical Data Book, "General purpose I/O interface").
 
-use emu_core::input::{Dirs, InputEvent};
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::{Dirs, InputEvent};
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 /// Pin bits in [`PortLines::pulled_low`] (bit n = pin n + 1).
 pub mod pin {
@@ -133,7 +133,7 @@ mod tests {
             pin::UP | pin::RIGHT | pin::FIRE
         );
         j.input(&InputEvent::Key {
-            machine_key: emu_core::input::MachineKey(0),
+            machine_key: mimic_core::input::MachineKey(0),
             down: true,
         });
         assert_ne!(j.read_lines(Cycle(0)).pulled_low, 0, "key events ignored");

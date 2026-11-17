@@ -13,7 +13,7 @@
 //! video RAM has seven bits: bit 6 is not stored, it reads back as the NOR
 //! of bits 5 and 7 (the "lowercase modification" adds the eighth chip).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const VRAM_BASE: u16 = 0x3c00;
 pub const VRAM_SIZE: usize = 0x400;

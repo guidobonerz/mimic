@@ -38,7 +38,7 @@
 //! not modelled. The Mac reads the SCC at $9FFFF8 + 2·n and writes at
 //! $BFFFF9 + 2·n: A1 picks channel A, A2 the data port.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 use std::collections::VecDeque;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

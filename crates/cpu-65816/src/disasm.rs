@@ -2,7 +2,7 @@
 //! length of immediate operands depends on the M and X flags, which the
 //! caller passes (normally the CPU's current ones).
 
-use emu_core::{Flow, Instr};
+use mimic_core::{Flow, Instr};
 
 use crate::Bus816;
 

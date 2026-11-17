@@ -15,9 +15,9 @@
 //! Keys ([`MediaSlot::control`]): "play", "stop", "rewind", "forward".
 //! Inserting a tape leaves it stopped at its start.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
 use media::cdt::{Tape, TZX_HZ};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub struct SpectrumTape {
     tape: Option<(Media, Tape)>,
@@ -208,7 +208,7 @@ impl Savestate for SpectrumTape {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
+    use mimic_core::media::MediaBackend;
 
     struct Mem(Vec<u8>);
 

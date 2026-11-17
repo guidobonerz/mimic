@@ -32,7 +32,7 @@
 //! Measured against a cycle-exact A500 configuration with the bus test of
 //! `tools/amiga_bustest.py` (`docs/sources.md`).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::chipram::ChipRam;
 

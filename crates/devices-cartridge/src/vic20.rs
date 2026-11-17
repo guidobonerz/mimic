@@ -4,8 +4,8 @@
 //! addresses) or a raw dump with its load address in the first two bytes
 //! (like a PRG). Source: VIC-20 Programmer's Reference Guide, memory map.
 
-use emu_core::media::MediaError;
 use media::crt::{Crt, CrtMachine};
+use mimic_core::media::MediaError;
 
 use crate::slot::CartSlot;
 

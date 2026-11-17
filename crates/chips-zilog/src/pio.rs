@@ -24,7 +24,7 @@
 //! Source: Zilog, "Z80 PIO Parallel I/O" product specification; Z80
 //! Family CPU Peripherals User Manual (UM0081).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::Chain;
 

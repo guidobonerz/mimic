@@ -67,7 +67,7 @@ jobs:
         shell: bash
         env:
           EMU_TESTDATA_DIR: ${{ github.workspace }}/testdata
-        run: cargo test -p emu-tests --release --test lorenz lorenz_suite_stub -- --ignored --nocapture
+        run: cargo test -p mimic-tests --release --test lorenz lorenz_suite_stub -- --ignored --nocapture
 
   wasm:
     runs-on: ubuntu-latest
@@ -79,7 +79,7 @@ jobs:
       # Native-only crates are excluded; everything else must stay wasm-compatible.
       - run: >
           cargo build --target wasm32-unknown-unknown --workspace
-          --exclude emu-desktop --exclude emu-headless --exclude emu-debug
+          --exclude mimic-desktop --exclude mimic-headless --exclude mimic-debug
       # The web frontend: every machine runs as WebAssembly (stub ROMs, Node).
       - name: Web frontend smoke test
         shell: bash

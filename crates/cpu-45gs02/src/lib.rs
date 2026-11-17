@@ -50,8 +50,8 @@ pub mod table;
 #[cfg(test)]
 mod tests;
 
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
-use emu_core::{Bus, Cpu, CycleResult, Instr, Register, RegisterSet, Size};
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Bus, Cpu, CycleResult, Instr, Register, RegisterSet, Size};
 
 /// Set on a bus address the MAP translation left alone: the low 16 bits are
 /// the CPU's address.

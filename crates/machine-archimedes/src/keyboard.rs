@@ -15,7 +15,7 @@
 
 use std::collections::VecDeque;
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const HRST: u8 = 0xff;
 pub const RAK1: u8 = 0xfe;

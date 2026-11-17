@@ -15,10 +15,10 @@
 //! paddle Y with [`Paddles::mouse_turns`] (the Atari 2600's paddle 0 is the
 //! one on pin 5).
 
-use emu_core::input::InputEvent;
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::InputEvent;
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 use crate::joystick::pin;
 
@@ -140,7 +140,7 @@ mod tests {
             value: 0x1234,
         });
         p.input(&InputEvent::Digital {
-            dirs: emu_core::input::Dirs::NONE,
+            dirs: mimic_core::input::Dirs::NONE,
             buttons: 2,
         });
         let l = p.read_lines(Cycle(0));

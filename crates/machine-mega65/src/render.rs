@@ -51,7 +51,7 @@
 //! 6567/6569 video controller (VIC-II) and its application in the
 //! Commodore 64" (the VIC-II modes, sprites, priorities, collisions).
 
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 
 use crate::board::{Board, CHIP_RAM};
 use crate::vic::{Personality, FIRST_PHYSICAL, LEFT, WIDTH};

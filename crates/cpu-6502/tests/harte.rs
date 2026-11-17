@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use cpu_6502::{Config, Cpu6502, Variant};
-use emu_core::{Bus, Cpu, CycleResult, Size};
+use mimic_core::{Bus, Cpu, CycleResult, Size};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

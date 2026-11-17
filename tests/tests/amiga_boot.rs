@@ -1,16 +1,16 @@
 //! Amiga 500 Kickstart boot with user-supplied ROMs (`EMU_ROM_DIR`, e.g.
 //! an `amiga/` subfolder with "Kickstart 1.3.rom" or kick13.rom).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test amiga_boot -- --ignored --nocapture
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test amiga_boot -- --ignored --nocapture
 //!
 //! `EMU_KICK=2.0` picks another Kickstart, `EMU_MODEL=1200` the board,
 //! `EMU_FRAMES=n` the trace length,
 //! `EMU_DISK`/`EMU_DISK1` ADFs for DF0:/DF1:, `EMU_OPTION=drives=2,…` machine
 //! options, `EMU_EVERY=n` the trace interval, `EMU_CHIPS=1` disk registers.
 
-use emu_core::machine::Machine;
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, Size, StopReason};
+use mimic_core::machine::Machine;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, Size, StopReason};
 
 fn boot(kick: &str) -> Box<dyn Machine> {
     // EMU_MODEL=1200: the board.
@@ -31,11 +31,11 @@ fn boot_model(kick: &str, model: Option<String>) -> Box<dyn Machine> {
             config.options.insert(k.into(), v.into());
         }
     }
-    emu_machines::registry().create("amiga", &config).unwrap()
+    mimic_machines::registry().create("amiga", &config).unwrap()
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()
@@ -54,7 +54,7 @@ fn trace_kickstart() {
     for (slot, var) in ["EMU_DISK", "EMU_DISK1"].iter().enumerate() {
         if let Ok(path) = std::env::var(var) {
             let media = media_backends::image::open(std::path::Path::new(&path)).expect("ADF");
-            m.media_slot(emu_core::media::SlotId(slot as u8))
+            m.media_slot(mimic_core::media::SlotId(slot as u8))
                 .expect("drive")
                 .insert(media)
                 .expect("insert");
@@ -191,14 +191,14 @@ fn kickstart_boots_a_bootblock_from_df0() {
             continue;
         }
         let mut m = boot(kick);
-        let media = emu_core::media::Media {
+        let media = mimic_core::media::Media {
             name: "boot.adf".into(),
-            kind: emu_core::media::MediaKind::Disk,
+            kind: mimic_core::media::MediaKind::Disk,
             backend: Box::new(media_backends::image::MemoryBackend {
                 data: bootable_adf(),
             }),
         };
-        m.media_slot(emu_core::media::SlotId(0))
+        m.media_slot(mimic_core::media::SlotId(0))
             .unwrap()
             .insert(media)
             .unwrap();
@@ -226,7 +226,7 @@ fn dump_bitplane() {
     let mut m = boot("1.3");
     let path = std::env::var("EMU_DISK").expect("EMU_DISK");
     let media = media_backends::image::open(std::path::Path::new(&path)).expect("ADF");
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -284,12 +284,12 @@ fn workbench_13_boots() {
     let path = std::env::var("EMU_WB_ADF").expect("EMU_WB_ADF not set");
     let data = std::fs::read(&path).expect("Workbench ADF");
     let mut m = boot("1.3");
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "workbench.adf".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend { data }),
     };
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -332,16 +332,16 @@ fn workbench_13_boots() {
 #[test]
 #[ignore = "needs a Kickstart 1.3 ROM in EMU_ROM_DIR and EMU_WB_ADF"]
 fn workbench_13_mouse_and_keyboard() {
-    use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
     let path = std::env::var("EMU_WB_ADF").expect("EMU_WB_ADF not set");
     let data = std::fs::read(&path).expect("Workbench ADF");
     let mut m = boot("1.3");
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "workbench.adf".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend { data }),
     };
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -376,7 +376,7 @@ fn workbench_13_mouse_and_keyboard() {
         let at = m.now();
         m.input(TimedInput {
             at,
-            target: InputTarget::Port(emu_core::port::PortId(0)),
+            target: InputTarget::Port(mimic_core::port::PortId(0)),
             event: InputEvent::MouseRel { dx, dy, buttons },
         });
     };
@@ -477,12 +477,12 @@ fn chip_bus_arbitration_matches_the_bus_test() {
     let mut m = boot("1.3");
     let mut adf = vec![0u8; media::adf::ADF_SIZE];
     adf[..1024].copy_from_slice(include_bytes!("../data/amiga_bustest.bootblock"));
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "bustest.adf".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend { data: adf }),
     };
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -535,12 +535,12 @@ fn blitter_bus_arbitration_matches_the_bus_test() {
     let mut m = boot("1.3");
     let mut adf = vec![0u8; media::adf::ADF_SIZE];
     adf[..1024].copy_from_slice(include_bytes!("../data/amiga_bustest2.bootblock"));
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "bustest2.adf".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend { data: adf }),
     };
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -613,12 +613,12 @@ fn copper_jump_bus_timing_matches_the_bus_test() {
     let mut m = boot("1.3");
     let mut adf = vec![0u8; media::adf::ADF_SIZE];
     adf[..1024].copy_from_slice(include_bytes!("../data/amiga_bustest3.bootblock"));
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "bustest3.adf".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend { data: adf }),
     };
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -680,12 +680,12 @@ fn cpu_blitter_copper_bus_timing_matches_the_bus_test() {
     let mut adf = vec![0u8; media::adf::ADF_SIZE];
     let disk = include_bytes!("../data/amiga_bustest4.bin");
     adf[..disk.len()].copy_from_slice(disk);
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "bustest4.adf".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend { data: adf }),
     };
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -769,7 +769,7 @@ fn expansions_and_models_boot() {
         for (k, v) in options {
             config.options.insert((*k).into(), (*v).into());
         }
-        let mut m = emu_machines::registry().create("amiga", &config).unwrap();
+        let mut m = mimic_machines::registry().create("amiga", &config).unwrap();
         let mut dbg = DebugHooks::new();
         for _ in 0..400 {
             assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
@@ -811,7 +811,7 @@ fn expansions_and_models_boot() {
 #[test]
 #[ignore = "needs EMU_ROM_DIR and EMU_WB_ADF"]
 fn mouse_latency() {
-    use emu_core::input::{InputEvent, InputTarget, TimedInput};
+    use mimic_core::input::{InputEvent, InputTarget, TimedInput};
     let path = std::env::var("EMU_WB_ADF").expect("EMU_WB_ADF not set");
     let data = std::fs::read(&path).expect("Workbench ADF");
     let kick = std::env::var("EMU_KICK").unwrap_or_else(|_| "1.3".into());
@@ -820,12 +820,12 @@ fn mouse_latency() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(3000);
     let mut m = boot(&kick);
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "workbench.adf".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend { data }),
     };
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -849,7 +849,7 @@ fn mouse_latency() {
         let at = m.now();
         m.input(TimedInput {
             at,
-            target: InputTarget::Port(emu_core::port::PortId(0)),
+            target: InputTarget::Port(mimic_core::port::PortId(0)),
             event: InputEvent::MouseRel {
                 dx,
                 dy: 0,
@@ -895,12 +895,12 @@ fn interrupt_probe_matches_the_bus_test() {
     let mut m = boot("1.3");
     let mut adf = vec![0u8; media::adf::ADF_SIZE];
     adf[..1024].copy_from_slice(include_bytes!("../data/amiga_bustest5.bootblock"));
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "bustest5.adf".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend { data: adf }),
     };
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -974,14 +974,14 @@ fn hardware_disk_runs_and_writes_its_results() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(6000);
     let mut m = boot(&kick);
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "hw.adf".into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend {
             data: std::fs::read(&path).expect("EMU_HWDISK"),
         }),
     };
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(media)
         .unwrap();
@@ -989,7 +989,7 @@ fn hardware_disk_runs_and_writes_its_results() {
     for _ in 0..frames {
         assert_eq!(m.run_frame(&mut dbg), StopReason::FrameDone);
     }
-    let slot = m.media_slot(emu_core::media::SlotId(0)).unwrap();
+    let slot = m.media_slot(mimic_core::media::SlotId(0)).unwrap();
     slot.flush().expect("flush");
     let mut media = slot.eject().expect("the disk");
     let mut data = vec![0u8; media.backend.len() as usize];
@@ -1058,12 +1058,12 @@ fn hardware_bus_tests(model: &str, kick: &str, cases: &[HardwareCase]) {
         let mut m = boot_model(kick, Some(model.into()));
         let mut adf = vec![0u8; media::adf::ADF_SIZE];
         adf[..case.disk.len()].copy_from_slice(case.disk);
-        let media = emu_core::media::Media {
+        let media = mimic_core::media::Media {
             name: "bustest.adf".into(),
-            kind: emu_core::media::MediaKind::Disk,
+            kind: mimic_core::media::MediaKind::Disk,
             backend: Box::new(media_backends::image::MemoryBackend { data: adf }),
         };
-        m.media_slot(emu_core::media::SlotId(0))
+        m.media_slot(mimic_core::media::SlotId(0))
             .unwrap()
             .insert(media)
             .unwrap();
@@ -1253,7 +1253,7 @@ fn a1200() -> Box<dyn Machine> {
         model: Some("1200".into()),
         ..MachineConfig::default()
     };
-    emu_machines::registry().create("amiga", &config).unwrap()
+    mimic_machines::registry().create("amiga", &config).unwrap()
 }
 
 /// The Workbench 3.1 screen: its grey with the white title bar and the
@@ -1290,10 +1290,10 @@ fn until_workbench31(m: &mut dyn Machine, frames: usize) -> Option<usize> {
     None
 }
 
-fn memory_media(name: &str, data: Vec<u8>) -> emu_core::media::Media {
-    emu_core::media::Media {
+fn memory_media(name: &str, data: Vec<u8>) -> mimic_core::media::Media {
+    mimic_core::media::Media {
         name: name.into(),
-        kind: emu_core::media::MediaKind::Disk,
+        kind: mimic_core::media::MediaKind::Disk,
         backend: Box::new(media_backends::image::MemoryBackend { data }),
     }
 }
@@ -1307,7 +1307,7 @@ fn workbench_31_boots_on_the_a1200() {
     let path = std::env::var("EMU_WB31_ADF").expect("EMU_WB31_ADF not set");
     let data = std::fs::read(&path).expect("Workbench ADF");
     let mut m = a1200();
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(memory_media("workbench31.adf", data))
         .unwrap();
@@ -1407,15 +1407,15 @@ fn a_pcmcia_sram_card_becomes_fast_ram() {
     let mut m = a1200();
     m.media_slot(machine_amiga::SLOT_PCMCIA)
         .expect("PCMCIA slot")
-        .insert(emu_core::media::Media {
+        .insert(mimic_core::media::Media {
             name: "sram.card".into(),
-            kind: emu_core::media::MediaKind::Cartridge,
+            kind: mimic_core::media::MediaKind::Cartridge,
             backend: Box::new(media_backends::image::MemoryBackend {
                 data: vec![0; 1 << 20],
             }),
         })
         .unwrap();
-    m.media_slot(emu_core::media::SlotId(0))
+    m.media_slot(mimic_core::media::SlotId(0))
         .unwrap()
         .insert(memory_media("workbench31.adf", adf))
         .unwrap();
@@ -1464,9 +1464,9 @@ fn workbench_31_boots_from_a_pcmcia_card() {
     let mut m = a1200();
     m.media_slot(machine_amiga::SLOT_PCMCIA)
         .expect("PCMCIA slot")
-        .insert(emu_core::media::Media {
+        .insert(mimic_core::media::Media {
             name: "workbench31.card".into(),
-            kind: emu_core::media::MediaKind::Cartridge,
+            kind: mimic_core::media::MediaKind::Cartridge,
             backend: Box::new(media_backends::image::MemoryBackend { data: adf }),
         })
         .unwrap();

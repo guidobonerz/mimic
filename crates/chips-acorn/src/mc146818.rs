@@ -24,7 +24,7 @@
 //! (register map, bus timing, update cycle); Acorn, *Advanced Reference
 //! Manual for the BBC Master Series* (the CMOS RAM, the slow data bus).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 const REG_A: usize = 10;
 const REG_B: usize = 11;

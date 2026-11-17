@@ -1,5 +1,5 @@
 //! Graphics data views (golden rule 1: the debugger sees them through
-//! [`emu_core::Machine::gfx_views`]):
+//! [`mimic_core::Machine::gfx_views`]):
 //!
 //! - `screen`: the display area (inside the borders) as the VIC-IV draws it
 //!   from memory now ([`crate::render::line`] for each of its lines),
@@ -15,9 +15,9 @@
 //! Views come from side-effect-free reads of [`Board`]: asking for one
 //! never changes the machine.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{palette_canvas, Canvas, GfxPixels, OPT_ADDR, OPT_INDEX, OPT_PALETTE};
-use emu_core::{GfxKind, GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{palette_canvas, Canvas, GfxPixels, OPT_ADDR, OPT_INDEX, OPT_PALETTE};
+use mimic_core::{GfxKind, GfxOptions, GfxView, GfxViewInfo};
 
 use crate::board::Board;
 use crate::render::{chardata, col8, line, ram};
@@ -76,7 +76,7 @@ pub fn view(b: &Board, id: &str, opts: &GfxOptions) -> Option<GfxView> {
 }
 
 type Decoded = (
-    emu_core::MemSpaceId,
+    mimic_core::MemSpaceId,
     u32,
     Vec<(&'static str, u32)>,
     u32,

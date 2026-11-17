@@ -3,8 +3,8 @@
 
 use cpu_6502::Cpu6502;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use emu_core::testing::FlatBus;
-use emu_core::Cpu;
+use mimic_core::testing::FlatBus;
+use mimic_core::Cpu;
 
 const CYCLES: u64 = 1_000_000;
 

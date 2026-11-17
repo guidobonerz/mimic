@@ -1,6 +1,6 @@
 use super::*;
-use emu_core::media::{MediaBackend, MediaKind};
 use media::D64;
+use mimic_core::media::{MediaBackend, MediaKind};
 use std::sync::{Arc, Mutex};
 
 /// A disk whose backend keeps what the drive writes back.

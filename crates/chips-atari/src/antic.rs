@@ -62,8 +62,8 @@
 //! the clock and addresses running but fetches nothing (Acid800
 //! `antic_linebuffering`).
 
-use emu_core::frame::VideoStandard;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::VideoStandard;
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const CYCLES_PER_LINE: u16 = 114;
 /// First and one-past-last line ANTIC can display.

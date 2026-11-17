@@ -65,7 +65,7 @@
 //! count at which its line's capacitor charged, ALLPOT shows the lines
 //! still counting (1).
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 const IRQ_BREAK: u8 = 0x80;
 const IRQ_KEY: u8 = 0x40;

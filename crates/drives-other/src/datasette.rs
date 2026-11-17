@@ -19,9 +19,9 @@
 //! "rewind" and "forward" (to the start or the end at once). Inserting a
 //! tape presses PLAY.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
 use media::tap::{Tap, TapMachine, Video};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 struct Cassette {
     media: Media,

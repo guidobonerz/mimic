@@ -1,13 +1,13 @@
 //! Cheat files applied to a real machine (sim6502): freezes and patches,
 //! all or nothing; imports end to end.
 
-use emu_cheats::{apply, from_hooks, CheatFile, CheatFreeze, CheatPatch};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, Size};
+use mimic_cheats::{apply, from_hooks, CheatFile, CheatFreeze, CheatPatch};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, Size};
 
 #[test]
 fn apply_freezes_and_patches_all_or_nothing() {
-    let mut m = emu_machines::registry()
+    let mut m = mimic_machines::registry()
         .create("sim6502", &MachineConfig::default())
         .unwrap();
     let space = m.memory_spaces()[0].name.to_string();
@@ -46,10 +46,11 @@ fn apply_freezes_and_patches_all_or_nothing() {
 
 #[test]
 fn an_imported_poke_list_freezes_the_value() {
-    let mut m = emu_machines::registry()
+    let mut m = mimic_machines::registry()
         .create("sim6502", &MachineConfig::default())
         .unwrap();
-    let file = emu_cheats::import::import("pokes", "10 POKE 4096,99: REM lives\n", "cpu").unwrap();
+    let file =
+        mimic_cheats::import::import("pokes", "10 POKE 4096,99: REM lives\n", "cpu").unwrap();
     let mut hooks = DebugHooks::new();
     apply(&file, m.as_mut(), &mut hooks).unwrap();
     let dev = m.devices()[0];

@@ -5,7 +5,7 @@
 //! base displacement, scaled index, base/index suppress, memory indirect
 //! pre-/post-indexed with an outer displacement).
 
-use emu_core::Size;
+use mimic_core::Size;
 
 use crate::{timing020, Res, TimedBus68, M68000};
 

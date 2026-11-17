@@ -1,12 +1,12 @@
 //! Decoders of BASIC interpreters' memory for the BASIC debugger
-//! ([`emu_core::basic`]): one module per dialect family. A decoder knows
+//! ([`mimic_core::basic`]): one module per dialect family. A decoder knows
 //! where its interpreter keeps the program, the variables and the stack
 //! and where it begins a statement; it reads the machine only through the
 //! main CPU's [`DebugTarget`] with side-effect-free reads (golden rule 2).
 //!
 //! A machine keeps the decoder as a field, refreshes it in
-//! [`emu_core::Machine::basic`] (the interpreter may have been banked out
-//! or replaced) and implements [`emu_core::basic::BasicDebug`] with
+//! [`mimic_core::Machine::basic`] (the interpreter may have been banked out
+//! or replaced) and implements [`mimic_core::basic::BasicDebug`] with
 //! [`impl_basic_debug!`].
 
 #![forbid(unsafe_code)]
@@ -18,10 +18,10 @@ pub mod locomotive;
 pub mod msz80;
 pub mod sinclair;
 
-use emu_core::basic::{
+use mimic_core::basic::{
     BasicError, BasicFrame, BasicInfo, BasicLine, BasicState, BasicStopPoint, BasicValue, BasicVar,
 };
-use emu_core::{DebugTarget, MemSpaceId};
+use mimic_core::{DebugTarget, MemSpaceId};
 
 /// A decoder for one interpreter; `host` is the machine's main CPU.
 pub trait Dialect {
@@ -52,7 +52,7 @@ pub trait Dialect {
     fn stop_points(&self, host: &dyn DebugTarget) -> Vec<BasicStopPoint>;
 }
 
-/// Implement [`emu_core::basic::BasicDebug`] for a machine that is its own
+/// Implement [`mimic_core::basic::BasicDebug`] for a machine that is its own
 /// main CPU [`DebugTarget`] and keeps a [`Dialect`] in field `$field`.
 /// A machine whose `DebugTarget` may stand for another processor names a
 /// method as third argument that returns the main CPU's (reads only; the
@@ -66,26 +66,26 @@ macro_rules! impl_basic_debug {
         &$me.$host()
     };
     ($machine:ty, $field:ident $(, $host:ident)?) => {
-        impl ::emu_core::basic::BasicDebug for $machine {
-            fn info(&self) -> ::emu_core::basic::BasicInfo {
+        impl ::mimic_core::basic::BasicDebug for $machine {
+            fn info(&self) -> ::mimic_core::basic::BasicInfo {
                 $crate::Dialect::info(&self.$field)
             }
 
-            fn state(&self) -> ::emu_core::basic::BasicState {
+            fn state(&self) -> ::mimic_core::basic::BasicState {
                 $crate::Dialect::state(
                     &self.$field,
                     $crate::impl_basic_debug!(@host self $(, $host)?),
                 )
             }
 
-            fn program(&self) -> Vec<::emu_core::basic::BasicLine> {
+            fn program(&self) -> Vec<::mimic_core::basic::BasicLine> {
                 $crate::Dialect::program(
                     &self.$field,
                     $crate::impl_basic_debug!(@host self $(, $host)?),
                 )
             }
 
-            fn variables(&self) -> Vec<::emu_core::basic::BasicVar> {
+            fn variables(&self) -> Vec<::mimic_core::basic::BasicVar> {
                 $crate::Dialect::variables(
                     &self.$field,
                     $crate::impl_basic_debug!(@host self $(, $host)?),
@@ -97,7 +97,7 @@ macro_rules! impl_basic_debug {
                 name: &str,
                 first: u32,
                 count: u32,
-            ) -> Result<Vec<::emu_core::basic::BasicValue>, ::emu_core::basic::BasicError> {
+            ) -> Result<Vec<::mimic_core::basic::BasicValue>, ::mimic_core::basic::BasicError> {
                 $crate::Dialect::array(
                     &self.$field,
                     $crate::impl_basic_debug!(@host self $(, $host)?),
@@ -107,7 +107,7 @@ macro_rules! impl_basic_debug {
                 )
             }
 
-            fn stack(&self) -> Vec<::emu_core::basic::BasicFrame> {
+            fn stack(&self) -> Vec<::mimic_core::basic::BasicFrame> {
                 $crate::Dialect::stack(
                     &self.$field,
                     $crate::impl_basic_debug!(@host self $(, $host)?),
@@ -118,8 +118,8 @@ macro_rules! impl_basic_debug {
                 &mut self,
                 name: &str,
                 index: Option<u32>,
-                value: &::emu_core::basic::BasicValue,
-            ) -> Result<(), ::emu_core::basic::BasicError> {
+                value: &::mimic_core::basic::BasicValue,
+            ) -> Result<(), ::mimic_core::basic::BasicError> {
                 let space = $crate::Dialect::space(&self.$field);
                 let writes = {
                     let me = &*self;
@@ -132,21 +132,21 @@ macro_rules! impl_basic_debug {
                     )?
                 };
                 for (addr, byte) in writes {
-                    let done = ::emu_core::DebugTarget::poke(
+                    let done = ::mimic_core::DebugTarget::poke(
                         self,
                         space,
                         addr,
-                        ::emu_core::Size::Byte,
+                        ::mimic_core::Size::Byte,
                         u32::from(byte),
                     );
                     if !done {
-                        return Err(::emu_core::basic::BasicError::Unsupported);
+                        return Err(::mimic_core::basic::BasicError::Unsupported);
                     }
                 }
                 Ok(())
             }
 
-            fn stop_points(&self) -> Vec<::emu_core::basic::BasicStopPoint> {
+            fn stop_points(&self) -> Vec<::mimic_core::basic::BasicStopPoint> {
                 $crate::Dialect::stop_points(
                     &self.$field,
                     $crate::impl_basic_debug!(@host self $(, $host)?),

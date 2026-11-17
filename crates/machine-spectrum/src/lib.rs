@@ -74,22 +74,22 @@ use chips_amstrad::ay::Ay;
 use chips_sinclair::spectrum::{self as ula, SpectrumUla, Timing};
 use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
 use drives_other::spectrum_tape::SpectrumTape;
-use emu_core::audio::Decimator;
-use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{
+use if1::Interface1;
+use memory::{Memory, BANK, ROM_SIZE};
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{
     DriveStatus, Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId,
 };
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use if1::Interface1;
-use memory::{Memory, BANK, ROM_SIZE};
 use snapshot::Snapshot;
 
 pub const CPU: DeviceId = DeviceId("cpu");
@@ -719,7 +719,7 @@ impl Spectrum {
             frame_start: 0,
             sound: Sound {
                 now: 0,
-                audio: Decimator::new(hz / 2, emu_core::SAMPLE_RATE)
+                audio: Decimator::new(hz / 2, mimic_core::SAMPLE_RATE)
                     .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
                 samples: Vec::new(),
             },
@@ -1127,11 +1127,11 @@ impl Machine for Spectrum {
         }
     }
 
-    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+    fn gfx_views(&self) -> Vec<mimic_core::GfxViewInfo> {
         self.views()
     }
 
-    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+    fn gfx_view(&self, id: &str, opts: &mimic_core::GfxOptions) -> Option<mimic_core::GfxView> {
         self.view(id, opts)
     }
 
@@ -1139,10 +1139,10 @@ impl Machine for Spectrum {
         self.ula.picture_row(u32::from(line))
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.sound.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -1166,7 +1166,7 @@ impl Machine for Spectrum {
         ]
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
@@ -1251,7 +1251,7 @@ impl Machine for Spectrum {
         // The 128 editor is busy for most of a second after ENTER (it
         // checks and stores the line and redraws the listing) and drops
         // the keys pressed meanwhile.
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             hz * 3 / 2,
@@ -1259,10 +1259,10 @@ impl Machine for Spectrum {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        let mut c = vec![emu_core::ControlInfo::button(0, "RESET", false)];
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        let mut c = vec![mimic_core::ControlInfo::button(0, "RESET", false)];
         if self.mem.mf_rom.is_some() {
-            c.push(emu_core::ControlInfo::button(1, "MULTIFACE", false));
+            c.push(mimic_core::ControlInfo::button(1, "MULTIFACE", false));
         }
         c
     }

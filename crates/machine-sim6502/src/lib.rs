@@ -16,13 +16,13 @@
 pub mod video;
 
 use cpu_6502::Cpu6502;
-use emu_core::input::TimedInput;
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::Cycle;
-use emu_core::{
+use mimic_core::input::TimedInput;
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::Cycle;
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, FrameRef, Instr,
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -306,9 +306,9 @@ impl Machine for Sim6502 {
         self.video.frame()
     }
 
-    fn audio(&mut self, _out: &mut Vec<i16>) -> emu_core::AudioFormat {
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+    fn audio(&mut self, _out: &mut Vec<i16>) -> mimic_core::AudioFormat {
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -318,17 +318,17 @@ impl Machine for Sim6502 {
         (line < video::VISIBLE_LINES).then_some(u32::from(line))
     }
 
-    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
-        vec![emu_core::GfxViewInfo {
+    fn gfx_views(&self) -> Vec<mimic_core::GfxViewInfo> {
+        vec![mimic_core::GfxViewInfo {
             id: "bitmap",
-            kind: emu_core::GfxKind::Bitmap,
+            kind: mimic_core::GfxKind::Bitmap,
             name: "raster chip bitmap".into(),
-            options: vec![emu_core::gfx::OPT_ADDR],
+            options: vec![mimic_core::gfx::OPT_ADDR],
         }]
     }
 
     /// The 320 × 200 bitmap at `$2000` (or `addr`) in the chip's colours.
-    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+    fn gfx_view(&self, id: &str, opts: &mimic_core::GfxOptions) -> Option<mimic_core::GfxView> {
         if id != "bitmap" {
             return None;
         }
@@ -337,14 +337,14 @@ impl Machine for Sim6502 {
         let raw: Vec<u8> = (0..8000)
             .map(|i| self.ram[(base as usize + i) & 0xffff])
             .collect();
-        let mut c = emu_core::gfx::Canvas::new(320, 200, bg);
+        let mut c = mimic_core::gfx::Canvas::new(320, 200, bg);
         for (i, &b) in raw.iter().enumerate() {
             let (x, y) = ((i % 40) as u32 * 8, (i / 40) as u32);
             c.row_1bpp(x, y, b, fg, Some(bg), 1);
         }
-        Some(emu_core::GfxView {
+        Some(mimic_core::GfxView {
             id: "bitmap",
-            kind: emu_core::GfxKind::Bitmap,
+            kind: mimic_core::GfxKind::Bitmap,
             name: "raster chip bitmap".into(),
             space: CPU_SPACE,
             addr: base,

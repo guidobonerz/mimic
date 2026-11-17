@@ -17,7 +17,7 @@ Part of the project's instructions for Claude Code; the core is `CLAUDE.md` at t
 - Atari: Acid800, Altirra test programs. CPC: CRTC/Z80 timing test programs. Amiga: the WinUAE comparison (`tools/amiga_winuae.py`) and the bus tests on the owner's A500/A1200 (`tools/amiga_hwdisk.py`); vAmigaTS was removed on 2026-11-08 at the owner's request (last OCS 94/537).
 - Regression: headless run → N frames → compare against reference images in `tests/reference/` (exact match; update only with an explanation in the commit).
 - Test-suite data and ROMs are fetched by `tools/fetch-testdata.sh`, never committed if license forbids.
-- Suite runners (Lorenz, Acid800, CPC Acid, VICE test programs, 68020 random tests) record a trend against their previous run with `emu_tests::trend` (`target/tmp/trend/<suite>.txt` + `-history.tsv`): passed before → now, newly passing, newly failing. Report it with every result.
+- Suite runners (Lorenz, Acid800, CPC Acid, VICE test programs, 68020 random tests) record a trend against their previous run with `mimic_tests::trend` (`target/tmp/trend/<suite>.txt` + `-history.tsv`): passed before → now, newly passing, newly failing. Report it with every result.
 - A new chip or machine feature is not done without tests and savestate round-trip coverage.
 - Freezer: tests for each `FreezeMode` (blocked write, frame reapply, banked addresses), cheat-search narrowing on a scripted test program, and freezer-cartridge freeze/restart round trips.
 - CRT: CPU-path output is compared against reference images per profile (tolerance-based, not exact); signal-stage tests use known test patterns (color bars, PAL color-mix pairs, Atari artifact stripes). GPU shaders are checked against the CPU path within a tolerance.

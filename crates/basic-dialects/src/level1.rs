@@ -55,11 +55,11 @@
 //! table (`$0249`) were read from the user's Level I ROM with this
 //! project's Z80 disassembler. No emulator source was used.
 
-use emu_core::basic::{
+use mimic_core::basic::{
     BasicError, BasicFrame, BasicGranularity, BasicInfo, BasicLine, BasicMode, BasicPos,
     BasicState, BasicStopPoint, BasicType, BasicValue, BasicVar,
 };
-use emu_core::{BreakpointKind, DebugTarget, MemSpaceId, Size};
+use mimic_core::{BreakpointKind, DebugTarget, MemSpaceId, Size};
 
 use crate::Dialect;
 

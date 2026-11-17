@@ -76,20 +76,20 @@ bullets(
 h2("Building")
 p("Always build the optimised (release) version; a debug build is far "
   "slower than real time.")
-code("""cargo build --release -p emu-desktop     # the desktop emulator
-cargo build --release -p emu-headless    # the command-line frontend""")
+code("""cargo build --release -p mimic-desktop     # the desktop emulator
+cargo build --release -p mimic-headless    # the command-line frontend""")
 p("""The programs end up in `target/release/` — on Windows
 `mimic-desktop.exe` and `mimic-headless.exe`. They need no other files and
 can be copied anywhere; ROMs live in `.mimic/roms` in your user folder or
 are found through `--rom-dir` or the environment variable `EMU_ROM_DIR`.""")
-note("""Older builds left files called `emu-desktop.exe` and `emu-headless.exe`
+note("""Older builds left files called `mimic-desktop.exe` and `mimic-headless.exe`
 in `target/release/`. They are outdated (they do not know the newer
 machines); use `mimic-desktop.exe` and `mimic-headless.exe`, or start
 through `cargo run` as shown below, which always builds the current
 version first.""", "Watch out")
 h2("Starting a machine")
 p("Two equivalent ways to start the desktop emulator:")
-code("""cargo run --release -p emu-desktop -- --machine c64
+code("""cargo run --release -p mimic-desktop -- --machine c64
 .\\target\\release\\mimic-desktop.exe --machine c64""")
 p("Everything after `--` goes to the emulator. Some first steps:")
 code("""# C64 with a disk, loaded and started automatically
@@ -248,9 +248,10 @@ settings); the browser frontend reads a profile file the page loads.""")
 
 h2("The status footer")
 p("""Ctrl+Space shows a status line below the picture. On the left is a
-**speed control**: click a step or drag the knob for 10 %, 25 %, 50 %,
-100 %, 150 %, 200 %, 400 % or 800 % of real time (sound is muted away from
-100 %). At 100 % the emulator runs as fast as it can, muted, while a disk
+**speed control**: click a step or drag the knob for -4x to 10x: 1x is
+real time, 2x to 10x that many times faster, -2x to -4x that many times
+slower, the last step **warp** as fast as the computer can (sound is muted
+away from 1x). At 1x the emulator runs as fast as it can, muted, while a disk
 drive works (LED or motor, e.g. during LOAD) and the machine has been silent
 with a still picture for a second, and only until the loaded program first
 plays sound or an animation (again after a disk change), so a demo that
@@ -1091,8 +1092,8 @@ note("Use `127.0.0.1`, not `localhost`: the servers listen on IPv4 only.")
 h1("Troubleshooting")
 table(["Problem", "Solution"], [
     ["`unknown machine 'vectrex'` (or another new machine)",
-     "You started an outdated `emu-desktop.exe`. Use `mimic-desktop.exe` or `cargo run "
-     "--release -p emu-desktop -- …`."],
+     "You started an outdated `mimic-desktop.exe`. Use `mimic-desktop.exe` or `cargo run "
+     "--release -p mimic-desktop -- …`."],
     ["`missing ROM '…'` or `no … ROM`",
      "Check the folder given with `--rom-dir` and the file's exact size; the message "
      "names the accepted file names."],
@@ -1320,8 +1321,8 @@ table(["Flag", "Meaning"], [
     ["`--deinterlace MODE`", "Interlaced pictures (Amiga LACE): `weave` (default, "
      "both fields interleaved) or `bob` (the current field's lines doubled); Ctrl+I "
      "switches at run time."],
-    ["`--speed PERCENT`", "Start at 10, 25, 50, 100, 150, 200, 400 or 800 % speed."],
-    ["`--warp-load on|off`", "At 100 %: run as fast as possible, muted, while a disk "
+    ["`--speed TIMES`", "Start at 1 to 10 times real time, or -2 to -4 for that many times slower, or `warp` as fast as the computer can."],
+    ["`--warp-load on|off`", "At 1x: run as fast as possible, muted, while a disk "
      "drive works and the machine has been silent with a still picture for a second, "
      "until the loaded program first shows sound or an animation (default `on`)."],
     ["`--rewind-mb N`", "Memory for rewinding with Ctrl+R (default 128; 0 = off)."],
@@ -1347,7 +1348,7 @@ table(["Key", "Effect"], [
     ["Ctrl+I", "Weave or bob deinterlacing (Amiga)."],
     ["PAUSE on the console panel", "Stop the whole machine and let it run again "
      "(lit while stopped, also by a debugger)."],
-    ["Ctrl+Space", "Show or hide the status footer: speed slider (10–800 %), snapshot "
+    ["Ctrl+Space", "Show or hide the status footer: speed slider (-4x to 10x, warp), snapshot "
      "button (`<machine>-NNN.png`), emulated time, pointer position, joystick "
      "directions, drive activity."],
     ["F12", "Switch between a machine's screens: C128 VIC/VDC, IMSAI front panel "
@@ -1403,7 +1404,7 @@ table(["Flag", "Meaning"], [
     ["`--list`", "List the machines with their models and exit."],
 ], [0.26, 0.74])
 h2("Real hardware (feature `real-hardware`)")
-p("""Built with `cargo build --release -p emu-headless --features real-hardware`
+p("""Built with `cargo build --release -p mimic-headless --features real-hardware`
 (or `greaseweazle` / `opencbm` alone) the program also talks to a
 Greaseweazle flux reader and, through OpenCBM (`opencbm.dll` in the PATH or
 `MIMIC_OPENCBM`), to a ZoomFloppy with a real Commodore drive.""")
@@ -1638,7 +1639,7 @@ table(["Key", "Meaning", "Command-line equivalent"], [
     ["`display.deinterlace`", "`weave` or `bob`.", "`--deinterlace`"],
     ["`input.joykeys`", "`cursor`, `numpad` or `off`.", "`--joykeys`"],
     ["`input.joyport`", "Port the keyboard joystick and gamepad play.", "`--joyport`"],
-    ["`input.speed`", "Percent of real time.", "`--speed`"],
+    ["`input.speed`", "Times real time, 1 to 10; -2 to -4: that many times slower; 0: warp.", "`--speed`"],
     ["`debug.server`", "`true` (127.0.0.1:6510) or an address.", "`--debug [ADDR]`"],
     ["`debug.preview`", "`true` (127.0.0.1:6580) or an address.", "`--preview [ADDR]`"],
     ["`debug.vice`", "`true` (127.0.0.1:6502) or an address.", "`--vice [ADDR]`"],

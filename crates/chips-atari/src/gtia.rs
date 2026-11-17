@@ -31,8 +31,8 @@
 //! are ORed — conflicting PRIOR settings give the mixed colours real
 //! machines show.
 
-use emu_core::frame::VideoStandard;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::VideoStandard;
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 use crate::antic::{Playfield, FIRST_LINE, VBLANK_LINE};
 
@@ -101,6 +101,9 @@ pub struct Gtia {
     /// Console keys held down: bit 0 START, 1 SELECT, 2 OPTION.
     pub console_keys: u8,
     pixels: Vec<u8>,
+    /// Warp: the picture is not looked at (not machine state; see
+    /// [`Gtia::set_warp`]).
+    warp: bool,
 }
 
 /// One colour clock of a player's width logic: whether the shift register
@@ -164,7 +167,17 @@ impl Gtia {
             p_out: 0,
             console_keys: 0,
             pixels: vec![0; (WIDTH * HEIGHT) as usize],
+            warp: false,
         }
+    }
+
+    /// Warp (`Machine::set_warp`): while it is on, a colour clock without
+    /// a player or missile on it is not drawn. One with an object is, as
+    /// always, for its collisions; the players' shifters run through
+    /// every clock. The machine leaves warp off while a light pen points
+    /// into the picture (the pen sees the pixels).
+    pub fn set_warp(&mut self, on: bool) {
+        self.warp = on;
     }
 
     pub fn standard(&self) -> VideoStandard {
@@ -359,6 +372,11 @@ impl Gtia {
             // Players run through horizontal blank too.
             self.step_players(cc);
             if !(FIRST_CC..LAST_CC).contains(&cc) {
+                continue;
+            }
+            // Warp: no object, so no collision, and the colour is not
+            // looked at (missiles show only with bits in GRAFM).
+            if self.warp && self.p_out == 0 && self.grafm == 0 {
                 continue;
             }
             let x = row + usize::from(cc - FIRST_CC) * 2;

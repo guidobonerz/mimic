@@ -61,8 +61,8 @@
 
 use std::collections::VecDeque;
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// The FIF's I/O port.
 pub const PORT: u8 = 0xfd;
@@ -634,7 +634,7 @@ pub(crate) mod tests {
         pub data: Vec<u8>,
     }
 
-    impl emu_core::media::MediaBackend for MemoryBackend {
+    impl mimic_core::media::MediaBackend for MemoryBackend {
         fn len(&self) -> u64 {
             self.data.len() as u64
         }

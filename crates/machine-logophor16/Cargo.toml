@@ -9,7 +9,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-emu-core.workspace = true
+mimic-core.workspace = true
 cpu-ada.workspace = true
 chips-logophor.workspace = true
 # the hub's gateway for net=host (src/hostnet.rs)

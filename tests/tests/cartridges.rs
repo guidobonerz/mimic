@@ -3,15 +3,15 @@
 //! switch banks like their hardware and, on EasyFlash, program the flash
 //! and write it back into the image.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test cartridges -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test cartridges -- --ignored
 
 use std::sync::{Arc, Mutex};
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size};
 use media::crt::{hw, Chip, Crt, CrtMachine};
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size};
 
 struct Shared(Arc<Mutex<Vec<u8>>>);
 
@@ -41,7 +41,7 @@ fn machine(id: &str) -> Box<dyn Machine> {
         ..MachineConfig::default()
     };
     config.options.insert("drive8".into(), "none".into());
-    emu_machines::registry().create(id, &config).unwrap()
+    mimic_machines::registry().create(id, &config).unwrap()
 }
 
 fn slot(m: &dyn Machine) -> SlotId {

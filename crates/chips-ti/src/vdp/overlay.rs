@@ -1,4 +1,4 @@
-//! Debug overlays of the TMS9918A/TMS9929A (see `emu_core::overlay`):
+//! Debug overlays of the TMS9918A/TMS9929A (see `mimic_core::overlay`):
 //! `sprites`, a box per sprite where the VDP drew it, line by line as it
 //! found the sprites (so a sprite moved during the frame shows where it
 //! really was), and `limit`, a band on each line where a fifth sprite was
@@ -10,7 +10,7 @@
 //! ([`Tms9918::overlay_end_frame`]) so a finished field can be shown while
 //! the next is drawn.
 
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 use super::Tms9918;
 

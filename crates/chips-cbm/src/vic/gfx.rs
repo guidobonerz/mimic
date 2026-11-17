@@ -1,4 +1,4 @@
-//! Graphics data views of the VIC 6560/6561 (see `emu_core::gfx`): the
+//! Graphics data views of the VIC 6560/6561 (see `mimic_core::gfx`): the
 //! character set, the screen matrix and the palette, decoded from the
 //! chip's registers and its view of memory, side-effect free.
 //!
@@ -16,12 +16,12 @@
 //! VIC's 14-bit view and the CPU's map ([`GfxContext::to_cpu`],
 //! [`GfxContext::from_cpu`]).
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo, OPT_ADDR,
     OPT_MULTICOLOR,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::{Vic, VicMemory};
 

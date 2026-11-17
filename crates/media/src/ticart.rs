@@ -6,7 +6,7 @@
 //! `TI99CART`, then for each part a letter (`C`, `D`, `G`), its length as
 //! a 32-bit big-endian number and the bytes.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 const MAGIC: &[u8; 8] = b"TI99CART";
 

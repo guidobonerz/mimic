@@ -14,7 +14,7 @@
 //! Source: Peter Schepers, "G64 (Raw GCR binary representation of 1541
 //! disks)", G64.TXT; the VICE manual's chapter on emulator file formats.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 /// The signature at the start of every G64.
 pub const SIGNATURE: &[u8; 8] = b"GCR-1541";

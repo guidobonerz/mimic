@@ -15,9 +15,9 @@
 //! "forward" (to the start or the end at once). Inserting a tape presses
 //! PLAY.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
 use media::cdt::{Segment, Tape};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// 28 MHz units per microsecond and per TZX T-state.
 const UNITS_PER_US: u64 = 28;
@@ -300,7 +300,7 @@ impl Savestate for CpcTape {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
+    use mimic_core::media::MediaBackend;
 
     struct Mem(Vec<u8>);
 

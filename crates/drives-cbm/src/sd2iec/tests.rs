@@ -2,8 +2,8 @@
 //! folder in memory.
 
 use super::*;
-use emu_core::host::{lock, HostServices, MemFileHost};
 use media::D64;
+use mimic_core::host::{lock, HostServices, MemFileHost};
 
 const DEV: u8 = 9;
 

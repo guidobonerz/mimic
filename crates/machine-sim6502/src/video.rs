@@ -23,10 +23,10 @@
 //! | `$D019` | R/W | IRQ status: bit 0 raster; write 1 to clear         |
 //! | `$D01A` | R/W | IRQ enable: bit 0 raster                           |
 
-use emu_core::frame::{
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::{BeamPos, Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{BeamPos, Savestate, StateError, StateReader, StateWriter};
 
 pub const LINES: u16 = 312;
 pub const CYCLES_PER_LINE: u16 = 63;

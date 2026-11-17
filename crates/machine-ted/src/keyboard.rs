@@ -20,8 +20,8 @@
 //! | 6         | CRSR ← | *   | ;    | CRSR → | ESC   | =   | +   | /     |
 //! | 7         | 1     | HOME | CTRL | 2      | SPACE | C=  | Q   | RUN/STOP |
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 const fn key(col: u16, row: u16) -> MachineKey {
     MachineKey(col * 8 + row)

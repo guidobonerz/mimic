@@ -10,9 +10,9 @@
 //! `$58`). Everything goes through the generic `Machine`/`DebugHooks`
 //! interface.
 
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
-use emu_core::registry::{MachineConfig, Registry};
-use emu_core::{BreakpointKind, DebugHooks, DeviceId, Machine, MemSpaceId, Size, StopReason};
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind};
+use mimic_core::registry::{MachineConfig, Registry};
+use mimic_core::{BreakpointKind, DebugHooks, DeviceId, Machine, MemSpaceId, Size, StopReason};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {

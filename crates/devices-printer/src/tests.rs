@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use emu_core::host::{DirEntry, FileHandle, FileHost, FileStat, FsError};
+use mimic_core::host::{DirEntry, FileHandle, FileHost, FileStat, FsError};
 
 use super::*;
 

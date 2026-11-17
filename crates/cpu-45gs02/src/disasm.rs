@@ -2,7 +2,7 @@
 //! instruction where `op` has a Q form, `EA op` with a `(zp),Z` opcode is
 //! flat (`[$nn],Z`), `42 42 EA op` both.
 
-use emu_core::{Flow, Instr};
+use mimic_core::{Flow, Instr};
 
 use crate::exec::{is_izz, Q_OPS};
 use crate::table::{Mn, OPS};

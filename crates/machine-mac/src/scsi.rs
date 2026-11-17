@@ -35,8 +35,8 @@
 //! default). Bus timing is not modelled: the target reacts as soon as
 //! the initiator's lines change.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const BLOCK: usize = 512;
 /// Targets on the bus (IDs 0–6).
@@ -786,7 +786,7 @@ fn cdb_len(op: u8) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
+    use mimic_core::media::MediaBackend;
 
     struct Mem(Vec<u8>);
 

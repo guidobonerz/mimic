@@ -30,7 +30,7 @@ fn stub() -> C64 {
 fn stub_model(model: &str) -> C64 {
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
-    config.video_format = emu_core::frame::VideoStandard::parse(model);
+    config.video_format = mimic_core::frame::VideoStandard::parse(model);
     C64::new(&config).unwrap()
 }
 
@@ -55,7 +55,7 @@ fn ddr_before_data_latch_banks_everything_out() {
 fn stub_kernal_boots_and_sets_up_the_port() {
     let mut m = stub();
     let mut dbg = DebugHooks::new();
-    let idle = dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+    let idle = dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
         space: CPU_SPACE,
         addr: u32::from(stub::IDLE),
     });
@@ -72,7 +72,7 @@ fn stub_kernal_boots_and_sets_up_the_port() {
     assert_eq!(m.io.cia1.ta.latch, 0x4025, "IOINIT: 1/60 s IRQ timer");
     // The CIA1 timer interrupt runs through the KERNAL entry and returns.
     dbg.remove_breakpoint(idle);
-    let entry = dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+    let entry = dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
         space: CPU_SPACE,
         addr: 0xea31,
     });
@@ -252,7 +252,7 @@ fn debugger_memory_spaces() {
 fn write_breakpoint_on_the_cpu_space() {
     let mut m = stub();
     let mut dbg = DebugHooks::new();
-    let bp = dbg.add_breakpoint(emu_core::BreakpointKind::Write {
+    let bp = dbg.add_breakpoint(mimic_core::BreakpointKind::Write {
         space: CPU_SPACE,
         addr: 1,
         len: 1,
@@ -368,22 +368,22 @@ fn tod_runs_at_mains_rate(model: &str, frames_per_second: u32) {
     assert!((19..=20).contains(&tenths(&m)), "{}", tenths(&m));
 }
 
-fn key_event(at: u64, k: emu_core::input::MachineKey, down: bool) -> TimedInput {
+fn key_event(at: u64, k: mimic_core::input::MachineKey, down: bool) -> TimedInput {
     TimedInput {
         at: Cycle(at),
         target: InputTarget::Keyboard,
-        event: emu_core::input::InputEvent::Key {
+        event: mimic_core::input::InputEvent::Key {
             machine_key: k,
             down,
         },
     }
 }
 
-fn joy_event(at: u64, port: PortId, dirs: emu_core::input::Dirs, buttons: u8) -> TimedInput {
+fn joy_event(at: u64, port: PortId, dirs: mimic_core::input::Dirs, buttons: u8) -> TimedInput {
     TimedInput {
         at: Cycle(at),
         target: InputTarget::Port(port),
-        event: emu_core::input::InputEvent::Digital { dirs, buttons },
+        event: mimic_core::input::InputEvent::Digital { dirs, buttons },
     }
 }
 
@@ -407,7 +407,7 @@ fn keyboard_matrix_through_cia1() {
 
 #[test]
 fn joystick_in_port_2_reads_on_port_a() {
-    use emu_core::input::Dirs;
+    use mimic_core::input::Dirs;
     let mut m = stub();
     m.run_frame(&mut DebugHooks::new());
     let now = m.now().0;
@@ -478,7 +478,7 @@ fn ports_accept_only_control_port_devices() {
 
 #[test]
 fn savestate_carries_queued_input_and_device_state() {
-    use emu_core::input::Dirs;
+    use mimic_core::input::Dirs;
     let mut a = stub();
     a.run_frame(&mut DebugHooks::new());
     let now = a.now().0;
@@ -554,7 +554,7 @@ fn ntsc_model_frame_timing_and_signal() {
     assert_eq!(m.now().0 - start, 263 * 65);
     let f = m.framebuffer();
     assert_eq!((f.width, f.height), (384, 235));
-    assert_eq!(f.signal.standard, emu_core::frame::VideoStandard::Ntsc);
+    assert_eq!(f.signal.standard, mimic_core::frame::VideoStandard::Ntsc);
     assert_eq!(f.signal.pixel_clock_hz, 8 * 1_022_727);
 
     let mut pal = stub();
@@ -564,7 +564,7 @@ fn ntsc_model_frame_timing_and_signal() {
     assert_eq!(pal.now().0 - start, 312 * 63);
     assert_eq!(
         pal.framebuffer().signal.standard,
-        emu_core::frame::VideoStandard::Pal
+        mimic_core::frame::VideoStandard::Pal
     );
 }
 
@@ -593,8 +593,8 @@ fn savestates_do_not_cross_video_standards() {
 fn irq_breakpoint_stops_at_the_first_handler_instruction() {
     let mut m = stub();
     let mut dbg = DebugHooks::new();
-    let bp = dbg.add_breakpoint(emu_core::BreakpointKind::Interrupt(
-        emu_core::InterruptKind::Irq,
+    let bp = dbg.add_breakpoint(mimic_core::BreakpointKind::Interrupt(
+        mimic_core::InterruptKind::Irq,
     ));
     let mut stop = StopReason::FrameDone;
     for _ in 0..10 {
@@ -635,7 +635,7 @@ fn soft_reset_keeps_ram_hard_reset_clears_it() {
 }
 
 /// Run a test program from $E000 for two frames with `freezes` armed.
-fn run_frozen(code: &[u8], freezes: Vec<emu_core::Freeze>) -> (C64, DebugHooks) {
+fn run_frozen(code: &[u8], freezes: Vec<mimic_core::Freeze>) -> (C64, DebugHooks) {
     let mut m = machine(code, &[0x40], &[0x40]);
     let mut dbg = DebugHooks::new();
     for f in freezes {
@@ -650,11 +650,11 @@ fn freeze(
     space: MemSpaceId,
     addr: u32,
     value: u32,
-    mode: emu_core::FreezeMode,
-) -> emu_core::Freeze {
-    emu_core::Freeze {
+    mode: mimic_core::FreezeMode,
+) -> mimic_core::Freeze {
+    mimic_core::Freeze {
         mode,
-        ..emu_core::Freeze::new(space, addr, Size::Byte, value)
+        ..mimic_core::Freeze::new(space, addr, Size::Byte, value)
     }
 }
 
@@ -670,7 +670,7 @@ fn freeze_block_writes_on_the_cpu_view() {
             CPU_SPACE,
             0x0400,
             0x42,
-            emu_core::FreezeMode::BlockWrites,
+            mimic_core::FreezeMode::BlockWrites,
         )],
     );
     assert_eq!(m.mem.ram[0x0400], 0, "write suppressed");
@@ -692,7 +692,7 @@ fn freeze_reapply_per_frame_on_physical_ram() {
             RAM_SPACE,
             0x0400,
             0x77,
-            emu_core::FreezeMode::ReapplyPerFrame,
+            mimic_core::FreezeMode::ReapplyPerFrame,
         )],
     );
     assert_eq!(
@@ -711,7 +711,7 @@ fn freeze_reapply_on_read_leaves_memory_alone() {
             CPU_SPACE,
             0x0400,
             0x99,
-            emu_core::FreezeMode::ReapplyOnRead,
+            mimic_core::FreezeMode::ReapplyOnRead,
         )],
     );
     assert_eq!(m.mem.ram[0x0400], 0, "memory unchanged");
@@ -735,7 +735,7 @@ fn freeze_on_ram_under_rom_respects_banking() {
             RAM_SPACE,
             0xa000,
             0x55,
-            emu_core::FreezeMode::BlockWrites,
+            mimic_core::FreezeMode::BlockWrites,
         )],
     );
     assert_eq!(
@@ -760,7 +760,7 @@ fn cia1_selects_whose_pots_the_sid_reads() {
 
 #[test]
 fn a_1351_in_port_1_shows_in_potx_poty() {
-    use emu_core::input::{InputEvent, InputTarget, TimedInput};
+    use mimic_core::input::{InputEvent, InputTarget, TimedInput};
     let mut m = stub();
     assert!(m
         .connect(CONTROL_PORT_1, Box::new(Mouse1351::new()))
@@ -808,13 +808,13 @@ fn overlays_record_bad_lines_and_sprites() {
     assert_eq!(bad.shapes.len(), 25);
     assert!(matches!(
         bad.shapes[0],
-        emu_core::overlay::Shape::Band { y, .. } if y == m.frame_row(0x33).unwrap() as i32
+        mimic_core::overlay::Shape::Band { y, .. } if y == m.frame_row(0x33).unwrap() as i32
     ));
     let sp = m.overlay("sprites").unwrap();
     let row = m.frame_row(81).unwrap() as i32;
     assert!(matches!(
         sp.shapes[..],
-        [emu_core::overlay::Shape::Rect { x: 108, y, w: 24, h: 21, .. }] if y == row
+        [mimic_core::overlay::Shape::Rect { x: 108, y, w: 24, h: 21, .. }] if y == row
     ));
     m.set_overlays(&[]);
     assert!(m.overlay("sprites").is_none());
@@ -824,7 +824,7 @@ fn pen_event(at: u64, x: u16, y: u16, trigger: bool) -> TimedInput {
     TimedInput {
         at: Cycle(at),
         target: InputTarget::Port(CONTROL_PORT_1),
-        event: emu_core::input::InputEvent::LightPen { x, y, trigger },
+        event: mimic_core::input::InputEvent::LightPen { x, y, trigger },
     }
 }
 
@@ -904,7 +904,7 @@ fn fire_on_control_port_1_latches_the_light_pen_registers() {
     m.input(joy_event(
         now,
         CONTROL_PORT_1,
-        emu_core::input::Dirs::NONE,
+        mimic_core::input::Dirs::NONE,
         1,
     ));
     // The VIC-II samples LP in the next cycle, and not before cycle 3 of
@@ -923,7 +923,7 @@ fn fire_on_control_port_1_latches_the_light_pen_registers() {
 #[test]
 fn proportional_mouse_and_keypad_read_as_joystick_lines() {
     use devices_input::{cbm_keypad::key, CbmKeypad, CbmKeypadKind, PropMouse, PropMouseKind};
-    use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
     let mut config = MachineConfig::default();
     config.options.insert("roms".into(), "stub".into());
     config.options.insert("port1".into(), "cx85".into());
@@ -1039,7 +1039,7 @@ fn sd2iec_options() {
 
 #[test]
 fn sd2iec_savestate_and_card_folder() {
-    use emu_core::host::{lock, MemFileHost};
+    use mimic_core::host::{lock, MemFileHost};
     let mut card = MemFileHost::new();
     card.insert("/SD2IEC/sub/x", vec![1]).unwrap();
     let host = HostServices::new(None, Some(Box::new(card)));
@@ -1063,4 +1063,51 @@ fn sd2iec_savestate_and_card_folder() {
     // A state without the SD2IEC loads and leaves it alone.
     let plain = stub().save_state();
     b.load_state(&plain).unwrap();
+}
+
+/// Warp leaves out the picture and nothing else: after it, a machine is in
+/// the state of one that drew every frame, and its next frame is the same.
+#[test]
+fn warp_changes_nothing_but_the_picture() {
+    let mut config = MachineConfig::default();
+    config.options.insert("roms".into(), "stub".into());
+    let mut plain = C64::new(&config).unwrap();
+    let mut warped = C64::new(&config).unwrap();
+    let mut dbg = DebugHooks::default();
+    for _ in 0..5 {
+        plain.run_frame(&mut dbg);
+        warped.run_frame(&mut dbg);
+    }
+    let shown = warped.io.vic.pixels().to_vec();
+    warped.set_warp(true);
+    for frame in 0..40 {
+        // Something on the screen that moves, and a sprite.
+        for m in [&mut plain, &mut warped] {
+            m.mem.ram[0x0400 + frame] = frame as u8;
+            m.io.vic.write(0x15, 0x01);
+            m.io.vic.write(0x00, 100 + frame as u8);
+            m.io.vic.write(0x01, 100);
+            m.io.vic.write(0x20, frame as u8 & 15);
+        }
+        plain.run_frame(&mut dbg);
+        warped.run_frame(&mut dbg);
+        assert_eq!(plain.now(), warped.now());
+    }
+    assert_eq!(
+        warped.io.vic.pixels().to_vec(),
+        shown,
+        "no frame drawn in warp"
+    );
+    assert_ne!(plain.io.vic.pixels().to_vec(), shown);
+    assert_eq!(plain.io.vic.peek(0x1e), warped.io.vic.peek(0x1e));
+    assert_eq!(plain.io.vic.peek(0x1f), warped.io.vic.peek(0x1f));
+    // Warp off: a whole frame later the two cannot be told apart.
+    warped.set_warp(false);
+    plain.run_frame(&mut dbg);
+    warped.run_frame(&mut dbg);
+    assert_eq!(
+        plain.io.vic.pixels().to_vec(),
+        warped.io.vic.pixels().to_vec()
+    );
+    assert!(plain.save_state() == warped.save_state(), "the same state");
 }

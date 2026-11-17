@@ -2,7 +2,7 @@
 //! its keyword table, a tokenised program, both variable areas and
 //! BASIC's stack.
 
-use emu_core::cpu::{Flow, Instr, RegisterSet};
+use mimic_core::cpu::{Flow, Instr, RegisterSet};
 
 use super::*;
 

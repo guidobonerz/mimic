@@ -1,7 +1,7 @@
 //! PRG: a Commodore program file, two-byte little-endian load address
 //! followed by the data.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Prg {

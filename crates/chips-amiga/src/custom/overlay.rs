@@ -1,4 +1,4 @@
-//! Debug overlays of the custom chips (see `emu_core::overlay`), drawn on
+//! Debug overlays of the custom chips (see `mimic_core::overlay`), drawn on
 //! [`Custom::frame`]:
 //!
 //! - `dma`: what used each DMA slot (colour clock) of each line — refresh,
@@ -21,8 +21,8 @@
 //! in the vertical blank, and the field so far once it has passed it
 //! (halted mid-frame).
 
-use emu_core::frame::Rgb8;
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::frame::Rgb8;
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 use super::{Custom, FIRST_CCK, PAL_LINE, WIDTH};
 use crate::regnames;
@@ -338,7 +338,7 @@ mod tests {
     use crate::chipram::ChipRam;
     use crate::custom::{Chipset, Standard};
     use crate::{dma, reg};
-    use emu_core::{Savestate, StateWriter};
+    use mimic_core::{Savestate, StateWriter};
 
     fn setup() -> (Custom, ChipRam) {
         let mut c = Custom::new(Standard::Pal, 0x7fffe, Chipset::OCS);
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(save(&c), save(&d), "the record is not state");
         // Loading a state keeps the recording switched on.
         let s = save(&d);
-        c.load(&mut emu_core::StateReader::new(&s)).unwrap();
+        c.load(&mut mimic_core::StateReader::new(&s)).unwrap();
         assert!(c.overlay("dma").is_some());
     }
 }

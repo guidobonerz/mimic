@@ -1,4 +1,4 @@
-//! Graphics data views of the TMS9918A/TMS9929A (see `emu_core::gfx`): the
+//! Graphics data views of the TMS9918A/TMS9929A (see `mimic_core::gfx`): the
 //! pattern generator table as tiles, the 32 sprites, the name table drawn
 //! in the current mode and the 16 colours, decoded from the registers and
 //! VRAM, side-effect free (VRAM is read directly, never through the data
@@ -15,12 +15,12 @@
 //! SIZE and MAG in R1, the early-clock bit, the $D0 terminator, the
 //! quadrant order of 16×16 patterns).
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxPixels, GfxView, GfxViewInfo,
     OPT_ADDR, OPT_COUNT, OPT_INDEX,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::{Tms9918, VdpModel, PALETTE};
 

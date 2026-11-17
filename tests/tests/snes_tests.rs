@@ -5,7 +5,7 @@
 //! addressing modes, emulation-mode wrapping, decimal mode) and `spctest`
 //! (the SPC700 instruction set).
 //!
-//!     EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test snes_tests -- --ignored --nocapture
+//!     EMU_TESTDATA_DIR=$PWD/testdata cargo test -p mimic-tests --release --test snes_tests -- --ignored --nocapture
 //!
 //! The ROMs write "Success" or "Fail" as text to video RAM word `$0032`
 //! (one character per word, the tile number its ASCII code) and the
@@ -16,10 +16,10 @@
 
 use std::path::PathBuf;
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, Size};
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, Size};
 
 struct Bytes(Vec<u8>);
 
@@ -53,7 +53,7 @@ fn machine(rom: &str) -> Box<dyn Machine> {
             config.roms = roms;
         }
     }
-    let mut m = emu_machines::registry().create("snes", &config).unwrap();
+    let mut m = mimic_machines::registry().create("snes", &config).unwrap();
     let bytes = std::fs::read(root().join(rom)).unwrap();
     m.media_slot(machine_snes::SLOT_CARTRIDGE)
         .unwrap()

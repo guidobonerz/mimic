@@ -1,5 +1,5 @@
 //! Text typed on the keyboard (pasted listings, scripted typing; see
-//! [`emu_core::Machine::typed_keys`]).
+//! [`mimic_core::Machine::typed_keys`]).
 //!
 //! Characters by the keys of the international MSX matrix (machine key =
 //! row × 8 + bit; MSX Technical Data Book, "Keyboard matrix"): row 0 the
@@ -10,7 +10,7 @@
 //! MSX BASIC takes its keywords in either case. A machine with another
 //! national layout (Japanese, German …) has some symbols elsewhere.
 
-use emu_core::input::{typed_chars, TimedInput, TypeTiming};
+use mimic_core::input::{typed_chars, TimedInput, TypeTiming};
 
 use crate::keys;
 

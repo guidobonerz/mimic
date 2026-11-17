@@ -6,8 +6,8 @@
 //! (C1 low) or 32 KB (C1 low and high). Source: Plus/4 Programmer's
 //! Reference Guide (memory banking, cartridge auto-start).
 
-use emu_core::media::MediaError;
 use media::crt::{Crt, CrtMachine};
+use mimic_core::media::MediaError;
 
 use crate::slot::CartSlot;
 

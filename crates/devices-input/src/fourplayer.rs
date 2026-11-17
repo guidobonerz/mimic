@@ -28,10 +28,10 @@
 //! Protovision adapter's fire lines are not switched by PB7 is this
 //! project's reading (the test program reads each with its own PB7 level).
 
-use emu_core::input::{Dirs, InputEvent};
-use emu_core::port::{user_port, PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::{Dirs, InputEvent};
+use mimic_core::port::{user_port, PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FourPlayerKind {

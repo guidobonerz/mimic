@@ -1,22 +1,24 @@
 //! Atari 800XL boot with real ROMs (user-supplied via `EMU_ROM_DIR`, e.g.
 //! an `atari/` subfolder with the XL OS and BASIC).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --test atari_boot -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --test atari_boot -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size, StopReason};
+use mimic_core::machine::Machine;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size, StopReason};
 
 fn boot(format: &str, basic: &str) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, "atari8").expect("ROMs"),
         model: Some("800xl".into()),
-        video_format: emu_core::frame::VideoStandard::parse(format),
+        video_format: mimic_core::frame::VideoStandard::parse(format),
         ..MachineConfig::default()
     };
     config.options.insert("basic".into(), basic.into());
-    let mut m = emu_machines::registry().create("atari8", &config).unwrap();
+    let mut m = mimic_machines::registry()
+        .create("atari8", &config)
+        .unwrap();
     // Without a disk drive the OS retries its boot command (STATUS to
     // D1:) until it gives up: about 250 fields.
     run(m.as_mut(), 350);
@@ -53,7 +55,7 @@ fn find(screen: &[u8], text: &str) -> Option<usize> {
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()
@@ -121,14 +123,16 @@ fn without_basic_the_xl_starts_the_self_test() {
 #[test]
 #[ignore = "needs Atari XL OS and BASIC ROMs in EMU_ROM_DIR"]
 fn basic_reads_stick_and_paddle_and_plays_sound() {
-    use emu_core::input::{Dirs, InputEvent, InputTarget, TimedInput};
+    use mimic_core::input::{Dirs, InputEvent, InputTarget, TimedInput};
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, "atari8").expect("ROMs"),
         ..MachineConfig::default()
     };
     config.options.insert("port2".into(), "paddles".into());
-    let mut m = emu_machines::registry().create("atari8", &config).unwrap();
+    let mut m = mimic_machines::registry()
+        .create("atari8", &config)
+        .unwrap();
     run(m.as_mut(), 350);
     let at = m.now();
     let ev = |target, event| TimedInput { at, target, event };
@@ -205,7 +209,9 @@ fn other_models_boot() {
             ..MachineConfig::default()
         };
         config.options.insert("basic".into(), basic.into());
-        let mut m = emu_machines::registry().create("atari8", &config).unwrap();
+        let mut m = mimic_machines::registry()
+            .create("atari8", &config)
+            .unwrap();
         run(m.as_mut(), 350);
         let s = screen(m.as_mut());
         let path = snapshot(m.as_ref(), &format!("atari-{model}-{basic}.png"));

@@ -2,16 +2,16 @@
 //! (user-supplied via `EMU_ROM_DIR`, e.g. a `spectrum/` subfolder with
 //! `Spec48.rom`, `spec128.rom`, `specp2.rom`).
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test spectrum_boot -- --ignored --nocapture
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test spectrum_boot -- --ignored --nocapture
 //!
 //! Phase 15 gate: every model boots to BASIC and prints, and a TAP file
 //! (built here: a BASIC program that runs itself) loads through the ROM's
 //! LOAD — with the loading trap and by playing the tape's pulses.
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size, StopReason};
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size, StopReason};
 use std::collections::BTreeMap;
 
 fn machine(model: &str, options: &[(&str, &str)]) -> (Box<dyn Machine>, Vec<u8>) {
@@ -35,7 +35,7 @@ fn machine(model: &str, options: &[(&str, &str)]) -> (Box<dyn Machine>, Vec<u8>)
             .collect::<BTreeMap<_, _>>(),
     };
     (
-        emu_machines::registry()
+        mimic_machines::registry()
             .create("spectrum", &config)
             .unwrap(),
         font,
@@ -96,12 +96,12 @@ fn type_all(m: &mut dyn Machine, text: &str) {
 
 /// Press keys (matrix codes) together for a few frames.
 fn press(m: &mut dyn Machine, keys: &[u16]) {
-    use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
     let at = m.now();
     for (down, delay) in [(true, 0u64), (false, 3_500_000 / 50 * 4)] {
         for &k in keys {
             m.input(TimedInput {
-                at: emu_core::Cycle(at.0 + delay),
+                at: mimic_core::Cycle(at.0 + delay),
                 target: InputTarget::Keyboard,
                 event: InputEvent::Key {
                     machine_key: MachineKey(k),
@@ -114,7 +114,7 @@ fn press(m: &mut dyn Machine, keys: &[u16]) {
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()
@@ -358,14 +358,14 @@ fn user_tap() {
 }
 
 fn panel(m: &mut dyn Machine, id: u16) {
-    use emu_core::input::{InputEvent, InputTarget, TimedInput};
+    use mimic_core::input::{InputEvent, InputTarget, TimedInput};
     let at = m.now();
     for (value, delay) in [(1, 0u64), (0, 3_500_000 / 50)] {
         m.input(TimedInput {
-            at: emu_core::Cycle(at.0 + delay),
+            at: mimic_core::Cycle(at.0 + delay),
             target: InputTarget::Panel,
             event: InputEvent::Control {
-                id: emu_core::ControlId(id),
+                id: mimic_core::ControlId(id),
                 value,
             },
         });

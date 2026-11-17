@@ -2,7 +2,7 @@
 //! `cargo test -p video-crt --release --test timing -- --ignored --nocapture`
 //! renders a C64-sized PAL frame (404 × 284) at scale 2 through each preset.
 
-use emu_core::frame::{
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
 use video_crt::{Crt, Profile};

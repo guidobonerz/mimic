@@ -18,7 +18,7 @@
 //! Disks (slots "drive 0" to "drive 3"): DMK, JV1 or JV3 images
 //! ([`media::dmk`]), written back to their files on flush and eject.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::fdc::{Chip, Drive, Fdc};
 

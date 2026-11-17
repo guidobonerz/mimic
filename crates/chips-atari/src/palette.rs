@@ -22,7 +22,7 @@
 //! is BT.601 YUV → RGB without gamma, like the VIC-II palette; the
 //! monitor's look (and NTSC artifact colours) belong to `video-crt`.
 
-use emu_core::frame::{LumaChroma, Rgb8, VideoStandard};
+use mimic_core::frame::{LumaChroma, Rgb8, VideoStandard};
 
 /// Chroma amplitude relative to full-scale luma.
 const SATURATION: f64 = 0.19;

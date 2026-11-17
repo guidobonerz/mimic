@@ -1,4 +1,4 @@
-//! The SNES's debug overlays (see `emu_core::overlay`): the S-PPU's
+//! The SNES's debug overlays (see `mimic_core::overlay`): the S-PPU's
 //! `sprites` (recorded by `chips-nintendo`), `hdma`, a band on each line
 //! whose registers HDMA rewrote (the transfer at the end of line v-1
 //! takes effect on line v, so the band sits on line v; labelled with the
@@ -15,7 +15,7 @@
 
 use chips_nintendo::overlay::Record;
 use chips_nintendo::sppu::overlay::row_of;
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Event {
@@ -40,7 +40,7 @@ pub(crate) struct Overlays {
 }
 
 /// The frame column of dot `dot` (H counter / 4) in the 512-column
-/// picture ([`emu_core::BeamPos::hpos`]): dot 22 is the first pixel
+/// picture ([`mimic_core::BeamPos::hpos`]): dot 22 is the first pixel
 /// (column 0), two columns a dot; dots before the picture clamp to 0,
 /// after it (horizontal blank) to 511.
 pub(crate) fn dot_column(dot: u16) -> u16 {

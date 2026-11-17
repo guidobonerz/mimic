@@ -10,10 +10,10 @@
 //! Source: Kempston Mouse Interface manual (ports and bits); World of
 //! Spectrum FAQ "Kempston mouse".
 
-use emu_core::input::InputEvent;
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::InputEvent;
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 /// Pin bits of the buttons in [`PortLines::pulled_low`].
 pub const LEFT: u32 = 1;

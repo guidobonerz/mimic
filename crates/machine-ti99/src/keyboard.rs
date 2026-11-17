@@ -21,7 +21,7 @@
 //! matrix and the CRU lines); Texas Instruments, *TI-99/4A Console and
 //! Peripheral Expansion System Technical Data* (1983).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// The ALPHA LOCK key.
 pub const ALPHA_LOCK: u16 = 48;

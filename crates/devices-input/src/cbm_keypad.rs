@@ -22,10 +22,10 @@
 //! and keypad pictures give the code of every key (read as behaviour; the
 //! keypads' own documentation was not available).
 
-use emu_core::input::InputEvent;
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::InputEvent;
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 use crate::joystick::pin;
 
@@ -242,7 +242,7 @@ impl PortDevice for CbmKeypad {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     /// The five bits as the C64 reads them from its port register.
     fn port(k: &CbmKeypad) -> u8 {

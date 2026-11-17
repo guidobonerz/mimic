@@ -44,15 +44,15 @@ use chips_logophor::telegraph::{self, Interrupts};
 use chips_logophor::telegraph_io::{Input, PortDev, Sd, SdCard, Timers};
 use chips_logophor::telegraph_net::{self, Net};
 use cpu_ada::Ada;
-use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
-use emu_core::hooked::HookedBus;
-use emu_core::host::{self as host, ConnState, HostServices, NetHandle, Recv, SocketKind};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::{ChipReg, DebugTarget};
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use mimic_core::hooked::HookedBus;
+use mimic_core::host::{self as host, ConnState, HostServices, NetHandle, Recv, SocketKind};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::{ChipReg, DebugTarget};
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, CycleResult, DebugHooks, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Size, StateError, StateReader,
     StateWriter, StopReason,
@@ -89,7 +89,7 @@ impl SparseCard {
     }
 }
 
-impl emu_core::media::MediaBackend for SparseCard {
+impl mimic_core::media::MediaBackend for SparseCard {
     fn len(&self) -> u64 {
         u64::from(self.sectors) * 512
     }
@@ -1584,10 +1584,10 @@ impl Machine for Logophor {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         self.board.calliope.take_output(out);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 2,
         }
     }

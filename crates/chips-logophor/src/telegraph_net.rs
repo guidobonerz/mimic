@@ -18,7 +18,7 @@
 //! it with flag bit 0. NETIRQ bits raise Telegraph's network interrupt
 //! when NETIRQEN enables them.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::lithograph::ChipRamMut;
 

@@ -28,8 +28,8 @@ mod disasm;
 mod exec;
 mod table;
 
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
-use emu_core::{Register, RegisterSet};
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Register, RegisterSet};
 
 pub use disasm::disassemble;
 

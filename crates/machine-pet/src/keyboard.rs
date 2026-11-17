@@ -13,8 +13,8 @@
 //! business keys `100 + row * 8 + column` (100–179). A machine ignores the
 //! codes of the other keyboard, so a host key can name both.
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 /// Which matrix the machine has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

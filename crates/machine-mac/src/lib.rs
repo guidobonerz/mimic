@@ -86,21 +86,21 @@ use chips_cbm::via::Via;
 use cpu_m68k::{Access, Step, TimedBus68, M68000};
 use devices_printer::Printer;
 use drives_other::iwm::Iwm;
-use emu_core::audio::Decimator;
-use emu_core::frame::{
+use keyboard::Keyboard;
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind, PortLines};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Size, StateError, StateReader,
     StateWriter, StopReason,
 };
-use keyboard::Keyboard;
 use rtc::Rtc;
 use scc::Scc;
 use scsi::Scsi;
@@ -874,7 +874,7 @@ impl Mac {
             c.loopback = loopback;
         }
         let printer = Printer::from_config(config, devices_printer::Model::ImageWriter);
-        let audio = Decimator::new(CPU_HZ / E_CLOCKS as u32, emu_core::SAMPLE_RATE)
+        let audio = Decimator::new(CPU_HZ / E_CLOCKS as u32, mimic_core::SAMPLE_RATE)
             .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?;
         let mut m = Self {
             printer,
@@ -1172,7 +1172,7 @@ impl Machine for Mac {
         }
     }
 
-    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+    fn gfx_views(&self) -> Vec<mimic_core::GfxViewInfo> {
         self.views()
     }
 
@@ -1183,14 +1183,14 @@ impl Machine for Mac {
     }
 
     /// See [`gfx`]: the 512 × 342 screen buffer.
-    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+    fn gfx_view(&self, id: &str, opts: &mimic_core::GfxOptions) -> Option<mimic_core::GfxView> {
         self.view(id, opts)
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.board.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -1323,11 +1323,11 @@ impl Machine for Mac {
         Cycle(self.board.clock)
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
         vec![
-            emu_core::ControlInfo::button(0, "POWER", false),
-            emu_core::ControlInfo::button(1, "RESET", false),
-            emu_core::ControlInfo::button(2, "INTERRUPT", self.board.nmi),
+            mimic_core::ControlInfo::button(0, "POWER", false),
+            mimic_core::ControlInfo::button(1, "RESET", false),
+            mimic_core::ControlInfo::button(2, "INTERRUPT", self.board.nmi),
         ]
     }
 
@@ -1369,7 +1369,7 @@ impl Machine for Mac {
         }
     }
 
-    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+    fn attach_host(&mut self, host: mimic_core::host::HostServices) {
         if let Some(p) = &mut self.printer {
             p.attach(&host);
         }

@@ -1,11 +1,11 @@
 //! IMSAI 8080 through the registry, the way a frontend drives it: the
 //! panel by control events, the terminal by a program in the program slot.
 
-use emu_core::frame::ScreenId;
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{ControlId, DebugHooks, Machine};
+use mimic_core::frame::ScreenId;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{ControlId, DebugHooks, Machine};
 
 struct Mem(Vec<u8>);
 
@@ -53,7 +53,7 @@ fn a_loaded_program_talks_to_the_terminal_screen() {
     ];
     let mut config = MachineConfig::default();
     config.options.insert("autostart".into(), "on".into());
-    let registry = emu_machines::registry();
+    let registry = mimic_machines::registry();
     let mut m = registry.create("imsai", &config).unwrap();
     let slot = m
         .media_slots()
@@ -301,7 +301,7 @@ fn cpm_commands(mpu: bool, disk: &str, deck: Option<&[u8]>, cmds: &[&str]) -> Op
         // Twice: the sequence works whatever state the 8251 is in.
         for _ in 0..2 {
             for v in [0x00, 0x00, 0x00, 0x40, 0xce, 0x37] {
-                t.poke(emu_core::MemSpaceId(0), io, emu_core::Size::Byte, v);
+                t.poke(mimic_core::MemSpaceId(0), io, mimic_core::Size::Byte, v);
             }
         }
         m.media_slot(machine_imsai::SLOT_CARDS)

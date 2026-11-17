@@ -32,9 +32,9 @@
 //! *TI-99/4A Console and Peripheral Expansion System Technical Data*,
 //! cassette interface).
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::wav::Wav;
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Input hysteresis (16-bit sample units).
 pub const THRESHOLD: i16 = 1024;
@@ -411,7 +411,7 @@ impl MediaSlot for AppleTape {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
+    use mimic_core::media::MediaBackend;
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]

@@ -1,8 +1,8 @@
-//! Shared pieces of the PPUs' debug overlays (see `emu_core::overlay`):
+//! Shared pieces of the PPUs' debug overlays (see `mimic_core::overlay`):
 //! sprite spans recorded line by line, merged into boxes, and the
 //! double-buffered per-frame record. Records are not machine state.
 
-use emu_core::overlay::{colors, Shape};
+use mimic_core::overlay::{colors, Shape};
 
 /// One sprite on one line: sprite number, raster line, first frame column
 /// and width in frame pixels.

@@ -23,7 +23,7 @@
 
 use chips_cbm::ted::TedMemory;
 use devices_cartridge::ted::TedCart;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const ROM_SIZE: usize = 0x4000;
 

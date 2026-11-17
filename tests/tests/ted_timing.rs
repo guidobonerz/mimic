@@ -3,13 +3,13 @@
 //! (`tests/data/ted-<name>.ref`, read back from its screenshot; see the
 //! tool's documentation). The programs keep their results at `$2000`.
 //!
-//!     EMU_ROM_DIR=$PWD/roms cargo test -p emu-tests --release --test ted_timing -- --ignored --nocapture
+//!     EMU_ROM_DIR=$PWD/roms cargo test -p mimic-tests --release --test ted_timing -- --ignored --nocapture
 //!
 //! `EMU_TED_SHOW=1` prints both side by side.
 
-use emu_core::media::MediaKind;
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size};
+use mimic_core::media::MediaKind;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size};
 
 /// A file of `tests/data`, or of `EMU_TED_DATA` when set (programs and
 /// screenshots made with the tool elsewhere).
@@ -28,7 +28,7 @@ fn measure(name: &str, len: usize) -> Vec<u8> {
         roms: media_backends::roms::load(&dir, "plus4").expect("ROMs"),
         ..MachineConfig::default()
     };
-    let mut m = emu_machines::registry().create("plus4", &config).unwrap();
+    let mut m = mimic_machines::registry().create("plus4", &config).unwrap();
     let prg = data(&format!("ted-{name}.prg"));
     let media =
         media_backends::image::from_bytes(&format!("ted-{name}.prg"), prg, MediaKind::Program);
@@ -213,7 +213,7 @@ fn irq_every_line_matches_xplus4() {
 #[test]
 #[ignore = "development aid; needs Plus/4 ROMs in EMU_ROM_DIR"]
 fn trace_irq_entry() {
-    use emu_core::beam::{TraceConfig, TraceEvent, TraceRange};
+    use mimic_core::beam::{TraceConfig, TraceEvent, TraceRange};
     let want: u32 = std::env::var("EMU_TED_IRQ_LINE")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -223,7 +223,7 @@ fn trace_irq_entry() {
         roms: media_backends::roms::load(&dir, "plus4").expect("ROMs"),
         ..MachineConfig::default()
     };
-    let mut m = emu_machines::registry().create("plus4", &config).unwrap();
+    let mut m = mimic_machines::registry().create("plus4", &config).unwrap();
     let prg = data("ted-irqall.prg");
     let media = media_backends::image::from_bytes("ted-irqall.prg", prg, MediaKind::Program);
     let slot = m
@@ -235,7 +235,7 @@ fn trace_irq_entry() {
     m.media_slot(slot).unwrap().insert(media).unwrap();
     let space = machine_ted::CPU_SPACE;
     let mut dbg = DebugHooks::new();
-    let bp = dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+    let bp = dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
         space,
         addr: 0x1167,
     });
@@ -251,7 +251,7 @@ fn trace_irq_entry() {
         capacity: 200,
     });
     for _ in 0..3000 {
-        if m.run_frame(&mut dbg) == emu_core::StopReason::Breakpoint(bp) {
+        if m.run_frame(&mut dbg) == mimic_core::StopReason::Breakpoint(bp) {
             let cpu = m.debug_target(DeviceId("cpu")).unwrap();
             let line = cpu.peek(space, 0xf2, Size::Byte).unwrap()
                 | cpu.peek(space, 0xf3, Size::Byte).unwrap() << 8;
@@ -288,7 +288,7 @@ fn compare_picture(name: &str) -> usize {
         roms: media_backends::roms::load(&dir, "plus4").expect("ROMs"),
         ..MachineConfig::default()
     };
-    let mut m = emu_machines::registry().create("plus4", &config).unwrap();
+    let mut m = mimic_machines::registry().create("plus4", &config).unwrap();
     let prg = data(&format!("ted-{name}.prg"));
     let media =
         media_backends::image::from_bytes(&format!("ted-{name}.prg"), prg, MediaKind::Program);
@@ -311,7 +311,7 @@ fn compare_picture(name: &str) -> usize {
     let bpp = info.color_type.samples();
     let (rw, rh) = (info.width as i64, info.height as i64);
     let frame = m.framebuffer();
-    let emu_core::frame::PixelData::Indexed { pixels, .. } = frame.pixels else {
+    let mimic_core::frame::PixelData::Indexed { pixels, .. } = frame.pixels else {
         panic!("TED frame not indexed");
     };
     let (ow, oh) = (i64::from(frame.width), i64::from(frame.height));
@@ -336,7 +336,7 @@ fn compare_picture(name: &str) -> usize {
     if show() {
         let out =
             std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("ted-{name}-mimic.png"));
-        std::fs::write(&out, emu_preview::encode_png(&frame)).unwrap();
+        std::fs::write(&out, mimic_preview::encode_png(&frame)).unwrap();
         println!(
             "{name}: first difference at {first:?} (frame); picture {}",
             out.display()
@@ -390,13 +390,13 @@ fn fetch_pipeline_pictures_match_xplus4() {
 #[test]
 #[ignore = "development aid; needs Plus/4 ROMs in EMU_ROM_DIR"]
 fn trace_split_writes() {
-    use emu_core::beam::{TraceConfig, TraceEvent, TraceRange};
+    use mimic_core::beam::{TraceConfig, TraceEvent, TraceRange};
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
     let config = MachineConfig {
         roms: media_backends::roms::load(&dir, "plus4").expect("ROMs"),
         ..MachineConfig::default()
     };
-    let mut m = emu_machines::registry().create("plus4", &config).unwrap();
+    let mut m = mimic_machines::registry().create("plus4", &config).unwrap();
     let prg = data("ted-split.prg");
     let media = media_backends::image::from_bytes("ted-split.prg", prg, MediaKind::Program);
     let slot = m

@@ -1,5 +1,5 @@
 //! Text typed on the keyboard (pasted listings, scripted typing; see
-//! [`emu_core::Machine::typed_keys`]).
+//! [`mimic_core::Machine::typed_keys`]).
 //!
 //! Characters by the keys of the BBC's own layout ([`crate::keyboard`]:
 //! machine key = row × 16 + column of the matrix): the digits' shifted
@@ -8,7 +8,7 @@
 //! as after power-on, they arrive in upper case, which is what BBC BASIC
 //! takes its keywords in.
 
-use emu_core::input::{typed_chars, TimedInput, TypeTiming};
+use mimic_core::input::{typed_chars, TimedInput, TypeTiming};
 
 use crate::keyboard::keys;
 

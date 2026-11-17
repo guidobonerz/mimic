@@ -14,40 +14,40 @@ import tomllib
 
 # Crate-name pattern -> internal crates it may depend on (patterns allowed).
 # First matching rule wins; a workspace crate with no rule is an error.
-FRONTEND_DEPS = ["emu-core", "emu-machines", "emu-debug", "emu-preview", "video-crt",
-                 "emu-input", "media-backends", "emu-profile", "emu-cheats"]
+FRONTEND_DEPS = ["mimic-core", "mimic-machines", "mimic-debug", "mimic-preview", "video-crt",
+                 "mimic-input", "media-backends", "mimic-profile", "mimic-cheats"]
 RULES = [
-    ("emu-core", []),
-    ("cpu-*", ["emu-core"]),
-    ("chips-*", ["emu-core"]),
-    ("asm-*", ["emu-core", "cpu-*"]),             # host assemblers (Logophor 16: asm-ada)
-    ("brass", ["emu-core", "cpu-*", "asm-*"]),    # Logophor 16's Brass compiler (host tool)
-    ("media", ["emu-core"]),
-    ("devices-input", ["emu-core"]),
-    ("devices-cartridge", ["emu-core", "media"]),
-    ("devices-net", ["emu-core"]),                # UCI, WiC64: host only via emu-core::host
-    ("devices-printer", ["emu-core"]),            # output only via emu-core::host
-    ("video-crt", ["emu-core"]),
-    ("emu-input", ["emu-core"]),
-    ("emu-profile", []),
-    ("emu-cheats", ["emu-core"]),                 # cheat files, imports, search                           # start profiles: frontends only
-    ("basic-dialects", ["emu-core"]),             # BASIC decoders for the debugger, linked by machines
-    ("media-backends", ["emu-core", "media"]),  # host folders as D64 images
-    ("drives-*", ["emu-core", "cpu-*", "chips-*", "media"]),
-    ("machine-*", ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "asm-*", "brass", "basic-dialects"]),  # asm-*, brass: ROMs and systems built from sources
+    ("mimic-core", []),
+    ("cpu-*", ["mimic-core"]),
+    ("chips-*", ["mimic-core"]),
+    ("asm-*", ["mimic-core", "cpu-*"]),             # host assemblers (Logophor 16: asm-ada)
+    ("brass", ["mimic-core", "cpu-*", "asm-*"]),    # Logophor 16's Brass compiler (host tool)
+    ("media", ["mimic-core"]),
+    ("devices-input", ["mimic-core"]),
+    ("devices-cartridge", ["mimic-core", "media"]),
+    ("devices-net", ["mimic-core"]),                # UCI, WiC64: host only via mimic-core::host
+    ("devices-printer", ["mimic-core"]),            # output only via mimic-core::host
+    ("video-crt", ["mimic-core"]),
+    ("mimic-input", ["mimic-core"]),
+    ("mimic-profile", []),
+    ("mimic-cheats", ["mimic-core"]),                 # cheat files, imports, search                           # start profiles: frontends only
+    ("basic-dialects", ["mimic-core"]),             # BASIC decoders for the debugger, linked by machines
+    ("media-backends", ["mimic-core", "media"]),  # host folders as D64 images
+    ("drives-*", ["mimic-core", "cpu-*", "chips-*", "media"]),
+    ("machine-*", ["mimic-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "asm-*", "brass", "basic-dialects"]),  # asm-*, brass: ROMs and systems built from sources
     # Also the catalogue of pluggable port devices for the frontends.
-    ("emu-machines", ["emu-core", "machine-*", "devices-input", "devices-net"]),
-    ("emu-debug", ["emu-core", "emu-preview", "video-crt", "emu-cheats"]),  # golden rule 1; preview encoders for gfx_get
-    ("emu-preview", ["emu-core", "video-crt"]),    # golden rule 1
-    ("emu-desktop", FRONTEND_DEPS),
-    ("emu-web", FRONTEND_DEPS),
-    ("emu-headless", FRONTEND_DEPS),
-    ("emu-tests", ["*"]),
+    ("mimic-machines", ["mimic-core", "machine-*", "devices-input", "devices-net"]),
+    ("mimic-debug", ["mimic-core", "mimic-preview", "video-crt", "mimic-cheats"]),  # golden rule 1; preview encoders for gfx_get
+    ("mimic-preview", ["mimic-core", "video-crt"]),    # golden rule 1
+    ("mimic-desktop", FRONTEND_DEPS),
+    ("mimic-web", FRONTEND_DEPS),
+    ("mimic-headless", FRONTEND_DEPS),
+    ("mimic-tests", ["*"]),
 ]
 
 # Golden rule 10: emulation crates never see host devices.
 HOST_CRATES = {"gilrs", "winit", "wgpu", "egui", "cpal", "tokio", "tokio-tungstenite"}
-HOST_FREE = ["emu-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "machine-*", "basic-dialects"]
+HOST_FREE = ["mimic-core", "cpu-*", "chips-*", "drives-*", "devices-*", "media", "machine-*", "basic-dialects"]
 
 DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 

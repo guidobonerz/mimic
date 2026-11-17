@@ -22,7 +22,7 @@
 //! Tracks are bit streams (MSB first) because the drive writes them from
 //! wherever the head is; [`decode_track`] finds sectors at any bit offset.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 /// Bytes of a double-density image.
 pub const ADF_SIZE: usize = 901_120;

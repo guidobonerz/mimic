@@ -13,8 +13,8 @@ mod io_port;
 mod micro;
 mod table;
 
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
-use emu_core::{Bus, Cpu, CycleResult, Instr, InterruptKind, Register, RegisterSet, Size};
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Bus, Cpu, CycleResult, Instr, InterruptKind, Register, RegisterSet, Size};
 
 pub use crate::io_port::IoPort;
 use crate::micro::{Core, Seq, B, I, U, V};
@@ -528,7 +528,7 @@ impl Savestate for Cpu6502 {
 mod tests {
     use super::*;
     use crate::micro::I;
-    use emu_core::testing::FlatBus;
+    use mimic_core::testing::FlatBus;
 
     /// Run until the CPU reaches an instruction boundary; returns cycles used.
     fn step(cpu: &mut Cpu6502, bus: &mut FlatBus) -> u32 {

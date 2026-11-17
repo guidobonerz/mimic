@@ -21,7 +21,7 @@
 //! chapter 19 "The video ULA"; *BBC Microcomputer Service Manual*. The
 //! implementation is this project's own.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VideoUla {

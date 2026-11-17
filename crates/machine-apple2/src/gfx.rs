@@ -1,4 +1,4 @@
-//! Graphics data views (see `emu_core::gfx`): the character generator, the
+//! Graphics data views (see `mimic_core::gfx`): the character generator, the
 //! text screen, the lo-res and hi-res pages and the 16 lo-res colours,
 //! decoded from RAM as stored and the soft switches as they are now, side
 //! effect free (no soft switch is touched: the views read the switch state,
@@ -36,8 +36,8 @@
 //! keeps, see [`crate::video`]). Double lo-res shows the auxiliary nibbles
 //! as their stored colour index (the real picture rotates their colours).
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxPixels, GfxView, GfxViewInfo,
     OPT_ADDR,
 };
@@ -265,7 +265,7 @@ impl Apple2 {
         &self,
         opts: &GfxOptions,
     ) -> (
-        emu_core::MemSpaceId,
+        mimic_core::MemSpaceId,
         u32,
         Vec<(&'static str, u32)>,
         u32,
@@ -311,7 +311,7 @@ impl Apple2 {
         &self,
         opts: &GfxOptions,
     ) -> (
-        emu_core::MemSpaceId,
+        mimic_core::MemSpaceId,
         u32,
         Vec<(&'static str, u32)>,
         u32,
@@ -366,7 +366,7 @@ impl Apple2 {
         &self,
         opts: &GfxOptions,
     ) -> (
-        emu_core::MemSpaceId,
+        mimic_core::MemSpaceId,
         u32,
         Vec<(&'static str, u32)>,
         u32,
@@ -411,7 +411,7 @@ impl Apple2 {
         &self,
         opts: &GfxOptions,
     ) -> (
-        emu_core::MemSpaceId,
+        mimic_core::MemSpaceId,
         u32,
         Vec<(&'static str, u32)>,
         u32,
@@ -486,8 +486,8 @@ impl Apple2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::registry::MachineConfig;
-    use emu_core::Machine;
+    use mimic_core::registry::MachineConfig;
+    use mimic_core::Machine;
 
     fn machine(model: &str) -> Apple2 {
         let mut config = MachineConfig {

@@ -3,7 +3,7 @@
 //! `tools/fetch-testdata.sh`, never committed). Each ROM has a PNG of the
 //! picture it should show; this runner runs the ROM and compares.
 //!
-//!     EMU_TESTDATA_DIR=$PWD/testdata cargo test -p emu-tests --release --test snes_peterlemon -- --ignored --nocapture
+//!     EMU_TESTDATA_DIR=$PWD/testdata cargo test -p mimic-tests --release --test snes_peterlemon -- --ignored --nocapture
 //!
 //! Compared: the CPU and SPC700 instruction tests (`CPUTest/`), the PPU
 //! tests (`PPU/`) and the bank tests (`BANK/`); the Super FX (`CHIP/GSU`),
@@ -20,11 +20,11 @@
 
 use std::path::{Path, PathBuf};
 
-use emu_core::frame::PixelData;
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::DebugHooks;
+use mimic_core::frame::PixelData;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::DebugHooks;
 
 struct Bytes(Vec<u8>);
 
@@ -73,7 +73,7 @@ fn ppu_reg(m: &dyn Machine, name: &str) -> Option<u32> {
 }
 
 fn key(m: &mut dyn Machine, k: u16, down: bool) {
-    use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
     let at = m.now();
     m.input(TimedInput {
         at,
@@ -117,7 +117,7 @@ fn machine(path: &Path) -> Result<Box<dyn Machine>, String> {
             config.roms = r;
         }
     }
-    let mut m = emu_machines::registry()
+    let mut m = mimic_machines::registry()
         .create("snes", &config)
         .map_err(|e| e.to_string())?;
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -186,7 +186,7 @@ fn dump(m: &dyn Machine, name: &str) {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("snes-peterlemon");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join(format!("{}.png", name.replace(['/', '\\'], "_")));
-    std::fs::write(file, emu_preview::encode_png(&m.framebuffer())).unwrap();
+    std::fs::write(file, mimic_preview::encode_png(&m.framebuffer())).unwrap();
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn peterlemon_snes() {
                 let mut hold = HOLD_UNTIL.iter().find(|(p, ..)| name.contains(p)).copied();
                 for f in 1..=frames {
                     if reset_at == Some(f) {
-                        m.reset(emu_core::machine::ResetKind::Soft);
+                        m.reset(mimic_core::machine::ResetKind::Soft);
                     }
                     if let Some((_, k, reg, value)) = hold {
                         let done = ppu_reg(m.as_ref(), reg) == Some(value);
@@ -278,7 +278,7 @@ fn peterlemon_snes() {
     }
     let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
     report.push_str(&format!("\n{pass} passed, {fail} failed\n"));
-    let trend = emu_tests::trend::record(tmp, "snes-peterlemon", &results);
+    let trend = mimic_tests::trend::record(tmp, "snes-peterlemon", &results);
     report.push_str(&trend);
     std::fs::write(tmp.join("snes-peterlemon.txt"), &report).unwrap();
     println!("{report}");

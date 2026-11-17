@@ -1,6 +1,6 @@
 use super::*;
-use emu_core::gfx::GfxOptions;
-use emu_core::MemSpaceId;
+use mimic_core::gfx::GfxOptions;
+use mimic_core::MemSpaceId;
 
 fn reg(v: &mut V9938, n: u8, value: u8) {
     v.write_control(value);

@@ -1,5 +1,5 @@
 use super::*;
-use emu_core::media::MediaBackend;
+use mimic_core::media::MediaBackend;
 use std::sync::{Arc, Mutex};
 
 struct Shared(Arc<Mutex<Vec<u8>>>);

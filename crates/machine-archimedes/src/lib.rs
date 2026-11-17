@@ -41,19 +41,19 @@ use chips_acorn::vidc::{sound_level, stereo_gain};
 use chips_acorn::wd1772::{Floppy, Wd1772};
 use chips_acorn::{Ioc, Memc, Pcf8583, Target, Vidc};
 use cpu_arm::{Arm2, ArmBus};
-use emu_core::audio::Decimator;
-use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use keyboard::Keyboard;
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, ControlInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr,
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use keyboard::Keyboard;
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The ARM's view, as a supervisor sees it.
@@ -606,7 +606,7 @@ impl Archimedes {
             return Err(ConfigError::Invalid("ROM size".into()));
         }
         let audio = || {
-            Decimator::new(1_000_000, emu_core::SAMPLE_RATE)
+            Decimator::new(1_000_000, mimic_core::SAMPLE_RATE)
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))
         };
         let mut m = Self {
@@ -796,10 +796,10 @@ impl Machine for Archimedes {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.board.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 2,
         }
     }

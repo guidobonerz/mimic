@@ -1,6 +1,6 @@
 //! Random 68020 instruction tests against results from another 68020.
 //!
-//!     EMU_TESTDATA_DIR=… cargo test -p emu-tests --release --test m68020_random -- --ignored --nocapture
+//!     EMU_TESTDATA_DIR=… cargo test -p mimic-tests --release --test m68020_random -- --ignored --nocapture
 //!
 //! `tools/m68020_random.py` builds a boot disk with test cases and a
 //! program that runs them (see the tool for the layout); booted on an A1200
@@ -20,7 +20,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use cpu_m68k::{Model, M68000};
-use emu_core::{Bus, Cpu, Size};
+use mimic_core::{Bus, Cpu, Size};
 
 const CODE: u32 = 0x10_0000;
 const LIMIT: u64 = 400_000_000;
@@ -337,7 +337,8 @@ fn random_68020_matches_the_reference() {
         h.cases,
         100.0 * (h.cases - failed) as f64 / h.cases as f64
     );
-    let trend = emu_tests::trend::record(tmp, &format!("m68020-random-seed{}", h.seed), &outcomes);
+    let trend =
+        mimic_tests::trend::record(tmp, &format!("m68020-random-seed{}", h.seed), &outcomes);
     let out = tmp.join("m68020-random.txt");
     std::fs::write(&out, format!("{report}{summary}\n{total}\n{trend}\n")).unwrap();
     println!("{summary}");
@@ -352,10 +353,10 @@ fn random_68020_matches_the_reference() {
 #[test]
 #[ignore = "needs EMU_ROM_DIR (Kickstart 3.1) and EMU_M68020_ADF"]
 fn random_68020_disk_runs_on_the_a1200() {
-    use emu_core::machine::Machine;
-    use emu_core::media::{Media, MediaKind, SlotId};
-    use emu_core::registry::MachineConfig;
-    use emu_core::{DebugHooks, StopReason};
+    use mimic_core::machine::Machine;
+    use mimic_core::media::{Media, MediaKind, SlotId};
+    use mimic_core::registry::MachineConfig;
+    use mimic_core::{DebugHooks, StopReason};
 
     let adf = std::fs::read(std::env::var_os("EMU_M68020_ADF").expect("EMU_M68020_ADF")).unwrap();
     let image = &adf[1024..];
@@ -369,7 +370,7 @@ fn random_68020_disk_runs_on_the_a1200() {
         ..MachineConfig::default()
     };
     config.options.insert("kickstart".into(), "3.1".into());
-    let mut m: Box<dyn Machine> = emu_machines::registry().create("amiga", &config).unwrap();
+    let mut m: Box<dyn Machine> = mimic_machines::registry().create("amiga", &config).unwrap();
     m.media_slot(SlotId(0))
         .unwrap()
         .insert(Media {

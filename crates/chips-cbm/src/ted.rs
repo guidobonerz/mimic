@@ -91,8 +91,10 @@ pub mod gfx;
 pub mod overlay;
 pub mod palette;
 
-use emu_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
-use emu_core::{BeamPos, Decimator, Savestate, StateError, StateReader, StateWriter, SAMPLE_RATE};
+use mimic_core::frame::{FieldParity, OutputType, SignalInfo, VideoStandard};
+use mimic_core::{
+    BeamPos, Decimator, Savestate, StateError, StateReader, StateWriter, SAMPLE_RATE,
+};
 
 /// TED type. A savestate only loads into a TED of the same type.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

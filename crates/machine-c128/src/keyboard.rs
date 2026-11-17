@@ -15,8 +15,8 @@
 //! | 9 (K1)    | ESC  | KP + | KP - | LINE FEED | ENTER | KP 6   | KP 9    | KP 3      |
 //! | 10 (K2)   | ALT  | KP 0 | KP . | ↑        | ↓      | ←      | →       | NO SCROLL |
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 pub const RESTORE: MachineKey = MachineKey(88);
 pub const DISPLAY_4080: MachineKey = MachineKey(89);

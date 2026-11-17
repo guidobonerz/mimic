@@ -14,7 +14,7 @@
 //! 8722 data sheet. [`Mmu::translate`] turns a CPU address in C128 mode
 //! into what it selects; the machine supplies the ROMs and I/O.
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// What a CPU address selects in C128 mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

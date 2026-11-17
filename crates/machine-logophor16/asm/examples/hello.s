@@ -4,7 +4,7 @@
 ;
 ;   cargo run --release -p asm-ada -- build crates/machine-logophor16/asm/examples/hello.s -o hello.bin
 ;   cargo run --release -p asm-ada -- sd card.img --boot hello.bin
-;   cargo run --release -p emu-desktop -- --profile logophor16 --disk card.img
+;   cargo run --release -p mimic-desktop -- --profile logophor16 --disk card.img
 
         .section text
         .org    $00400000

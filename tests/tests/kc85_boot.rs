@@ -2,11 +2,11 @@
 //! `~/.mimic/roms`, a `kc85/` subfolder with the files as KCemu names
 //! them: `caos__e0.853`, `basic_c0.853`, `caos__c0.854` …).
 //!
-//!     cargo test -p emu-tests --release --test kc85_boot -- --ignored --nocapture
+//!     cargo test -p mimic-tests --release --test kc85_boot -- --ignored --nocapture
 
-use emu_core::machine::Machine;
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Size, StopReason};
+use mimic_core::machine::Machine;
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Size, StopReason};
 
 fn machine(model: &str, options: &[(&str, &str)]) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("no ROM folder");
@@ -18,7 +18,7 @@ fn machine(model: &str, options: &[(&str, &str)]) -> Box<dyn Machine> {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    emu_machines::registry().create("kc85", &config).unwrap()
+    mimic_machines::registry().create("kc85", &config).unwrap()
 }
 
 fn run(m: &mut dyn Machine, fields: usize) {
@@ -209,9 +209,9 @@ fn a_program_loads_from_tape_and_starts() {
         let mut m = machine(model, &[]);
         run(&mut *m, 400);
         let image = kcc();
-        let media = emu_core::media::Media {
+        let media = mimic_core::media::Media {
             name: "test.kcc".into(),
-            kind: emu_core::media::MediaKind::Tape,
+            kind: mimic_core::media::MediaKind::Tape,
             backend: Box::new(media_backends::image::MemoryBackend {
                 data: image.clone(),
             }),

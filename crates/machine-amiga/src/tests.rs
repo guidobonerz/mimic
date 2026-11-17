@@ -1,5 +1,5 @@
 use super::*;
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 
 fn stub() -> Amiga {
     let mut config = MachineConfig::default();
@@ -131,7 +131,7 @@ fn floppy_lines_reach_the_drive() {
 
 #[test]
 fn joystick_in_port_1() {
-    use emu_core::input::Dirs;
+    use mimic_core::input::Dirs;
     let mut m = stub();
     m.input(TimedInput {
         at: Cycle(0),
@@ -206,8 +206,8 @@ fn debugger_sees_registers_memory_and_disassembly() {
 
 mod disk {
     use super::*;
-    use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
     use media::adf;
+    use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind};
     use std::sync::{Arc, Mutex};
 
     struct Shared(Arc<Mutex<Vec<u8>>>);
@@ -363,7 +363,7 @@ fn mouse_motion_counts_into_joy0dat() {
 
 #[test]
 fn keys_arrive_at_cia_a() {
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
     let mut m = stub();
     frames(&mut m, 12); // past the power-up stream ($FD, $FE): no handshake
                         // Handshake the power-up codes away by hand.
@@ -406,7 +406,7 @@ fn interlace_alternates_long_and_short_fields() {
         let lines = (m.now().0 - t0 + 227) / (2 * 227);
         seen.push((lines, m.framebuffer().signal.field));
     }
-    use emu_core::frame::FieldParity::{Even, Odd};
+    use mimic_core::frame::FieldParity::{Even, Odd};
     let pattern: Vec<_> = seen.iter().map(|&(_, f)| f).collect();
     assert!(
         pattern == [Odd, Even, Odd, Even] || pattern == [Even, Odd, Even, Odd],
@@ -420,8 +420,8 @@ fn interlace_alternates_long_and_short_fields() {
 
 mod debugger {
     use super::*;
-    use emu_core::debug::BreakpointKind;
-    use emu_core::freeze::{Freeze, FreezeMode};
+    use mimic_core::debug::BreakpointKind;
+    use mimic_core::freeze::{Freeze, FreezeMode};
 
     /// Hooks configured the way the debug session does it.
     fn hooks(m: &Amiga) -> DebugHooks {
@@ -529,7 +529,7 @@ fn stub_with(model: Option<&str>, options: &[(&str, &str)]) -> Amiga {
 
 fn stub_as(
     model: Option<&str>,
-    format: Option<emu_core::frame::VideoStandard>,
+    format: Option<mimic_core::frame::VideoStandard>,
     options: &[(&str, &str)],
 ) -> Amiga {
     let mut config = MachineConfig {
@@ -552,7 +552,7 @@ fn models_fit_their_memory() {
     assert_eq!(m.board.mem.slow.len() * 2, 0x8_0000);
     let m = stub_as(
         Some("1000"),
-        Some(emu_core::frame::VideoStandard::Ntsc),
+        Some(mimic_core::frame::VideoStandard::Ntsc),
         &[],
     );
     assert_eq!((m.model(), m.standard()), (Model::A1000, Standard::Ntsc));
@@ -886,17 +886,21 @@ fn graphics_views_decode_chip_ram_without_side_effects() {
     }
     let before = m.save_state();
     let v = m
-        .gfx_view("bitplanes", &emu_core::GfxOptions::new())
+        .gfx_view("bitplanes", &mimic_core::GfxOptions::new())
         .unwrap();
     assert_eq!(v.space, CHIP_SPACE);
     assert_eq!((v.width, v.height, v.addr), (320, 256, 0x2_0000));
     assert_eq!(v.raw.len(), 40 * 256);
     assert_eq!(v.frame().rgb_at(0, 0), Some(Rgb8 { r: 0, g: 255, b: 0 }));
-    let p = m.gfx_view("palette", &emu_core::GfxOptions::new()).unwrap();
+    let p = m
+        .gfx_view("palette", &mimic_core::GfxOptions::new())
+        .unwrap();
     assert_eq!(p.param("color01"), Some(0x0f0));
-    let s = m.gfx_view("sprites", &emu_core::GfxOptions::new()).unwrap();
+    let s = m
+        .gfx_view("sprites", &mimic_core::GfxOptions::new())
+        .unwrap();
     assert_eq!(s.width, 8 * 17 - 1);
-    assert!(m.gfx_view("nope", &emu_core::GfxOptions::new()).is_none());
+    assert!(m.gfx_view("nope", &mimic_core::GfxOptions::new()).is_none());
     assert_eq!(m.save_state(), before, "views change nothing");
 }
 
@@ -923,7 +927,7 @@ fn overlays_record_only_when_switched_on_and_stay_out_of_savestates() {
     let c = m.overlay("copper").unwrap();
     assert!(!c.shapes.is_empty());
     let d = m.overlay("dma").unwrap();
-    let emu_core::overlay::Shape::Cells { ref cells, .. } = d.shapes[0] else {
+    let mimic_core::overlay::Shape::Cells { ref cells, .. } = d.shapes[0] else {
         panic!()
     };
     assert!(cells.contains(&8), "free slots");
@@ -943,7 +947,7 @@ fn light_pen_in_game_port_0_freezes_the_beam_counters() {
     m.input(TimedInput {
         at: Cycle(now),
         target: InputTarget::Port(PortId(0)),
-        event: emu_core::input::InputEvent::LightPen {
+        event: mimic_core::input::InputEvent::LightPen {
             x: 200,
             y: 150,
             trigger: true,
@@ -968,7 +972,7 @@ fn light_pen_in_game_port_0_freezes_the_beam_counters() {
     n.input(TimedInput {
         at: Cycle(now),
         target: InputTarget::Port(PortId(0)),
-        event: emu_core::input::InputEvent::LightPen {
+        event: mimic_core::input::InputEvent::LightPen {
             x: 200,
             y: 50,
             trigger: false,
@@ -980,7 +984,7 @@ fn light_pen_in_game_port_0_freezes_the_beam_counters() {
 
 #[test]
 fn four_player_adapter_on_the_parallel_port() {
-    use emu_core::input::Dirs;
+    use mimic_core::input::Dirs;
     let mut m = stub_with(None, &[("parallel", "4player")]);
     let names: Vec<&str> = m.ports().iter().map(|p| p.name).collect();
     assert_eq!(names[2..], ["joystick 3", "joystick 4"]);

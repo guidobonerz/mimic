@@ -17,7 +17,7 @@
 //! data sheet gives no levels. CRT colour reproduction belongs to
 //! `video-crt`.
 
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 
 /// Luminance level per luminance step (0–1).
 const LUMA: [f64; 8] = [

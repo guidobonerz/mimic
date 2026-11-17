@@ -146,7 +146,7 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | Joysticks, paddles, mice, keypads, light pens | unit tests at pin level | green | 🟡 | interactive VICE tests checked by hand only |
 | Cartridges (C64 CRT, freezers, VIC-20, Plus/4, C128 function ROM, Atari, Coleco, NES mappers 0–4, SNES with DSP-1–4) | `cartridges` tests, VICE selftests | green | 🟡 | more NES mappers, SNES coprocessors beyond the DSPs |
 | Printers (FX-80, P6+, ImageWriter) | real ROMs on several machines | print | 🟡 | Amiga printer.device, more machines |
-| Debug server, VICE monitor adapter, preview | `emu-debug`/`emu-preview` tests | green | 🟢 | – |
+| Debug server, VICE monitor adapter, preview | `mimic-debug`/`mimic-preview` tests | green | 🟢 | – |
 | Desktop, headless | smoke tests | green | 🟢 | – |
 | Web (WASM) | headless Chrome check | runs | 🟡 | no file host for printers |
 
@@ -308,17 +308,17 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | Ultimate 64 command interface (C64 `uci=on`): DOS targets on a host folder, network target (TCP/UDP sockets), control identify | `devices-net` | 70 % (Ultimate control commands not offered; error texts and timing partly unverified) |
 | WiC64 on the user port (C64 `userport=wic64`): legacy and protocol 2, HTTP GET/POST, TCP, info, time | `devices-net` | 70 % (no https; handshake timing and some answers unverified) |
 | Four-player adapters: Classical Games / Protovision, Digital Excess / Hitmen, Kingsoft, Starbyte on the user port (C64, C128; VIC-20: Protovision), the Amiga's on the parallel port | `devices-input`, `machine-amiga` | 75 % (own test programs after the documented wiring; no game tried) |
-| Host network and folder (`media-backends`), journalled for exact replays | `emu-core::host` | 80 % (no TLS; the web frontend has no network) |
+| Host network and folder (`media-backends`), journalled for exact replays | `mimic-core::host` | 80 % (no TLS; the web frontend has no network) |
 
 ### Debugger, preview and frontends
 
 | Component | Crate | Completeness |
 | --- | --- | --- |
-| Debug server (native JSON protocol, breakpoints, raster trace, savestates, freezer, cheat search) | `emu-debug` | 85 % |
-| VICE binary monitor adapter | `emu-debug` | 85 % |
+| Debug server (native JSON protocol, breakpoints, raster trace, savestates, freezer, cheat search) | `mimic-debug` | 85 % |
+| VICE binary monitor adapter | `mimic-debug` | 85 % |
 | Graphics data views (sprites, charsets, bitmaps) | – | 0 % |
-| Live preview (snapshots, WebSocket stream, raw stream) | `emu-preview` | 85 % |
+| Live preview (snapshots, WebSocket stream, raw stream) | `mimic-preview` | 85 % |
 | CRT emulation (signal stage, scanlines, masks, profiles) | `video-crt` | 70 % (full CRT stage, vector persistence open) |
-| Desktop frontend (window, sound, gamepads, drag & drop) | `emu-desktop` | 85 % |
-| Headless runner | `emu-headless` | 95 % |
-| Web frontend (WASM) | `emu-web` | 5 % |
+| Desktop frontend (window, sound, gamepads, drag & drop) | `mimic-desktop` | 85 % |
+| Headless runner | `mimic-headless` | 95 % |
+| Web frontend (WASM) | `mimic-web` | 5 % |

@@ -17,7 +17,7 @@
 
 use std::sync::OnceLock;
 
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 
 /// Entries: `emphasis << 6 | colour`, emphasis bit 0 red, 1 green, 2 blue
 /// (the 2C02's $2001 bits 5–7).

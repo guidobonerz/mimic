@@ -4,7 +4,7 @@
 //! forms (full-format extension words, the added instructions) are decoded
 //! only for a 68020.
 
-use emu_core::{Bus, Flow, Instr, Size};
+use mimic_core::{Bus, Flow, Instr, Size};
 
 const CC: [&str; 16] = [
     "T", "F", "HI", "LS", "CC", "CS", "NE", "EQ", "VC", "VS", "PL", "MI", "GE", "LT", "GT", "LE",

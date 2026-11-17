@@ -1,4 +1,4 @@
-//! Graphics data views of the S-PPU (see `emu_core::gfx`): VRAM as 2/4/8
+//! Graphics data views of the S-PPU (see `mimic_core::gfx`): VRAM as 2/4/8
 //! bpp tiles (or Mode 7's 8 bpp tiles), one BG tilemap rendered with its
 //! tiles and palettes (Mode 7: the 128 × 128 map), the 128 OAM objects
 //! and the 256 CGRAM colours, decoded from the registers and the chip's
@@ -17,12 +17,12 @@
 //! math are not applied). Option `addr` is a **byte** address in the VRAM
 //! space (as the machine's `vram` memory space counts), not a word address.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     grey_palette, palette_canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxPixels, GfxView,
     GfxViewInfo, OPT_ADDR, OPT_BPP, OPT_COUNT, OPT_INDEX, OPT_PALETTE,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::{direct_colour, rgb, SPpu, OBJ_SIZES};
 

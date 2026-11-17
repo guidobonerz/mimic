@@ -5,7 +5,7 @@
 use super::*;
 use crate::memory::KERNAL_SIZE;
 use devices_net::testing::FakeNet;
-use emu_core::host::{Journal, MemFileHost};
+use mimic_core::host::{Journal, MemFileHost};
 
 /// A config whose KERNAL runs `code` at $E000 with `data` at $E100.
 fn config(code: &[u8], data: &[u8], options: &[(&str, &str)]) -> MachineConfig {

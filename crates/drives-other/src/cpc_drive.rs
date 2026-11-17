@@ -8,9 +8,9 @@
 //! motor stops, on flush and on eject.
 
 use chips_amstrad::fdc::{FloppyDrive, SectorInfo};
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
 use media::dsk::{Dsk, FormatId};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Cylinders the head can reach.
 const CYLINDERS: u8 = 42;
@@ -230,7 +230,7 @@ impl Savestate for CpcDrive {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
+    use mimic_core::media::MediaBackend;
 
     struct Mem(Vec<u8>);
 

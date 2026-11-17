@@ -13,8 +13,8 @@
 //! 1, the display parameters and their offsets per pixel depth, the 8-bit
 //! palette (figure 6), the sound frequency register.
 
-use emu_core::frame::Rgb8;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const MAX_WIDTH: usize = 1280;
 pub const MAX_HEIGHT: usize = 1024;

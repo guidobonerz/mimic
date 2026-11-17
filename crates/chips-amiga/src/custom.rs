@@ -80,8 +80,8 @@
 
 use std::cell::Cell;
 
-use emu_core::frame::Rgb8;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 use crate::audio;
 use crate::blitter::Blitter;
@@ -413,9 +413,20 @@ pub struct Custom {
     /// The debug overlays' record while one is switched on (`overlay`;
     /// not machine state, not saved).
     rec: Option<Box<overlay::OverlayRecord>>,
+    /// Warp: the picture is not looked at, Denise's pixels are not put
+    /// into the frame (not machine state; see [`Custom::set_warp`]).
+    warp: bool,
 }
 
 impl Custom {
+    /// Warp (`Machine::set_warp`): Denise's pixels are not written into
+    /// the frame while it is on. Denise itself runs as always (shifters,
+    /// sprites, collisions, HAM); with a light pen pointing into the
+    /// picture the pixels are written too, since the pen sees them.
+    pub fn set_warp(&mut self, on: bool) {
+        self.warp = on;
+    }
+
     pub fn new(standard: Standard, ptr_mask: u32, chipset: Chipset) -> Self {
         let mut beam_regs = [0; 18];
         if chipset.ecs_agnus && standard == Standard::Pal {
@@ -473,6 +484,7 @@ impl Custom {
             pen: None,
             pen_luma: 0,
             rec: None,
+            warp: false,
         }
     }
 
@@ -1312,6 +1324,9 @@ impl Custom {
         let dh = self.denise_h(h);
         let mut px = [0u32; 8];
         let n = self.denise.output(dh, &mut px) as u32;
+        if self.warp && self.pen.is_none() {
+            return;
+        }
         let row = if h >= denise::LINE_START + DENISE_LAG {
             i32::from(v)
         } else {

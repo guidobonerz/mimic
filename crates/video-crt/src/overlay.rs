@@ -11,7 +11,7 @@
 //! the user's own pictures (`media_backends::overlays`), never machine
 //! state; the debugger and the raw preview never see them (golden rule 9).
 
-use emu_core::frame::Rgb8;
+use mimic_core::frame::Rgb8;
 
 /// The room's light on the sheet, as a fraction of full brightness.
 pub const AMBIENT: f32 = 0.06;

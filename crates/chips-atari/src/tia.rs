@@ -69,8 +69,8 @@
 //! start delays, HMOVE clock stuffing, graphics registers and VDEL; the
 //! blanking reset positions are the commonly documented values.
 
-use emu_core::frame::VideoStandard;
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::VideoStandard;
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
 
 /// Colour clocks per line and of horizontal blanking.
 pub const CLOCKS_PER_LINE: u8 = 228;

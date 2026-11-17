@@ -86,8 +86,8 @@
 //! under EO and blinking, FH while IE1 is off and the commands' speeds are
 //! this model's reading of the data book, not measured.
 
-use emu_core::frame::Rgb8;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub mod cmd;
 pub mod gfx;

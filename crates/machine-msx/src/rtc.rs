@@ -28,7 +28,7 @@
 //! output and the 16 Hz/1 Hz outputs are not connected on an MSX2 and not
 //! modelled.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// The bits each register of a block has.
 const MASKS: [[u8; 13]; 4] = [

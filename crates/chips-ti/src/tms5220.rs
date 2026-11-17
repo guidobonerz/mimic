@@ -36,7 +36,7 @@
 //! coding table (energy, pitch, K1–K10). The implementation is this
 //! project's own.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Samples per second.
 pub const SAMPLE_RATE: u32 = 8000;

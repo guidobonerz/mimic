@@ -1,4 +1,4 @@
-//! Debug overlays of the V9938 (see `emu_core::overlay`), as the
+//! Debug overlays of the V9938 (see `mimic_core::overlay`), as the
 //! TMS9918A's in `chips-ti`: `sprites`, a box per sprite where the chip
 //! drew it, line by line, and `limit`, a band on each line with one sprite
 //! too many (a fifth in sprite mode 1, a ninth in mode 2).
@@ -7,7 +7,7 @@
 //! not machine state; the machine swaps it at the end of each field
 //! ([`V9938::overlay_end_frame`]).
 
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 use super::V9938;
 

@@ -37,7 +37,7 @@
 //! last slot has passed, so CPU reads during a blit see the progress word
 //! by word.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::chipram::ChipRam;
 

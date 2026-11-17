@@ -1,6 +1,6 @@
 //! Disassembler with the Acorn mnemonics.
 
-use emu_core::{Bus, Flow, Instr, Size};
+use mimic_core::{Bus, Flow, Instr, Size};
 
 const COND: [&str; 16] = [
     "EQ", "NE", "CS", "CC", "MI", "PL", "VS", "VC", "HI", "LS", "GE", "LT", "GT", "LE", "", "NV",

@@ -77,7 +77,7 @@ mod timing020;
 pub use timing020::cacr;
 use timing020::{ICache, Pipe};
 
-use emu_core::{
+use mimic_core::{
     Bus, Cpu, CycleResult, Instr, InterruptKind, Register, RegisterSet, Savestate, Size,
     StateError, StateReader, StateWriter,
 };

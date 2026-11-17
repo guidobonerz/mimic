@@ -53,9 +53,9 @@
 //! their bit streams. The disk is media, not state: savestates keep the
 //! card and the mechanics.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::a2disk::{self, NibbleDisk, SectorOrder, QUARTER_TRACKS};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Highest quarter track the head reaches.
 pub const LAST_QUARTER: u8 = (QUARTER_TRACKS - 1) as u8;
@@ -705,7 +705,7 @@ impl Disk2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
+    use mimic_core::media::MediaBackend;
 
     struct Mem(Vec<u8>);
 

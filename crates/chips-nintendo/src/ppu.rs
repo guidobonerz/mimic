@@ -34,8 +34,8 @@
 //! OAM bus are resolved at dot 257), OAM decay and the 2C07's OAM refresh,
 //! the three-dot delay of $2006's second write.
 
-use emu_core::frame::Rgb8;
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::Rgb8;
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
 
 use crate::palette;
 

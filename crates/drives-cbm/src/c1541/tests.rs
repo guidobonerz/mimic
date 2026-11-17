@@ -1,5 +1,5 @@
 use super::*;
-use emu_core::media::MediaBackend;
+use mimic_core::media::MediaBackend;
 
 struct Mem(Vec<u8>);
 

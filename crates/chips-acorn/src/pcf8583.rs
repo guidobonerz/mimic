@@ -8,7 +8,7 @@
 //!
 //! Source: Philips PCF8583 data sheet; I²C bus specification.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {

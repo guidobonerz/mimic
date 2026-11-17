@@ -1,5 +1,5 @@
 use super::*;
-use emu_core::input::{Dirs, MachineKey};
+use mimic_core::input::{Dirs, MachineKey};
 
 fn stub(model: &str) -> Atari8 {
     stub_as(model, VideoStandard::Pal)
@@ -294,7 +294,7 @@ fn drive_slots_and_options() {
     let names: Vec<_> = m.media_slots().iter().map(|s| s.name).collect();
     assert_eq!(names, ["D1:", "D2:", "program", "tape", "cartridge"]);
     assert!(m.media_slot(SlotId(2)).is_none(), "no D3:");
-    let disk_as_program = emu_core::media::Media {
+    let disk_as_program = mimic_core::media::Media {
         name: "x.atr".into(),
         kind: MediaKind::Disk,
         backend: Box::new(media_backends_free::Bytes(media::atr::blank(720))),
@@ -319,7 +319,7 @@ fn drive_slots_and_options() {
 /// A minimal in-memory backend for tests (media-backends is a frontend
 /// crate).
 mod media_backends_free {
-    use emu_core::media::{MediaBackend, MediaError};
+    use mimic_core::media::{MediaBackend, MediaError};
 
     pub struct Bytes(pub Vec<u8>);
 
@@ -350,7 +350,7 @@ fn cartridge_maps_banks_and_drives_trig3() {
     // XEGS 32K: four banks whose bytes name the bank.
     let rom: Vec<u8> = (0..0x8000).map(|i| (i / 0x2000) as u8 + 0xc0).collect();
     let car = media::car::Car { kind: 12, rom };
-    let media = emu_core::media::Media {
+    let media = mimic_core::media::Media {
         name: "x.car".into(),
         kind: MediaKind::Cartridge,
         backend: Box::new(media_backends_free::Bytes(car.to_bytes())),
@@ -536,7 +536,7 @@ fn gfx_views_follow_the_display_list_and_antic_banking() {
     assert_eq!(s.raw.len(), 24 * 40);
     let lum = (m.io.gtia.colpf[2] & 0xf0) | (m.io.gtia.colpf[1] & 0x0f);
     match &s.pixels {
-        emu_core::gfx::GfxPixels::Indexed { pixels, palette } => {
+        mimic_core::gfx::GfxPixels::Indexed { pixels, palette } => {
             assert_eq!(pixels[24 * 384 + 32], lum);
             assert_eq!(palette.len(), 256);
         }
@@ -569,11 +569,11 @@ fn gfx_views_follow_the_display_list_and_antic_banking() {
     assert_eq!(s.raw[0], 0x22, "decoded from ANTIC's bank");
 }
 
-fn band_labels(o: &emu_core::overlay::Overlay) -> Vec<(i32, u32, String)> {
+fn band_labels(o: &mimic_core::overlay::Overlay) -> Vec<(i32, u32, String)> {
     o.shapes
         .iter()
         .filter_map(|s| match s {
-            emu_core::overlay::Shape::Band { y, h, label, .. } => {
+            mimic_core::overlay::Shape::Band { y, h, label, .. } => {
                 Some((*y, *h, label.clone().unwrap_or_default()))
             }
             _ => None,
@@ -605,12 +605,12 @@ fn overlays_record_the_display_list_players_and_dlis() {
     let p = m.overlay("players").unwrap();
     assert_eq!(
         p.shapes,
-        [emu_core::overlay::Shape::Rect {
+        [mimic_core::overlay::Shape::Rect {
             x: 2 * (0x80 - 32),
             y: 0,
             w: 32,
             h: 240,
-            color: emu_core::overlay::colors::SERIES[0],
+            color: mimic_core::overlay::colors::SERIES[0],
             label: Some("P0".into()),
         }]
     );
@@ -637,7 +637,7 @@ fn overlays_record_the_display_list_players_and_dlis() {
     let dli = m.overlay("dli").unwrap();
     assert_eq!(dli.shapes.len(), 1);
     match &dli.shapes[0] {
-        emu_core::overlay::Shape::Mark { y, label, .. } => {
+        mimic_core::overlay::Shape::Mark { y, label, .. } => {
             assert_eq!(*y, 31 - 8, "last line of the mode line");
             assert_eq!(label.as_deref(), Some("DLI"));
         }
@@ -676,7 +676,7 @@ fn pen_event(at: u64, port: u8, x: u16, y: u16, trigger: bool) -> TimedInput {
     TimedInput {
         at: Cycle(at),
         target: InputTarget::Port(PortId(port)),
-        event: emu_core::input::InputEvent::LightPen { x, y, trigger },
+        event: mimic_core::input::InputEvent::LightPen { x, y, trigger },
     }
 }
 

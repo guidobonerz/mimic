@@ -15,8 +15,8 @@
 //!
 //! Source: Sinclair ZX81 Service Manual (keyboard matrix).
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::Cycle;
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::Cycle;
 
 /// The key code of a matrix position.
 pub const fn key(row: u16, col: u16) -> u16 {
@@ -28,7 +28,7 @@ const fn k(row: u16, col: u16) -> u16 {
 }
 
 pub mod keys {
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     pub const SHIFT: MachineKey = MachineKey(super::k(0, 0));
     pub const NEW_LINE: MachineKey = MachineKey(super::k(6, 0));

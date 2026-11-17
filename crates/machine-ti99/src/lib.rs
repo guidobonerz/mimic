@@ -81,22 +81,22 @@ use cpu_tms9900::{Tms9900, Tms9900Bus};
 use devices_input::joystick::pin;
 use disk::DiskCard;
 use drives_other::apple_tape::AppleTape;
-use emu_core::audio::Decimator;
-use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::overlay::{Overlay, OverlayInfo};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use keyboard::{joy, Keyboard};
+use media::ticart::TiCart;
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{Media, MediaError, MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use keyboard::{joy, Keyboard};
-use media::ticart::TiCart;
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The CPU's view of memory.
@@ -124,7 +124,7 @@ pub fn entry() -> MachineEntry {
         id: "ti99",
         name: "TI-99/4A",
         models: &[],
-        video_formats: emu_core::registry::PAL_NTSC,
+        video_formats: mimic_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Ti99::new(config)?)),
     }
 }
@@ -687,7 +687,7 @@ impl Ti99 {
                 pix_acc: 0,
                 pixels: 0,
                 field_done: false,
-                audio: Decimator::new(PSG_HZ, emu_core::SAMPLE_RATE)
+                audio: Decimator::new(PSG_HZ, mimic_core::SAMPLE_RATE)
                     .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
                 dc: [0; 2],
                 samples: Vec::new(),
@@ -937,10 +937,10 @@ impl Machine for Ti99 {
         self.board.vdp.line_row(line)
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.board.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -1067,7 +1067,7 @@ impl Machine for Ti99 {
 
     /// Text as key presses ([`typing`]), with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             typing::LINE_PAUSE,
@@ -1075,8 +1075,8 @@ impl Machine for Ti99 {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        vec![emu_core::ControlInfo::button(0, "POWER", false)]
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        vec![mimic_core::ControlInfo::button(0, "POWER", false)]
     }
 
     fn ports(&self) -> Vec<PortInfo> {
@@ -1303,7 +1303,7 @@ impl DebugTarget for Ti99 {
             "R14", "R15",
         ];
         for (i, name) in NAMES.iter().enumerate() {
-            regs.0.push(emu_core::Register {
+            regs.0.push(mimic_core::Register {
                 name,
                 value: u32::from(self.cpu.register(&pb, i as u16)),
                 bits: 16,

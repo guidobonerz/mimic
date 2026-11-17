@@ -2,14 +2,14 @@
 //! subfolder): boot to BASIC 7.0 on the 40- and 80-column screens, typing,
 //! GO64 into C64 mode, and loading from true-emulated 1541/1571 drives.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test c128_boot -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test c128_boot -- --ignored
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaKind};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, MemSpaceId, Size};
 use media::D64;
 use media_backends::image::MemoryBackend;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaKind};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, MemSpaceId, Size};
 
 fn boot(options: &[(&str, &str)]) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
@@ -20,7 +20,7 @@ fn boot(options: &[(&str, &str)]) -> Box<dyn Machine> {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    emu_machines::registry().create("c128", &config).unwrap()
+    mimic_machines::registry().create("c128", &config).unwrap()
 }
 
 fn read(m: &mut dyn Machine, space: MemSpaceId, from: u32, len: u32) -> Vec<u8> {
@@ -82,7 +82,7 @@ fn snapshot(m: &dyn Machine, name: &str, screen: &str) -> std::path::PathBuf {
         .find(|s| s.name == screen)
         .unwrap()
         .id;
-    let png = emu_preview::encode_png(&m.screen(id).unwrap());
+    let png = mimic_preview::encode_png(&m.screen(id).unwrap());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.png"));
     std::fs::write(&out, png).unwrap();
     out
@@ -155,10 +155,10 @@ fn go64_switches_to_c64_mode() {
 #[ignore = "needs C128 ROMs (incl. the C64-mode ROMs) in EMU_ROM_DIR"]
 fn commodore_key_at_power_on_starts_c64_mode() {
     let mut m = boot(&[("drive8", "none")]);
-    let key = |at: u64, down: bool| emu_core::input::TimedInput {
-        at: emu_core::Cycle(at),
-        target: emu_core::input::InputTarget::Keyboard,
-        event: emu_core::input::InputEvent::Key {
+    let key = |at: u64, down: bool| mimic_core::input::TimedInput {
+        at: mimic_core::Cycle(at),
+        target: mimic_core::input::InputTarget::Keyboard,
+        event: mimic_core::input::InputEvent::Key {
             machine_key: machine_c128::keyboard::keys::COMMODORE,
             down,
         },

@@ -106,11 +106,11 @@
 //! project's Z80 disassembler; MSX's number format was compared with what
 //! LIST writes on the screen. No emulator source was used.
 
-use emu_core::basic::{
+use mimic_core::basic::{
     BasicError, BasicFrame, BasicGranularity, BasicInfo, BasicLine, BasicMode, BasicPos,
     BasicState, BasicStopPoint, BasicType, BasicValue, BasicVar,
 };
-use emu_core::{BreakpointKind, DebugTarget, MemSpaceId, Size};
+use mimic_core::{BreakpointKind, DebugTarget, MemSpaceId, Size};
 
 use crate::Dialect;
 

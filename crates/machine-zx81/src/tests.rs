@@ -1,6 +1,6 @@
 use super::*;
-use emu_core::input::MachineKey;
-use emu_core::media::MediaBackend;
+use mimic_core::input::MachineKey;
+use mimic_core::media::MediaBackend;
 use std::sync::{Arc, Mutex};
 
 fn stub(ram: &str) -> Zx81 {

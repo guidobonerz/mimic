@@ -3,7 +3,7 @@
 //! the WiC64 WLAN adapter on the user port ([`wic64`]).
 //!
 //! They never touch the host themselves (golden rule 10): network and
-//! files come through the [`emu_core::host`] traits the frontend lends the
+//! files come through the [`mimic_core::host`] traits the frontend lends the
 //! machine, wrapped in a journal so recordings replay exactly.
 //! [`testing`] has scripted stand-ins for tests (no real network).
 

@@ -17,7 +17,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use cpu_m68k::{Access, Step, TimedBus68, M68000};
-use emu_core::{Bus, Size};
+use mimic_core::{Bus, Size};
 use serde::Deserialize;
 use serde_json::Value;
 

@@ -83,7 +83,7 @@ fn savestate_round_trip_is_deterministic() {
 
 #[test]
 fn joystick_reads_as_keyboard_line_9() {
-    use emu_core::input::{Dirs, InputEvent, InputTarget, TimedInput};
+    use mimic_core::input::{Dirs, InputEvent, InputTarget, TimedInput};
     let mut m = stub("6128");
     m.input(TimedInput {
         at: m.now(),
@@ -145,7 +145,9 @@ fn graphics_views_show_the_screen_without_side_effects() {
     let ids: Vec<_> = m.gfx_views().iter().map(|v| v.id).collect();
     assert_eq!(ids, ["screen", "palette"]);
     let before = m.save_state();
-    let v = m.gfx_view("screen", &emu_core::GfxOptions::new()).unwrap();
+    let v = m
+        .gfx_view("screen", &mimic_core::GfxOptions::new())
+        .unwrap();
     assert_eq!(v.space, RAM_SPACE);
     let r = &m.io.crtc.regs;
     assert_eq!(v.param("chars"), Some(u32::from(r[1])));
@@ -161,11 +163,13 @@ fn graphics_views_show_the_screen_without_side_effects() {
     let ink = m.io.ga.inks[1];
     let pal = chips_amstrad::palette::palette();
     assert_eq!(v.frame().rgb_at(0, 0), Some(pal[usize::from(ink)]));
-    let p = m.gfx_view("palette", &emu_core::GfxOptions::new()).unwrap();
+    let p = m
+        .gfx_view("palette", &mimic_core::GfxOptions::new())
+        .unwrap();
     assert_eq!(p.param("pen1"), Some(u32::from(ink)));
     assert_eq!(p.raw.len(), 17);
     assert!(m
-        .gfx_view("sprites", &emu_core::GfxOptions::new())
+        .gfx_view("sprites", &mimic_core::GfxOptions::new())
         .is_none());
     assert_eq!(m.save_state(), before, "views change nothing");
     // The RAM space reaches the 6128's extra banks.
@@ -194,13 +198,13 @@ fn crtc_overlay_marks_writes_where_the_beam_was() {
     assert!(m.poke(CPU_SPACE, IO_BASE + 0x7f00, Size::Byte, 0x40 | 4));
     // Halted mid-frame: the field so far.
     let o = m.overlay("crtc").unwrap();
-    let mark = |label: &str| emu_core::overlay::Shape::Mark {
+    let mark = |label: &str| mimic_core::overlay::Shape::Mark {
         x: i32::from(b.hpos),
         y: 100,
         color: if label.starts_with('R') {
-            emu_core::overlay::colors::YELLOW
+            mimic_core::overlay::colors::YELLOW
         } else {
-            emu_core::overlay::colors::CYAN
+            mimic_core::overlay::colors::CYAN
         },
         label: Some(label.into()),
     };
@@ -238,10 +242,10 @@ fn vsync_bands_cover_the_rows_drawn_during_vsync() {
     let o = r.overlay("vsync", 5).unwrap();
     assert_eq!(
         o.shapes,
-        vec![emu_core::overlay::Shape::Band {
+        vec![mimic_core::overlay::Shape::Band {
             y: 100,
             h: 4,
-            color: emu_core::overlay::colors::MAGENTA,
+            color: mimic_core::overlay::colors::MAGENTA,
             label: Some("VSYNC".into()),
         }]
     );

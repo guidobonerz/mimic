@@ -40,11 +40,11 @@
 //! [`InputEvent::MouseRel`] (moves the aim, button 0 the switch),
 //! [`InputEvent::Digital`] button bit 0.
 
-use emu_core::frame::Rgb8;
-use emu_core::input::InputEvent;
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::frame::Rgb8;
+use mimic_core::input::InputEvent;
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 use crate::joystick;
 

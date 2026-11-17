@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use emu_core::registry::MachineConfig;
-use emu_debug::{DebugServer, ServerConfig, Session};
+use mimic_core::registry::MachineConfig;
+use mimic_debug::{DebugServer, ServerConfig, Session};
 
 /// The subroutine program of the protocol test, loaded at $0800:
 /// 0800 JSR $0810 / JMP $0800; 0810 LDA #1, STA $0400, JSR $0820, RTS;
@@ -67,7 +67,7 @@ fn command_line_client_drives_the_debugger() {
         eprintln!("skipped: no Python 3 found");
         return;
     };
-    let machine = emu_machines::registry()
+    let machine = mimic_machines::registry()
         .create("sim6502", &subroutines())
         .unwrap();
     let server = DebugServer::start(
@@ -114,10 +114,10 @@ fn command_line_client_drives_the_debugger() {
     server.shutdown();
 }
 
-/// `polydbg basic …` against the toy BASIC machine of `emu-core`.
+/// `polydbg basic …` against the toy BASIC machine of `mimic-core`.
 #[test]
 fn command_line_client_debugs_basic() {
-    use emu_core::testing::basic::{ToyBasic, ToyStmt::*};
+    use mimic_core::testing::basic::{ToyBasic, ToyStmt::*};
     let Some(python) = python() else {
         eprintln!("skipped: no Python 3 found");
         return;
@@ -217,7 +217,7 @@ fn command_line_client_debugs_basic() {
 /// `polydbg type`: text for the machine's keyboard, typed while it runs.
 #[test]
 fn command_line_client_types_text() {
-    use emu_core::testing::basic::ToyBasic;
+    use mimic_core::testing::basic::ToyBasic;
     let Some(python) = python() else {
         eprintln!("skipped: no Python 3 found");
         return;

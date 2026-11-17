@@ -71,8 +71,8 @@
 //! addresses, power-on banks, the SCC's window, the battery RAM schemes),
 //! read 2026-11-12; see `docs/sources.md`.
 
-use emu_core::media::MediaError;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::MediaError;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::scc::Scc;
 use crate::slot::CartSlot;

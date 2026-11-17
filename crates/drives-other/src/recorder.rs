@@ -19,9 +19,9 @@
 //! Keys ([`MediaSlot::control`]): "play", "record", "stop", "rewind",
 //! "forward". Inserting a tape presses PLAY.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::cas::{self, Cas, Record};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::sio::{SerialIn, SerialTx};
 
@@ -345,7 +345,7 @@ impl MediaSlot for Recorder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
+    use mimic_core::media::MediaBackend;
 
     const HZ: u32 = 1_773_447;
 

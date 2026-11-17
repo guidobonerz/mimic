@@ -7,8 +7,8 @@ use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
-use emu_core::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind};
+use mimic_core::Machine;
 
 fn range(len: u64, offset: u64, n: usize) -> Result<std::ops::Range<usize>, MediaError> {
     let end = offset.checked_add(n as u64).ok_or(MediaError::OutOfRange)?;

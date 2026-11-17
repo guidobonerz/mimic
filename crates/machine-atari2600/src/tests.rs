@@ -1,11 +1,11 @@
 use super::*;
-use emu_core::input::Dirs;
-use emu_core::input::{InputEvent, MachineKey};
-use emu_core::media::MediaKind;
+use mimic_core::input::Dirs;
+use mimic_core::input::{InputEvent, MachineKey};
+use mimic_core::media::MediaKind;
 
 fn stub(model: &str) -> Atari2600 {
     let mut config = MachineConfig {
-        video_format: emu_core::frame::VideoStandard::parse(model),
+        video_format: mimic_core::frame::VideoStandard::parse(model),
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());
@@ -67,7 +67,7 @@ fn empty_console_idles_and_free_runs() {
     // "auto" keeps the TIA's PAL limits until (and after) it decides.
     for (model, standard) in [("ntsc", VideoStandard::Ntsc), ("auto", VideoStandard::Pal)] {
         let mut m = Atari2600::new(&MachineConfig {
-            video_format: emu_core::frame::VideoStandard::parse(model),
+            video_format: mimic_core::frame::VideoStandard::parse(model),
             ..MachineConfig::default()
         })
         .unwrap();
@@ -166,7 +166,7 @@ fn with_program(program: &[u8]) -> Atari2600 {
     rom[..program.len()].copy_from_slice(program);
     rom[0xffc..].copy_from_slice(&[0x00, 0xf0, 0x00, 0xf0]);
     let mut m = Atari2600::new(&MachineConfig {
-        video_format: Some(emu_core::frame::VideoStandard::Ntsc),
+        video_format: Some(mimic_core::frame::VideoStandard::Ntsc),
         ..MachineConfig::default()
     })
     .unwrap();
@@ -214,7 +214,7 @@ fn tia_sound_reaches_the_audio_output() {
         m.audio(&mut samples);
     }
     // 30 free-running fields of 302 lines at 76 cycles: ≈ 0.58 s of sound.
-    let rate = f64::from(emu_core::SAMPLE_RATE);
+    let rate = f64::from(mimic_core::SAMPLE_RATE);
     assert!((samples.len() as f64 / rate - 0.577).abs() < 0.01);
     let high = samples.iter().filter(|&&s| s > 10_000).count();
     let low = samples.iter().filter(|&&s| s < 5_000).count();
@@ -365,7 +365,7 @@ fn driving_controller_gray_code() {
 
 /// A machine with `rom` in the cartridge slot (as a user inserts it).
 fn with_cart(rom: Vec<u8>, options: &[(&str, &str)]) -> Atari2600 {
-    use emu_core::media::{Media, MediaBackend, MediaError};
+    use mimic_core::media::{Media, MediaBackend, MediaError};
     struct Mem(Vec<u8>);
     impl MediaBackend for Mem {
         fn len(&self) -> u64 {
@@ -468,7 +468,7 @@ fn gfx_views_show_the_tia_registers() {
     assert_eq!(v.raw[usize::from(tia::PF1)], 0x80);
     let pf_strip = 7 * 9;
     match &v.pixels {
-        emu_core::gfx::GfxPixels::Indexed { pixels, .. } => {
+        mimic_core::gfx::GfxPixels::Indexed { pixels, .. } => {
             assert_eq!(pixels[(pf_strip * 160 + 16) as usize], 0x43);
         }
         _ => panic!("indexed"),
@@ -499,15 +499,15 @@ fn overlay_marks_position_strobes_and_hmove() {
     let o = m.overlay("objects").unwrap();
     assert_eq!(
         o.shapes[0],
-        emu_core::overlay::Shape::Mark {
+        mimic_core::overlay::Shape::Mark {
             x: i32::from(clock - tia::HBLANK),
             y: 50,
-            color: emu_core::overlay::colors::RED,
+            color: mimic_core::overlay::colors::RED,
             label: Some("RESP0".into()),
         }
     );
     assert!(matches!(&o.shapes[1],
-        emu_core::overlay::Shape::Mark { label: Some(l), .. } if l == "HMOVE"));
+        mimic_core::overlay::Shape::Mark { label: Some(l), .. } if l == "HMOVE"));
     frame(&mut m);
     assert!(m.overlay("objects").unwrap().shapes.is_empty());
     m.set_overlays(&[]);
@@ -702,7 +702,7 @@ fn auto_model_detects_the_tv_standard_from_the_field_length() {
 fn forced_models_do_not_switch() {
     let mut m = with_cart(frames_of(255), &[]);
     let mut config = MachineConfig {
-        video_format: Some(emu_core::frame::VideoStandard::Pal),
+        video_format: Some(mimic_core::frame::VideoStandard::Pal),
         ..MachineConfig::default()
     };
     config.options.insert("roms".into(), "stub".into());

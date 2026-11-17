@@ -2,7 +2,7 @@
 //! loop and its two name tables, a tokenised program, the variable tables
 //! and the run time stack.
 
-use emu_core::cpu::{Flow, Instr, RegisterSet};
+use mimic_core::cpu::{Flow, Instr, RegisterSet};
 
 use super::*;
 

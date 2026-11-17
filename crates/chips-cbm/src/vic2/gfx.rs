@@ -1,4 +1,4 @@
-//! Graphics data views of the VIC-II (see `emu_core::gfx`): sprites, the
+//! Graphics data views of the VIC-II (see `mimic_core::gfx`): sprites, the
 //! character set, the bitmap, screen memory and the palette, decoded from
 //! the chip's registers and its view of memory, side-effect free.
 //!
@@ -8,12 +8,12 @@
 //! per sprite, 24 × 21 pixels; multicolour pairs: 01 = $D025, 10 = sprite
 //! colour, 11 = $D026). Text and bitmap colours as in 3.7.3.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxPixels, GfxView, GfxViewInfo,
     OPT_ADDR, OPT_COUNT, OPT_INDEX, OPT_MULTICOLOR,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::{Vic2, VicMemory};
 

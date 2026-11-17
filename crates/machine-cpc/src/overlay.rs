@@ -1,4 +1,4 @@
-//! Debug overlays of the CPC (see `emu_core::overlay`), on the Gate
+//! Debug overlays of the CPC (see `mimic_core::overlay`), on the Gate
 //! Array's picture:
 //!
 //! - `crtc`: a mark where a CRTC register write (`R7=1E`) or a Gate Array
@@ -17,7 +17,7 @@
 //! field so far once it has passed it.
 
 use chips_amstrad::gate_array::HEIGHT;
-use emu_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 /// Marks kept per field.
 const MAX_MARKS: usize = 2048;

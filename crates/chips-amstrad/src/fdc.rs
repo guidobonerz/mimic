@@ -30,7 +30,7 @@
 //! is reported after two index pulses. The FDC on the CPC runs at 4 MHz,
 //! so step times are twice the SPECIFY values.
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// One revolution in microseconds.
 pub const REV_US: u32 = 200_000;

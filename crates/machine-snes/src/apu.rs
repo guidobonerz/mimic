@@ -26,8 +26,8 @@
 
 use chips_nintendo::sdsp::SDsp;
 use cpu_spc700::{Spc700, SpcBus};
-use emu_core::savestate::{Savestate, StateError, StateReader, StateWriter};
-use emu_core::{DebugTarget, Instr, MemSpaceId, RegisterSet, Size};
+use mimic_core::savestate::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{DebugTarget, Instr, MemSpaceId, RegisterSet, Size};
 
 /// The SPC700's 64 KB address space (debugger).
 pub const ARAM_SPACE: MemSpaceId = MemSpaceId(10);

@@ -1,11 +1,11 @@
 //! The TI-99/4A with its real ROMs (user-supplied in `~/.mimic/roms/ti99`
 //! or `EMU_ROM_DIR`): the title screen, the menu, TI BASIC, a cartridge.
 //!
-//!     cargo test -p emu-tests --release --test ti99_boot -- --ignored
+//!     cargo test -p mimic-tests --release --test ti99_boot -- --ignored
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Machine, Size};
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Machine, Size};
 
 fn ti99(options: &[(&str, &str)]) -> Box<dyn Machine> {
     let dir = media_backends::roms::env_dir().expect("no ROM folder");
@@ -16,7 +16,7 @@ fn ti99(options: &[(&str, &str)]) -> Box<dyn Machine> {
     for (k, v) in options {
         config.options.insert((*k).into(), (*v).into());
     }
-    emu_machines::registry().create("ti99", &config).unwrap()
+    mimic_machines::registry().create("ti99", &config).unwrap()
 }
 
 fn run(m: &mut dyn Machine, frames: u32) {
@@ -124,7 +124,7 @@ fn type_text(m: &mut dyn Machine, text: &str) {
         let now = m.now().0;
         for &k in &ks {
             m.input(TimedInput {
-                at: emu_core::Cycle(now),
+                at: mimic_core::Cycle(now),
                 target: InputTarget::Keyboard,
                 event: InputEvent::Key {
                     machine_key: MachineKey(k),
@@ -136,7 +136,7 @@ fn type_text(m: &mut dyn Machine, text: &str) {
         let now = m.now().0;
         for &k in ks.iter().rev() {
             m.input(TimedInput {
-                at: emu_core::Cycle(now),
+                at: mimic_core::Cycle(now),
                 target: InputTarget::Keyboard,
                 event: InputEvent::Key {
                     machine_key: MachineKey(k),
@@ -194,7 +194,7 @@ fn ti_basic_starts_and_computes() {
 fn snapshot(m: &dyn Machine, name: &str) {
     if let Ok(dir) = std::env::var("EMU_SNAPSHOT_DIR") {
         let profile = video_crt::Profile::preset("lite").unwrap();
-        let png = emu_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
+        let png = mimic_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
         std::fs::write(std::path::Path::new(&dir).join(name), png).unwrap();
     }
 }
@@ -234,16 +234,16 @@ fn a_cartridge_appears_in_the_menu_and_runs() {
 #[derive(Clone)]
 struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
-impl emu_core::media::MediaBackend for Shared {
+impl mimic_core::media::MediaBackend for Shared {
     fn len(&self) -> u64 {
         self.0.lock().unwrap().len() as u64
     }
-    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), emu_core::media::MediaError> {
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), mimic_core::media::MediaError> {
         let d = self.0.lock().unwrap();
         buf.copy_from_slice(&d[offset as usize..offset as usize + buf.len()]);
         Ok(())
     }
-    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), emu_core::media::MediaError> {
+    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), mimic_core::media::MediaError> {
         let mut d = self.0.lock().unwrap();
         let o = offset as usize;
         let n = d.len().max(o + data.len());
@@ -251,7 +251,7 @@ impl emu_core::media::MediaBackend for Shared {
         d[o..o + data.len()].copy_from_slice(data);
         Ok(())
     }
-    fn commit(&mut self) -> Result<(), emu_core::media::MediaError> {
+    fn commit(&mut self) -> Result<(), mimic_core::media::MediaError> {
         Ok(())
     }
 }
@@ -300,9 +300,9 @@ fn ti_basic_saves_to_and_loads_from_cassette() {
         .id;
     m.media_slot(slot)
         .unwrap()
-        .insert(emu_core::media::Media {
+        .insert(mimic_core::media::Media {
             name: "blank.wav".into(),
-            kind: emu_core::media::MediaKind::Tape,
+            kind: mimic_core::media::MediaKind::Tape,
             backend: Box::new(store.clone()),
         })
         .unwrap();
@@ -370,9 +370,9 @@ fn ti_basic_saves_to_and_loads_from_disk() {
         .id;
     m.media_slot(slot)
         .unwrap()
-        .insert(emu_core::media::Media {
+        .insert(mimic_core::media::Media {
             name: "blank.dsk".into(),
-            kind: emu_core::media::MediaKind::Disk,
+            kind: mimic_core::media::MediaKind::Disk,
             backend: Box::new(store.clone()),
         })
         .unwrap();

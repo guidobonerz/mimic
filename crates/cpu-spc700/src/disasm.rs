@@ -1,6 +1,6 @@
 //! Disassembler (Sony syntax). Reads with `SpcBus::peek` only.
 
-use emu_core::{Flow, Instr};
+use mimic_core::{Flow, Instr};
 
 use crate::SpcBus;
 

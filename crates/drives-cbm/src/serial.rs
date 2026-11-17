@@ -15,10 +15,10 @@
 //! race would hit at the same point every time; the drive therefore runs
 //! [`DEFAULT_CRYSTAL_PPM`] off nominal unless `drive8_ppm` says otherwise.
 
-use emu_core::media::{DriveStatus, MediaSlot};
-use emu_core::registry::ConfigError;
-use emu_core::CycleResult as Cycle;
-use emu_core::{
+use mimic_core::media::{DriveStatus, MediaSlot};
+use mimic_core::registry::ConfigError;
+use mimic_core::CycleResult as Cycle;
+use mimic_core::{
     ClockDivider, CycleResult, DebugHooks, DebugTarget, DeviceId, MemSpaceId, Savestate,
     StateError, StateReader, StateWriter, StopReason,
 };

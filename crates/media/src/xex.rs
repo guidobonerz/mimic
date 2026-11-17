@@ -5,7 +5,7 @@
 //! loaded, RUNAD (`$02E0`) names where the program starts after loading.
 //! Source: Atari DOS 2.0S Reference Manual, "Binary file format".
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 pub const RUNAD: u16 = 0x02e0;
 pub const INITAD: u16 = 0x02e2;

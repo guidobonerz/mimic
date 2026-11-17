@@ -15,8 +15,8 @@
 //! `51,OVERFLOW IN RECORD`; positioning past the end is `50,RECORD NOT
 //! PRESENT`, and writing there adds the records up to it.
 
-use emu_core::host::lock;
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::host::lock;
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use super::super::names::{self, REL};
 use super::{
@@ -131,7 +131,7 @@ impl RelFile {
 
     pub(super) fn load(c: &mut StateReader<'_>) -> Result<Self, StateError> {
         let path = c.string()?;
-        emu_core::host::check_path(&path).map_err(|_| StateError::Invalid("sd2iec REL path"))?;
+        mimic_core::host::check_path(&path).map_err(|_| StateError::Invalid("sd2iec REL path"))?;
         let f = Self {
             path,
             header: c.bytes()?.to_vec(),

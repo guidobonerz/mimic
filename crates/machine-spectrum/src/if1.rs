@@ -22,7 +22,7 @@
 //! $1532, the GAP/SYNC search at $15E2, RS-232 at $0B88 and $0D0C).
 
 use drives_other::microdrive::Microdrive;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub struct Interface1 {
     pub drives: Vec<Microdrive>,

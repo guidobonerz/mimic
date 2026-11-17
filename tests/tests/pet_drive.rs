@@ -2,16 +2,16 @@
 //! `EMU_ROM_DIR`): BASIC 4 disk commands on a D80, LOAD/SAVE on BASIC 2,
 //! and DEVICE NOT PRESENT without a drive.
 //!
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test pet_drive -- --ignored
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test pet_drive -- --ignored
 
 use std::sync::{Arc, Mutex};
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, MemSpaceId, Size};
 use machine_pet::keyboard::Layout;
 use media::D64;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, MemSpaceId, Size};
 
 struct Shared(Arc<Mutex<Vec<u8>>>);
 
@@ -42,7 +42,7 @@ fn pet(model: &str, drive: &str) -> Box<dyn Machine> {
         ..MachineConfig::default()
     };
     config.options.insert("drive8".into(), drive.into());
-    emu_machines::registry().create("pet", &config).unwrap()
+    mimic_machines::registry().create("pet", &config).unwrap()
 }
 
 fn screen(m: &mut dyn Machine) -> Vec<u8> {

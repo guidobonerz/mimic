@@ -26,7 +26,7 @@
 //! but only with CRA bit 4 set (rising edge). Any output mode clears the
 //! flag.
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PiaPort {

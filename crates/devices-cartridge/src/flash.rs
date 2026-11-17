@@ -9,7 +9,7 @@
 //! at once (status polling then sees the final data). Source: AMD Am29F040B
 //! data sheet.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const SIZE: usize = 0x8_0000;
 const SECTOR: usize = 0x1_0000;

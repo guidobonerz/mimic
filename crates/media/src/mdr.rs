@@ -13,7 +13,7 @@
 //! Microdrive Book* (the block layout). The implementation is this
 //! project's own.
 
-use emu_core::media::MediaError;
+use mimic_core::media::MediaError;
 
 pub const SECTORS: usize = 254;
 pub const HEADER_LEN: usize = 15;

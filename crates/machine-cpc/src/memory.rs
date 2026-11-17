@@ -17,7 +17,7 @@
 //! | 3      | 0     | 3     | 2     | 7     |
 //! | 4–7    | 0     | 4–7   | 2     | 3     |
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const ROM_SIZE: usize = 0x4000;
 

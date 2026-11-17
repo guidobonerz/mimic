@@ -35,7 +35,7 @@
 //! Mappers" and "Konami 051649" (register map, the 11-bit output). See
 //! `docs/sources.md`.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scc {

@@ -30,8 +30,8 @@
 //! Sources: 1551 schematic 251860, paddle schematic 251925 and parts list
 //! (zimmers.net); Plus/4 KERNAL 318004-05 (`$EC8B–$EE10`, `$F313`).
 
-use emu_core::media::{DriveStatus, MediaSlot};
-use emu_core::{
+use mimic_core::media::{DriveStatus, MediaSlot};
+use mimic_core::{
     ClockDivider, CycleResult, DebugHooks, DebugTarget, DeviceId, MemSpaceId, Savestate,
     StateError, StateReader, StateWriter, StopReason,
 };
@@ -243,11 +243,11 @@ mod tests {
         for _ in 0..4 {
             t.run(None);
         }
-        let d = t.drive.peek(MemSpaceId(3), 0x4000, emu_core::Size::Byte);
+        let d = t.drive.peek(MemSpaceId(3), 0x4000, mimic_core::Size::Byte);
         assert_eq!(d, Some(0x55), "drive PA sees DIO");
         let pc = t
             .drive
-            .peek(MemSpaceId(3), 0x4002, emu_core::Size::Byte)
+            .peek(MemSpaceId(3), 0x4002, mimic_core::Size::Byte)
             .unwrap();
         assert_eq!(pc & 0x80, 0, "DAV low at the drive");
         assert_eq!(t.peek(0xfef1), Some(0x02), "status at the host's PB");
@@ -275,7 +275,7 @@ mod tests {
             t.run(None);
         }
         let space = MemSpaceId(3);
-        let pc = t.drive.peek(space, 0x4002, emu_core::Size::Byte).unwrap();
+        let pc = t.drive.peek(space, 0x4002, mimic_core::Size::Byte).unwrap();
         assert_eq!(pc & 0x01, 0, "STATUS0 pulled low by the host");
         assert_eq!(pc & 0x02, 0x02, "STATUS1 high");
         assert_eq!(pc & 0x08, 0, "ACK pulled low by the host");
@@ -306,7 +306,7 @@ mod tests {
         for _ in 0..(8330 * 2 + 100) {
             t.drive.tick(IecLines::default(), None);
         }
-        let n = t.drive.peek(MemSpaceId(3), 0x10, emu_core::Size::Byte);
+        let n = t.drive.peek(MemSpaceId(3), 0x10, mimic_core::Size::Byte);
         assert_eq!(n, Some(3), "one IRQ per period");
     }
 

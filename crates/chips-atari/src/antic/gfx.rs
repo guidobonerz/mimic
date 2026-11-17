@@ -1,5 +1,5 @@
 //! Graphics data views of the Atari 8-bit computers' ANTIC and GTIA (see
-//! `emu_core::gfx`): players and missiles, the character set, the
+//! `mimic_core::gfx`): players and missiles, the character set, the
 //! playfield as the display list builds it, and the GTIA palette. Decoded
 //! from the chips' registers and ANTIC's view of memory, side-effect free.
 //!
@@ -17,12 +17,12 @@
 //! GTIA modes 9–11 and players, and stops at 240 scan lines like the
 //! display does.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxPixels, GfxView, GfxViewInfo,
     OPT_ADDR, OPT_INDEX,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::{char_data, pixel, width_edges, Antic, AnticMemory, Playfield, MODES};
 use crate::gtia::Gtia;
@@ -490,7 +490,7 @@ impl Antic {
 mod tests {
     use super::*;
     use crate::palette;
-    use emu_core::frame::VideoStandard;
+    use mimic_core::frame::VideoStandard;
 
     struct Ram(Vec<u8>);
 

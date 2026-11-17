@@ -185,7 +185,7 @@ name = "asm-ada"
 version = "0.1.0"
 dependencies = [
  "cpu-ada",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -357,7 +357,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 name = "basic-dialects"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -460,7 +460,7 @@ version = "0.1.0"
 dependencies = [
  "asm-ada",
  "cpu-ada",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -570,42 +570,42 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 name = "chips-acorn"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "chips-amiga"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "chips-amstrad"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "chips-atari"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "chips-cbm"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "chips-logophor"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
  "symphonia-bundle-mp3",
  "symphonia-codec-aac",
  "symphonia-core",
@@ -615,35 +615,35 @@ dependencies = [
 name = "chips-nintendo"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "chips-sinclair"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "chips-ti"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "chips-yamaha"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "chips-zilog"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -850,7 +850,7 @@ dependencies = [
 name = "cpu-45gs02"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -858,7 +858,7 @@ name = "cpu-6502"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "emu-core",
+ "mimic-core",
  "serde",
  "serde_json",
 ]
@@ -867,7 +867,7 @@ dependencies = [
 name = "cpu-65816"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
  "serde",
  "serde_json",
 ]
@@ -876,36 +876,36 @@ dependencies = [
 name = "cpu-6809"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "cpu-8080"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "cpu-ada"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "cpu-arm"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "cpu-m68k"
 version = "0.1.0"
 dependencies = [
- "emu-core",
  "flate2",
+ "mimic-core",
  "serde",
  "serde_json",
 ]
@@ -914,7 +914,7 @@ dependencies = [
 name = "cpu-spc700"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
  "serde",
  "serde_json",
 ]
@@ -923,21 +923,21 @@ dependencies = [
 name = "cpu-tms9900"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "cpu-upd7725"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "cpu-z80"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
  "serde",
  "serde_json",
 ]
@@ -1038,29 +1038,29 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 name = "devices-cartridge"
 version = "0.1.0"
 dependencies = [
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
 name = "devices-input"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "devices-net"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
 name = "devices-printer"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
  "noto-sans-mono-bitmap",
  "png",
 ]
@@ -1140,8 +1140,8 @@ version = "0.1.0"
 dependencies = [
  "chips-cbm",
  "cpu-6502",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -1150,8 +1150,8 @@ version = "0.1.0"
 dependencies = [
  "chips-amstrad",
  "cpu-6502",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -1159,202 +1159,6 @@ name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
-
-[[package]]
-name = "emu-cheats"
-version = "0.1.0"
-dependencies = [
- "emu-core",
- "serde",
- "toml",
-]
-
-[[package]]
-name = "emu-core"
-version = "0.1.0"
-
-[[package]]
-name = "emu-debug"
-version = "0.1.0"
-dependencies = [
- "emu-cheats",
- "emu-core",
- "emu-preview",
- "serde",
- "serde_json",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "emu-desktop"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "cpal",
- "emu-cheats",
- "emu-core",
- "emu-debug",
- "emu-input",
- "emu-machines",
- "emu-preview",
- "emu-profile",
- "gilrs",
- "media-backends",
- "noto-sans-mono-bitmap",
- "png",
- "pollster",
- "rfd",
- "video-crt",
- "wgpu",
- "windows-sys 0.59.0",
- "winit",
-]
-
-[[package]]
-name = "emu-headless"
-version = "0.1.0"
-dependencies = [
- "emu-cheats",
- "emu-core",
- "emu-debug",
- "emu-input",
- "emu-machines",
- "emu-preview",
- "emu-profile",
- "media-backends",
- "video-crt",
-]
-
-[[package]]
-name = "emu-input"
-version = "0.1.0"
-dependencies = [
- "emu-core",
- "serde",
- "toml",
-]
-
-[[package]]
-name = "emu-machines"
-version = "0.1.0"
-dependencies = [
- "devices-input",
- "devices-net",
- "emu-core",
- "machine-amiga",
- "machine-apple2",
- "machine-archimedes",
- "machine-atari2600",
- "machine-atari8",
- "machine-bbc",
- "machine-c128",
- "machine-c64",
- "machine-coleco",
- "machine-cpc",
- "machine-imsai",
- "machine-kc85",
- "machine-keypunch",
- "machine-logophor16",
- "machine-mac",
- "machine-mega65",
- "machine-msx",
- "machine-nes",
- "machine-pet",
- "machine-sim6502",
- "machine-snes",
- "machine-spectrum",
- "machine-ted",
- "machine-ti99",
- "machine-trs80",
- "machine-vectrex",
- "machine-vic20",
- "machine-zx81",
-]
-
-[[package]]
-name = "emu-preview"
-version = "0.1.0"
-dependencies = [
- "emu-core",
- "futures-util",
- "png",
- "qoi",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
- "video-crt",
-]
-
-[[package]]
-name = "emu-profile"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_yaml_ng",
-]
-
-[[package]]
-name = "emu-tests"
-version = "0.1.0"
-dependencies = [
- "asm-ada",
- "chips-cbm",
- "cpu-m68k",
- "devices-cartridge",
- "devices-net",
- "drives-other",
- "emu-cheats",
- "emu-core",
- "emu-debug",
- "emu-machines",
- "emu-preview",
- "machine-amiga",
- "machine-apple2",
- "machine-archimedes",
- "machine-atari8",
- "machine-bbc",
- "machine-c128",
- "machine-c64",
- "machine-cpc",
- "machine-imsai",
- "machine-kc85",
- "machine-keypunch",
- "machine-logophor16",
- "machine-mac",
- "machine-mega65",
- "machine-msx",
- "machine-pet",
- "machine-snes",
- "machine-spectrum",
- "machine-ted",
- "machine-trs80",
- "machine-vic20",
- "machine-zx81",
- "media",
- "media-backends",
- "png",
- "qoi",
- "serde_json",
- "tokio-tungstenite",
- "video-crt",
-]
-
-[[package]]
-name = "emu-web"
-version = "0.1.0"
-dependencies = [
- "emu-cheats",
- "emu-core",
- "emu-input",
- "emu-machines",
- "emu-preview",
- "emu-profile",
- "media-backends",
- "png",
- "serde_json",
- "video-crt",
-]
 
 [[package]]
 name = "encoding_rs"
@@ -2208,8 +2012,8 @@ dependencies = [
  "devices-input",
  "devices-printer",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2222,8 +2026,8 @@ dependencies = [
  "cpu-6502",
  "devices-input",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2232,7 +2036,7 @@ version = "0.1.0"
 dependencies = [
  "chips-acorn",
  "cpu-arm",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2243,7 +2047,7 @@ dependencies = [
  "cpu-6502",
  "devices-cartridge",
  "devices-input",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2258,8 +2062,8 @@ dependencies = [
  "devices-input",
  "devices-printer",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2271,8 +2075,8 @@ dependencies = [
  "chips-cbm",
  "chips-ti",
  "cpu-6502",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2288,8 +2092,8 @@ dependencies = [
  "devices-printer",
  "drives-cbm",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2305,8 +2109,8 @@ dependencies = [
  "devices-printer",
  "drives-cbm",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2317,7 +2121,7 @@ dependencies = [
  "cpu-z80",
  "devices-cartridge",
  "devices-input",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2330,8 +2134,8 @@ dependencies = [
  "devices-input",
  "devices-printer",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2339,8 +2143,8 @@ name = "machine-imsai"
 version = "0.1.0"
 dependencies = [
  "cpu-8080",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2349,16 +2153,16 @@ version = "0.1.0"
 dependencies = [
  "chips-zilog",
  "cpu-z80",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
 name = "machine-keypunch"
 version = "0.1.0"
 dependencies = [
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2369,7 +2173,7 @@ dependencies = [
  "brass",
  "chips-logophor",
  "cpu-ada",
- "emu-core",
+ "mimic-core",
  "png",
 ]
 
@@ -2382,8 +2186,8 @@ dependencies = [
  "devices-input",
  "devices-printer",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2394,8 +2198,8 @@ dependencies = [
  "cpu-45gs02",
  "devices-input",
  "drives-cbm",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2410,7 +2214,7 @@ dependencies = [
  "devices-cartridge",
  "devices-input",
  "drives-other",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2421,7 +2225,7 @@ dependencies = [
  "cpu-6502",
  "devices-cartridge",
  "devices-input",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2435,8 +2239,8 @@ dependencies = [
  "devices-printer",
  "drives-cbm",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2444,7 +2248,7 @@ name = "machine-sim6502"
 version = "0.1.0"
 dependencies = [
  "cpu-6502",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2457,7 +2261,7 @@ dependencies = [
  "cpu-upd7725",
  "devices-cartridge",
  "devices-input",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2471,8 +2275,8 @@ dependencies = [
  "cpu-z80",
  "devices-input",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2487,8 +2291,8 @@ dependencies = [
  "devices-printer",
  "drives-cbm",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2499,8 +2303,8 @@ dependencies = [
  "cpu-tms9900",
  "devices-input",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2510,8 +2314,8 @@ dependencies = [
  "basic-dialects",
  "cpu-z80",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2523,7 +2327,7 @@ dependencies = [
  "cpu-6809",
  "devices-cartridge",
  "devices-input",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2538,8 +2342,8 @@ dependencies = [
  "devices-printer",
  "drives-cbm",
  "drives-other",
- "emu-core",
  "media",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2549,7 +2353,7 @@ dependencies = [
  "basic-dialects",
  "chips-sinclair",
  "cpu-z80",
- "emu-core",
+ "mimic-core",
 ]
 
 [[package]]
@@ -2565,17 +2369,17 @@ dependencies = [
 name = "media"
 version = "0.1.0"
 dependencies = [
- "emu-core",
  "flate2",
+ "mimic-core",
 ]
 
 [[package]]
 name = "media-backends"
 version = "0.1.0"
 dependencies = [
- "emu-core",
  "libloading",
  "media",
+ "mimic-core",
  "serialport",
 ]
 
@@ -2616,6 +2420,202 @@ dependencies = [
  "log",
  "objc",
  "paste",
+]
+
+[[package]]
+name = "mimic-cheats"
+version = "0.1.0"
+dependencies = [
+ "mimic-core",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "mimic-core"
+version = "0.1.0"
+
+[[package]]
+name = "mimic-debug"
+version = "0.1.0"
+dependencies = [
+ "mimic-cheats",
+ "mimic-core",
+ "mimic-preview",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "mimic-desktop"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "cpal",
+ "gilrs",
+ "media-backends",
+ "mimic-cheats",
+ "mimic-core",
+ "mimic-debug",
+ "mimic-input",
+ "mimic-machines",
+ "mimic-preview",
+ "mimic-profile",
+ "noto-sans-mono-bitmap",
+ "png",
+ "pollster",
+ "rfd",
+ "video-crt",
+ "wgpu",
+ "windows-sys 0.59.0",
+ "winit",
+]
+
+[[package]]
+name = "mimic-headless"
+version = "0.1.0"
+dependencies = [
+ "media-backends",
+ "mimic-cheats",
+ "mimic-core",
+ "mimic-debug",
+ "mimic-input",
+ "mimic-machines",
+ "mimic-preview",
+ "mimic-profile",
+ "video-crt",
+]
+
+[[package]]
+name = "mimic-input"
+version = "0.1.0"
+dependencies = [
+ "mimic-core",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "mimic-machines"
+version = "0.1.0"
+dependencies = [
+ "devices-input",
+ "devices-net",
+ "machine-amiga",
+ "machine-apple2",
+ "machine-archimedes",
+ "machine-atari2600",
+ "machine-atari8",
+ "machine-bbc",
+ "machine-c128",
+ "machine-c64",
+ "machine-coleco",
+ "machine-cpc",
+ "machine-imsai",
+ "machine-kc85",
+ "machine-keypunch",
+ "machine-logophor16",
+ "machine-mac",
+ "machine-mega65",
+ "machine-msx",
+ "machine-nes",
+ "machine-pet",
+ "machine-sim6502",
+ "machine-snes",
+ "machine-spectrum",
+ "machine-ted",
+ "machine-ti99",
+ "machine-trs80",
+ "machine-vectrex",
+ "machine-vic20",
+ "machine-zx81",
+ "mimic-core",
+]
+
+[[package]]
+name = "mimic-preview"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "mimic-core",
+ "png",
+ "qoi",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "video-crt",
+]
+
+[[package]]
+name = "mimic-profile"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_yaml_ng",
+]
+
+[[package]]
+name = "mimic-tests"
+version = "0.1.0"
+dependencies = [
+ "asm-ada",
+ "chips-cbm",
+ "cpu-m68k",
+ "devices-cartridge",
+ "devices-net",
+ "drives-other",
+ "machine-amiga",
+ "machine-apple2",
+ "machine-archimedes",
+ "machine-atari8",
+ "machine-bbc",
+ "machine-c128",
+ "machine-c64",
+ "machine-cpc",
+ "machine-imsai",
+ "machine-kc85",
+ "machine-keypunch",
+ "machine-logophor16",
+ "machine-mac",
+ "machine-mega65",
+ "machine-msx",
+ "machine-pet",
+ "machine-snes",
+ "machine-spectrum",
+ "machine-ted",
+ "machine-trs80",
+ "machine-vic20",
+ "machine-zx81",
+ "media",
+ "media-backends",
+ "mimic-cheats",
+ "mimic-core",
+ "mimic-debug",
+ "mimic-machines",
+ "mimic-preview",
+ "png",
+ "qoi",
+ "serde_json",
+ "tokio-tungstenite",
+ "video-crt",
+]
+
+[[package]]
+name = "mimic-web"
+version = "0.1.0"
+dependencies = [
+ "media-backends",
+ "mimic-cheats",
+ "mimic-core",
+ "mimic-input",
+ "mimic-machines",
+ "mimic-preview",
+ "mimic-profile",
+ "png",
+ "serde_json",
+ "video-crt",
 ]
 
 [[package]]
@@ -4354,7 +4354,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "video-crt"
 version = "0.1.0"
 dependencies = [
- "emu-core",
+ "mimic-core",
  "naga",
  "png",
  "pollster",

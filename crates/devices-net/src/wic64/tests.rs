@@ -1,6 +1,6 @@
 use super::*;
 use crate::testing::FakeNet;
-use emu_core::host::Journal;
+use mimic_core::host::Journal;
 
 /// The C64's side of the user port, driven at pin level like a program
 /// using CIA2: PA2 for the direction, PB writes/reads with PC2 pulses,
@@ -15,7 +15,7 @@ struct C64Side {
 }
 
 impl C64Side {
-    fn new(net: Option<Box<dyn emu_core::host::NetBackend>>) -> Self {
+    fn new(net: Option<Box<dyn mimic_core::host::NetBackend>>) -> Self {
         let mut dev = Wic64::new();
         dev.attach_host(&HostServices::new(net, None));
         Self::with(dev)
@@ -251,7 +251,7 @@ fn without_network_remote_commands_fail() {
     for net in [None, {
         let mut n = net();
         n.online = false;
-        Some(Box::new(n) as Box<dyn emu_core::host::NetBackend>)
+        Some(Box::new(n) as Box<dyn mimic_core::host::NetBackend>)
     }] {
         let mut c = C64Side::new(net);
         assert_eq!(

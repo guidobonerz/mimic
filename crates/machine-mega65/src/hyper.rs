@@ -96,8 +96,8 @@ impl Mega65 {
                 Ok(())
             }
             (0x00, 0x7e) => {
-                use emu_core::Machine;
-                self.reset(emu_core::ResetKind::Soft);
+                use mimic_core::Machine;
+                self.reset(mimic_core::ResetKind::Soft);
                 return;
             }
             // SD card, disk image, task services.

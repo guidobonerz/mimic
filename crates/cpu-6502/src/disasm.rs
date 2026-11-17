@@ -1,6 +1,6 @@
 //! Disassembler. Uses `Bus::peek` only (golden rule 2).
 
-use emu_core::{Bus, Flow, Instr, Size};
+use mimic_core::{Bus, Flow, Instr, Size};
 
 use crate::table::{Kind, Mode, Op, CMOS_TABLE, TABLE};
 
@@ -73,7 +73,7 @@ pub(crate) fn disassemble(bus: &dyn Bus, addr: u16, cmos: bool) -> Instr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::testing::FlatBus;
+    use mimic_core::testing::FlatBus;
 
     fn dis(program: &[u8]) -> Instr {
         let mut bus = FlatBus::new(16);

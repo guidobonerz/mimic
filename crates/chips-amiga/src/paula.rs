@@ -25,7 +25,7 @@
 //! INTREQ and ADKCON are SET/CLR: bit 15 set → the 1 bits are set, else
 //! cleared.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 use crate::audio::Channel;
 use crate::disk::DiskCtl;

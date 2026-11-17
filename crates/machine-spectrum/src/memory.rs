@@ -33,7 +33,7 @@
 //! Sources: Sinclair ZX Spectrum 128 Service Manual (memory map, port
 //! `$7FFD`); World of Spectrum FAQ "128K memory".
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const ROM_SIZE: usize = 0x4000;
 pub const BANK: usize = 0x4000;

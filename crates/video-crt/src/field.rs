@@ -14,7 +14,7 @@
 //! returns `None`). The stage keeps its own field memory, never machine
 //! state (savestates stay CRT-independent).
 
-use emu_core::frame::{FieldParity, FrameRef, Rgb8};
+use mimic_core::frame::{FieldParity, FrameRef, Rgb8};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Deinterlace {
@@ -75,7 +75,7 @@ impl FieldStage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::frame::{OutputType, PixelData, SignalInfo, VideoStandard};
+    use mimic_core::frame::{OutputType, PixelData, SignalInfo, VideoStandard};
 
     fn field(px: &[Rgb8], parity: FieldParity) -> FrameRef<'_> {
         FrameRef {

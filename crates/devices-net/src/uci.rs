@@ -73,12 +73,12 @@
 
 use std::collections::BTreeMap;
 
-use emu_core::host::{
+use mimic_core::host::{
     join_path, lock, ConnState, DirEntry, FileHandle, FileHost, FileStat, FsError, HostServices,
     HttpRequest, HttpTicket, NetError, NetHandle, OpenMode, Recv, SocketKind,
 };
-use emu_core::media::{Media, MediaError, MediaKind};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::{Media, MediaError, MediaKind};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub mod http;
 mod machine;
@@ -321,7 +321,7 @@ fn net_status(e: &NetError) -> String {
 /// FAT date and time words from seconds since 1970 (UTC).
 fn fat_date_time(t: Option<i64>) -> (u16, u16) {
     let Some(t) = t else { return (0x21, 0) }; // 1980-01-01
-    let (y, mo, d, h, mi, s, _) = emu_core::host::HostTime {
+    let (y, mo, d, h, mi, s, _) = mimic_core::host::HostTime {
         unix_secs: t,
         utc_offset_secs: 0,
     }
@@ -939,7 +939,7 @@ impl Uci {
         }
     }
 
-    fn host_time(&self) -> emu_core::host::HostTime {
+    fn host_time(&self) -> mimic_core::host::HostTime {
         self.host
             .net
             .as_ref()
@@ -1029,7 +1029,7 @@ impl Uci {
                 if p.first().copied().unwrap_or(0) != 0 {
                     self.set_status("82,PARAMETER(S) OUT OF RANGE");
                 } else {
-                    let i = info().unwrap_or_else(|_| emu_core::host::NetInfo {
+                    let i = info().unwrap_or_else(|_| mimic_core::host::NetInfo {
                         ip: [0; 4],
                         netmask: [0; 4],
                         gateway: [0; 4],

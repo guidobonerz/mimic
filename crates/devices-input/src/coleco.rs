@@ -40,10 +40,10 @@
 //! vertical motion, the wheel with horizontal motion (left button = gas),
 //! the trackball with both (buttons = the two fire buttons).
 
-use emu_core::input::{Dirs, InputEvent};
-use emu_core::port::{PortDevice, PortKind, PortLines};
-use emu_core::savestate::{StateError, StateReader, StateWriter};
-use emu_core::Cycle;
+use mimic_core::input::{Dirs, InputEvent};
+use mimic_core::port::{PortDevice, PortKind, PortLines};
+use mimic_core::savestate::{StateError, StateReader, StateWriter};
+use mimic_core::Cycle;
 
 /// Pins as `PortLines` bits (bit n = pin n + 1), plus the Roller
 /// Controller's second cable.
@@ -413,7 +413,7 @@ impl PortDevice for ColecoController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::input::MachineKey;
+    use mimic_core::input::MachineKey;
 
     fn select(c: &mut ColecoController, keypad: bool, now: u64) -> u32 {
         let common = if keypad {

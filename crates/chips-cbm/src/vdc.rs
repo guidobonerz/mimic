@@ -39,8 +39,8 @@
 
 pub mod gfx;
 
-use emu_core::frame::{FieldParity, OutputType, Rgb8, SignalInfo, VideoStandard};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::frame::{FieldParity, OutputType, Rgb8, SignalInfo, VideoStandard};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Character clocks per second (16 MHz dot clock / 8).
 pub const CHAR_CLOCK_HZ: u32 = 2_000_000;

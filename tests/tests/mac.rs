@@ -4,14 +4,14 @@
 //! volume whose boot blocks blacken the screen) through the IWM and the
 //! Sony drives — 400K on the 128K/512K, 800K on the Plus and SE.
 //!
-//!     cargo test -p emu-tests --release --test mac
-//!     EMU_ROM_DIR=~/roms cargo test -p emu-tests --release --test mac -- --include-ignored --nocapture
+//!     cargo test -p mimic-tests --release --test mac
+//!     EMU_ROM_DIR=~/roms cargo test -p mimic-tests --release --test mac -- --include-ignored --nocapture
 
-use emu_core::machine::Machine;
-use emu_core::media::{Media, MediaKind, SlotId};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, StopReason};
 use media_backends::image::MemoryBackend;
+use mimic_core::machine::Machine;
+use mimic_core::media::{Media, MediaKind, SlotId};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, StopReason};
 
 fn machine(model: &str, stub: bool) -> Box<dyn Machine> {
     let mut config = MachineConfig {
@@ -24,7 +24,7 @@ fn machine(model: &str, stub: bool) -> Box<dyn Machine> {
         let dir = media_backends::roms::env_dir().expect("EMU_ROM_DIR not set");
         config.roms = media_backends::roms::load(&dir, "mac").expect("ROMs");
     }
-    emu_machines::registry().create("mac", &config).unwrap()
+    mimic_machines::registry().create("mac", &config).unwrap()
 }
 
 fn run(m: &mut dyn Machine, frames: usize) {
@@ -35,7 +35,7 @@ fn run(m: &mut dyn Machine, frames: usize) {
 }
 
 fn snapshot(m: &dyn Machine, name: &str) -> String {
-    let png = emu_preview::encode_png(&m.framebuffer());
+    let png = mimic_preview::encode_png(&m.framebuffer());
     let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&out, png).unwrap();
     out.display().to_string()
@@ -44,7 +44,7 @@ fn snapshot(m: &dyn Machine, name: &str) -> String {
 /// Share of black pixels in a rectangle of the screen.
 fn black(m: &dyn Machine, x0: usize, y0: usize, w: usize, h: usize) -> f64 {
     let f = m.framebuffer();
-    let emu_core::frame::PixelData::Indexed { pixels, .. } = f.pixels else {
+    let mimic_core::frame::PixelData::Indexed { pixels, .. } = f.pixels else {
         panic!("indexed frame expected");
     };
     let width = f.width as usize;
@@ -90,8 +90,8 @@ fn savestate_round_trip_is_deterministic() {
     run(b.as_mut(), 2);
     assert_eq!(a.now(), b.now());
     assert_eq!(
-        emu_preview::encode_png(&a.framebuffer()),
-        emu_preview::encode_png(&b.framebuffer())
+        mimic_preview::encode_png(&a.framebuffer()),
+        mimic_preview::encode_png(&b.framebuffer())
     );
 }
 

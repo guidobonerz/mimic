@@ -1,4 +1,4 @@
-//! Graphics data views of the V9938 (see `emu_core::gfx`), decoded from
+//! Graphics data views of the V9938 (see `mimic_core::gfx`), decoded from
 //! the registers, the palette and VRAM, side-effect free: `screen` (the
 //! name table or the bitmap page in the current mode, without sprites and
 //! regardless of BL and R23), `sprites` (the 32 sprites, in mode 2 with
@@ -8,12 +8,12 @@
 //! Table addresses after the Technical Data Book, chapter 1 (R2–R6, R10,
 //! R11) and chapter 2 (the modes' tables), sprites after chapter 3.
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     palette_canvas, Canvas, GfxKind, GfxOptionInfo, GfxOptions, GfxPixels, GfxView, GfxViewInfo,
     OPT_ADDR, OPT_COUNT, OPT_INDEX,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::{mode, resolve, rgb777, BORDER, G7_SPRITE_COLORS, V9938, VRAM};
 

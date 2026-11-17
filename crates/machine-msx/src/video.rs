@@ -7,11 +7,11 @@
 
 use chips_ti::{vdp, Tms9918, VdpModel};
 use chips_yamaha::{v9938, V9938};
-use emu_core::frame::{PixelData, VideoStandard};
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::machine::ChipReg;
-use emu_core::overlay::{Overlay, OverlayInfo};
-use emu_core::{MemSpaceId, StateError, StateReader, StateWriter};
+use mimic_core::frame::{PixelData, VideoStandard};
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::machine::ChipReg;
+use mimic_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::{MemSpaceId, StateError, StateReader, StateWriter};
 
 #[derive(Clone, Debug)]
 pub enum Video {

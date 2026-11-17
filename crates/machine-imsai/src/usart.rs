@@ -21,7 +21,7 @@
 //! Source: Intel 8251A Programmable Communication Interface data sheet
 //! (mode instruction, command instruction, status read).
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Command word bits.
 /// (DTR, SBRK, ER, RTS and EH have no effect here: no modem lines, no

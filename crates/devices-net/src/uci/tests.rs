@@ -1,6 +1,6 @@
 use super::*;
 use crate::testing::FakeNet;
-use emu_core::host::{Journal, MemFileHost};
+use mimic_core::host::{Journal, MemFileHost};
 
 pub(super) const STATUS: u16 = 0xdf1c;
 pub(super) const CMD: u16 = 0xdf1d;

@@ -19,8 +19,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use emu_core::media::{Media, MediaBackend, MediaError, MediaKind};
 use media::D64;
+use mimic_core::media::{Media, MediaBackend, MediaError, MediaKind};
 
 fn io_err(e: std::io::Error) -> MediaError {
     MediaError::Backend(e.to_string())

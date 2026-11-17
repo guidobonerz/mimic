@@ -4,7 +4,7 @@ const HZ: u32 = 1_773_447;
 
 struct Mem(Vec<u8>);
 
-impl emu_core::media::MediaBackend for Mem {
+impl mimic_core::media::MediaBackend for Mem {
     fn len(&self) -> u64 {
         self.0.len() as u64
     }

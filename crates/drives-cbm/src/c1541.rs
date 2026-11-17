@@ -67,13 +67,13 @@ use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::tia::Tia6523;
 use chips_cbm::via::Via;
 use cpu_6502::{Config as CpuConfig, Cpu6502, IoPort, Variant};
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{
+use media::gcr::TRACK_BYTES;
+use media::{d64::speed_zone, g64::G64, gcr, D64};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{
     Bus, Cpu, CycleResult, DebugHooks, DebugTarget, HookedBus, Instr, MemSpaceId, RegisterSet,
     Savestate, Size, StateError, StateReader, StateWriter,
 };
-use media::gcr::TRACK_BYTES;
-use media::{d64::speed_zone, g64::G64, gcr, D64};
 
 use crate::iec::IecLines;
 
@@ -961,7 +961,7 @@ impl CbmDrive {
             inner: &mut b,
             dbg: dbg.as_deref_mut(),
             space,
-            beam: emu_core::BeamPos::default(),
+            beam: mimic_core::BeamPos::default(),
         };
         let r = self.cpu.tick(&mut hooked);
         // Interrupt breakpoints are for the main CPU only.

@@ -19,10 +19,10 @@
 
 use std::collections::BTreeMap;
 
-use emu_core::media::MediaError;
 use media::d64::{sectors_per_track, speed_zone, SECTOR_SIZE};
 use media::g64::G64;
 use media::{adf, mfm, D64};
+use mimic_core::media::MediaError;
 
 use super::{gcr, mfm as fmfm, Flux};
 

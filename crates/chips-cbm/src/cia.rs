@@ -39,7 +39,7 @@
 //! by underflow or force load, removes the clock that was about to
 //! decrement, which gives the period of latch + 1 cycles.
 
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Chip revision. They differ in interrupt timing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -35,7 +35,7 @@
 //! clock shows hue 1 as its artifact colour, the shifted pattern the
 //! complementary one.
 
-use emu_core::frame::{
+use mimic_core::frame::{
     FrameRef, LumaChroma, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
 

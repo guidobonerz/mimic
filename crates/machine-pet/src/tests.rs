@@ -1,6 +1,6 @@
 use super::*;
-use emu_core::input::{InputEvent, MachineKey};
-use emu_core::media::{Media, MediaBackend, MediaError};
+use mimic_core::input::{InputEvent, MachineKey};
+use mimic_core::media::{Media, MediaBackend, MediaError};
 
 struct Bytes(Vec<u8>);
 
@@ -55,13 +55,13 @@ fn key_event(at: u64, k: MachineKey, down: bool) -> TimedInput {
 fn stub_boots_and_takes_retrace_interrupts() {
     let mut m = stub();
     let mut dbg = DebugHooks::new();
-    let idle = dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+    let idle = dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
         space: CPU_SPACE,
         addr: u32::from(stub::IDLE),
     });
     assert_eq!(m.run_frame(&mut dbg), StopReason::Breakpoint(idle));
     dbg.remove_breakpoint(idle);
-    let irq = dbg.add_breakpoint(emu_core::BreakpointKind::Exec {
+    let irq = dbg.add_breakpoint(mimic_core::BreakpointKind::Exec {
         space: CPU_SPACE,
         addr: u32::from(stub::IRQ),
     });

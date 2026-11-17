@@ -29,8 +29,8 @@
 
 use chips_acorn::i8271::I8271;
 use chips_acorn::wd1772::{Floppy, Wd1772};
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 pub const DRIVES: usize = 2;
 const SECTORS: u32 = 10;

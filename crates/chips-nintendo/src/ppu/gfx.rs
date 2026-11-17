@@ -1,4 +1,4 @@
-//! Graphics data views of the 2C02/2C07 (see `emu_core::gfx`): both pattern
+//! Graphics data views of the 2C02/2C07 (see `mimic_core::gfx`): both pattern
 //! tables, the four nametables, the 64 OAM sprites and palette RAM,
 //! decoded from the PPU's registers and its address space, side-effect
 //! free: the address space is read through the machine's peek path (no
@@ -13,12 +13,12 @@
 //! $3F00/$04/$08/$0C; colour 0 of every palette shows the backdrop) and
 //! "PPU scrolling" (t and fine x).
 
-use emu_core::frame::Rgb8;
-use emu_core::gfx::{
+use mimic_core::frame::Rgb8;
+use mimic_core::gfx::{
     grey_palette, palette_canvas, Canvas, GfxKind, GfxOptions, GfxPixels, GfxView, GfxViewInfo,
     OPT_INDEX, OPT_PALETTE,
 };
-use emu_core::MemSpaceId;
+use mimic_core::MemSpaceId;
 
 use super::{Ppu, PpuModel};
 

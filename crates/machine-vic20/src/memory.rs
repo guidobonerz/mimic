@@ -22,7 +22,7 @@
 
 use chips_cbm::vic::VicMemory;
 use devices_cartridge::vic20::VicCart;
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 pub const KERNAL_SIZE: usize = 0x2000;
 pub const BASIC_SIZE: usize = 0x2000;

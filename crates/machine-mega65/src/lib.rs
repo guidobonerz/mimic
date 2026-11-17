@@ -50,15 +50,15 @@ pub mod vic;
 
 use board::Board;
 use cpu_45gs02::{Cpu45gs02, Speed, ADDR_MASK, UNMAPPED};
-use emu_core::frame::{
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, CycleResult, DebugHooks, DebugTarget, DeviceId, Instr,
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -568,7 +568,7 @@ impl Mega65 {
         let now = Cycle(self.clocks);
         for i in 0..2 {
             let lines = self.ports[i].as_mut().map(|d| {
-                d.write_lines(emu_core::port::PortLines::default(), now);
+                d.write_lines(mimic_core::port::PortLines::default(), now);
                 d.read_lines(now)
             });
             self.board.port_lines[i] = lines.map_or(0, |l| l.pulled_low);
@@ -678,10 +678,10 @@ impl Machine for Mega65 {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.board.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 2,
         }
     }
@@ -901,12 +901,12 @@ impl Machine for Mega65 {
         chips
     }
 
-    fn gfx_views(&self) -> Vec<emu_core::GfxViewInfo> {
+    fn gfx_views(&self) -> Vec<mimic_core::GfxViewInfo> {
         gfx::views()
     }
 
     /// The display area, character set, sprites and palette ([`gfx`]).
-    fn gfx_view(&self, id: &str, opts: &emu_core::GfxOptions) -> Option<emu_core::GfxView> {
+    fn gfx_view(&self, id: &str, opts: &mimic_core::GfxOptions) -> Option<mimic_core::GfxView> {
         gfx::view(&self.board, id, opts)
     }
 
@@ -938,7 +938,7 @@ impl Machine for Mega65 {
 
     /// Text as key presses ([`typing`]), with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             typing::LINE_PAUSE,
@@ -946,10 +946,10 @@ impl Machine for Mega65 {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
         vec![
-            emu_core::ControlInfo::button(0, "POWER", false),
-            emu_core::ControlInfo::button(1, "RESET", false),
+            mimic_core::ControlInfo::button(0, "POWER", false),
+            mimic_core::ControlInfo::button(1, "RESET", false),
         ]
     }
 
@@ -957,7 +957,7 @@ impl Machine for Mega65 {
         (0..2)
             .map(|i| PortInfo {
                 id: PortId(i as u8),
-                kind: emu_core::port::PortKind::CbmControl,
+                kind: mimic_core::port::PortKind::CbmControl,
                 name: ["control port 1", "control port 2"][i],
                 connected: self.ports[i].is_some(),
             })
@@ -969,9 +969,9 @@ impl Machine for Mega65 {
             .ports
             .get_mut(usize::from(port.0))
             .ok_or(PortError::NoSuchPort(port))?;
-        if dev.kind() != emu_core::port::PortKind::CbmControl {
+        if dev.kind() != mimic_core::port::PortKind::CbmControl {
             return Err(PortError::Incompatible {
-                port: emu_core::port::PortKind::CbmControl,
+                port: mimic_core::port::PortKind::CbmControl,
                 device: dev.kind(),
             });
         }
@@ -995,7 +995,7 @@ impl Machine for Mega65 {
             slots.push(MediaSlotInfo {
                 id: SLOT_DRIVE8,
                 name: d.slot_name(),
-                kind: emu_core::media::MediaKind::Disk,
+                kind: mimic_core::media::MediaKind::Disk,
                 inserted: d.has_disk(),
             });
         }
@@ -1015,14 +1015,14 @@ impl Machine for Mega65 {
             slots.push(MediaSlotInfo {
                 id,
                 name,
-                kind: emu_core::media::MediaKind::Disk,
+                kind: mimic_core::media::MediaKind::Disk,
                 inserted,
             });
         }
         slots.push(MediaSlotInfo {
             id: SLOT_SDCARD,
             name: "SD card",
-            kind: emu_core::media::MediaKind::Disk,
+            kind: mimic_core::media::MediaKind::Disk,
             inserted: st.sd_inserted(),
         });
         slots

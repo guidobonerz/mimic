@@ -1,11 +1,11 @@
 //! The BBC Micro with its real ROMs (the user's, in `~/.mimic/roms/bbc`
 //! or `EMU_ROM_DIR`).
 //!
-//!     cargo test -p emu-tests --release --test bbc_boot -- --ignored
+//!     cargo test -p mimic-tests --release --test bbc_boot -- --ignored
 
-use emu_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
-use emu_core::registry::MachineConfig;
-use emu_core::{DebugHooks, DeviceId, Machine, Size};
+use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+use mimic_core::registry::MachineConfig;
+use mimic_core::{DebugHooks, DeviceId, Machine, Size};
 
 fn bbc() -> Box<dyn Machine> {
     bbc_model(None)
@@ -19,7 +19,7 @@ fn bbc_model(model: Option<&str>) -> Box<dyn Machine> {
         roms: media_backends::roms::load(&dir, "bbc").expect("ROMs"),
         ..MachineConfig::default()
     };
-    emu_machines::registry().create("bbc", &config).unwrap()
+    mimic_machines::registry().create("bbc", &config).unwrap()
 }
 
 fn run(m: &mut dyn Machine, frames: u32) {
@@ -32,7 +32,7 @@ fn run(m: &mut dyn Machine, frames: u32) {
 /// Mode 7's screen memory (`&7C00`, 25 rows of 40) as text.
 fn teletext(m: &mut dyn Machine) -> String {
     let cpu = m.debug_target(DeviceId("cpu")).unwrap();
-    let ram = emu_core::MemSpaceId(0);
+    let ram = mimic_core::MemSpaceId(0);
     (0..1000)
         .map(|i| {
             let b = cpu.peek(ram, 0x7c00 + i, Size::Byte).unwrap() as u8 & 0x7f;
@@ -131,7 +131,7 @@ fn type_text(m: &mut dyn Machine, text: &str) {
             let now = m.now().0;
             for k in list {
                 m.input(TimedInput {
-                    at: emu_core::Cycle(now),
+                    at: mimic_core::Cycle(now),
                     target: InputTarget::Keyboard,
                     event: InputEvent::Key {
                         machine_key: MachineKey(k),
@@ -159,7 +159,7 @@ fn basic_computes_and_mode_2_fills_red() {
     type_text(m, "GCOL 0,129:CLG\n");
     run(m, 60);
     let f = m.framebuffer();
-    let emu_core::frame::PixelData::Indexed { pixels, .. } = f.pixels else {
+    let mimic_core::frame::PixelData::Indexed { pixels, .. } = f.pixels else {
         panic!("indexed")
     };
     let mid = pixels[(f.height as usize / 2) * f.width as usize + f.width as usize / 2];
@@ -188,7 +188,7 @@ fn mode_1_text_picture() {
     run(m, 60);
     if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
         let profile = video_crt::Profile::preset("lite").unwrap();
-        let png = emu_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
+        let png = mimic_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
         std::fs::write(std::path::Path::new(&d).join("bbc-mode1.png"), png).unwrap();
     }
 }
@@ -257,7 +257,7 @@ fn test_page() -> Vec<u8> {
 /// FNV-1a over the picture's indices.
 fn picture_hash(m: &dyn Machine) -> u64 {
     let f = m.framebuffer();
-    let emu_core::frame::PixelData::Indexed { pixels, .. } = f.pixels else {
+    let mimic_core::frame::PixelData::Indexed { pixels, .. } = f.pixels else {
         panic!("indexed")
     };
     pixels.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &p| {
@@ -281,7 +281,7 @@ fn mode_7_test_page_matches_its_reference() {
         let cpu = m.debug_target(DeviceId("cpu")).unwrap();
         for (i, &b) in page.iter().enumerate() {
             cpu.poke(
-                emu_core::MemSpaceId(0),
+                mimic_core::MemSpaceId(0),
                 0x7c00 + i as u32,
                 Size::Byte,
                 u32::from(b),
@@ -293,7 +293,7 @@ fn mode_7_test_page_matches_its_reference() {
     let hash = picture_hash(m);
     if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
         let profile = video_crt::Profile::preset("1084s-rgb").unwrap();
-        let png = emu_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
+        let png = mimic_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
         std::fs::write(std::path::Path::new(&d).join("bbc-mode7-test.png"), png).unwrap();
         eprintln!("picture hash {hash:016x}");
     }
@@ -326,7 +326,7 @@ fn run_until(m: &mut dyn Machine, frames: u32, done: impl Fn(&str) -> bool) -> S
 #[test]
 #[ignore = "needs the BBC Micro ROMs"]
 fn basic_saves_and_loads_on_tape() {
-    use emu_core::media::{Media, MediaKind};
+    use mimic_core::media::{Media, MediaKind};
     let mut m = bbc();
     let m = m.as_mut();
     run(m, 150);
@@ -467,7 +467,7 @@ fn bbc_model_with_disc(model: Option<&str>, image: Vec<u8>) -> Box<dyn Machine> 
 }
 
 fn bbc_model_with_named_disc(model: Option<&str>, name: &str, image: Vec<u8>) -> Box<dyn Machine> {
-    use emu_core::media::{Media, MediaKind};
+    use mimic_core::media::{Media, MediaKind};
     let mut m = bbc_model(model);
     m.media_slot(machine_bbc::SLOT_DRIVE0)
         .expect("the DFS ROM (dfs-1.20.rom; B+: dfs-2.26.rom) in the ROM folder")
@@ -494,7 +494,7 @@ fn shift_break_boots_a_dfs_disc() {
     // SHIFT down, BREAK, SHIFT held while the MOS starts.
     let now = m.now().0;
     let key = |down| TimedInput {
-        at: emu_core::Cycle(now),
+        at: mimic_core::Cycle(now),
         target: InputTarget::Keyboard,
         event: InputEvent::Key {
             machine_key: MachineKey(0x00),
@@ -503,17 +503,17 @@ fn shift_break_boots_a_dfs_disc() {
     };
     m.input(key(true));
     m.input(TimedInput {
-        at: emu_core::Cycle(now),
+        at: mimic_core::Cycle(now),
         target: InputTarget::Panel,
         event: InputEvent::Control {
-            id: emu_core::ControlId(machine_bbc::keyboard::BREAK),
+            id: mimic_core::ControlId(machine_bbc::keyboard::BREAK),
             value: 1,
         },
     });
     run(m, 50);
     let now = m.now().0;
     m.input(TimedInput {
-        at: emu_core::Cycle(now),
+        at: mimic_core::Cycle(now),
         ..key(false)
     });
     let t = run_until(m, 500, |t| t.contains("BOOTED FROM DISC"));
@@ -562,7 +562,7 @@ fn a_savestate_in_the_middle_of_a_disc_read_resumes_it() {
     run(m, 150);
     let now = m.now().0;
     let shift = |at, down| TimedInput {
-        at: emu_core::Cycle(at),
+        at: mimic_core::Cycle(at),
         target: InputTarget::Keyboard,
         event: InputEvent::Key {
             machine_key: MachineKey(0x00),
@@ -571,10 +571,10 @@ fn a_savestate_in_the_middle_of_a_disc_read_resumes_it() {
     };
     m.input(shift(now, true));
     m.input(TimedInput {
-        at: emu_core::Cycle(now),
+        at: mimic_core::Cycle(now),
         target: InputTarget::Panel,
         event: InputEvent::Control {
-            id: emu_core::ControlId(machine_bbc::keyboard::BREAK),
+            id: mimic_core::ControlId(machine_bbc::keyboard::BREAK),
             value: 1,
         },
     });
@@ -595,7 +595,7 @@ fn a_savestate_in_the_middle_of_a_disc_read_resumes_it() {
 fn shift_break(m: &mut dyn Machine) {
     let now = m.now().0;
     let shift = |at, down| TimedInput {
-        at: emu_core::Cycle(at),
+        at: mimic_core::Cycle(at),
         target: InputTarget::Keyboard,
         event: InputEvent::Key {
             machine_key: MachineKey(0x00),
@@ -604,10 +604,10 @@ fn shift_break(m: &mut dyn Machine) {
     };
     m.input(shift(now, true));
     m.input(TimedInput {
-        at: emu_core::Cycle(now),
+        at: mimic_core::Cycle(now),
         target: InputTarget::Panel,
         event: InputEvent::Control {
-            id: emu_core::ControlId(machine_bbc::keyboard::BREAK),
+            id: mimic_core::ControlId(machine_bbc::keyboard::BREAK),
             value: 1,
         },
     });
@@ -803,7 +803,7 @@ fn master_saves_and_loads_on_adfs() {
     let t = teletext(m);
     if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
         let profile = video_crt::Profile::preset("lite").unwrap();
-        let png = emu_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
+        let png = mimic_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
         std::fs::write(std::path::Path::new(&d).join("bbc-master-adfs.png"), png).unwrap();
     }
     assert!(t.contains("PROG"), "{t}");
@@ -860,7 +860,7 @@ fn master_time_comes_from_the_clock() {
     config
         .options
         .insert("rtc".into(), "1987-06-15T10:20:30".into());
-    let mut m = emu_machines::registry().create("bbc", &config).unwrap();
+    let mut m = mimic_machines::registry().create("bbc", &config).unwrap();
     let m = m.as_mut();
     run(m, 200);
     type_text(m, "*TIME\n");
@@ -868,7 +868,7 @@ fn master_time_comes_from_the_clock() {
     let t = teletext(m);
     if let Ok(d) = std::env::var("EMU_SNAPSHOT_DIR") {
         let profile = video_crt::Profile::preset("1084s-rgb").unwrap();
-        let png = emu_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
+        let png = mimic_preview::encode_png_crt(&m.framebuffer(), &profile, 2);
         std::fs::write(std::path::Path::new(&d).join("bbc-master.png"), png).unwrap();
     }
     assert!(t.contains("Mon,15 Jun 1987.10:20"), "{t}");
@@ -880,7 +880,7 @@ fn press(m: &mut dyn Machine, keys: &[u16]) {
         for down in [true, false] {
             let now = m.now().0;
             m.input(TimedInput {
-                at: emu_core::Cycle(now),
+                at: mimic_core::Cycle(now),
                 target: InputTarget::Keyboard,
                 event: InputEvent::Key {
                     machine_key: MachineKey(k),

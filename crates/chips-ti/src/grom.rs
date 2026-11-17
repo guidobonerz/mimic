@@ -21,7 +21,7 @@
 //! TI-99/4A Tech Pages", GROMs (the address read-back and the 6 KB
 //! mirror). The implementation is this project's own.
 
-use emu_core::{StateError, StateReader, StateWriter};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Bytes a GROM holds.
 pub const GROM_SIZE: usize = 0x1800;

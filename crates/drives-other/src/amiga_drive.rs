@@ -27,10 +27,10 @@
 //! (`media::dms`) is unpacked on insert and is read-only. The disk is
 //! media, not state: savestates keep the mechanics only.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{StateError, StateReader, StateWriter};
 use media::adf::{self, Density};
 use media::{adfx, dms};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{StateError, StateReader, StateWriter};
 
 /// Identification of a 3.5" double-density drive.
 pub const ID_35_DD: u32 = 0xffff_ffff;
@@ -457,7 +457,7 @@ mod tests {
     /// A backend over shared bytes, to see what is written back.
     struct Shared(Arc<Mutex<Vec<u8>>>);
 
-    impl emu_core::media::MediaBackend for Shared {
+    impl mimic_core::media::MediaBackend for Shared {
         fn len(&self) -> u64 {
             self.0.lock().unwrap().len() as u64
         }

@@ -55,20 +55,20 @@ use chips_atari::pokey::Pokey;
 use chips_cbm::pia::Pia;
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
 use devices_printer::Printer;
-use emu_core::audio::Decimator;
-use emu_core::frame::{
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{
     FieldParity, FrameRef, OutputType, PixelData, Rgb8, SignalInfo, VideoStandard,
 };
-use emu_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
-use emu_core::hooked::HookedBus;
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::overlay::{Overlay, OverlayInfo};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::Cycle;
-use emu_core::{
+use mimic_core::gfx::{GfxOptions, GfxView, GfxViewInfo};
+use mimic_core::hooked::HookedBus;
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::overlay::{Overlay, OverlayInfo};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo, PortKind};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::Cycle;
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, CycleResult, DebugHooks, DebugTarget, DeviceId, Instr, Machine,
     MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
@@ -112,7 +112,7 @@ pub fn entry() -> MachineEntry {
         id: "atari8",
         name: "Atari 400/800/800XL/65XE/130XE",
         models: &["800xl", "65xe", "130xe", "800", "400"],
-        video_formats: emu_core::registry::PAL_NTSC,
+        video_formats: mimic_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(Atari8::new(config)?)),
     }
 }
@@ -401,8 +401,8 @@ pub struct Atari8 {
     palette: [Rgb8; 256],
     /// The palette as luma and chroma, and the last finished picture in it
     /// for the composite path (not machine state).
-    palette_lc: [emu_core::frame::LumaChroma; 256],
-    picture_lc: Vec<emu_core::frame::LumaChroma>,
+    palette_lc: [mimic_core::frame::LumaChroma; 256],
+    picture_lc: Vec<mimic_core::frame::LumaChroma>,
     audio: Decimator,
     samples: Vec<i16>,
     field_done_pending: bool,
@@ -428,6 +428,9 @@ pub struct Atari8 {
     /// separately) and which palette entries light it.
     pen: Option<PenTarget>,
     pen_lit: Vec<bool>,
+    /// Warp is on (`Machine::set_warp`; not machine state): GTIA is told,
+    /// unless a light pen points into the picture.
+    warp: bool,
 }
 
 /// The beam position at which a light pen sees its pixel drawn: line,
@@ -584,13 +587,14 @@ impl Atari8 {
             palette: chips_atari::palette::palette(standard),
             palette_lc: chips_atari::palette::luma_chroma(standard),
             picture_lc: Vec::new(),
-            audio: Decimator::new(hz, emu_core::SAMPLE_RATE)
+            audio: Decimator::new(hz, mimic_core::SAMPLE_RATE)
                 .ok_or_else(|| ConfigError::Invalid("audio rate".into()))?,
             samples: Vec::new(),
             field_done_pending: false,
             overlay_rec: None,
             pen: None,
             pen_lit: Vec::new(),
+            warp: false,
             option_until: if basic_off && !model.is_old() {
                 OPTION_HOLD_FIELDS
             } else {
@@ -793,7 +797,7 @@ impl Atari8 {
                 self.refresh_ports();
             }
             InputTarget::Panel => {
-                if let emu_core::input::InputEvent::Control { id, value } = ev.event {
+                if let mimic_core::input::InputEvent::Control { id, value } = ev.event {
                     self.control(id.0, value);
                 }
             }
@@ -803,7 +807,7 @@ impl Atari8 {
     /// A console control from the panel (power, RESET, the START, SELECT and OPTION keys).
     fn control(&mut self, id: u16, value: u8) {
         match id {
-            0 if value == 1 => emu_core::Machine::reset(self, emu_core::ResetKind::Hard),
+            0 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Hard),
             1 if value == 1 => self.reset_key(),
             2..=4 => self.key(keys::START.0 + id - 2, value == 1),
             _ => {}
@@ -903,6 +907,7 @@ impl Atari8 {
                 index: usize::from(a.y) * gtia::WIDTH as usize + usize::from(a.x),
             })
         });
+        self.io.gtia.set_warp(self.warp && self.pen.is_none());
         if self.pen.is_some() && self.pen_lit.is_empty() {
             self.pen_lit = devices_input::lightpen::lit_colours(&self.palette);
         }
@@ -1135,10 +1140,18 @@ impl Machine for Atari8 {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    /// Warp: GTIA draws only the colour clocks with a player or missile
+    /// on them (see `Gtia::set_warp`); nothing a program can observe
+    /// changes.
+    fn set_warp(&mut self, on: bool) {
+        self.warp = on;
+        self.io.gtia.set_warp(on && self.pen.is_none());
+    }
+
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -1205,7 +1218,7 @@ impl Machine for Atari8 {
         )
     }
 
-    fn basic(&mut self) -> Option<&mut dyn emu_core::basic::BasicDebug> {
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
         if let Some(found) = self.basic.rescan(&*self) {
             self.basic = found;
         }
@@ -1361,9 +1374,32 @@ impl Machine for Atari8 {
         self.sched.now()
     }
 
+    /// Pasted text goes straight to the OS's keyboard handler: CH
+    /// (`$02FC`) holds the code of the last key pressed (`$FF`: none) and
+    /// the handler takes it from there, so the next character's key code
+    /// goes in whenever CH is free: one character a call, without the
+    /// keyboard's debounce and repeat delay. Source: Ian Chadwick,
+    /// *Mapping the Atari* (location 764).
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        const CH: u32 = 0x02fc;
+        if DebugTarget::peek(self, CPU_SPACE, CH, Size::Byte)? != 0xff {
+            return Some(0);
+        }
+        let code = |c: char| {
+            let (key, shift) = keyboard::key_for_char(c)?;
+            Some(key.0 as u8 | u8::from(shift) << 6)
+        };
+        let mut key = None;
+        let used = mimic_core::input::fill_key_buffer(text, 1, code, |_, b| key = Some(b));
+        if let Some(key) = key {
+            DebugTarget::poke(self, CPU_SPACE, CH, Size::Byte, u32::from(key));
+        }
+        Some(used)
+    }
+
     /// Text as key presses, with a pause behind RETURN for BASIC to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             360_000,
@@ -1371,8 +1407,8 @@ impl Machine for Atari8 {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
-        use emu_core::ControlInfo;
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
+        use mimic_core::ControlInfo;
         vec![
             ControlInfo::button(0, "POWER", false),
             ControlInfo::button(1, "RESET", false),
@@ -1425,7 +1461,7 @@ impl Machine for Atari8 {
         dev
     }
 
-    fn attach_host(&mut self, host: emu_core::host::HostServices) {
+    fn attach_host(&mut self, host: mimic_core::host::HostServices) {
         if let Some(p) = &mut self.printer {
             p.attach(&host);
         }

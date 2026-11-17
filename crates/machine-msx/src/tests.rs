@@ -1,7 +1,7 @@
 use super::*;
 use chips_ti::vdp;
-use emu_core::input::Dirs;
-use emu_core::media::{Media, MediaBackend, MediaError};
+use mimic_core::input::Dirs;
+use mimic_core::media::{Media, MediaBackend, MediaError};
 
 fn stub_with(format: Option<&str>, options: &[(&str, &str)]) -> Msx {
     let mut config = MachineConfig {
@@ -352,7 +352,7 @@ fn megarom_banks_switch_and_the_mapper_option_overrides_the_guess() {
         &mut m,
         InputTarget::Panel,
         InputEvent::Control {
-            id: emu_core::ControlId(1),
+            id: mimic_core::ControlId(1),
             value: 1,
         },
     );
@@ -781,7 +781,7 @@ fn msx2_stub(format: Option<&str>, options: &[(&str, &str)]) -> Msx {
 }
 
 /// The colour at active-area pixel (x, y) of a machine with a V9938.
-fn rgb(m: &Msx, x: u32, y: u32) -> emu_core::frame::Rgb8 {
+fn rgb(m: &Msx, x: u32, y: u32) -> mimic_core::frame::Rgb8 {
     let Video::V9938(v) = video(m) else {
         panic!("no V9938");
     };
@@ -791,7 +791,7 @@ fn rgb(m: &Msx, x: u32, y: u32) -> emu_core::frame::Rgb8 {
         .unwrap()
 }
 
-fn default_color(n: usize) -> emu_core::frame::Rgb8 {
+fn default_color(n: usize) -> mimic_core::frame::Rgb8 {
     let (r, g, b) = chips_yamaha::v9938::DEFAULT_PALETTE[n];
     chips_yamaha::v9938::rgb777(r, g, b)
 }
@@ -808,7 +808,7 @@ fn an_msx2_runs_the_stub_on_its_v9938() {
         assert_eq!(f.signal.lines_per_field, lines);
         assert_eq!(f.signal.total_pixels, 684);
         assert_eq!(f.signal.output, OutputType::Rgb);
-        assert!(matches!(f.pixels, emu_core::frame::PixelData::Rgb(_)));
+        assert!(matches!(f.pixels, mimic_core::frame::PixelData::Rgb(_)));
         assert_eq!(rgb(&m, 8, 0), default_color(10), "box top row: yellow");
         assert_eq!(rgb(&m, 9, 1), default_color(4));
         assert_eq!(rgb(&m, 0x78, 0x61), default_color(15), "the sprite");

@@ -1,7 +1,7 @@
 //! Machine tests with the stub ROM.
 
 use super::*;
-use emu_core::input::MachineKey;
+use mimic_core::input::MachineKey;
 
 fn mac(model: &str) -> Mac {
     let mut config = MachineConfig {
@@ -267,7 +267,7 @@ fn trace_rom() {
         let ok = slots.into_iter().any(|slot| {
             m.media_slot(slot)
                 .unwrap()
-                .insert(emu_core::media::Media {
+                .insert(mimic_core::media::Media {
                     name: "disk".into(),
                     kind: MediaKind::Disk,
                     backend: Box::new(Mem(data.clone())),
@@ -532,21 +532,21 @@ fn trace_rom() {
 /// An image in memory.
 pub(crate) struct Mem(pub Vec<u8>);
 
-impl emu_core::media::MediaBackend for Mem {
+impl mimic_core::media::MediaBackend for Mem {
     fn len(&self) -> u64 {
         self.0.len() as u64
     }
-    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), emu_core::media::MediaError> {
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), mimic_core::media::MediaError> {
         let o = offset as usize;
         buf.copy_from_slice(&self.0[o..o + buf.len()]);
         Ok(())
     }
-    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), emu_core::media::MediaError> {
+    fn write(&mut self, offset: u64, data: &[u8]) -> Result<(), mimic_core::media::MediaError> {
         let o = offset as usize;
         self.0[o..o + data.len()].copy_from_slice(data);
         Ok(())
     }
-    fn commit(&mut self) -> Result<(), emu_core::media::MediaError> {
+    fn commit(&mut self) -> Result<(), mimic_core::media::MediaError> {
         Ok(())
     }
 }

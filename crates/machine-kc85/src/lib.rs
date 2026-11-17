@@ -67,19 +67,19 @@ pub mod video;
 
 use chips_zilog::{pio, Ctc, Pio};
 use cpu_z80::{IO_BASE, Z80};
-use emu_core::audio::Decimator;
-use emu_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
-use emu_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
-use emu_core::machine::ChipReg;
-use emu_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
-use emu_core::port::{PortDevice, PortError, PortId, PortInfo};
-use emu_core::registry::{ConfigError, MachineConfig, MachineEntry};
-use emu_core::{
+use memory::{Memory, Roms};
+use mimic_core::audio::Decimator;
+use mimic_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
+use mimic_core::input::{InputEvent, InputQueue, InputTarget, TimedInput};
+use mimic_core::machine::ChipReg;
+use mimic_core::media::{MediaKind, MediaSlot, MediaSlotInfo, SlotId};
+use mimic_core::port::{PortDevice, PortError, PortId, PortInfo};
+use mimic_core::registry::{ConfigError, MachineConfig, MachineEntry};
+use mimic_core::{
     BeamPos, Bus, ChipInfo, Cpu, Cycle, DebugHooks, DebugTarget, DeviceId, Instr, InterruptKind,
     Machine, MemSpace, MemSpaceId, RegisterSet, ResetKind, Savestate, Scheduler, Size, StateError,
     StateReader, StateWriter, StopReason,
 };
-use memory::{Memory, Roms};
 
 pub const CPU: DeviceId = DeviceId("cpu");
 /// The CPU's view: memory at 0–$FFFF, I/O ports at `IO_BASE + port`.
@@ -256,7 +256,7 @@ impl Sound {
         Self {
             level: [false; 2],
             phase: 0,
-            audio: Decimator::new(cpu_hz / SOUND_STEP, emu_core::SAMPLE_RATE)
+            audio: Decimator::new(cpu_hz / SOUND_STEP, mimic_core::SAMPLE_RATE)
                 .expect("the sound clock is above the sample rate"),
             samples: Vec::new(),
         }
@@ -671,10 +671,10 @@ impl Machine for Kc85 {
         }
     }
 
-    fn audio(&mut self, out: &mut Vec<i16>) -> emu_core::AudioFormat {
+    fn audio(&mut self, out: &mut Vec<i16>) -> mimic_core::AudioFormat {
         out.append(&mut self.sound.samples);
-        emu_core::AudioFormat {
-            sample_rate: emu_core::SAMPLE_RATE,
+        mimic_core::AudioFormat {
+            sample_rate: mimic_core::SAMPLE_RATE,
             channels: 1,
         }
     }
@@ -775,7 +775,7 @@ impl Machine for Kc85 {
     /// to take the line in.
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> {
         let hz = self.model.cpu_hz();
-        Some(emu_core::input::typed_lines(
+        Some(mimic_core::input::typed_lines(
             text,
             start,
             u64::from(hz),
@@ -783,10 +783,10 @@ impl Machine for Kc85 {
         ))
     }
 
-    fn controls(&self) -> Vec<emu_core::ControlInfo> {
+    fn controls(&self) -> Vec<mimic_core::ControlInfo> {
         vec![
-            emu_core::ControlInfo::button(CONTROL_RESET, "RESET", false),
-            emu_core::ControlInfo::button(CONTROL_POWER, "POWER", false),
+            mimic_core::ControlInfo::button(CONTROL_RESET, "RESET", false),
+            mimic_core::ControlInfo::button(CONTROL_POWER, "POWER", false),
         ]
     }
 

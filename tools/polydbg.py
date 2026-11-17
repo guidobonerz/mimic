@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """polydbg: client for the mimic native debug protocol.
 
-The protocol is JSON lines over TCP (see crates/emu-debug/src/protocol.rs).
+The protocol is JSON lines over TCP (see crates/mimic-debug/src/protocol.rs).
 Start a machine with a debug server, e.g.
 
-    cargo run -p emu-headless -- --machine c64 --debug --run
-    cargo run -p emu-desktop -- --machine c64 --debug
+    cargo run -p mimic-headless -- --machine c64 --debug --run
+    cargo run -p mimic-desktop -- --machine c64 --debug
 
 then use polydbg from the command line,
 

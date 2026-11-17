@@ -27,9 +27,9 @@
 //! routines (how it polls GAP and SYNC and moves bytes, read from the
 //! user's ROM); Ian Logan, *Spectrum Microdrive Book*.
 
-use emu_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
-use emu_core::{Savestate, StateError, StateReader, StateWriter};
 use media::mdr::{Cartridge, HEADER_LEN, IMAGE_LEN, RECORD_LEN, SECTORS};
+use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
+use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
 /// Status polls showing GAP before the preamble.
 pub const GAP_POLLS: u8 = 12;
@@ -355,7 +355,7 @@ impl Savestate for Microdrive {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use emu_core::media::MediaBackend;
+    use mimic_core::media::MediaBackend;
     use std::sync::{Arc, Mutex};
 
     struct Shared(Arc<Mutex<Vec<u8>>>);

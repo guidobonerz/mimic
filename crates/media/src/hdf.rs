@@ -16,7 +16,7 @@
 //! from memory of them: big-endian longs; `SummedLongs` longs (64) add up
 //! to 0 with the checksum at long 2.
 
-use emu_core::media::{MediaBackend, MediaError};
+use mimic_core::media::{MediaBackend, MediaError};
 
 pub const BLOCK: usize = 512;
 /// The blocks an RDB may start in.

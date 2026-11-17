@@ -3,7 +3,7 @@
 //!
 //!     bash tools/fetch-testdata.sh
 //!     EMU_ROM_DIR=~/roms EMU_TESTDATA_DIR=$PWD/testdata \
-//!         cargo test -p emu-tests --release --test acid800 -- --ignored --nocapture
+//!         cargo test -p mimic-tests --release --test acid800 -- --ignored --nocapture
 //!
 //! Runs every standalone test of the suite on an 800XL with the real OS.
 //! `EMU_ACID_FILTER=antic` runs only matching tests, `EMU_ACID_MODEL=130xe`
@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use emu_core::registry::MachineConfig;
-use emu_tests::acid800::{self, Outcome, Verdict};
+use mimic_core::registry::MachineConfig;
+use mimic_tests::acid800::{self, Outcome, Verdict};
 
 /// Emulated time limit per test: 60 s (the whole suite takes "a couple of
 /// minutes" on a real machine).
@@ -49,7 +49,7 @@ fn acid800_suite() {
     let mut config = MachineConfig {
         roms: media_backends::roms::load(&dir, "atari8").expect("ROMs"),
         model: Some(model.clone()),
-        video_format: ntsc.then_some(emu_core::frame::VideoStandard::Ntsc),
+        video_format: ntsc.then_some(mimic_core::frame::VideoStandard::Ntsc),
         ..MachineConfig::default()
     };
     // The standalone tests boot from the program slot; the serial tests
@@ -70,7 +70,7 @@ fn acid800_suite() {
     names.sort();
     assert!(!names.is_empty(), "no tests match '{filter}'");
 
-    let registry = emu_machines::registry();
+    let registry = mimic_machines::registry();
     let next = AtomicUsize::new(0);
     let results: Mutex<Vec<(String, Result<Outcome, String>)>> = Mutex::new(Vec::new());
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -134,7 +134,7 @@ fn acid800_suite() {
             )
         })
         .collect();
-    let trend = emu_tests::trend::record(&tmp, &format!("acid800-{setup}"), &outcomes);
+    let trend = mimic_tests::trend::record(&tmp, &format!("acid800-{setup}"), &outcomes);
     println!("{trend}");
     report.push_str(&trend);
     report.push('\n');
