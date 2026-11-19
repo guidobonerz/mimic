@@ -29,3 +29,7 @@ When finishing a phase, update "Current phase" above.
 - Device work by phase (part of each gate): **Phase 4:** 1351 mouse, paddles, virtual drive mode, host-directory backend, 1571/1581, datasette.
 - Memory freezer by phase: **Phase 4 (deferred, see `docs/claude/phases/phase-04-commodore-family.md`):** C64/C128 freezer cartridges (Action Replay, Retro Replay, Final Cartridge III), cheat-file import.
 - CRT work by phase: **Phase 4:** PAL delay-line + NTSC composite signal stage (C64/VIC-20/Plus/4), C128 VDC on RGB profile, PET monochrome.
+
+## C128 Z80 timing (2026-11-19)
+
+On the user's request the C128's Z80 runs with `step_timed` (before: `Cpu::tick`, which runs the whole instruction in its first T-state). `cycle()` is split into `begin_cycle` (input, VIC phi1, chips, interrupts) and `end_cycle` (VIC phi2, cartridge, IEC and drive, user port, datasette, clock); in Z80 mode a call runs one instruction whose bus (`Z80TimedBus`) begins and ends system cycles up to each access, two T-states per cycle with BA high. Checked: VICE `c128/z80` (c128z80timing, outi, mmu_zp_sp, cycletimer) 1871/1871 before and after, identical reports; the unit test `a_z80_write_lands_in_the_system_cycle_of_its_t_state` (a `LD (HL),n` writes 3–4 cycles into the instruction; 1 before); `c128_boot` 7/7. Speed in 8502 mode unchanged within noise (3000 fields: 24.7 → 25.1 s, FAST 26.9 → 27.0 s); the Z80 suite ran 1429 → 1369 s.

@@ -18,7 +18,12 @@
 //! **Attenuation:** 4 bits per channel, 2 dB a step, 15 off.
 //!
 //! [`Sn76489::tick`] is one input clock; the output level is the sum of
-//! the four channels (0–4 × 8191).
+//! the four channels (0–4 × 8191), [`Sn76489::levels`] gives them apart
+//! (the Game Gear's stereo).
+//!
+//! **Sega's variant** ([`Sn76489::sega`], inside the Master System, Game
+//! Gear and Mega Drive VDPs): a 16-bit shift register, reset to $8000,
+//! white noise feeds bit 0 XOR bit 3 into bit 15 (SMS Power, "SN76489").
 
 use mimic_core::{StateError, StateReader, StateWriter};
 
@@ -28,6 +33,7 @@ const VOLUME: [i32; 16] = [
 ];
 
 const NOISE_START: u16 = 0x4000;
+const SEGA_NOISE_START: u16 = 0x8000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sn76489 {
@@ -44,6 +50,8 @@ pub struct Sn76489 {
     shift: u16,
     /// Input clocks within the ÷16 prescaler.
     prescale: u8,
+    /// Sega's 16-bit noise register (configuration, not state).
+    sega: bool,
 }
 
 impl Default for Sn76489 {
@@ -63,6 +71,24 @@ impl Sn76489 {
             output: [false; 4],
             shift: NOISE_START,
             prescale: 0,
+            sega: false,
+        }
+    }
+
+    /// The SN76489 inside Sega's VDPs (see the module doc).
+    pub fn sega() -> Self {
+        Self {
+            shift: SEGA_NOISE_START,
+            sega: true,
+            ..Self::new()
+        }
+    }
+
+    fn noise_start(&self) -> u16 {
+        if self.sega {
+            SEGA_NOISE_START
+        } else {
+            NOISE_START
         }
     }
 
@@ -88,7 +114,7 @@ impl Sn76489 {
             self.period[ch] = (self.period[ch] & 0x3f0) | u16::from(v);
         } else {
             self.noise = v & 7;
-            self.shift = NOISE_START;
+            self.shift = self.noise_start();
         }
     }
 
@@ -141,14 +167,29 @@ impl Sn76489 {
         if noise_edge {
             self.output[3] = !self.output[3];
             if self.output[3] {
+                let (tap, top) = if self.sega { (3, 15) } else { (1, 14) };
                 let fb = if self.noise & 4 != 0 {
-                    (self.shift ^ (self.shift >> 1)) & 1
+                    (self.shift ^ (self.shift >> tap)) & 1
                 } else {
                     self.shift & 1
                 };
-                self.shift = (self.shift >> 1) | fb << 14;
+                self.shift = (self.shift >> 1) | fb << top;
             }
         }
+    }
+
+    /// The four channels' current levels (0 – 8191 each; tone 0–2, noise).
+    pub fn levels(&self) -> [i32; 4] {
+        let mut l = [0; 4];
+        for (ch, v) in l.iter_mut().take(3).enumerate() {
+            if self.output[ch] {
+                *v = VOLUME[usize::from(self.atten[ch])];
+            }
+        }
+        if self.shift & 1 != 0 {
+            l[3] = VOLUME[usize::from(self.atten[3])];
+        }
+        l
     }
 
     /// The current output level (0 – 4 × 8191).
@@ -186,7 +227,10 @@ impl Sn76489 {
 
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
         let (_, mut c) = r.chunk(*b"S764", 1)?;
-        let mut n = Self::new();
+        let mut n = Self {
+            sega: self.sega,
+            ..Self::new()
+        };
         for p in &mut n.period {
             *p = c.u16()? & 0x3ff;
         }
@@ -202,7 +246,7 @@ impl Sn76489 {
         for o in &mut n.output {
             *o = c.bool()?;
         }
-        n.shift = c.u16()? & 0x7fff;
+        n.shift = c.u16()? & if self.sega { 0xffff } else { 0x7fff };
         n.prescale = c.u8()? % 16;
         *self = n;
         Ok(())

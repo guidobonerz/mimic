@@ -10,8 +10,12 @@
 //! At power-on the Z80 runs its BIOS (KERNAL ROM `$D000–$DFFF`), which
 //! hands over to the 8502 through MCR bit 0 (or enters C64 mode when C= is
 //! held). The Z80 runs at 2 T-states per system cycle (its 4 MHz clock less
-//! the VIC's half); in 2 MHz mode (`$D030` bit 0) the 8502 runs two cycles
-//! per VIC cycle.
+//! the VIC's half), none while the VIC-IIe holds the bus (BA low); in 2 MHz
+//! mode (`$D030` bit 0) the 8502 runs two cycles per VIC cycle. The Z80
+//! runs whole instructions with [`Z80::step_timed`]: before each of its
+//! accesses the system cycles run up to the access's T-state, so it meets
+//! the VIC-IIe, the CIAs and the MMU of its own cycle (before 2026-11-19
+//! every access fell into the instruction's first cycle).
 //!
 //! Two screens ([`Machine::screens`]): "vic" (the main one) and "vdc"; the
 //! 40/80 DISPLAY key decides which is active. Time ([`Machine::now`])
@@ -51,7 +55,7 @@ pub mod stub;
 use chips_cbm::sid::SidModel;
 use chips_cbm::{vdc, vic2};
 use cpu_6502::{Config as CpuConfig, Cpu6502, Variant};
-use cpu_z80::{IO_BASE, Z80};
+use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
 use devices_printer::CbmPrinter;
 use mimic_core::frame::{FrameRef, PixelData, Rgb8, ScreenId, ScreenInfo, VideoStandard};
 use mimic_core::gfx::{GfxKind, GfxOptionInfo, GfxOptions, GfxView, GfxViewInfo};
@@ -414,6 +418,103 @@ pub struct C128 {
     booted: bool,
     /// The device the debugger addresses through [`DebugTarget`].
     debug_dev: DeviceId,
+    /// A T-state of the last system cycle the Z80's last instruction left
+    /// unused: the next instruction's first (0 or 1).
+    z80_credit: u8,
+}
+
+/// What [`C128::begin_cycle`] found for the cycle's CPU steps.
+#[derive(Clone, Copy)]
+struct CycleStart {
+    m8502: bool,
+    fast: bool,
+    ba: bool,
+    irq_on: bool,
+    nmi_on: bool,
+}
+
+/// The Z80's bus for one instruction: before each access the system cycles
+/// run up to its T-state ([`C128::z80_instruction`]).
+struct Z80TimedBus<'a> {
+    m: &'a mut C128,
+    dbg: Option<&'a mut DebugHooks>,
+    /// T-states of the instruction the cycles run so far cover (the last
+    /// one is begun, not ended).
+    avail: u32,
+    new_field: bool,
+    drive_stop: Option<StopReason>,
+}
+
+impl Z80TimedBus<'_> {
+    /// End the open cycle, begin the next; BA high gives the Z80 its two
+    /// T-states there.
+    fn next_cycle(&mut self) {
+        let (field, stop) = self.m.end_cycle(self.dbg.as_deref_mut(), false, 0);
+        self.new_field |= field;
+        if self.drive_stop.is_none() {
+            self.drive_stop = stop;
+        }
+        let start = self.m.begin_cycle();
+        if start.ba {
+            self.avail += 2;
+        }
+    }
+}
+
+impl Bus for Z80TimedBus<'_> {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        let beam = self.m.beam_pos();
+        let v = Z80Bus {
+            mem: &mut self.m.mem,
+            io: &mut self.m.io,
+        }
+        .read(addr, size);
+        match self.dbg.as_deref_mut() {
+            Some(dbg) if dbg.read_armed(Z80_SPACE) => {
+                let seen = dbg.on_read(Z80_SPACE, addr, size, v);
+                dbg.trace_read(Z80_SPACE, addr, size, seen, beam);
+                seen
+            }
+            _ => v,
+        }
+    }
+
+    fn peek(&self, addr: u32, _size: Size) -> u32 {
+        u32::from(z80_peek(&self.m.mem, &self.m.io, addr))
+    }
+
+    fn write(&mut self, addr: u32, size: Size, v: u32) {
+        if let Some(dbg) = self.dbg.as_deref_mut() {
+            if dbg.write_armed(Z80_SPACE) {
+                let beam = self.m.beam_pos();
+                dbg.trace_write(Z80_SPACE, addr, size, v & 0xff, beam);
+                if !dbg.on_write(Z80_SPACE, addr, size, v & 0xff) {
+                    return;
+                }
+            }
+        }
+        Z80Bus {
+            mem: &mut self.m.mem,
+            io: &mut self.m.io,
+        }
+        .write(addr, size, v);
+    }
+
+    fn addr_bits(&self) -> u8 {
+        16
+    }
+}
+
+impl TimedBus for Z80TimedBus<'_> {
+    /// The cycles up to T-state `t` run first, so the access meets the
+    /// VIC-IIe, the CIAs and the MMU of its own cycle; cycles with BA low
+    /// pass without T-states (the Z80 waits there).
+    fn wait_states(&mut self, _access: Access, t: u32) -> u32 {
+        while self.avail <= t {
+            self.next_cycle();
+        }
+        0
+    }
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -531,6 +632,7 @@ impl C128 {
             boot_frame: 0,
             booted: false,
             debug_dev: CPU,
+            z80_credit: 0,
         };
         // The devices' lines from the start (paddles sit at mid travel).
         m.refresh_ports();
@@ -598,25 +700,9 @@ impl C128 {
         (r, self.cpu.take_interrupt())
     }
 
-    /// One Z80 T-state on the hooked bus.
-    fn z80_cycle(&mut self, dbg: Option<&mut DebugHooks>) -> (CycleResult, Option<InterruptKind>) {
-        let beam = self.beam_pos();
-        let mut bus = Z80Bus {
-            mem: &mut self.mem,
-            io: &mut self.io,
-        };
-        let mut hooked = HookedBus {
-            inner: &mut bus,
-            dbg,
-            space: Z80_SPACE,
-            beam,
-        };
-        let r = self.z80.tick(&mut hooked);
-        (r, self.z80.take_interrupt())
-    }
-
-    /// One system (VIC) cycle. Returns `Some` if emulation must stop.
-    fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+    /// The first half of a system (VIC) cycle, up to the CPU's steps:
+    /// input, the VIC-IIe's phi1, the chips' clocks, the interrupt lines.
+    fn begin_cycle(&mut self) -> CycleStart {
         // A cartridge went in or out: the machine powers up again.
         if self.cart.take_changed() {
             self.reset(ResetKind::Hard);
@@ -644,94 +730,25 @@ impl C128 {
         let ba = self.io.vic.ba();
         self.io.tick_chips();
         self.update_interrupts();
-        let (irq_on, nmi_on) = (self.ints.0 != 0, self.ints.1 != 0);
-
-        // The CPU steps of this cycle: one or two 8502 cycles, or two Z80
-        // T-states. A debug stop ends the cycle's steps early. In 2 MHz
-        // mode the VIC-IIe's DRAM refresh (cycles 11-15) still takes its
-        // half: the 8502 gets one cycle there, 121 per PAL line (VICE test
-        // programs c128/2mhzVIC: 121-cycle line loops); BA does not stop it.
-        let refresh = (11..=15).contains(&self.io.vic.cycle());
-        let switched = fast && !self.io.fast_prev;
-        self.io.fast_prev = fast;
-        let steps = match (m8502, fast, ba) {
-            (true, true, _) if refresh || switched => 1,
-            (true, true, _) => 2,
-            (true, false, _) => 1,
-            (false, _, true) => 2,
-            (false, _, false) => 0,
-        };
-        let mut jam = None;
-        // 2 MHz: the byte of the step in the VIC-IIe's phi2 half, for its
-        // c-access.
-        let mut phi2_data = self.io.cpu_data;
-        let mut stretched = false;
-        for step in 0..steps {
-            let (dev, space, (result, entered)) = if m8502 {
-                // 2 MHz: BA does not stop the 8502.
-                self.cpu.set_rdy(ba || fast);
-                self.io.io_access = false;
-                self.cpu.set_irq(irq_on);
-                self.cpu.set_nmi(nmi_on);
-                // Without AEC the halted CPU does not reach the bus at all.
-                let result = if !fast && !self.io.vic.aec() {
-                    self.cpu.stall_off_bus();
-                    (CycleResult::Busy, None)
-                } else {
-                    self.cpu_cycle(dbg.as_deref_mut())
-                };
-                // In a refresh cycle the single step is the phi2 one.
-                if fast && steps == 2 && step == PHI1_STEP {
-                    self.io.vic.cpu_phi1_data(self.io.cpu_data);
-                    // An I/O access in the phi1 half is stretched to the
-                    // phi2 half: the step takes the whole cycle (VICE test
-                    // program c128/2mhzVIC/timing-change0: INC $D020 takes
-                    // two cycles more than INC $C000).
-                    if self.io.io_access {
-                        stretched = true;
-                        phi2_data = self.io.cpu_data;
-                    }
-                } else if fast {
-                    phi2_data = self.io.cpu_data;
-                }
-                (CPU, CPU_SPACE, result)
-            } else {
-                self.z80.set_int(irq_on);
-                self.z80.set_nmi(nmi_on);
-                (Z80_DEV, Z80_SPACE, self.z80_cycle(dbg.as_deref_mut()))
-            };
-            if result == CycleResult::Jammed {
-                jam = Some(StopReason::CpuJam {
-                    device: dev,
-                    pc: u32::from(self.cpu.pc()),
-                });
-            }
-            if let Some(dbg) = dbg.as_deref_mut() {
-                if let Some(kind) = entered {
-                    if dbg.interrupt_armed(kind) {
-                        dbg.check_interrupt(kind);
-                    }
-                }
-                if let CycleResult::InstrDone { next_pc } = result {
-                    if dbg.trace_instr_armed() {
-                        dbg.trace_instr(dev, next_pc, self.beam_pos());
-                    }
-                    if dbg.instr_step_armed() {
-                        dbg.check_instr_step();
-                    }
-                    if dbg.exec_armed(space) {
-                        dbg.check_exec(space, next_pc);
-                    }
-                }
-                if dbg.stop_pending() {
-                    break;
-                }
-            }
-            if stretched {
-                break;
-            }
+        CycleStart {
+            m8502,
+            fast,
+            ba,
+            irq_on: self.ints.0 != 0,
+            nmi_on: self.ints.1 != 0,
         }
+    }
 
+    /// The second half of a system cycle, after the CPU's steps: the
+    /// VIC-IIe's phi2 (with `phi2_data`, the 2 MHz step's byte), the
+    /// cartridge, the serial bus and drive 8, the user port, the datasette,
+    /// the clock. Returns whether a field ended and a stop of drive 8.
+    fn end_cycle(
+        &mut self,
+        mut dbg: Option<&mut DebugHooks>,
+        fast: bool,
+        phi2_data: u8,
+    ) -> (bool, Option<StopReason>) {
         let base = self.io.vic_base();
         let new_field = self.io.vic.phi2(&VicView {
             mem: &self.mem,
@@ -807,6 +824,112 @@ impl C128 {
                 let b = self.beam_pos();
                 dbg.check_raster(b.line, b.cycle);
             }
+        }
+        (new_field, drive_stop)
+    }
+
+    /// One system (VIC) cycle; in Z80 mode a whole Z80 instruction (the
+    /// system cycles it takes run inside it, [`Z80TimedBus`]). Returns
+    /// `Some` if emulation must stop.
+    fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+        let start = self.begin_cycle();
+        if !start.m8502 {
+            return self.z80_instruction(start, dbg);
+        }
+        let CycleStart {
+            m8502,
+            fast,
+            ba,
+            irq_on,
+            nmi_on,
+        } = start;
+
+        // The CPU steps of this cycle: one or two 8502 cycles, or two Z80
+        // T-states. A debug stop ends the cycle's steps early. In 2 MHz
+        // mode the VIC-IIe's DRAM refresh (cycles 11-15) still takes its
+        // half: the 8502 gets one cycle there, 121 per PAL line (VICE test
+        // programs c128/2mhzVIC: 121-cycle line loops); BA does not stop it.
+        let refresh = (11..=15).contains(&self.io.vic.cycle());
+        let switched = fast && !self.io.fast_prev;
+        self.io.fast_prev = fast;
+        let steps = match (m8502, fast, ba) {
+            (true, true, _) if refresh || switched => 1,
+            (true, true, _) => 2,
+            (true, false, _) => 1,
+            (false, ..) => 0,
+        };
+        let mut jam = None;
+        // 2 MHz: the byte of the step in the VIC-IIe's phi2 half, for its
+        // c-access.
+        let mut phi2_data = self.io.cpu_data;
+        let mut stretched = false;
+        for step in 0..steps {
+            let (dev, space, (result, entered)) = if m8502 {
+                // 2 MHz: BA does not stop the 8502.
+                self.cpu.set_rdy(ba || fast);
+                self.io.io_access = false;
+                self.cpu.set_irq(irq_on);
+                self.cpu.set_nmi(nmi_on);
+                // Without AEC the halted CPU does not reach the bus at all.
+                let result = if !fast && !self.io.vic.aec() {
+                    self.cpu.stall_off_bus();
+                    (CycleResult::Busy, None)
+                } else {
+                    self.cpu_cycle(dbg.as_deref_mut())
+                };
+                // In a refresh cycle the single step is the phi2 one.
+                if fast && steps == 2 && step == PHI1_STEP {
+                    self.io.vic.cpu_phi1_data(self.io.cpu_data);
+                    // An I/O access in the phi1 half is stretched to the
+                    // phi2 half: the step takes the whole cycle (VICE test
+                    // program c128/2mhzVIC/timing-change0: INC $D020 takes
+                    // two cycles more than INC $C000).
+                    if self.io.io_access {
+                        stretched = true;
+                        phi2_data = self.io.cpu_data;
+                    }
+                } else if fast {
+                    phi2_data = self.io.cpu_data;
+                }
+                (CPU, CPU_SPACE, result)
+            } else {
+                unreachable!("Z80 mode runs whole instructions")
+            };
+            if result == CycleResult::Jammed {
+                jam = Some(StopReason::CpuJam {
+                    device: dev,
+                    pc: u32::from(self.cpu.pc()),
+                });
+            }
+            if let Some(dbg) = dbg.as_deref_mut() {
+                if let Some(kind) = entered {
+                    if dbg.interrupt_armed(kind) {
+                        dbg.check_interrupt(kind);
+                    }
+                }
+                if let CycleResult::InstrDone { next_pc } = result {
+                    if dbg.trace_instr_armed() {
+                        dbg.trace_instr(dev, next_pc, self.beam_pos());
+                    }
+                    if dbg.instr_step_armed() {
+                        dbg.check_instr_step();
+                    }
+                    if dbg.exec_armed(space) {
+                        dbg.check_exec(space, next_pc);
+                    }
+                }
+                if dbg.stop_pending() {
+                    break;
+                }
+            }
+            if stretched {
+                break;
+            }
+        }
+
+        let (new_field, drive_stop) = self.end_cycle(dbg.as_deref_mut(), fast, phi2_data);
+
+        if let Some(dbg) = dbg {
             if let Some(stop) = dbg.take_stop() {
                 self.field_done_pending |= new_field;
                 return Some(stop);
@@ -821,6 +944,71 @@ impl C128 {
             None if new_field => Some(StopReason::FrameDone),
             None => None,
         }
+    }
+
+    /// One Z80 instruction (or interrupt response) from the system cycle
+    /// `first`, already begun: [`Z80::step_timed`] on a bus that runs the
+    /// system cycles up to each access, two T-states in each cycle with BA
+    /// high, none while the VIC-IIe holds the bus (the Z80 waits). A
+    /// T-state of the last cycle the instruction leaves unused is the next
+    /// one's ([`C128::z80_credit`]).
+    fn z80_instruction(
+        &mut self,
+        first: CycleStart,
+        mut dbg: Option<&mut DebugHooks>,
+    ) -> Option<StopReason> {
+        let mut z80 = std::mem::take(&mut self.z80);
+        z80.set_int(first.irq_on);
+        z80.set_nmi(first.nmi_on);
+        let credit = u32::from(self.z80_credit);
+        let mut bus = Z80TimedBus {
+            avail: credit + if first.ba { 2 } else { 0 },
+            m: self,
+            dbg: dbg.as_deref_mut(),
+            new_field: false,
+            drive_stop: None,
+        };
+        let t = z80.step_timed(&mut bus);
+        // The instruction's last T-states after its last access, then the
+        // open cycle ends.
+        while bus.avail < t {
+            bus.next_cycle();
+        }
+        let (field, end_field, drive_stop) = {
+            let (f, stop) = bus.m.end_cycle(bus.dbg.as_deref_mut(), false, 0);
+            (bus.new_field, f, stop.or(bus.drive_stop))
+        };
+        let spare = bus.avail - t;
+        self.z80_credit = spare.min(1) as u8;
+        let entered = z80.take_interrupt();
+        let next_pc = u32::from(z80.pc);
+        self.z80 = z80;
+        let new_field = field || end_field;
+        if let Some(dbg) = dbg {
+            if let Some(kind) = entered {
+                if dbg.interrupt_armed(kind) {
+                    dbg.check_interrupt(kind);
+                }
+            }
+            if dbg.trace_instr_armed() {
+                dbg.trace_instr(Z80_DEV, next_pc, self.beam_pos());
+            }
+            if dbg.instr_step_armed() {
+                dbg.check_instr_step();
+            }
+            if dbg.exec_armed(Z80_SPACE) {
+                dbg.check_exec(Z80_SPACE, next_pc);
+            }
+            if let Some(stop) = dbg.take_stop() {
+                self.field_done_pending |= new_field;
+                return Some(stop);
+            }
+        }
+        if drive_stop.is_some() {
+            self.field_done_pending |= new_field;
+            return drive_stop;
+        }
+        new_field.then_some(StopReason::FrameDone)
     }
 
     fn apply_input(&mut self, ev: TimedInput) {
@@ -1096,6 +1284,7 @@ impl Machine for C128 {
         let hard = kind == ResetKind::Hard;
         self.cpu.reset();
         self.z80.reset();
+        self.z80_credit = 0;
         self.mem.reset(hard);
         self.io.reset(hard);
         if let Some(d) = &mut self.drive {
@@ -1571,13 +1760,14 @@ impl Machine for C128 {
         if let Some(p) = &self.printer {
             p.save_chunk(&mut w);
         }
-        w.chunk(*b"C128", 3, |w| {
+        w.chunk(*b"C128", 4, |w| {
             w.u8(self.ints.0);
             w.u8(self.ints.1);
             w.bool(self.field_done_pending);
             w.u8(self.autostart.to_u8());
             w.u64(self.boot_frame);
             w.bool(self.booted);
+            w.u8(self.z80_credit);
         });
         self.cpu.save(&mut w);
         self.z80.save(&mut w);
@@ -1622,13 +1812,15 @@ impl Machine for C128 {
             input: self.input.clone(),
         };
         let mut r = StateReader::new(s);
-        let (version, mut c) = r.chunk(*b"C128", 3)?;
+        let (version, mut c) = r.chunk(*b"C128", 4)?;
         let ints = (c.u8()?, c.u8()?);
         let field_done_pending = c.bool()?;
         let autostart =
             Autostart::from_u8(c.u8()?).ok_or(StateError::Invalid("autostart state"))?;
         let boot_frame = c.u64()?;
         let booted = c.bool()?;
+        // Version 4 on: the Z80's T-state credit.
+        let z80_credit = if version >= 4 { c.u8()?.min(1) } else { 0 };
         next.cpu.load(&mut r)?;
         next.z80.load(&mut r)?;
         next.mem.load(&mut r)?;
@@ -1756,6 +1948,7 @@ impl Machine for C128 {
         self.autostart = autostart;
         self.boot_frame = boot_frame;
         self.booted = booted;
+        self.z80_credit = z80_credit;
         self.sync_light_pen();
         if let Some(p) = &mut self.printer {
             p.load_chunk(s);

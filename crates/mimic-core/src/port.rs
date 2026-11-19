@@ -46,6 +46,11 @@ pub enum PortKind {
     /// MSX general-purpose port: 9-pin, pins 1–4 the directions, 6 and 7
     /// triggers A and B (also outputs), 8 an output strobe.
     MsxJoy,
+    /// Sega SG-1000 / SC-3000 joystick port: 9-pin, pins 1–4 the
+    /// directions, 6 the left trigger (TL), 9 the right one (TR); pin 8 the
+    /// common, driven by the keyboard row select (Charles MacDonald, "Sega
+    /// SC-3000H hardware notes").
+    SegaJoy,
     /// Kempston mouse interface on the ZX Spectrum: the mouse's X and Y
     /// counters and buttons, read through ports $FBDF, $FFDF, $FADF.
     KempstonMouse,

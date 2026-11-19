@@ -405,12 +405,18 @@ fn overlays_show_sprites_the_hit_and_interrupts() {
         color: colors::SERIES[0],
         label: Some("0".into()),
     };
-    assert_eq!(m.overlay("sprites").unwrap().shapes, std::slice::from_ref(&rect));
+    assert_eq!(
+        m.overlay("sprites").unwrap().shapes,
+        std::slice::from_ref(&rect)
+    );
     // The bounds: tile 0 is solid, so they are the full box; tile 1 sets
     // columns 2-5 on rows 2-5 only.
     m.set_overlays(&["sprites", "sprite_bounds", "sprite0", "irq"]);
     frames(&mut m, 2);
-    assert_eq!(m.overlay("sprite_bounds").unwrap().shapes, std::slice::from_ref(&rect));
+    assert_eq!(
+        m.overlay("sprite_bounds").unwrap().shapes,
+        std::slice::from_ref(&rect)
+    );
     for r in 2..6 {
         assert!(m.poke(PPU_SPACE, 16 + r, Size::Byte, 0x3c));
     }

@@ -8,6 +8,13 @@
 //! two output ports ([`memory`]), two module slots ([`modules`]); the
 //! floppy unit D004 on top ([`d004`]).
 //!
+//! **Timing.** The Z80 runs whole instructions with [`Z80::step_timed`]
+//! (no wait states). Before each access that can see the rest of the
+//! machine (I/O, the interrupt acknowledge, a write to $8000–$BFFF) the
+//! D004, the tape, the CTC with the sound, the keyboard and the beam are
+//! brought up to that T-state; fetches and other memory accesses leave
+//! them for the next such access or the instruction's end.
+//!
 //! I/O ports (the lower address byte; the upper one is the slot for port
 //! `$80`):
 //!
@@ -73,7 +80,7 @@ pub mod tape;
 pub mod video;
 
 use chips_zilog::{pio, Ctc, Pio};
-use cpu_z80::{IO_BASE, Z80};
+use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
 use d004::D004;
 use memory::{Memory, Roms};
 use mimic_core::audio::Decimator;
@@ -171,15 +178,137 @@ fn peek_at(mem: &Memory, pio: &Pio, ctc: &Ctc, d004: Option<&D004>, addr: u32) -
     }
 }
 
-/// The CPU's bus for one instruction.
+/// The CPU's bus for one instruction, with everything that runs beside
+/// the CPU: before each bus access ([`TimedBus::wait_states`]) the floppy
+/// unit, the tape, the CTC with the sound, the keyboard and the beam are
+/// brought up to that T-state, so a read of the CTC or a port sees the
+/// state of its own T-state, not the instruction's start.
 struct KcBus<'a> {
+    model: Model,
     four: bool,
     mem: &'a mut Memory,
     pio: &'a mut Pio,
     ctc: &'a mut Ctc,
     d004: Option<&'a mut D004>,
+    blink: &'a mut bool,
+    sound: &'a mut Sound,
+    keyboard: &'a mut keyboard::Keyboard,
+    tape: &'a mut tape::Tape,
+    line: &'a mut u32,
+    line_end: &'a mut u64,
+    fields: &'a mut u64,
+    pixels: &'a mut [u8],
+    toggles: &'a mut Vec<(u8, u32)>,
+    /// CPU clock the instruction started on, and its T-states the rest of
+    /// the machine has run.
+    start: u64,
+    done: u32,
+    /// A field ended during the instruction.
+    field: bool,
     dbg: Option<&'a mut DebugHooks>,
     beam: BeamPos,
+}
+
+impl KcBus<'_> {
+    /// Bring the rest of the machine up to T-state `t` of the instruction.
+    fn run_to(&mut self, t: u32) {
+        if t <= self.done {
+            return;
+        }
+        let n = t - self.done;
+        self.done = t;
+        // The floppy unit runs the same time.
+        if let Some(d) = self.d004.as_deref_mut() {
+            d.run(n, self.model.cpu_hz(), self.dbg.as_deref_mut());
+        }
+        // Every zero crossing on the tape is a strobe at PIO port A.
+        let motor = self.mem.pio_a & memory::A_TAPE_MOTOR != 0;
+        if self.tape.run(u64::from(n), motor) > 0 {
+            self.pio.strobe(pio::A);
+        }
+        self.toggles.clear();
+        let (toggles, blink) = (&mut *self.toggles, &mut *self.blink);
+        self.ctc.advance(n, |ch, at| match ch {
+            0 | 1 => toggles.push((ch as u8, at)),
+            2 => *blink ^= true,
+            _ => {}
+        });
+        self.toggles.sort_by_key(|e| e.1);
+        // PIO B bits 4-1: the volume, all ones is silence.
+        let volume = 15 - i32::from(self.mem.pio_b >> 1 & 15);
+        let sounding = [
+            self.ctc.channel(0).0 & 1 != 0,
+            self.ctc.channel(1).0 & 1 != 0,
+        ];
+        self.sound.run(n, self.toggles, sounding, volume);
+        let now = self.start + u64::from(t);
+        // Every pulse of the keyboard is a strobe at PIO port B.
+        if self.keyboard.run(now) {
+            self.pio.strobe(pio::B);
+        }
+        while now * 2 >= *self.line_end {
+            *self.line_end += self.model.line_half_t();
+            self.end_of_line();
+            self.field |= *self.line == 0;
+        }
+    }
+
+    /// The beam reached the end of its line: draw it, count it.
+    fn end_of_line(&mut self) {
+        let y = *self.line as usize;
+        if y < video::HEIGHT as usize {
+            let blink = *self.blink && self.mem.pio_b & memory::B_BLINK != 0;
+            let out = &mut self.pixels[y * video::WIDTH as usize..][..video::WIDTH as usize];
+            if self.model.four() {
+                video::line_4(&self.mem.irm, self.mem.port84, y, blink, out);
+            } else {
+                video::line_3(&self.mem.irm, y, blink, out);
+            }
+        }
+        *self.line += 1;
+        // The line pulse clocks CTC channels 0 and 1, the field pulse
+        // channels 2 and 3.
+        for ch in 0..2 {
+            if self.ctc.trigger(ch) {
+                self.sound.level[ch] ^= true;
+            }
+        }
+        if *self.line == video::HEIGHT {
+            if self.ctc.trigger(2) {
+                *self.blink ^= true;
+            }
+            self.ctc.trigger(3);
+        }
+        if *self.line == video::LINES {
+            *self.line = 0;
+            *self.fields += 1;
+        }
+    }
+}
+
+impl TimedBus for KcBus<'_> {
+    fn wait_states(&mut self, access: Access, t: u32) -> u32 {
+        self.wait_states_at(access, t, 0x8000)
+    }
+
+    /// The KC85 has no wait states. The rest of the machine catches up
+    /// before the accesses that can see it: I/O (CTC, PIO, the D004's
+    /// ports), the interrupt acknowledge and writes to $8000–$BFFF (where
+    /// the picture RAM can be, drawn line by line). Fetches, memory reads
+    /// and other writes see none of it, so they leave it for later:
+    /// catching up before every access cost a third of the speed
+    /// (2026-11-19).
+    fn wait_states_at(&mut self, access: Access, t: u32, addr: u16) -> u32 {
+        let seen = match access {
+            Access::Fetch | Access::Read => false,
+            Access::Write => (0x8000..0xc000).contains(&addr),
+            Access::IoRead | Access::IoWrite | Access::IntAck => true,
+        };
+        if seen {
+            self.run_to(t);
+        }
+        0
+    }
 }
 
 impl Bus for KcBus<'_> {
@@ -484,10 +613,6 @@ impl Kc85 {
         while let Some(ev) = self.input.pop_due(self.sched.now()) {
             self.apply_input(ev);
         }
-        // Every pulse of the keyboard is a strobe at PIO port B.
-        if self.keyboard.run(self.sched.now().0) {
-            self.pio.strobe(pio::B);
-        }
         let beam = self.beam_pos();
         let vector = self.interrupt();
         self.cpu.set_int(vector.is_some());
@@ -496,22 +621,34 @@ impl Kc85 {
         let reti = !self.cpu.halted
             && self.mem.read(self.cpu.pc) == 0xed
             && self.mem.read(self.cpu.pc.wrapping_add(1)) == 0x4d;
-        let t = {
+        let (t, field) = {
             let mut bus = KcBus {
+                model: self.model,
                 four: self.model.four(),
                 mem: &mut self.mem,
                 pio: &mut self.pio,
                 ctc: &mut self.ctc,
                 d004: self.d004.as_deref_mut(),
+                blink: &mut self.blink,
+                sound: &mut self.sound,
+                keyboard: &mut self.keyboard,
+                tape: &mut self.tape,
+                line: &mut self.line,
+                line_end: &mut self.line_end,
+                fields: &mut self.fields,
+                pixels: &mut self.pixels,
+                toggles: &mut self.toggles,
+                start: self.sched.now().0,
+                done: 0,
+                field: false,
                 dbg: dbg.as_deref_mut(),
                 beam,
             };
-            self.cpu.step(&mut bus)
+            let t = self.cpu.step_timed(&mut bus);
+            // The rest of the instruction's T-states after its last access.
+            bus.run_to(t);
+            (t, bus.field)
         };
-        // The floppy unit runs the same time.
-        if let Some(d) = &mut self.d004 {
-            d.run(t, self.model.cpu_hz(), dbg.as_deref_mut());
-        }
         let entered = self.cpu.take_interrupt();
         // The acknowledge and the RETI go to the first device of the
         // chain they belong to.
@@ -523,32 +660,6 @@ impl Kc85 {
             self.pio.chain.reti();
         }
         self.sched.advance(u64::from(t));
-        // Every zero crossing on the tape is a strobe at PIO port A.
-        let motor = self.mem.pio_a & memory::A_TAPE_MOTOR != 0;
-        if self.tape.run(u64::from(t), motor) > 0 {
-            self.pio.strobe(pio::A);
-        }
-        self.toggles.clear();
-        let (toggles, blink) = (&mut self.toggles, &mut self.blink);
-        self.ctc.advance(t, |ch, at| match ch {
-            0 | 1 => toggles.push((ch as u8, at)),
-            2 => *blink ^= true,
-            _ => {}
-        });
-        self.toggles.sort_by_key(|e| e.1);
-        // PIO B bits 4-1: the volume, all ones is silence.
-        let volume = 15 - i32::from(self.mem.pio_b >> 1 & 15);
-        let sounding = [
-            self.ctc.channel(0).0 & 1 != 0,
-            self.ctc.channel(1).0 & 1 != 0,
-        ];
-        self.sound.run(t, &self.toggles, sounding, volume);
-        let mut field = false;
-        while self.sched.now().0 * 2 >= self.line_end {
-            self.line_end += self.model.line_half_t();
-            self.end_of_line();
-            field |= self.line == 0;
-        }
         if let Some(dbg) = dbg {
             if let Some(kind) = entered {
                 if dbg.interrupt_armed(kind) {
@@ -575,38 +686,6 @@ impl Kc85 {
             }
         }
         field.then_some(StopReason::FrameDone)
-    }
-
-    /// The beam reached the end of its line: draw it, count it.
-    fn end_of_line(&mut self) {
-        let y = self.line as usize;
-        if y < video::HEIGHT as usize {
-            let blink = self.blink && self.mem.pio_b & memory::B_BLINK != 0;
-            let out = &mut self.pixels[y * video::WIDTH as usize..][..video::WIDTH as usize];
-            if self.model.four() {
-                video::line_4(&self.mem.irm, self.mem.port84, y, blink, out);
-            } else {
-                video::line_3(&self.mem.irm, y, blink, out);
-            }
-        }
-        self.line += 1;
-        // The line pulse clocks CTC channels 0 and 1, the field pulse
-        // channels 2 and 3.
-        for ch in 0..2 {
-            if self.ctc.trigger(ch) {
-                self.sound.level[ch] ^= true;
-            }
-        }
-        if self.line == video::HEIGHT {
-            if self.ctc.trigger(2) {
-                self.blink ^= true;
-            }
-            self.ctc.trigger(3);
-        }
-        if self.line == video::LINES {
-            self.line = 0;
-            self.fields += 1;
-        }
     }
 
     fn apply_input(&mut self, ev: TimedInput) {

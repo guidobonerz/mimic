@@ -619,6 +619,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "chips-sega"
+version = "0.1.0"
+dependencies = [
+ "mimic-core",
+]
+
+[[package]]
 name = "chips-sinclair"
 version = "0.1.0"
 dependencies = [
@@ -2246,6 +2253,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-sega8"
+version = "0.1.0"
+dependencies = [
+ "chips-sega",
+ "chips-ti",
+ "chips-yamaha",
+ "cpu-z80",
+ "devices-cartridge",
+ "devices-input",
+ "drives-other",
+ "mimic-core",
+]
+
+[[package]]
 name = "machine-sim6502"
 version = "0.1.0"
 dependencies = [
@@ -2524,6 +2545,7 @@ dependencies = [
  "machine-msx",
  "machine-nes",
  "machine-pet",
+ "machine-sega8",
  "machine-sim6502",
  "machine-snes",
  "machine-spectrum",

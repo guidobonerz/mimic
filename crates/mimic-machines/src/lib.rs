@@ -23,6 +23,7 @@ fn joystick_port(kind: PortKind) -> bool {
             | PortKind::SpectrumJoy
             | PortKind::Ti99Joy
             | PortKind::MsxJoy
+            | PortKind::SegaJoy
     )
 }
 
@@ -168,6 +169,7 @@ pub fn registry() -> Registry {
     r.register(machine_kc85::entry());
     r.register(machine_spectrum::entry());
     r.register(machine_coleco::entry());
+    r.register(machine_sega8::entry());
     r.register(machine_msx::entry());
     r.register(machine_ti99::entry());
     r.register(machine_bbc::entry());

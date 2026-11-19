@@ -25,6 +25,7 @@ pub mod nes;
 pub mod pagefox;
 pub mod reu;
 pub mod scc;
+pub mod sega;
 pub mod slot;
 pub mod snes;
 pub mod ted;

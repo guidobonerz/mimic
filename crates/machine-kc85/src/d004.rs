@@ -32,8 +32,10 @@
 //! the zeros (NOPs) into `$FC00`. A reset with bit 2 keeps the RAM: the
 //! CPU starts the program at `$0000` (MicroDOS' warm start).
 //!
-//! Both computers run in step: after every instruction of the KC, the
-//! D004 runs the same time at its own clock. The arbitration of the
+//! Both computers run in step: before each of the KC's I/O accesses (and
+//! after its instruction) the D004 runs the same time at its own clock;
+//! its own Z80 runs with [`Z80::step_timed`], the CTC and the FDC brought
+//! up to each of its I/O accesses. The arbitration of the
 //! Koppel-RAM (the manual: "the different clocks are balanced for both
 //! sides") costs nothing here.
 //!
@@ -51,7 +53,7 @@
 
 use chips_amstrad::fdc::{Fdc, FloppyDrive};
 use chips_zilog::Ctc;
-use cpu_z80::{IO_BASE, Z80};
+use cpu_z80::{Access, TimedBus, IO_BASE, Z80};
 use drives_other::cpc_drive::CpcDrive;
 use mimic_core::{
     Bus, Cpu, DebugHooks, DebugTarget, DeviceId, Instr, InterruptKind, MemSpaceId, RegisterSet,
@@ -162,6 +164,30 @@ struct D004Bus<'a> {
     unit: &'a mut Unit,
     drives: &'a mut [CpcDrive; 2],
     dbg: Option<&'a mut DebugHooks>,
+    /// T-states of the instruction the CTC and the FDC have run.
+    done: u32,
+}
+
+impl D004Bus<'_> {
+    /// The CTC and the FDC up to T-state `t` of the instruction.
+    fn run_to(&mut self, t: u32) {
+        if t > self.done {
+            devices(self.unit, self.drives, t - self.done);
+            self.done = t;
+        }
+    }
+}
+
+impl TimedBus for D004Bus<'_> {
+    fn wait_states(&mut self, access: Access, t: u32) -> u32 {
+        // No wait states: the CTC and the FDC catch up before an I/O access
+        // or an interrupt acknowledge, so the program reads them at the
+        // access's own T-state; memory accesses do not see them.
+        if matches!(access, Access::IoRead | Access::IoWrite | Access::IntAck) {
+            self.run_to(t);
+        }
+        0
+    }
 }
 
 impl Bus for D004Bus<'_> {
@@ -333,12 +359,14 @@ impl D004 {
         while self.unit.owed > 0 {
             let t = if self.unit.reset {
                 // Only the devices run: the clocks owed, in one go.
-                ((self.unit.owed + unit - 1) / unit) as u32
+                let t = ((self.unit.owed + unit - 1) / unit) as u32;
+                devices(&mut self.unit, &mut self.drives, t);
+                t
             } else {
+                // The devices run inside, up to each access.
                 self.instruction(dbg.as_deref_mut())
             };
             self.unit.owed -= i64::from(t) * unit;
-            self.devices(t);
         }
     }
 
@@ -355,10 +383,12 @@ impl D004 {
                 unit: &mut *u,
                 drives: &mut self.drives,
                 dbg: dbg.as_deref_mut(),
+                done: 0,
             };
             // The bus borrows the unit; the CPU is part of it.
             let mut cpu = std::mem::take(&mut bus.unit.cpu);
-            let t = cpu.step(&mut bus);
+            let t = cpu.step_timed(&mut bus);
+            bus.run_to(t);
             self.unit.cpu = cpu;
             t
         };
@@ -379,28 +409,29 @@ impl D004 {
         }
         t
     }
+}
 
-    /// `t` clocks of the CTC and the FDC.
-    fn devices(&mut self, t: u32) {
-        let u = &mut self.unit;
-        let mut pulses = [0u32; 4];
-        u.ctc.advance(t, |ch, _| pulses[ch] += 1);
-        // ZC/TO 0–2 clock the next channel.
-        for ch in 0..3 {
-            for _ in 0..pulses[ch] {
-                if u.ctc.trigger(ch + 1) {
-                    pulses[ch + 1] += 1;
-                }
+/// `t` clocks of the CTC and the FDC.
+fn devices(u: &mut Unit, drives: &mut [CpcDrive; 2], t: u32) {
+    let mut pulses = [0u32; 4];
+    u.ctc.advance(t, |ch, _| pulses[ch] += 1);
+    // ZC/TO 0–2 clock the next channel.
+    for ch in 0..3 {
+        for _ in 0..pulses[ch] {
+            if u.ctc.trigger(ch + 1) {
+                pulses[ch + 1] += 1;
             }
         }
-        u.us_phase += t;
-        let per_us = D004_HZ / 1_000_000;
-        while u.us_phase >= per_us {
-            u.us_phase -= per_us;
-            u.fdc.tick(&mut self.drives);
-        }
     }
+    u.us_phase += t;
+    let per_us = D004_HZ / 1_000_000;
+    while u.us_phase >= per_us {
+        u.us_phase -= per_us;
+        u.fdc.tick(drives);
+    }
+}
 
+impl D004 {
     pub fn save(&self, w: &mut StateWriter) {
         let u = &self.unit;
         w.chunk(*b"D004", 1, |w| {

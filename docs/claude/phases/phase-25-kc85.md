@@ -45,3 +45,7 @@ Open:
 - The desktop and web frontends run the machine through the registry but were not tried by hand.
 
 User documentation (2026-11-15, on the user's request): `docs/usage.md` (ROM files, models, options, media, keys), the user guide (`tools/guide_de.py`, `guide_en.py`: a "Robotron KC85" section, the machine and ROM tables; PDFs rebuilt) and the README gallery: `docs/screenshots/kc85-4.png` (the KC85/4's CAOS 4.2 menu, 200 fields) and `kc85-basic.png` (HC-BASIC on the KC85/4, a typed program printing the 15 foreground colours on black and black on the 8 background colours: `--type 'BASIC\n\n\n\n\n10 CLS:FOR V=1 TO 15\n20 COLOR V,0:PRINT " ROBOTRON KC85/4 ";:COLOR 0,V AND 7:PRINT " HC-BASIC "\n30 NEXT:COLOR 7,1:PRINT\nRUN\n' --type-at 150 --frames 2000`); both `--crt raw` (640 × 512, the machine's picture without a border).
+
+## Z80 timing (2026-11-19)
+
+On the user's request the KC85 and the D004 run their Z80 with `step_timed` (before: `step`, the rest of the machine caught up after each instruction). The rest catches up before each access that can see it (I/O, interrupt acknowledge, writes to $8000–$BFFF; the D004 before its I/O), not before every access: that cost a third of the speed. Measured (3000 fields, KC85/4, best of 4, interleaved): 1.07 → 1.15 s without the D004, 2.91 → 3.11 s with ML-DOS on the D004 (+7–8 %). All unit tests and the ROM tests (`kc85_boot`: boot, BASIC, tape, `JUMP FC`) unchanged, the boot sector after the same fields (110/80/80); ML-DOS still boots to its prompt.

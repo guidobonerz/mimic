@@ -77,6 +77,7 @@ crates/
   machine-archimedes/ Acorn Archimedes A305, A310, A440, A3000 as models
   machine-imsai/   IMSAI 8080: the picture is the front panel (clickable paddles, lamps by bus duty), serial terminal as second screen; card reader
   machine-keypunch/ IBM 029 card punch: the user types card decks (picture: the card), read back by the IMSAI's card reader
+  machine-sega8/   Sega SG-1000, SG-1000 II, SC-3000, SC-3000H, Mark III, Master System 1/2 and Game Gear as models (Phase 36): TMS9918A or the SMS VDP, SN76489, YM2413, Sega/Codemasters mappers, 8255 PPI with the SC-3000 keyboard, cassette
   machine-msx/     MSX1 and MSX2 as models: slots, keyboard, joysticks, cassette, SVI-738 disk interface; MSX2 with V9938, memory mapper, sub ROM, RP5C01; C-BIOS or a user-supplied BIOS
   machine-kc85/    Robotron KC85/2, /3, /4, /5 as models: IRM picture, keyboard over its pulse protocol, cassette (KC-TAP, KCC), module slots
   machine-zx81/    Sinclair ZX81 / TS1000
@@ -168,7 +169,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34 and 35 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35 and 36 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

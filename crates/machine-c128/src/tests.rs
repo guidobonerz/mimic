@@ -70,6 +70,65 @@ fn z80_breakpoints_and_debug_target() {
 }
 
 #[test]
+fn a_z80_write_lands_in_the_system_cycle_of_its_t_state() {
+    use mimic_core::{TraceConfig, TraceEvent, TraceRange};
+    let mut m = stub();
+    // From $4000: LD HL,$5000 ; loop: LD (HL),$AA ; JR loop. LD (HL),n
+    // writes in its third M-cycle (T-states 7-9), two T-states a cycle.
+    let code = [0x21, 0x00, 0x50, 0x36, 0xaa, 0x18, 0xfc];
+    m.mem.ram[0x4000..0x4000 + code.len()].copy_from_slice(&code);
+    // The MMU: bank 0 all RAM (with I/O), so the Z80 fetches from RAM.
+    assert!(m.poke(CPU_SPACE, 0xff00, Size::Byte, 0x3e));
+    m.z80.pc = 0x4000;
+    let mut dbg = DebugHooks::new();
+    dbg.set_trace(TraceConfig {
+        instructions: true,
+        writes: vec![TraceRange {
+            space: Z80_SPACE,
+            addr: 0x5000,
+            len: 1,
+        }],
+        ..TraceConfig::default()
+    });
+    m.run_frame(&mut dbg);
+    let trace = dbg.drain_trace();
+    let mut start = None;
+    let mut gaps = Vec::new();
+    for e in &trace {
+        match e.event {
+            TraceEvent::Instr { pc: 0x4003, .. } => start = Some(e.beam),
+            TraceEvent::Write { .. } => {
+                if let Some(s) = start.take() {
+                    if s.line == e.beam.line {
+                        gaps.push(e.beam.cycle - s.cycle);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        gaps.len() > 1000,
+        "{} writes; trace {} entries, first {:?}, ram {:02x}, pc {:04x}",
+        gaps.len(),
+        trace.len(),
+        &trace[..trace.len().min(6)],
+        m.mem.ram[0x5000],
+        m.z80.pc
+    );
+    // Outside bad lines the write is 3 or 4 cycles into the instruction
+    // (before step_timed every access fell into its first cycle).
+    let typical = gaps.iter().filter(|&&g| (3..=4).contains(&g)).count();
+    assert!(
+        typical * 10 > gaps.len() * 9,
+        "{typical} of {} writes 3-4 cycles in: {:?}",
+        gaps.len(),
+        &gaps[..20]
+    );
+    assert!(m.mem.ram[0x5000] == 0xaa);
+}
+
+#[test]
 fn mmu_banking_through_ff00() {
     let mut m = stub();
     assert_eq!(m.peek(CPU_SPACE, 0xe000, Size::Byte), Some(0x78), "KERNAL");

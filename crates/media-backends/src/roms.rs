@@ -531,6 +531,20 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         // The Speech Synthesizer's TMS6100 speech ROM (optional).
         optional("ti99speech", &["spchrom", "ti99speech", "speech"], 0x8000),
     ];
+    // Sega: the Master System's 8 KB BIOS 1.3 and the Game Gear's 1 KB
+    // BIOS, both optional (the machine starts cartridges without them).
+    const SEGA8: &[RomSpec] = &[
+        optional(
+            "sms-bios",
+            &["sms-bios", "bios13", "mpr-12808", "smsbios", "bios"],
+            0x2000,
+        ),
+        optional(
+            "gg-bios",
+            &["gg-bios", "bios-gg", "majesco", "ggbios"],
+            0x400,
+        ),
+    ];
     const COLECO: &[RomSpec] = &[rom(
         "coleco",
         &[
@@ -771,6 +785,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "spectrum" => SPECTRUM,
         "vectrex" => VECTREX,
         "coleco" => COLECO,
+        "sega8" => SEGA8,
         "msx" => MSX,
         "ti99" => TI99,
         "bbc" => BBC,
@@ -808,6 +823,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "trs80" => &["trs80", "trs-80", "tandy"],
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
+        "sega8" => &["sega8", "sms", "gg", "sega"],
         "msx" => &["msx", "msx1", "msx2"],
         "ti99" => &["ti99", "ti-99", "ti994a"],
         "bbc" => &[

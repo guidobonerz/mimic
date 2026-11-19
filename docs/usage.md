@@ -136,6 +136,7 @@ Programm statt der echten ROMs, nur für Tests.
 | `zx81` | Sinclair ZX81 / Timex Sinclair 1000 | `zx81` (Standard, PAL), `ts1000` (NTSC, 60 Hz) |
 | `spectrum` | Sinclair ZX Spectrum | `48k` (Standard), `128k`, `plus2` (der Amstrad-+2: 128K-Hardware mit eigenen ROMs) |
 | `coleco` | ColecoVision | – (`--videoformat`: `ntsc` Standard, TMS9918A; `pal` TMS9929A) |
+| `sega8` | Sega SG-1000 / SC-3000 / Master System / Game Gear | `sg1000` (Standard), `sg1000ii`, `sc3000`, `sc3000h` (`--videoformat`: `ntsc` Standard, TMS9918A; `pal` TMS9929A); `mark3`, `sms`, `sms2` (`--videoformat ntsc\|pal`), `gg` (Game Gear) |
 | `msx` | MSX | `msx1` (Standard), `msx2` (V9938 mit 128 KB VRAM, Memory Mapper, Sub-ROM, Uhr) (`--videoformat`: ohne Angabe nach dem BIOS, Byte $002B: 50 oder 60 Hz; MSX1 `ntsc` TMS9918A, `pal` TMS9929A) |
 | `kc85` | Robotron KC85 | `4` (Standard: KC85/4, CAOS 4.2), `2` (KC85/2, HC900-CAOS, ohne BASIC-ROM), `3` (KC85/3, CAOS 3.1), `5` (KC85/5, CAOS 4.4, 256 KB RAM) |
 | `ti99` | TI-99/4A | – (`--videoformat`: `ntsc` Standard, TMS9918A; `pal` TMS9929A) |
@@ -159,6 +160,8 @@ Optionen werden mit `--option KEY=WERT` gesetzt (mehrfach möglich):
 | SNES | `port1`/`port2=pad\|mouse\|superscope\|none` (Super Scope nur in Port 2; zielt mit der Maus, linke Taste = Abzug, rechte = Cursor), `multitap=on` (Multiplayer 5 in Port 2: Ports 2–5 mit Pads), `roms=stub` (eigener Sound-Bootlader statt der IPL-ROM) |
 | NES | `port1`/`port2=controller\|zapper\|arkanoid\|none` (Standard `controller`; `zapper` = Lichtpistole, zielt mit der Maus, linke Taste = Abzug; `arkanoid` = Arkanoid-Controller, die Maus dreht den Knopf), `fourscore=on` (Four Score: Ports 3 und 4 mit Controllern, Ports 1 und 2 müssen Controller sein) |
 | ColecoVision | `port1`/`port2=controller\|superaction\|driving\|roller\|none` (Standard `controller`: Joystick, zwei Feuerknöpfe, Keypad; `superaction` = Super Action Controller mit vier Knöpfen und Speed Roller; `driving` = Expansion Module #2 mit Lenkrad und Gaspedal; `roller` = Roller Controller (Trackball, belegt mit seinem zweiten Kabel auch Port 2)), `roms=stub` |
+| SG-1000 / SC-3000 | `port1`/`port2=joystick\|none` (Sega-Pad: Richtungen, TL und TR), `cartram=auto\|none\|2k\|8k\|16k\|32k` (Modul-RAM ab $8000; `auto`: beim SC-3000 16 KB für Module bis 32 KB wie BASIC Level III A, sonst keins; `32k` wie Level III B, schaltet das Arbeits-RAM ab), `cart=demo` (eingebautes Testmodul) |
+| Master System / Game Gear | `port1`/`port2=joystick\|none`, `mapper=sega\|codemasters` (Standard `sega`), `region=export\|japan` (Standard: Mark III Japan, sonst Export), `fm=on\|off` (YM2413; Standard an beim japanischen SMS, also `sms` mit `region=japan`; beim Mark III die FM Sound Unit), `cart=demo` (Mode-4-Testmodul); BIOS optional: `~/.mimic/roms/sega8/` (`bios13*` 8 KB fürs SMS, `gg-bios*` 1 KB für den Game Gear) |
 | MSX | `port1`/`port2=joystick\|none` (Standard `joystick`), `ram=8\|16\|32\|64` (KB, Standard 64; MSX2 `64` bis `4096`, Standard 256), `vdp=tms9918\|v9938` (MSX1 auch mit dem V9938), `mapper1`/`mapper2=auto\|plain\|konami\|konamiscc\|ascii8\|ascii16` (Bankumschaltung des Moduls in Schacht 1 bzw. 2; `auto` rät sie aus dem Abbild; mit Batterie-RAM nur ausdrücklich: `ascii8sram`, `ascii16sram`, `gamemaster2` – der Spielstand liegt dann als `spiel.srm` neben dem Abbild), `roms=stub`. `--cart spiel.rom` steckt ein Modul in Schacht 1. Tasten: linke Alt = GRAPH, rechte Alt = CODE, Ende = STOP, Bild↑ = SELECT, Bild↓ = Akzenttaste, Pos1 = HOME, Einfg/Entf = INS/DEL, F1–F5. Konami-SCC-Module klingen mit ihrem Soundchip. Kassette: `--tape spiel.cas` (CAS-Abbild; `CLOAD` bzw. `BLOAD"CAS:",R` lädt, der Motor wird vom Rechner geschaltet; für `CSAVE` vorher RECORD am Laufwerk drücken, das Abbild wird beim Loslassen von RECORD geschrieben) – braucht ein echtes BIOS mit BASIC. Diskette: liegt das Disk-ROM des Spectravideo SVI-738 (`svi-738_disk.rom`, 16 KB) im ROM-Ordner, hat die Maschine zwei Laufwerke A und B (`--disk spiel.dsk`, Sektorabbilder 160–720 KB) und startet Disk BASIC bzw. bootet die Diskette; beim Start fragt sie nach dem Datum (Enter genügt). `disk=off` schaltet das Interface ab. Andere Disk-ROMs werden nicht erkannt. MSX2-Programme brauchen `--model msx2` (C-BIOS startet nur Module; Disketten und BASIC brauchen ein echtes MSX2-BIOS). Beim MSX2 bestimmt das BIOS die Bildfrequenz über das NT-Bit des V9938 (aus der Registertabelle des Sub-ROMs), nicht `--videoformat`; mit einer Diskette startet MSX BASIC 2.0 ohne Datumsfrage (die Uhr liefert es) |
 | KC85 | `slot8`/`slotc=none\|m022\|m011\|m006\|m012\|m026\|m027\|m033` (ein Modul in Schacht 08 bzw. 0C des Grundgeräts: M022 16 KB RAM, M011 64 KB RAM, M006 BASIC, M012 Texor, M026 Forth, M027 Development, M033 TypeStar; die ROM-Module brauchen ihr Abbild im ROM-Ordner), `roms=stub`. Module schaltet CAOS ein: `SWITCH 8 C1` (Schacht 8, ROM ab $C000), danach `MENU`; das M006 auf dem KC85/2 startet mit `JUMP C` sein eigenes CAOS mit BASIC. Kassette: `--tape programm.kcc` oder ein KC-TAP-Abbild (`.tap`); `LOAD` im CAOS-Menü lädt ein Maschinenprogramm und startet es, den Motor schaltet der Rechner (BASIC-Programme vom Band sind nicht erprobt). Speichern auf Band gibt es noch nicht. Floppy: `--option d004=on` setzt die Floppy-Disk-Basis D004 auf (eigener Z80 mit 4 MHz, zwei 5,25-Zoll-Laufwerke `drive 0` und `drive 1`); `--disk system.img` legt eine Diskette ein (rohe MicroDOS-Abbilder `.img` mit 80 Spuren und 2 Seiten, 5 × 1024, 9 × 512 oder 16 × 256 Byte je Spur, oder DSK/EDSK), `JUMP FC` startet den Urlader des D004, der das System von Laufwerk 0 lädt. Mit echten Systemdisketten (MicroDOS, CAOS-Diskette) ist das noch nicht erprobt. Im Debugger ist die CPU des D004 das Gerät `d004`. Bis zum Menü braucht das KC85/3 etwa 6 Sekunden (CAOS 3.1 löscht den Speicher langsam), die anderen etwa 2. Tasten: Esc = BRK, Tab oder Pause = STOP, Pos1 = HOME (mit Umschalt CLS), Ende = CLR, Einfg = INS, Rücktaste/Entf = DEL, Feststelltaste = SHIFT LOCK, F1–F6. Konsolenpanel: RESET (CAOS-Warmstart, der Speicher bleibt) und POWER |
 | TI-99/4A | `ram=32k\|none` (Standard `32k`: die 32-KB-Speichererweiterung der Peripherie-Box), `port1`/`port2=joystick\|none` (die zwei Joysticks am Joystick-Anschluss), `roms=stub`. Module: `--cart SPIELC.BIN` – liegen `SPIELG.BIN` (GROM) und `SPIELD.BIN` (zweite Bank) daneben, werden sie zusammen geladen. Tasten: Alt = FCTN, Feststelltaste = ALPHA LOCK (beim Start an), Pfeiltasten = FCTN+E/S/D/X, Rücktaste = FCTN+S, Entf = FCTN+1, Esc = FCTN+9 (BACK), F4 = FCTN+4 (CLEAR). Kassette CS1: `--tape band.wav` (WAV; das ROM schaltet den Motor, `SAVE CS1`/`OLD CS1` fragen nach den Rekordertasten PLAY/RECORD/STOP/REWIND). Disketten: `--disk spiel.dsk` legt eine TI-Diskette (Sektorabbild, 90 oder 180 KB) in DSK1; der Diskettencontroller ist dabei, sobald sein DSR-ROM `DISK.BIN` im ROM-Ordner liegt (`--option disk=on\|off`), Laufwerke DSK1–DSK3. Sprachausgabe: der Speech Synthesizer (TMS5220) ist dabei, sobald das Sprach-ROM `SPCHROM.BIN` (32 KB) im ROM-Ordner liegt (`--option speech=on\|off`); Spiele wie Parsec sprechen damit |
@@ -200,6 +203,8 @@ cargo run --release -p mimic-desktop -- --machine nes --cart spiel.nes
 cargo run --release -p mimic-desktop -- --machine nes --videoformat pal --cart spiel.nes --option port2=zapper
 cargo run --release -p mimic-desktop -- --machine coleco --cart spiel.col
 cargo run --release -p mimic-desktop -- --machine coleco --videoformat pal --cart spiel.rom --option port1=roller
+cargo run --release -p mimic-desktop -- --machine sega8 --cart spiel.sg
+cargo run --release -p mimic-desktop -- --machine sega8 --model sc3000 --cart basic.sc --tape programm.wav
 cargo run --release -p mimic-desktop -- --machine msx --cart spiel.rom
 cargo run --release -p mimic-desktop -- --machine msx --videoformat ntsc --cart spiel.rom --option mapper1=konami
 cargo run --release -p mimic-desktop -- --machine kc85
@@ -269,6 +274,14 @@ Wichtige Optionen: `--machine`, `--model`, `--prg`, `--disk`, `--tape`,
   Controllers, `X` = rechter Feuerknopf), Keypad von Controller 2 auf dem
   Ziffernblock (`*` und `/` = `*` und `#`, `+` = rechter Feuerknopf);
   Joystick 1 auf den Cursortasten, Leertaste = linker Feuerknopf.
+- SG-1000: Pad 1 auf den Cursortasten, Leertaste = TL; PAUSE im Konsolen-Panel.
+  Master System: dazu Enter = PAUSE (Game Gear: START), F6 = RESET-Knopf (nur `sms`).
+  SC-3000 (nach Position, Satzzeichen wie auf der japanischen Tastatur: `@` und
+  `[` rechts neben P, `:` und `]` rechts neben L): Pos1 = HOME CLR, Rücktaste,
+  Entf und Einfg = INS DEL, Esc = BREAK, Alt = GRAPH, Strg = CTRL, Tab = FUNC,
+  Feststelltaste = ENG DIER'S, Ende = π, F5 = RESET-Taste (NMI). Die Cursortasten
+  sind zunächst Pad 1 (JOY KEYS im Panel auf NUMPAD oder OFF stellt sie auf die
+  Tastatur).
 - MSX (internationale Tastatur, nach Position): linke Alt = GRAPH, rechte Alt
   = CODE, Feststelltaste = CAPS, Ende = STOP (Strg+Ende = CTRL+STOP, bricht
   BASIC-Programme ab), Bild↑ = SELECT, Bild↓ = Akzenttaste, Pos1 = HOME,
@@ -736,7 +749,7 @@ Zeilennummern. Maschinen-Overlays:
 | Atari 2600 | `objects` (RESPx/RESMx/RESBL/HMOVE-Strobes) |
 | Amiga | `dma` (DMA-Slot-Karte je Farbtakt und Zeile mit Legende), `sprites`, `copper` (jeder Copper-MOVE) |
 | CPC | `crtc` (CRTC- und Gate-Array-Schreibzugriffe im Bild), `vsync` |
-| ColecoVision, MSX | `sprites`, `limit` (Zeilen mit 5. Sprite, beim MSX2 im Sprite-Modus 2 mit 9.) |
+| ColecoVision, MSX, SG-1000/SC-3000 | `sprites`, `sprite_bounds`, `limit` (Zeilen mit 5. Sprite, beim MSX2 im Sprite-Modus 2 mit 9.) |
 | NES | `sprites`, `sprite0` (Sprite-0-Treffer), `irq` (NMI, Mapper-/APU-IRQ) |
 | SNES | `sprites`, `hdma` (HDMA-Schreibzugriffe je Zeile), `irq` |
 | Apple II | `modes` (Videomodus je Zeile) |

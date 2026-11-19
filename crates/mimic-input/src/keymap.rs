@@ -1402,6 +1402,94 @@ pub static KC85: Keymap = Keymap {
     entries: KC85_POSITIONAL,
 };
 
+/// Sega SC-3000: row · 12 + column of its key matrix (see
+/// `machine-sega8`; Charles MacDonald, "Sega SC-3000H hardware notes").
+/// The punctuation sits where the Japanese layout has it: `@` and `[`
+/// right of P, `:` and `]` right of L (the PC's `[`, `]`, `'` and `\`), `^`
+/// and the yen key right of `-` (`=` and the PC's Intl keys). Home is HOME
+/// CLR, Backspace, Delete and Insert INS DEL, Escape BREAK, Alt GRAPH, Tab
+/// FUNC, Caps Lock ENG DIER'S, End the π key, F5 the RESET key.
+const SEGA8_POSITIONAL: &[(&str, &[u16])] = &[
+    ("Digit1", &[0]),
+    ("KeyQ", &[1]),
+    ("KeyA", &[2]),
+    ("KeyZ", &[3]),
+    ("CapsLock", &[4]),
+    ("Comma", &[5]),
+    ("KeyK", &[6]),
+    ("KeyI", &[7]),
+    ("Digit8", &[8]),
+    ("Digit2", &[12]),
+    ("KeyW", &[13]),
+    ("KeyS", &[14]),
+    ("KeyX", &[15]),
+    ("Space", &[16]),
+    ("Period", &[17]),
+    ("KeyL", &[18]),
+    ("KeyO", &[19]),
+    ("Digit9", &[20]),
+    ("Digit3", &[24]),
+    ("KeyE", &[25]),
+    ("KeyD", &[26]),
+    ("KeyC", &[27]),
+    ("Home", &[28]),
+    ("Slash", &[29]),
+    ("Semicolon", &[30]),
+    ("KeyP", &[31]),
+    ("Digit0", &[32]),
+    ("Digit4", &[36]),
+    ("KeyR", &[37]),
+    ("KeyF", &[38]),
+    ("KeyV", &[39]),
+    ("Backspace", &[40]),
+    ("Delete", &[40]),
+    ("Insert", &[40]),
+    ("End", &[41]),
+    ("Quote", &[42]),
+    ("BracketLeft", &[43]),
+    ("Minus", &[44]),
+    ("Digit5", &[48]),
+    ("KeyT", &[49]),
+    ("KeyG", &[50]),
+    ("KeyB", &[51]),
+    ("ArrowDown", &[53]),
+    ("Backslash", &[54]),
+    ("BracketRight", &[55]),
+    ("Equal", &[56]),
+    ("Digit6", &[60]),
+    ("KeyY", &[61]),
+    ("KeyH", &[62]),
+    ("KeyN", &[63]),
+    ("ArrowLeft", &[65]),
+    ("Enter", &[66, 85]),
+    ("NumpadEnter", &[66]),
+    ("IntlYen", &[68]),
+    ("IntlBackslash", &[68]),
+    ("Tab", &[71]),
+    ("Digit7", &[72]),
+    ("KeyU", &[73]),
+    ("KeyJ", &[74]),
+    ("KeyM", &[75]),
+    ("ArrowRight", &[77]),
+    ("ArrowUp", &[78]),
+    ("Escape", &[80]),
+    ("AltLeft", &[81]),
+    ("AltRight", &[81]),
+    ("ControlLeft", &[82]),
+    ("ControlRight", &[82]),
+    ("ShiftLeft", &[83]),
+    ("ShiftRight", &[83]),
+    ("F5", &[84]),
+    // F6: the Master System's RESET button; Enter is also PAUSE (Game
+    // Gear: START).
+    ("F6", &[86]),
+];
+
+pub static SEGA8: Keymap = Keymap {
+    machine: "sega8",
+    entries: SEGA8_POSITIONAL,
+};
+
 /// ZX Spectrum: row · 5 + column of its 8 × 5 matrix (see
 /// `machine-spectrum::keyboard`). Shift is CAPS SHIFT, Ctrl and AltGr are
 /// SYMBOL SHIFT (the desktop keeps the left Ctrl's P, M, D, I, R and Space
@@ -1997,6 +2085,7 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "zx81" => Some(&ZX81),
         "trs80" => Some(&TRS80),
         "kc85" => Some(&KC85),
+        "sega8" => Some(&SEGA8),
         "spectrum" => Some(&SPECTRUM),
         "apple2" => Some(&APPLE2),
         "imsai" => Some(&IMSAI),

@@ -38,6 +38,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Video (`--videoformat
     ["`zx81`", "Sinclair ZX81 / Timex Sinclair 1000", "`zx81` (Standard, PAL), `ts1000` (NTSC)", "–"],
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (Standard), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (Standard), `pal`"],
+    ["`sega8`", "Sega SG-1000 / SC-3000 / Master System / Game Gear", "`sg1000` (Standard), `sg1000ii`, `sc3000`, `sc3000h`, `mark3`, `sms`, `sms2`, `gg`", "`ntsc` (Standard), `pal`"],
     ["`msx`", "MSX", "`msx1` (Standard), `msx2`", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
     ["`kc85`", "Robotron KC85/2, /3, /4, /5", "`4` (Standard), `2`, `3`, `5`", "–"],
     ["`nes`", "Nintendo Entertainment System / Famicom", "–", "`ntsc` (Standard), `pal`"],
@@ -602,6 +603,28 @@ Tasten. Der rote Knopf des Multiface 128 ist MULTIFACE im Panel; die
 Microdrives des Interface 1 nehmen MDR-Kassetten (`--disk`,
 `FORMAT "m";1;"name"`, `SAVE *"m";1;"file"`, `CAT 1`, `LOAD *"m";1;"file"`).
 Der RS-232-Anschluss hat noch kein Gerät auf der Rechnerseite.""")
+
+h2("Sega SG-1000 und SC-3000")
+p("""Die Spielkonsolen SG-1000 und SG-1000 II und die Computer SC-3000 und
+SC-3000H laufen als Modelle von `--machine sega8`. Sie brauchen kein BIOS:
+das Modul (`--cart`, ein ROM-Abbild bis 48 KB) startet bei $0000. Zwei
+Sega-Pads (Richtungen, TL, TR) stecken in den Joystick-Anschlüssen, PAUSE
+im Konsolen-Panel ist der NMI der Konsolen. Der SC-3000 hat dazu eine
+Tastatur (über einen 8255, nach Position; F5 ist die RESET-Taste), 2 KB
+Arbeits-RAM, Modul-RAM für die BASIC-Module (`--option cartram`) und eine
+Kassette ohne Motorsteuerung (`--tape`, WAV): das Band läuft, solange das
+Programm es liest. `--option cart=demo` legt ein kleines Testmodul ein.""")
+
+h2("Sega Master System und Game Gear")
+p("""Mark III, Master System und Master System 2 (`--model mark3`, `sms`,
+`sms2`, PAL und NTSC) und der Game Gear (`gg`) sind weitere Modelle von
+`sega8`. Module (`.sms`, `.gg`, bis 4 MB) laufen ohne BIOS; ein BIOS in
+`~/.mimic/roms/sega8/` startet zuerst, wenn es da ist. Der Mapper ist
+Segas (`--option mapper=codemasters` für die Codemasters-Spiele). Enter
+ist PAUSE (beim Game Gear START), F6 der RESET-Knopf des SMS. Der
+FM-Klangchip YM2413 steckt im japanischen SMS (`--option region=japan`)
+und lässt sich mit `--option fm=on` auch beim Mark III einschalten.
+SG-1000-Module laufen auch auf dem Master System.""")
 
 h2("ColecoVision")
 table(["Option", "Werte"], [
@@ -1275,6 +1298,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Videoformate (`--vide
     ["`zx81`", "Sinclair ZX81 / TS1000", "`zx81` (Standard), `ts1000`", "–"],
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (Standard), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (Standard), `pal`"],
+    ["`sega8`", "Sega SG-1000 / SC-3000 / Master System / Game Gear", "`sg1000` (Standard), `sg1000ii`, `sc3000`, `sc3000h`, `mark3`, `sms`, `sms2`, `gg`", "`ntsc` (Standard), `pal`"],
     ["`msx`", "MSX", "`msx1` (Standard), `msx2`", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
     ["`kc85`", "Robotron KC85/2, /3, /4, /5", "`4` (Standard), `2`, `3`, `5`", "–"],
     ["`nes`", "Nintendo NES / Famicom", "–", "`ntsc` (Standard), `pal`"],
