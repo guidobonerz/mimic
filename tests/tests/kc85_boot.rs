@@ -236,3 +236,58 @@ fn a_program_loads_from_tape_and_starts() {
         assert_eq!(byte(&mut *m, 0x3000), 0x42, "KC85/{model}: started");
     }
 }
+
+/// A boot disc for the D004 as a raw MicroDOS dump: track 0, record 1
+/// starts with "SYS" and code at `$9004` (where the boot loader jumps)
+/// that leaves `$42` at the D004's `$FFF8` (in the Koppel-RAM) and halts.
+fn boot_disc() -> Vec<u8> {
+    let mut disc = vec![0xe5u8; 819_200];
+    let sector = [
+        b'S', b'Y', b'S', 0x00, // the boot loader's check
+        0x3e, 0x42, 0x32, 0xf8, 0xff, // LD A,$42 / LD ($FFF8),A
+        0x76, // HALT
+    ];
+    disc[..sector.len()].copy_from_slice(&sector);
+    disc
+}
+
+/// The D004 with its ROM 2.0: `JUMP FC` (ROM in slot $FC, CAOS off)
+/// clears the D004, puts its boot loader into the Koppel-RAM and starts
+/// it; the loader reads the first sector of the disc in drive 0 by DMA,
+/// finds "SYS" and runs it.
+#[test]
+#[ignore = "needs the user's KC85 ROMs"]
+fn jump_fc_boots_the_d004_from_disc() {
+    for model in ["3", "4", "5"] {
+        let mut m = machine(model, &[("d004", "on")]);
+        run(&mut *m, 400);
+        let media = mimic_core::media::Media {
+            name: "boot.img".into(),
+            kind: mimic_core::media::MediaKind::Disk,
+            backend: Box::new(media_backends::image::MemoryBackend { data: boot_disc() }),
+        };
+        m.media_slot(machine_kc85::SLOT_DRIVE0)
+            .unwrap()
+            .insert(media)
+            .unwrap();
+        type_text(&mut *m, "JUMP FC\n");
+        let mut fields = 0;
+        let marker = |m: &mut dyn Machine| {
+            m.debug_target(machine_kc85::d004::D004_DEVICE)
+                .unwrap()
+                .peek(machine_kc85::d004::D004_SPACE, 0xfff8, Size::Byte)
+                .unwrap()
+        };
+        while marker(&mut *m) != 0x42 {
+            run(&mut *m, 10);
+            fields += 10;
+            assert!(fields < 1000, "KC85/{model}: the boot sector did not run");
+        }
+        println!("--- KC85/{model}: the boot sector ran after {fields} fields");
+        dump(&mut *m);
+        let d = m.debug_target(machine_kc85::d004::D004_DEVICE).unwrap();
+        let regs = d.regs();
+        let pc = regs.0.iter().find(|r| r.name == "PC").unwrap().value;
+        assert_eq!(pc, 0x900a, "KC85/{model}: halted behind the code");
+    }
+}

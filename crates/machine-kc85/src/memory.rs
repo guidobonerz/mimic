@@ -229,7 +229,7 @@ impl Memory {
     }
 
     pub fn save(&self, w: &mut StateWriter) {
-        w.chunk(*b"KCME", 1, |w| {
+        w.chunk(*b"KCME", 2, |w| {
             w.raw(&self.ram);
             w.raw(&self.irm);
             for b in [self.pio_a, self.pio_b, self.port84, self.port86] {
@@ -240,7 +240,8 @@ impl Memory {
     }
 
     pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut r) = r.chunk(*b"KCME", 1)?;
+        // 1: no slot $FC.
+        let (version, mut r) = r.chunk(*b"KCME", 2)?;
         let mut n = self.clone();
         r.raw_into(&mut n.ram)?;
         r.raw_into(&mut n.irm)?;
@@ -248,7 +249,7 @@ impl Memory {
         n.pio_b = r.u8()?;
         n.port84 = r.u8()?;
         n.port86 = r.u8()?;
-        n.modules.load(&mut r)?;
+        n.modules.load(&mut r, if version < 2 { 2 } else { 3 })?;
         *self = n;
         Ok(())
     }

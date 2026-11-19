@@ -757,6 +757,8 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         optional("m026", &["m026"], 0x2000),
         optional("m027", &["m027"], 0x2000),
         optional("m033", &["m033"], 0x4000),
+        // The D004 floppy unit's ROM 2.0 (KC side, slot $FC).
+        optional("d004", &["floppy20", "d004v20", "d004"], 0x2000),
     ];
     match machine {
         "kc85" => KC85,

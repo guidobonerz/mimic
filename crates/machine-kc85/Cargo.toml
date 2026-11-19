@@ -12,4 +12,6 @@ workspace = true
 mimic-core.workspace = true
 cpu-z80.workspace = true
 chips-zilog.workspace = true
+chips-amstrad.workspace = true
+drives-other.workspace = true
 media.workspace = true

@@ -6,32 +6,94 @@
 //! drives, port &FA7E) runs. The head moves over 42 cylinders. Writes and
 //! formats change the image in memory; it goes back to the media when the
 //! motor stops, on flush and on eject.
+//!
+//! The KC85's D004 uses the same drive as a 5.25" drive with 80
+//! cylinders ([`CpcDrive::kc85`]): it also takes raw sector dumps
+//! (`.img`) in the three MicroDOS layouts (80 tracks, two sides; five
+//! sectors of 1024 bytes, nine of 512 or sixteen of 256, records from 1);
+//! such an image is written back raw.
 
 use chips_amstrad::fdc::{FloppyDrive, SectorInfo};
-use media::dsk::{Dsk, FormatId};
+use media::dsk::{Dsk, FormatId, RawGeometry};
 use mimic_core::media::{DriveStatus, Media, MediaError, MediaKind, MediaSlot};
 use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
-/// Cylinders the head can reach.
-const CYLINDERS: u8 = 42;
+/// Cylinders the CPC's head can reach.
+const CPC_CYLINDERS: u8 = 42;
+
+/// Raw dumps the KC85's drive takes (MicroDOS formats).
+const KC85_RAW: [RawGeometry; 3] = [
+    RawGeometry {
+        tracks: 80,
+        sides: 2,
+        sectors: 5,
+        n: 3,
+        first: 1,
+    },
+    RawGeometry {
+        tracks: 80,
+        sides: 2,
+        sectors: 9,
+        n: 2,
+        first: 1,
+    },
+    RawGeometry {
+        tracks: 80,
+        sides: 2,
+        sectors: 16,
+        n: 1,
+        first: 1,
+    },
+];
 
 struct Disc {
     media: Media,
     dsk: Dsk,
+    /// A raw dump: written back in this layout.
+    raw: Option<RawGeometry>,
     dirty: bool,
     protected: bool,
 }
 
-#[derive(Default)]
 pub struct CpcDrive {
     disc: Option<Disc>,
     cylinder: u8,
     motor: bool,
+    /// Cylinders the head can reach.
+    cylinders: u8,
+    /// Raw dumps it takes besides DSK images.
+    raw_formats: &'static [RawGeometry],
+}
+
+impl Default for CpcDrive {
+    fn default() -> Self {
+        Self {
+            disc: None,
+            cylinder: 0,
+            motor: false,
+            cylinders: CPC_CYLINDERS,
+            raw_formats: &[],
+        }
+    }
 }
 
 impl CpcDrive {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A 5.25" drive of the KC85's D004: 80 cylinders, DSK images and raw
+    /// MicroDOS dumps.
+    pub fn kc85() -> Self {
+        Self {
+            cylinders: 80,
+            raw_formats: &KC85_RAW,
+            ..Self::default()
+        }
+    }
+
+    pub fn motor(&self) -> bool {
+        self.motor
     }
 
     pub fn has_disc(&self) -> bool {
@@ -52,7 +114,10 @@ impl CpcDrive {
         if !std::mem::take(&mut d.dirty) {
             return Ok(());
         }
-        d.media.backend.write(0, &d.dsk.bytes)
+        match d.raw {
+            Some(g) => d.media.backend.write(0, &d.dsk.to_raw(g)),
+            None => d.media.backend.write(0, &d.dsk.bytes),
+        }
     }
 
     fn sector(&self, side: u8, index: usize) -> Option<media::dsk::Sector> {
@@ -86,7 +151,7 @@ impl FloppyDrive for CpcDrive {
         self.cylinder = if outward {
             self.cylinder.saturating_sub(1)
         } else {
-            (self.cylinder + 1).min(CYLINDERS - 1)
+            (self.cylinder + 1).min(self.cylinders - 1)
         };
     }
 
@@ -153,11 +218,27 @@ impl MediaSlot for CpcDrive {
         }
         let mut bytes = vec![0; media.backend.len() as usize];
         media.backend.read(0, &mut bytes)?;
-        let dsk = Dsk::parse(&bytes)?;
+        // A DSK image by its signature, else a raw dump by its size.
+        let raw = match Dsk::parse(&bytes) {
+            Ok(_) => None,
+            Err(e) => Some(
+                self.raw_formats
+                    .iter()
+                    .find(|g| g.len() == bytes.len())
+                    .copied()
+                    .ok_or(e)?,
+            ),
+        };
+        let dsk = match raw {
+            Some(g) => Dsk::from_raw(&bytes, g)
+                .ok_or_else(|| MediaError::Format("raw disk image".into()))?,
+            None => Dsk::parse(&bytes)?,
+        };
         let _ = self.write_back();
         self.disc = Some(Disc {
             media,
             dsk,
+            raw,
             dirty: false,
             protected: false,
         });
@@ -218,7 +299,7 @@ impl Savestate for CpcDrive {
         let (_, mut c) = r.chunk(TAG, VERSION)?;
         let cylinder = c.u8()?;
         let motor = c.bool()?;
-        if cylinder >= CYLINDERS {
+        if cylinder >= self.cylinders {
             return Err(StateError::Invalid("drive cylinder"));
         }
         self.cylinder = cylinder;
@@ -290,6 +371,49 @@ mod tests {
         let dsk = Dsk::parse(&bytes).unwrap();
         let s = dsk.track(3, 0).unwrap().sectors[0];
         assert_eq!(dsk.data(&s)[0], 0x42);
+    }
+
+    #[test]
+    fn kc85_drive_takes_a_raw_dump_and_writes_it_back_raw() {
+        let mut raw = vec![0u8; 819_200];
+        raw[(2 * 5 + 2) * 1024] = 0x42; // track 1 side 0, record 3
+        let mut d = CpcDrive::kc85();
+        d.insert(Media {
+            name: "kc.img".into(),
+            kind: MediaKind::Disk,
+            backend: Box::new(Mem(raw)),
+        })
+        .unwrap();
+        d.set_motor(true);
+        assert!(d.two_sided());
+        for _ in 0..79 {
+            d.step(false);
+        }
+        assert_eq!(d.cylinder(), 79, "80 cylinders");
+        for _ in 0..78 {
+            d.step(true);
+        }
+        let s = d.sectors(0);
+        assert_eq!(s.len(), 5);
+        assert_eq!(s[2].id, [1, 0, 3, 3]);
+        assert_eq!(d.read(0, 2)[0], 0x42);
+        assert!(d.write(1, 4, &[0x24; 1024]));
+        d.set_motor(false);
+        let mut b = d.eject().unwrap().backend;
+        assert_eq!(b.len(), 819_200, "still a raw dump");
+        let mut bytes = vec![0; 819_200];
+        b.read(0, &mut bytes).unwrap();
+        assert_eq!(bytes[(2 * 5 + 2) * 1024], 0x42);
+        assert_eq!(bytes[(3 * 5 + 4) * 1024], 0x24, "track 1 side 1, record 5");
+        // The CPC's drive does not take raw dumps.
+        let mut cpc = CpcDrive::new();
+        assert!(cpc
+            .insert(Media {
+                name: "kc.img".into(),
+                kind: MediaKind::Disk,
+                backend: Box::new(Mem(bytes)),
+            })
+            .is_err());
     }
 
     #[test]

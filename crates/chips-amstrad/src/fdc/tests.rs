@@ -281,3 +281,82 @@ fn savestate_round_trip_mid_transfer() {
     f.load(&mut StateReader::new(&bytes)).unwrap();
     assert_eq!(f, r.fdc);
 }
+
+/// The D004's wiring: DMA mode, DRQ and DACK, TC after half a sector, INT
+/// at the result phase.
+#[test]
+fn dma_mode_with_terminal_count() {
+    let mut r = Rig {
+        fdc: Fdc::new_8mhz(),
+        ..Rig::new()
+    };
+    r.fdc.motor = true;
+    r.command(&[0x03, 0x9f, 0x14]); // ND = 0: DMA
+                                    // Read C1 (EOT C9), take 256 bytes, then TC.
+    r.command(&[0x46, 0x00, 5, 0, 0xc1, 2, 0xc9, 0x2a, 0xff]);
+    let mut data = Vec::new();
+    for _ in 0..1_000_000 {
+        assert_eq!(r.fdc.status() & RQM, 0, "no RQM in DMA mode");
+        assert!(!r.fdc.int());
+        if r.fdc.drq() {
+            data.push(r.fdc.read_data());
+            if data.len() == 256 {
+                r.fdc.terminal_count();
+                break;
+            }
+        }
+        r.tick(1);
+    }
+    assert_eq!(data, vec![0xc1; 256]);
+    for _ in 0..1_000_000 {
+        if r.fdc.int() {
+            break;
+        }
+        assert!(!r.fdc.drq(), "no requests after TC");
+        r.tick(1);
+    }
+    assert!(r.fdc.int(), "INT at the result phase");
+    assert_eq!(r.fdc.status() & (RQM | DIO), RQM | DIO);
+    let mut result = Vec::new();
+    while r.fdc.status() & DIO != 0 {
+        result.push(r.fdc.read_data());
+        assert!(!r.fdc.int(), "the first result byte clears INT");
+    }
+    assert_eq!(
+        result,
+        vec![0x00, 0, 0, 5, 0, 0xc2, 2],
+        "normal termination"
+    );
+}
+
+#[test]
+fn step_rate_at_8_mhz() {
+    let mut r = Rig {
+        fdc: Fdc::new_8mhz(),
+        ..Rig::new()
+    };
+    r.command(&[0x03, 0xa1, 0x03]); // 6 ms at 8 MHz
+    r.command(&[0x0f, 0x00, 3]); // three steps from cylinder 5
+    r.tick(2 * 6_000);
+    assert!(!r.fdc.int(), "still stepping");
+    r.tick(6_000 + 10);
+    assert!(r.fdc.int(), "the seek ended");
+    assert_eq!(r.drives[0].cyl, 8);
+    assert_eq!(r.sense_interrupt(), vec![0x20, 3]);
+    assert!(!r.fdc.int());
+}
+
+#[test]
+fn a_new_command_clears_a_seeks_int() {
+    let mut r = Rig {
+        fdc: Fdc::new_8mhz(),
+        ..Rig::new()
+    };
+    r.drives[0].cyl = 0;
+    r.command(&[0x07, 0x00]);
+    r.tick(10);
+    assert!(r.fdc.int(), "the recalibrate ended at once");
+    r.command(&[0x03, 0x9f, 0x14]);
+    assert!(!r.fdc.int(), "the next command clears INT");
+    assert_eq!(r.sense_interrupt(), vec![0x20, 0], "the status stays");
+}

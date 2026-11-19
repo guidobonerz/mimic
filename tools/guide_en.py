@@ -152,7 +152,8 @@ table(["Folder", "Machine", "ROMs (example names and sizes)"], [
     ["`coleco/`", "ColecoVision", "`coleco.rom` (8 KB BIOS)"],
     ["`kc85/`", "Robotron KC85", "CAOS and BASIC per model under KCemu's names: `hc900.852`; "
      "`caos__e0.853`, `basic_c0.853`; `caos__e0.854`, `caos__c0.854`, `basic_c0.854`; "
-     "`caos__e0.855`, `caos__c0.855`, `basic_c0.855`; optional module ROMs `m006.rom` …"],
+     "`caos__e0.855`, `caos__c0.855`, `basic_c0.855`; optional module ROMs `m006.rom` … "
+     "and the D004 floppy unit's ROM 2.0 `floppy20.rom`"],
     ["`msx/`", "MSX", "a 32 KB MSX1 BIOS or C-BIOS (`python tools/fetch_cbios.py`); MSX2: main ROM 32 KB and sub ROM 16 KB"],
     ["`snes/`", "SNES", "optional: the 64-byte sound boot ROM `spc700.rom`"],
     ["`vectrex/`", "Vectrex", "the 8 KB system ROM (executive and Mine Storm); a 4 KB "
@@ -637,13 +638,20 @@ table(["Option", "Values"], [
      "(16 KB RAM), `m011` (64 KB RAM), `m006` (BASIC), `m012` (Texor), `m026` (Forth), "
      "`m027` (Development), `m033` (TypeStar); ROM modules need their image "
      "(`m026.rom` …) in the ROM folder"],
+    ["`d004`", "`on`: the D004 floppy unit (ROM `floppy20.rom`), drives `drive 0` and `drive 1`"],
     ["`roms`", "`stub`: a test program of mimic's own instead of CAOS"],
 ], [0.22, 0.78])
 p("""CAOS switches modules on: `SWITCH 8 C1` (slot 8, ROM from $C000), then
 `MENU` shows the new commands; on the KC85/2 the M006 starts its own CAOS
 with BASIC by `JUMP C`. Cassette: `--tape program.kcc` or a KC-TAP image
 (`.tap`); `LOAD` in the CAOS menu loads machine programs and starts them,
-the computer switches the motor (BASIC programs from tape are untried). Saving to tape and the D004 floppy unit are not there yet. Keys:
+the computer switches the motor (BASIC programs from tape are untried). Saving to tape is not there yet. Floppy: with
+`--option d004=on` the D004 sits on top (its own Z80 at 4 MHz); `--disk
+system.img` inserts a disc (raw MicroDOS dumps `.img`: 80 tracks, 2 sides,
+5 × 1024, 9 × 512 or 16 × 256 bytes a track, or DSK), `JUMP FC` starts the
+boot loader, which loads the system from drive 0. Real system discs
+(MicroDOS, the CAOS disc) are untried. In the debugger the D004's CPU is
+the device `d004`. Keys:
 Escape = BRK, Tab or Pause = STOP, Home = HOME (shifted CLS), End = CLR,
 Insert = INS, Backspace and Delete = DEL, Caps Lock = SHIFT LOCK, F1–F6;
 `^` is on `=`, `:` on `;`, `+` on `'`, `_` on `\\`. The console panel has

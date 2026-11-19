@@ -5,7 +5,8 @@
 //! A U880 (Z80) at 1.75 MHz (KC85/4, /5: 1.7734475 MHz), a U857 (CTC) and
 //! a U855 (PIO) in interrupt mode 2 ([`chips_zilog`]), the IRM video RAM
 //! with 320 × 256 pixels ([`video`]), RAM and ROM switched by the PIO and
-//! two output ports ([`memory`]), two module slots ([`modules`]).
+//! two output ports ([`memory`]), two module slots ([`modules`]); the
+//! floppy unit D004 on top ([`d004`]).
 //!
 //! I/O ports (the lower address byte; the upper one is the slot for port
 //! `$80`):
@@ -18,6 +19,7 @@
 //! | `$88`, `$89` | PIO data A, B |
 //! | `$8A`, `$8B` | PIO control A, B |
 //! | `$8C–$8F` | CTC channels 0–3 |
+//! | `$F0–$F4` | D004: Koppel-RAM, control ([`d004`]) |
 //!
 //! PIO A: bit 0 CAOS ROM E, 1 RAM0, 2 IRM, 3 RAM0 writable, 5 tape LED, 6
 //! tape motor, 7 BASIC ROM. PIO B: bits 4–1 the volume (inverted: all
@@ -34,7 +36,8 @@
 //! CTC, then PIO.
 //!
 //! Media slot "tape" (kind Tape): a KC-TAP or KCC image; LOAD starts the
-//! motor. Saving to tape is not built yet.
+//! motor. Saving to tape is not built yet. With the D004: "drive 0" and
+//! "drive 1" (kind Disk): DSK images or raw MicroDOS dumps (`.img`).
 //!
 //! Power-on starts the CPU at `$F000`, the RESET button at `$E000` (the
 //! hardware forces these addresses; RAM survives a RESET).
@@ -44,6 +47,9 @@
 //!   (default) or one of [`modules::KINDS`] ("m022", "m011", "m006",
 //!   "m012", "m026", "m027", "m033"); ROM modules need their image as ROM
 //!   role of the same name.
+//! - `d004`: "on" puts the floppy unit D004 on top (ROM role "d004", the
+//!   8 KB ROM 2.0, KCemu's `floppy20.rom`); `JUMP FC` starts it. Default
+//!   "off".
 //! - `roms`: "stub" runs a small built-in program ([`stub`]).
 //!
 //! ROMs user-supplied, never in the repository: CAOS per model (roles
@@ -58,6 +64,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod d004;
 pub mod keyboard;
 pub mod memory;
 pub mod modules;
@@ -67,6 +74,7 @@ pub mod video;
 
 use chips_zilog::{pio, Ctc, Pio};
 use cpu_z80::{IO_BASE, Z80};
+use d004::D004;
 use memory::{Memory, Roms};
 use mimic_core::audio::Decimator;
 use mimic_core::frame::{FieldParity, FrameRef, OutputType, PixelData, SignalInfo, VideoStandard};
@@ -86,6 +94,9 @@ pub const CPU: DeviceId = DeviceId("cpu");
 pub const CPU_SPACE: MemSpaceId = MemSpaceId(0);
 
 pub const SLOT_TAPE: SlotId = SlotId(0);
+/// The D004's drives.
+pub const SLOT_DRIVE0: SlotId = SlotId(1);
+pub const SLOT_DRIVE1: SlotId = SlotId(2);
 
 /// KC85/2, /3: CPU clock.
 pub const CPU_HZ_3: u32 = 1_750_000;
@@ -139,19 +150,22 @@ impl Model {
 }
 
 /// The base unit's I/O: what a port reads. No side effects.
-fn port_peek(mem: &Memory, pio: &Pio, ctc: &Ctc, port: u16) -> u8 {
+fn port_peek(mem: &Memory, pio: &Pio, ctc: &Ctc, d004: Option<&D004>, port: u16) -> u8 {
     match port as u8 {
         0x80 => mem.modules.id((port >> 8) as u8),
         0x88 => pio.read_data(pio::A),
         0x89 => pio.read_data(pio::B),
         p @ 0x8c..=0x8f => ctc.read(usize::from(p & 3)),
+        0xf0..=0xf3 if mem.modules.d004_connected() => {
+            d004.and_then(|d| d.kc_read(port)).unwrap_or(0xff)
+        }
         _ => 0xff,
     }
 }
 
-fn peek_at(mem: &Memory, pio: &Pio, ctc: &Ctc, addr: u32) -> u8 {
+fn peek_at(mem: &Memory, pio: &Pio, ctc: &Ctc, d004: Option<&D004>, addr: u32) -> u8 {
     if addr >= IO_BASE {
-        port_peek(mem, pio, ctc, addr as u16)
+        port_peek(mem, pio, ctc, d004, addr as u16)
     } else {
         mem.read(addr as u16)
     }
@@ -163,13 +177,20 @@ struct KcBus<'a> {
     mem: &'a mut Memory,
     pio: &'a mut Pio,
     ctc: &'a mut Ctc,
+    d004: Option<&'a mut D004>,
     dbg: Option<&'a mut DebugHooks>,
     beam: BeamPos,
 }
 
 impl Bus for KcBus<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
-        let v = u32::from(peek_at(self.mem, self.pio, self.ctc, addr));
+        let v = u32::from(peek_at(
+            self.mem,
+            self.pio,
+            self.ctc,
+            self.d004.as_deref(),
+            addr,
+        ));
         match self.dbg.as_deref_mut() {
             Some(dbg) if dbg.read_armed(CPU_SPACE) => {
                 let seen = dbg.on_read(CPU_SPACE, addr, size, v);
@@ -181,7 +202,13 @@ impl Bus for KcBus<'_> {
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(peek_at(self.mem, self.pio, self.ctc, addr))
+        u32::from(peek_at(
+            self.mem,
+            self.pio,
+            self.ctc,
+            self.d004.as_deref(),
+            addr,
+        ))
     }
 
     fn write(&mut self, addr: u32, size: Size, v: u32) {
@@ -207,6 +234,11 @@ impl Bus for KcBus<'_> {
             0x8a => self.pio.write_control(pio::A, v),
             0x8b => self.pio.write_control(pio::B, v),
             p @ 0x8c..=0x8f => self.ctc.write(usize::from(p & 3), v),
+            0xf0..=0xf4 if self.mem.modules.d004_connected() => {
+                if let Some(d) = self.d004.as_deref_mut() {
+                    d.kc_write(addr as u16, v);
+                }
+            }
             _ => {}
         }
         // The PIO's lines switch the memory.
@@ -219,7 +251,7 @@ impl Bus for KcBus<'_> {
     }
 }
 
-struct PeekBus<'a>(&'a Memory, &'a Pio, &'a Ctc);
+struct PeekBus<'a>(&'a Memory, &'a Pio, &'a Ctc, Option<&'a D004>);
 
 impl Bus for PeekBus<'_> {
     fn read(&mut self, addr: u32, size: Size) -> u32 {
@@ -227,7 +259,7 @@ impl Bus for PeekBus<'_> {
     }
 
     fn peek(&self, addr: u32, _size: Size) -> u32 {
-        u32::from(peek_at(self.0, self.1, self.2, addr))
+        u32::from(peek_at(self.0, self.1, self.2, self.3, addr))
     }
 
     fn write(&mut self, _addr: u32, _size: Size, _v: u32) {}
@@ -310,6 +342,8 @@ pub struct Kc85 {
     field_done_pending: bool,
     /// CTC outputs of the current instruction (scratch).
     toggles: Vec<(u8, u32)>,
+    /// The floppy unit on top.
+    d004: Option<Box<D004>>,
 }
 
 impl Kc85 {
@@ -386,6 +420,18 @@ impl Kc85 {
             })?;
             mem.modules.slot[i] = Some(module);
         }
+        let d004 = match opt("d004") {
+            None | Some("off") => None,
+            Some("on") => {
+                let image = rom("d004", 0x2000)?;
+                mem.modules.slot[modules::SLOT_D004] = Some(
+                    modules::Module::new(modules::D004, Some(&image))
+                        .expect("the size was checked"),
+                );
+                Some(Box::new(D004::new()))
+            }
+            Some(o) => return Err(ConfigError::Invalid(format!("d004 option '{o}' (on, off)"))),
+        };
         let mut m = Self {
             model,
             cpu: Z80::new(),
@@ -404,6 +450,7 @@ impl Kc85 {
             pixels: vec![0; (video::WIDTH * video::HEIGHT) as usize],
             field_done_pending: false,
             toggles: Vec::new(),
+            d004,
         };
         m.cpu.pc = 0xf000;
         Ok(m)
@@ -455,11 +502,16 @@ impl Kc85 {
                 mem: &mut self.mem,
                 pio: &mut self.pio,
                 ctc: &mut self.ctc,
+                d004: self.d004.as_deref_mut(),
                 dbg: dbg.as_deref_mut(),
                 beam,
             };
             self.cpu.step(&mut bus)
         };
+        // The floppy unit runs the same time.
+        if let Some(d) = &mut self.d004 {
+            d.run(t, self.model.cpu_hz(), dbg.as_deref_mut());
+        }
         let entered = self.cpu.take_interrupt();
         // The acknowledge and the RETI go to the first device of the
         // chain they belong to.
@@ -654,6 +706,9 @@ impl Machine for Kc85 {
                 self.blink = false;
                 self.sound.level = [false; 2];
                 self.field_done_pending = false;
+                if let Some(d) = &mut self.d004 {
+                    d.power_on();
+                }
             }
         }
     }
@@ -684,13 +739,23 @@ impl Machine for Kc85 {
     }
 
     fn memory_spaces(&self) -> Vec<MemSpace> {
-        vec![MemSpace {
+        let mut v = vec![MemSpace {
             id: CPU_SPACE,
             name: "cpu",
             device: CPU,
             addr_bits: 17,
             big_endian: false,
-        }]
+        }];
+        if self.d004.is_some() {
+            v.push(MemSpace {
+                id: d004::D004_SPACE,
+                name: "d004",
+                device: d004::D004_DEVICE,
+                addr_bits: 17,
+                big_endian: false,
+            });
+        }
+        v
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -743,7 +808,7 @@ impl Machine for Kc85 {
                 9,
             ));
         }
-        vec![
+        let mut chips = vec![
             ChipInfo {
                 name: "pio",
                 regs: pio_regs,
@@ -752,15 +817,50 @@ impl Machine for Kc85 {
                 name: "ctc",
                 regs: ctc_regs,
             },
-        ]
+        ];
+        if let Some(d) = &self.d004 {
+            let mut regs = vec![
+                reg("RUNNING", None, u32::from(d.running()), 1),
+                // The D004's own ports $F6, $F4, $F0 (its space, not the KC's).
+                reg("SELECT", None, u32::from(d.select()), 8),
+                reg("STATUS", None, u32::from(d.status()), 8),
+                reg("FDC_MSR", None, u32::from(d.fdc().status()), 8),
+                reg("PCN0", None, u32::from(d.fdc().cylinder(0)), 8),
+                reg("PCN1", None, u32::from(d.fdc().cylinder(1)), 8),
+            ];
+            regs.push(reg("CTC_VECTOR", None, u32::from(d.ctc().vector_base()), 8));
+            const NAMES: [[&str; 2]; 4] = [
+                ["CTC_CONTROL0", "CTC_COUNTER0"],
+                ["CTC_CONTROL1", "CTC_COUNTER1"],
+                ["CTC_CONTROL2", "CTC_COUNTER2"],
+                ["CTC_CONTROL3", "CTC_COUNTER3"],
+            ];
+            for (n, [control_name, counter_name]) in NAMES.into_iter().enumerate() {
+                let (control, _, counter) = d.ctc().channel(n);
+                regs.push(reg(control_name, None, u32::from(control), 8));
+                regs.push(reg(counter_name, None, u32::from(counter), 9));
+            }
+            chips.push(ChipInfo { name: "d004", regs });
+        }
+        chips
     }
 
     fn devices(&self) -> Vec<DeviceId> {
-        vec![CPU]
+        let mut v = vec![CPU];
+        if self.d004.is_some() {
+            v.push(d004::D004_DEVICE);
+        }
+        v
     }
 
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget> {
-        (dev == CPU).then_some(self as &mut dyn DebugTarget)
+        if dev == CPU {
+            return Some(self as &mut dyn DebugTarget);
+        }
+        match self.d004.as_deref_mut() {
+            Some(d) if dev == d004::D004_DEVICE => Some(d as &mut dyn DebugTarget),
+            _ => None,
+        }
     }
 
     fn input(&mut self, ev: TimedInput) {
@@ -803,16 +903,38 @@ impl Machine for Kc85 {
     }
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
-        vec![MediaSlotInfo {
+        let mut v = Vec::new();
+        if self.d004.is_some() {
+            for (i, (id, name)) in [(SLOT_DRIVE0, "drive 0"), (SLOT_DRIVE1, "drive 1")]
+                .into_iter()
+                .enumerate()
+            {
+                v.push(MediaSlotInfo {
+                    id,
+                    name,
+                    kind: MediaKind::Disk,
+                    inserted: self.d004.as_ref().is_some_and(|d| d.drives[i].has_disc()),
+                });
+            }
+        }
+        v.push(MediaSlotInfo {
             id: SLOT_TAPE,
             name: "tape",
             kind: MediaKind::Tape,
             inserted: self.tape.inserted(),
-        }]
+        });
+        v
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
-        (slot == SLOT_TAPE).then_some(&mut self.tape as &mut dyn MediaSlot)
+        match slot {
+            SLOT_TAPE => Some(&mut self.tape),
+            SLOT_DRIVE0 | SLOT_DRIVE1 => self
+                .d004
+                .as_deref_mut()
+                .map(|d| &mut d.drives[usize::from(slot.0 - 1)] as &mut dyn MediaSlot),
+            _ => None,
+        }
     }
 
     fn save_state(&self) -> Vec<u8> {
@@ -838,6 +960,9 @@ impl Machine for Kc85 {
         self.ctc.save(&mut w);
         self.sched.save(&mut w);
         self.input.save(&mut w);
+        if let Some(d) = &self.d004 {
+            d.save(&mut w);
+        }
         w.into_bytes()
     }
 
@@ -886,6 +1011,10 @@ impl Machine for Kc85 {
         if line_end <= now || line_end > now + self.model.line_half_t() + 64 {
             return Err(StateError::Invalid("KC85 line clock"));
         }
+        // Last (it is atomic on its own).
+        if let Some(d) = &mut self.d004 {
+            d.load(&mut r)?;
+        }
         self.cpu = cpu;
         self.mem = mem;
         self.pio = pio;
@@ -920,7 +1049,7 @@ impl DebugTarget for Kc85 {
         if space != CPU_SPACE {
             return None;
         }
-        let bus = PeekBus(&self.mem, &self.pio, &self.ctc);
+        let bus = PeekBus(&self.mem, &self.pio, &self.ctc, self.d004.as_deref());
         Some((0..size.bytes()).fold(0, |v, i| {
             v | bus.peek(addr.wrapping_add(i), Size::Byte) << (8 * i)
         }))
@@ -937,8 +1066,10 @@ impl DebugTarget for Kc85 {
     }
 
     fn disassemble(&self, addr: u32) -> Instr {
-        self.cpu
-            .disassemble(&PeekBus(&self.mem, &self.pio, &self.ctc), addr)
+        self.cpu.disassemble(
+            &PeekBus(&self.mem, &self.pio, &self.ctc, self.d004.as_deref()),
+            addr,
+        )
     }
 }
 

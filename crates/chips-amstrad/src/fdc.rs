@@ -29,6 +29,14 @@
 //! (ST0 abnormal termination, ST1 EN), as AMSDOS expects. A missing sector
 //! is reported after two index pulses. The FDC on the CPC runs at 4 MHz,
 //! so step times are twice the SPECIFY values.
+//!
+//! **Other wirings** (the KC85's D004, [`Fdc::new_8mhz`]): an 8 MHz clock
+//! (SPECIFY's step rate in milliseconds), DMA mode (SPECIFY ND = 0: no RQM
+//! in the execution phase, the bytes go through DACK with [`Fdc::drq`]),
+//! the INT output ([`Fdc::int`]) and TC ([`Fdc::terminal_count`]): the
+//! transfer stops at the end of the current sector with normal
+//! termination, R pointing behind it. The CPC never uses them, so its
+//! behaviour does not change.
 
 use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 
@@ -36,6 +44,8 @@ use mimic_core::{Savestate, StateError, StateReader, StateWriter};
 pub const REV_US: u32 = 200_000;
 /// Microseconds per data byte.
 const BYTE_US: u32 = 32;
+/// Length of the index pulse in microseconds.
+const INDEX_US: u32 = 2_000;
 
 // MSR bits.
 const RQM: u8 = 0x80;
@@ -148,6 +158,8 @@ struct Exec {
     last: bool,
     /// Sectors read so far by read track.
     count: u8,
+    /// TC arrived: this sector is the last.
+    tc: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,6 +181,15 @@ pub struct Fdc {
     rotation: u32,
     /// The last data byte (what a read of the data register returns).
     data: u8,
+    /// Microseconds per step-rate unit of SPECIFY (the clock; not state).
+    step_unit_us: u32,
+    /// DMA mode (SPECIFY ND = 0).
+    dma: bool,
+    /// INT for a result phase, until its first byte is read.
+    int_result: bool,
+    /// INT for an ended seek: until SENSE INTERRUPT STATUS, or until the
+    /// next command begins (the status stays for SENSE INTERRUPT STATUS).
+    int_seek: bool,
 }
 
 impl Default for Fdc {
@@ -190,11 +211,59 @@ impl Fdc {
             step_us: 32_000,
             rotation: 0,
             data: 0xff,
+            step_unit_us: 2000,
+            dma: false,
+            int_result: false,
+            int_seek: false,
         }
     }
 
+    /// A µPD765A at 8 MHz (SPECIFY's step rate in 1 ms units).
+    pub fn new_8mhz() -> Self {
+        Self {
+            step_unit_us: 1000,
+            ..Self::new()
+        }
+    }
+
+    /// RESET: everything but the clock.
     pub fn reset(&mut self) {
-        *self = Self::new();
+        *self = Self {
+            step_unit_us: self.step_unit_us,
+            ..Self::new()
+        };
+    }
+
+    /// The INT output: a result phase of a read, write or format command
+    /// waits (until its first byte is read), a seek ended (until SENSE
+    /// INTERRUPT STATUS or the next command), or, outside DMA mode, a data
+    /// byte waits. The D004's boot loader relies on the next command
+    /// clearing a seek's INT: it recalibrates a drive already at track 0
+    /// and reads without asking for the interrupt status.
+    pub fn int(&self) -> bool {
+        self.int_result
+            || self.int_seek
+            || (!self.dma && self.exec.as_ref().is_some_and(|e| e.pending))
+    }
+
+    /// DRQ in DMA mode: a data byte waits for DACK (read it with
+    /// [`Fdc::read_data`], give it with [`Fdc::write_data`]).
+    pub fn drq(&self) -> bool {
+        self.dma && self.exec.as_ref().is_some_and(|e| e.pending)
+    }
+
+    /// The index pulse of the turning disc.
+    pub fn index(&self) -> bool {
+        self.motor && self.rotation < INDEX_US
+    }
+
+    /// The TC input: the transfer ends with the current sector.
+    pub fn terminal_count(&mut self) {
+        if let Some(e) = &mut self.exec {
+            if matches!(e.kind, Kind::Read | Kind::Write) {
+                e.tc = true;
+            }
+        }
     }
 
     /// The present cylinder number of drive `i` (debugger).
@@ -214,7 +283,7 @@ impl Fdc {
             } else {
                 DIO
             };
-            let rqm = if e.pending { RQM } else { 0 };
+            let rqm = if e.pending && !self.dma { RQM } else { 0 };
             return rqm | dir | EXM | CB | seeking;
         }
         let busy = if self.command.is_empty() { 0 } else { CB };
@@ -233,6 +302,7 @@ impl Fdc {
     /// Read the data register.
     pub fn read_data(&mut self) -> u8 {
         if !self.result.is_empty() {
+            self.int_result = false;
             return self.result.remove(0);
         }
         if let Some(e) = &mut self.exec {
@@ -261,6 +331,7 @@ impl Fdc {
             return;
         }
         self.command.push(v);
+        self.int_seek = false;
         if self.command.len() >= command_len(self.command[0] & 0x1f) {
             let cmd = std::mem::take(&mut self.command);
             self.start(&cmd, drives);
@@ -278,8 +349,9 @@ impl Fdc {
         let d = &drives[usize::from(drive)];
         match code {
             0x03 => {
-                // SRT in the high nibble; 4 MHz clock: 2 ms units.
-                self.step_us = (16 - u32::from(cmd[1] >> 4)) * 2000;
+                // SRT in the high nibble (4 MHz clock: 2 ms units); ND.
+                self.step_us = (16 - u32::from(cmd[1] >> 4)) * self.step_unit_us;
+                self.dma = cmd[2] & 1 == 0;
             }
             0x04 => {
                 let st3 = if d.write_protected() { 0x40 } else { 0 }
@@ -336,6 +408,7 @@ impl Fdc {
                     st: [Self::st0(drive, side), 0, 0],
                     last: false,
                     count: 0,
+                    tc: false,
                 };
                 if !d.ready() {
                     e.st[0] |= IC_ABNORMAL | NR;
@@ -463,6 +536,7 @@ impl Fdc {
                     self.pcn[i] = 0;
                 }
                 self.interrupt[i] = Some(st0);
+                self.int_seek = true;
                 continue;
             }
             let outward = if recal { true } else { target < self.pcn[i] };
@@ -510,7 +584,12 @@ impl Fdc {
             self.begin_sector(e, d, usize::from(i), info);
             return;
         }
-        // Transferring.
+        // Transferring. After TC the rest of the sector passes without
+        // requests (a write fills it with zeros).
+        if e.tc && usize::from(e.pos) < e.buffer.len() {
+            e.pending = false;
+            e.pos = e.buffer.len() as u16;
+        }
         if e.timer > 1 {
             e.timer -= 1;
             return;
@@ -618,6 +697,18 @@ impl Fdc {
             self.finish(e.clone());
             return;
         }
+        if e.tc {
+            // Normal termination; R (or C at the end of the track) points
+            // behind the last sector.
+            if e.p[2] == e.p[4] {
+                e.p[0] = e.p[0].wrapping_add(1);
+                e.p[2] = 1;
+            } else {
+                e.p[2] = e.p[2].wrapping_add(1);
+            }
+            self.finish(e.clone());
+            return;
+        }
         if e.p[2] == e.p[4] {
             // No TC on the CPC: end of cylinder; C + 1, R = 1.
             e.st[0] |= IC_ABNORMAL;
@@ -634,12 +725,14 @@ impl Fdc {
 
     fn finish(&mut self, e: Exec) {
         self.exec = None;
+        self.int_result = true;
         self.result = vec![e.st[0], e.st[1], e.st[2], e.p[0], e.p[1], e.p[2], e.p[3]];
     }
 }
 
 const TAG: [u8; 4] = *b"F765";
-const VERSION: u16 = 1;
+/// 2: DMA mode, the result INT, TC.
+const VERSION: u16 = 2;
 
 impl Savestate for Fdc {
     fn save(&self, w: &mut StateWriter) {
@@ -681,12 +774,19 @@ impl Savestate for Fdc {
                 w.bool(e.last);
                 w.u8(e.count);
             }
+            w.bool(self.dma);
+            w.bool(self.int_result);
+            w.bool(self.int_seek);
+            w.bool(self.exec.as_ref().is_some_and(|e| e.tc));
         });
     }
 
     fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        let (_, mut c) = r.chunk(TAG, VERSION)?;
-        let mut n = Self::new();
+        let (version, mut c) = r.chunk(TAG, VERSION)?;
+        let mut n = Self {
+            step_unit_us: self.step_unit_us,
+            ..Self::new()
+        };
         n.motor = c.bool()?;
         n.command = c.bytes()?.to_vec();
         n.result = c.bytes()?.to_vec();
@@ -742,7 +842,18 @@ impl Savestate for Fdc {
                 st,
                 last,
                 count,
+                tc: false,
             });
+        }
+        n.int_seek = n.interrupt.iter().any(Option::is_some);
+        if version >= 2 {
+            n.dma = c.bool()?;
+            n.int_result = c.bool()?;
+            n.int_seek = c.bool()?;
+            let tc = c.bool()?;
+            if let Some(e) = &mut n.exec {
+                e.tc = tc;
+            }
         }
         if n.command.len() > 9 || n.result.len() > 7 {
             return Err(StateError::Invalid("FDC phase"));

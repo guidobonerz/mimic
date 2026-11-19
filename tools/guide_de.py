@@ -154,7 +154,8 @@ table(["Ordner", "Maschine", "ROMs (Beispielnamen und Größen)"], [
     ["`coleco/`", "ColecoVision", "`coleco.rom` (8 KB BIOS)"],
     ["`kc85/`", "Robotron KC85", "CAOS und BASIC je Modell unter KCemus Namen: `hc900.852`; "
      "`caos__e0.853`, `basic_c0.853`; `caos__e0.854`, `caos__c0.854`, `basic_c0.854`; "
-     "`caos__e0.855`, `caos__c0.855`, `basic_c0.855`; optional Modul-ROMs `m006.rom` …"],
+     "`caos__e0.855`, `caos__c0.855`, `basic_c0.855`; optional Modul-ROMs `m006.rom` … "
+     "und das ROM 2.0 der Floppy D004 `floppy20.rom`"],
     ["`msx/`", "MSX", "32 KB MSX1-BIOS oder C-BIOS (`python tools/fetch_cbios.py`); MSX2: Haupt-ROM 32 KB und Sub-ROM 16 KB"],
     ["`snes/`", "SNES", "optional: das 64-Byte-Sound-Boot-ROM `spc700.rom`"],
     ["`vectrex/`", "Vectrex", "das 8-KB-System-ROM (Executive und Mine Storm); ein 4-KB-Abbild "
@@ -659,6 +660,7 @@ table(["Option", "Werte"], [
      "(16 KB RAM), `m011` (64 KB RAM), `m006` (BASIC), `m012` (Texor), `m026` (Forth), "
      "`m027` (Development), `m033` (TypeStar); ROM-Module brauchen ihr Abbild "
      "(`m026.rom` …) im ROM-Ordner"],
+    ["`d004`", "`on`: die Floppy-Disk-Basis D004 (ROM `floppy20.rom`), Laufwerke `drive 0` und `drive 1`"],
     ["`roms`", "`stub`: ein eigenes Testprogramm statt CAOS"],
 ], [0.22, 0.78])
 p("""Module schaltet CAOS ein: `SWITCH 8 C1` (Schacht 8, ROM ab $C000), danach
@@ -666,7 +668,13 @@ zeigt `MENU` die neuen Befehle; das M006 startet auf dem KC85/2 mit `JUMP C`
 sein eigenes CAOS mit BASIC. Kassette: `--tape programm.kcc` oder ein
 KC-TAP-Abbild (`.tap`); `LOAD` im CAOS-Menü lädt Maschinenprogramme und
 startet sie, den Motor schaltet der Rechner (BASIC-Programme vom Band sind
-nicht erprobt). Speichern auf Band und die Floppy D004 gibt es noch nicht.
+nicht erprobt). Speichern auf Band gibt es noch nicht. Floppy: mit
+`--option d004=on` sitzt die D004 auf dem Rechner (eigener Z80 mit 4 MHz);
+`--disk system.img` legt eine Diskette ein (rohe MicroDOS-Abbilder `.img`:
+80 Spuren, 2 Seiten, 5 × 1024, 9 × 512 oder 16 × 256 Byte je Spur, oder
+DSK), `JUMP FC` startet den Urlader, der das System von Laufwerk 0 lädt.
+Mit echten Systemdisketten (MicroDOS, CAOS-Diskette) ist das noch nicht
+erprobt. Im Debugger ist die CPU des D004 das Gerät `d004`.
 Tasten: Esc = BRK, Tab oder Pause = STOP, Pos1 = HOME (mit Umschalt CLS),
 Ende = CLR, Einfg = INS, Rücktaste und Entf = DEL, Feststelltaste = SHIFT
 LOCK, F1–F6; `^` liegt auf `=`, `:` auf `;`, `+` auf `'`, `_` auf `\\`. Das

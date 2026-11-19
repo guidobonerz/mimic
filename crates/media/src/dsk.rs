@@ -263,6 +263,118 @@ pub fn blank_data(tracks: u8) -> Vec<u8> {
     out
 }
 
+/// The layout of a raw sector dump ("`.img`"): every track of every side
+/// in order (track 0 side 0, track 0 side 1, …), the sectors of a track
+/// in record order from `first`, all of one size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawGeometry {
+    pub tracks: u8,
+    pub sides: u8,
+    pub sectors: u8,
+    /// Size code: 128 << n bytes.
+    pub n: u8,
+    /// The first record number.
+    pub first: u8,
+}
+
+impl RawGeometry {
+    pub fn sector_len(&self) -> usize {
+        128 << self.n.min(6)
+    }
+
+    /// Size of the image.
+    pub fn len(&self) -> usize {
+        usize::from(self.tracks)
+            * usize::from(self.sides)
+            * usize::from(self.sectors)
+            * self.sector_len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Track blocks of images made from raw dumps hold at least this much
+/// sector data, so that a track can be formatted in place with another
+/// layout (five sectors of 1024 bytes on a track of 16 × 256).
+const RAW_TRACK_DATA: usize = 0x1400;
+
+impl Dsk {
+    /// An extended image holding a raw dump; `None` if its size does not
+    /// match the geometry.
+    pub fn from_raw(raw: &[u8], g: RawGeometry) -> Option<Self> {
+        if raw.len() != g.len() || g.is_empty() || g.sides > 2 || g.sectors > 29 {
+            return None;
+        }
+        let len = g.sector_len();
+        let data = (usize::from(g.sectors) * len).max(RAW_TRACK_DATA);
+        let track_size = (0x100 + data).div_ceil(0x100) * 0x100;
+        if track_size / 0x100 > 0xff {
+            return None;
+        }
+        let mut out = vec![0u8; 0x100];
+        out[..34].copy_from_slice(b"EXTENDED CPC DSK File\r\nDisk-Info\r\n");
+        out[0x22..0x30].copy_from_slice(b"mimic         ");
+        out[0x30] = g.tracks;
+        out[0x31] = g.sides;
+        let count = usize::from(g.tracks) * usize::from(g.sides);
+        if count > 0xcc {
+            return None;
+        }
+        out[0x34..0x34 + count].fill((track_size / 0x100) as u8);
+        let mut src = raw.chunks(len);
+        for t in 0..g.tracks {
+            for side in 0..g.sides {
+                let mut block = vec![0u8; track_size];
+                block[..TRACK_INFO.len()].copy_from_slice(TRACK_INFO);
+                block[0x10] = t;
+                block[0x11] = side;
+                block[0x14] = g.n;
+                block[0x15] = g.sectors;
+                block[0x16] = 0x4e;
+                block[0x17] = 0xe5;
+                for k in 0..usize::from(g.sectors) {
+                    let e = &mut block[0x18 + 8 * k..0x20 + 8 * k];
+                    e[..4].copy_from_slice(&[t, side, g.first.wrapping_add(k as u8), g.n]);
+                    e[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+                    let at = 0x100 + k * len;
+                    block[at..at + len].copy_from_slice(src.next()?);
+                }
+                out.extend_from_slice(&block);
+            }
+        }
+        Self::parse(&out).ok()
+    }
+
+    /// The raw dump of the image in that geometry: each sector found by
+    /// its ID (cylinder and record; a sector missing or of another size
+    /// reads as `$E5`).
+    pub fn to_raw(&self, g: RawGeometry) -> Vec<u8> {
+        let len = g.sector_len();
+        let mut out = vec![0xe5u8; g.len()];
+        let mut at = 0;
+        for t in 0..g.tracks {
+            for side in 0..g.sides {
+                let track = self.track(t, side);
+                for k in 0..g.sectors {
+                    let r = g.first.wrapping_add(k);
+                    let found = track.and_then(|tr| {
+                        tr.sectors
+                            .iter()
+                            .find(|s| s.id[0] == t && s.id[2] == r && s.len == len)
+                    });
+                    if let Some(s) = found {
+                        out[at..at + len].copy_from_slice(self.data(s));
+                    }
+                    at += len;
+                }
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +437,33 @@ mod tests {
         let mut bad = blank_data(1);
         bad.truncate(0x180);
         assert!(Dsk::parse(&bad).is_err());
+    }
+
+    #[test]
+    fn raw_dump_round_trip() {
+        let g = RawGeometry {
+            tracks: 80,
+            sides: 2,
+            sectors: 5,
+            n: 3,
+            first: 1,
+        };
+        assert_eq!(g.len(), 819_200);
+        let raw: Vec<u8> = (0..g.len()).map(|i| (i / 1024) as u8).collect();
+        let mut d = Dsk::from_raw(&raw, g).unwrap();
+        assert_eq!((d.tracks, d.sides), (80, 2));
+        let t = d.track(1, 1).unwrap();
+        assert_eq!(t.sectors[2].id, [1, 1, 3, 3]);
+        // Track 1 side 1 sector 3: the (1 * 2 + 1) * 5 + 2 = 17th.
+        assert!(d.data(&t.sectors[2]).iter().all(|&b| b == 17));
+        assert_eq!(d.to_raw(g), raw);
+        assert!(Dsk::from_raw(&raw[1..], g).is_none(), "size must match");
+        // Reformatted to 9 × 512, the track reads back as E5 in the old
+        // geometry.
+        let ids: Vec<FormatId> = (1..=9).map(|r| FormatId { id: [0, 0, r, 2] }).collect();
+        d.format(0, 0, 2, 0x4e, 0xe5, &ids).unwrap();
+        let back = d.to_raw(g);
+        assert!(back[..5 * 1024].iter().all(|&b| b == 0xe5));
+        assert_eq!(back[5 * 1024..], raw[5 * 1024..]);
     }
 }

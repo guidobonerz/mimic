@@ -1,4 +1,5 @@
-//! Expansion modules in the base unit's two slots (`$08` and `$0C`).
+//! Expansion modules in the base unit's two slots (`$08` and `$0C`), and
+//! the D004 floppy unit's ROM in slot `$FC` ([`crate::d004`]).
 //!
 //! A module is reached through port `$80` with the slot number in the
 //! upper half of the port address (`LD BC,$0880` / `IN A,(C)`): a read
@@ -21,17 +22,24 @@
 //! | M006 BASIC | `$FC` | 16 KB ROM (BASIC for the KC85/2) |
 //! | M012 Texor, M026 Forth, M027 Development | `$FB` | 8 KB ROM |
 //! | M033 Typestar | `$01` | 16 KB ROM in two 8 KB segments (bit 4) |
+//! | D004 (slot `$FC`) | `$A7` | 8 KB ROM at `$C000`, or `$E000` with bit 5; bit 2 connects the Koppel-RAM and port `$F4` |
 //!
 //! Source: KC85/3 Systemhandbuch ("Modulsteuerung"); the modules' own
 //! manuals (M006, M011, M022, M026, M027, M033) for structure bytes and
-//! control bits.
+//! control bits. D004: its manual (structure byte, slot) and MAME's
+//! `bus/kc/d004.cpp` (control bits 2 and 5; BSD-3-Clause, read as a
+//! description only).
 
 use mimic_core::{StateError, StateReader, StateWriter};
 
-pub const SLOTS: [u8; 2] = [0x08, 0x0c];
+pub const SLOTS: [u8; 3] = [0x08, 0x0c, 0xfc];
+/// Slot of the D004's ROM.
+pub const SLOT_D004: usize = 2;
 
 pub const CONTROL_ON: u8 = 0x01;
 pub const CONTROL_WRITE: u8 = 0x02;
+/// D004: the Koppel-RAM and port `$F4` answer.
+pub const CONTROL_D004_CONNECT: u8 = 0x04;
 
 /// A module type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +49,8 @@ pub struct Kind {
     pub id: u8,
     /// The control byte's address bits.
     address_mask: u8,
+    /// Added to the address the control byte selects.
+    base: u16,
     /// Size of the block it appears in.
     window: usize,
     /// Size of its memory.
@@ -53,6 +63,7 @@ pub const KINDS: [Kind; 7] = [
         name: "m022",
         id: 0xf4,
         address_mask: 0xc0,
+        base: 0,
         window: 0x4000,
         size: 0x4000,
         ram: true,
@@ -61,6 +72,7 @@ pub const KINDS: [Kind; 7] = [
         name: "m011",
         id: 0xf6,
         address_mask: 0xc0,
+        base: 0,
         window: 0x1_0000,
         size: 0x1_0000,
         ram: true,
@@ -69,6 +81,7 @@ pub const KINDS: [Kind; 7] = [
         name: "m006",
         id: 0xfc,
         address_mask: 0xc0,
+        base: 0,
         window: 0x4000,
         size: 0x4000,
         ram: false,
@@ -77,6 +90,7 @@ pub const KINDS: [Kind; 7] = [
         name: "m012",
         id: 0xfb,
         address_mask: 0xe0,
+        base: 0,
         window: 0x2000,
         size: 0x2000,
         ram: false,
@@ -85,6 +99,7 @@ pub const KINDS: [Kind; 7] = [
         name: "m026",
         id: 0xfb,
         address_mask: 0xe0,
+        base: 0,
         window: 0x2000,
         size: 0x2000,
         ram: false,
@@ -93,6 +108,7 @@ pub const KINDS: [Kind; 7] = [
         name: "m027",
         id: 0xfb,
         address_mask: 0xe0,
+        base: 0,
         window: 0x2000,
         size: 0x2000,
         ram: false,
@@ -101,11 +117,23 @@ pub const KINDS: [Kind; 7] = [
         name: "m033",
         id: 0x01,
         address_mask: 0xe0,
+        base: 0,
         window: 0x2000,
         size: 0x4000,
         ram: false,
     },
 ];
+
+/// The D004's ROM (KC side): `$C000`, or `$E000` with control bit 5.
+pub const D004: Kind = Kind {
+    name: "d004",
+    id: 0xa7,
+    address_mask: 0x20,
+    base: 0xc000,
+    window: 0x2000,
+    size: 0x2000,
+    ram: false,
+};
 
 pub fn kind(name: &str) -> Option<Kind> {
     KINDS.iter().copied().find(|k| k.name == name)
@@ -139,7 +167,7 @@ impl Module {
             return None;
         }
         let k = &self.kind;
-        let base = usize::from(self.control & k.address_mask) << 8;
+        let base = usize::from(k.base) | usize::from(self.control & k.address_mask) << 8;
         let o = usize::from(addr).wrapping_sub(base) & 0xffff;
         if o >= k.window {
             return None;
@@ -156,7 +184,7 @@ impl Module {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Modules {
-    pub slot: [Option<Module>; 2],
+    pub slot: [Option<Module>; 3],
 }
 
 impl Modules {
@@ -239,10 +267,21 @@ impl Modules {
         }
     }
 
+    /// D004 connected: its Koppel-RAM and port `$F4` answer.
+    pub fn d004_connected(&self) -> bool {
+        self.slot[SLOT_D004]
+            .as_ref()
+            .is_some_and(|m| m.control & CONTROL_D004_CONNECT != 0)
+    }
+
     /// Loads into the modules that are plugged in; a state with other
-    /// modules is refused.
-    pub fn load(&mut self, r: &mut StateReader<'_>) -> Result<(), StateError> {
-        for m in &mut self.slot {
+    /// modules is refused. `slots`: how many the state holds (older ones
+    /// had no slot `$FC`).
+    pub fn load(&mut self, r: &mut StateReader<'_>, slots: usize) -> Result<(), StateError> {
+        if slots < SLOTS.len() && self.slot[slots..].iter().any(Option::is_some) {
+            return Err(StateError::Invalid("KC85 modules differ"));
+        }
+        for m in self.slot.iter_mut().take(slots) {
             if r.bool()? != m.is_some() {
                 return Err(StateError::Invalid("KC85 modules differ"));
             }
@@ -298,5 +337,21 @@ mod tests {
         assert_eq!(m.read(0xdfff), Some(0xbb));
         m.write(0xc000, 0);
         assert_eq!(m.read(0xc000), Some(0xbb));
+    }
+
+    #[test]
+    fn the_d004_rom_sits_at_c000_or_e000() {
+        let mut m = Modules::default();
+        let mut rom = vec![0u8; 0x2000];
+        rom[0] = 0xc3;
+        m.slot[SLOT_D004] = Some(Module::new(D004, Some(&rom)).unwrap());
+        assert_eq!(m.id(0xfc), 0xa7);
+        m.control(0xfc, 0x01);
+        assert_eq!(m.read(0xc000), Some(0xc3));
+        assert!(!m.d004_connected());
+        m.control(0xfc, 0xff);
+        assert_eq!(m.read(0xc000), None);
+        assert_eq!(m.read(0xe000), Some(0xc3));
+        assert!(m.d004_connected());
     }
 }

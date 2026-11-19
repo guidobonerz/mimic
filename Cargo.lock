@@ -2151,8 +2151,10 @@ dependencies = [
 name = "machine-kc85"
 version = "0.1.0"
 dependencies = [
+ "chips-amstrad",
  "chips-zilog",
  "cpu-z80",
+ "drives-other",
  "media",
  "mimic-core",
 ]
