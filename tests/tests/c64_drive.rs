@@ -199,6 +199,34 @@ fn save_writes_the_file_to_the_disk_image() {
 
 #[test]
 #[ignore = "needs C64 ROMs in EMU_ROM_DIR"]
+fn autostart_at_run_time_loads_and_runs_without_a_reset() {
+    let mut m = c64_with(false, "virtual");
+    let slot = m
+        .media_slots()
+        .into_iter()
+        .find(|s| s.name.starts_with("drive 8"))
+        .expect("drive 8 present")
+        .id;
+    assert!(m.can_autostart(slot));
+    let mut dbg = DebugHooks::new();
+    for _ in 0..200 {
+        m.run_frame(&mut dbg);
+    }
+    assert!(!m.autostart(slot), "an empty drive does not start");
+    m.media_slot(slot).unwrap().insert(disk()).unwrap();
+    assert!(m.autostart(slot));
+    let ran = (0..1000).find(|_| {
+        m.run_frame(&mut dbg);
+        screen(m.as_mut())
+            .chunks(40)
+            .any(|row| row.starts_with(&[0x08, 0x09, 0x20]))
+    });
+    let ran = ran.expect("the program did not run after autostart");
+    eprintln!("autostart at run time: program ran after {ran} frames");
+}
+
+#[test]
+#[ignore = "needs C64 ROMs in EMU_ROM_DIR"]
 fn virtual_drive_autostart_directory_and_save() {
     virtual_drive_session(false);
 }

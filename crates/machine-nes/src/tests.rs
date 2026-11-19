@@ -372,7 +372,7 @@ fn overlays_show_sprites_the_hit_and_interrupts() {
     with_cart(&mut m, nmi_rom());
     frames(&mut m, 3);
     let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
-    assert_eq!(ids, ["sprites", "sprite0", "irq"]);
+    assert_eq!(ids, ["sprites", "sprite_bounds", "sprite0", "irq"]);
     // Tile 0 solid colour 1 (background everywhere), sprite 0 at
     // Y = 49, X = 100 (lines 50–57), the others off screen.
     for a in 0..8 {
@@ -405,7 +405,36 @@ fn overlays_show_sprites_the_hit_and_interrupts() {
         color: colors::SERIES[0],
         label: Some("0".into()),
     };
-    assert_eq!(m.overlay("sprites").unwrap().shapes, [rect]);
+    assert_eq!(m.overlay("sprites").unwrap().shapes, std::slice::from_ref(&rect));
+    // The bounds: tile 0 is solid, so they are the full box; tile 1 sets
+    // columns 2-5 on rows 2-5 only.
+    m.set_overlays(&["sprites", "sprite_bounds", "sprite0", "irq"]);
+    frames(&mut m, 2);
+    assert_eq!(m.overlay("sprite_bounds").unwrap().shapes, std::slice::from_ref(&rect));
+    for r in 2..6 {
+        assert!(m.poke(PPU_SPACE, 16 + r, Size::Byte, 0x3c));
+    }
+    assert!(m.poke(OAM_SPACE, 1, Size::Byte, 1));
+    frames(&mut m, 2);
+    assert_eq!(
+        m.overlay("sprite_bounds").unwrap().shapes,
+        [Shape::Rect {
+            x: ppu::BORDER as i32 + 102,
+            y: 52,
+            w: 4,
+            h: 4,
+            color: colors::SERIES[0],
+            label: Some("0".into()),
+        }]
+    );
+    assert_eq!(
+        m.overlay("sprites").unwrap().shapes,
+        [rect],
+        "the full box stays"
+    );
+    assert!(m.poke(OAM_SPACE, 1, Size::Byte, 0));
+    m.set_overlays(&["sprites", "sprite0", "irq"]);
+    frames(&mut m, 2);
     let hit = m.overlay("sprite0").unwrap().shapes;
     assert!(
         matches!(&hit[..], [Shape::Mark { x, y: 50, .. }] if *x == ppu::BORDER as i32 + 100),

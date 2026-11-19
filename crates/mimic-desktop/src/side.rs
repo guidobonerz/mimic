@@ -39,6 +39,9 @@ pub enum Action {
     Eject(u8),
     Save(u8),
     Tape(u8, TapeKey),
+    /// The slot's Autostart checkbox: the next image mounted there is
+    /// loaded and run from the running system (no reset).
+    Autostart(u8),
 }
 
 /// A clickable area in panel pixels.
@@ -124,7 +127,8 @@ fn pill(strip: &mut Strip, x: usize) {
     }
 }
 
-/// One line of buttons: Mount or Eject by the slot's state, then Save, grey
+/// One line of buttons: Mount or Eject by the slot's state, the Autostart
+/// checkbox where the machine can start the slot's medium, then Save, grey
 /// and without a hit area on an empty slot.
 fn buttons(strip: &mut Strip, x: usize, line: usize, s: &Slot, hits: &mut Vec<(usize, Hit)>) {
     let mut x = x;
@@ -133,7 +137,12 @@ fn buttons(strip: &mut Strip, x: usize, line: usize, s: &Slot, hits: &mut Vec<(u
     } else {
         ("Mount", Action::Mount(s.id, s.kind), true, MOUNT)
     };
-    let row = [toggle, ("Save", Action::Save(s.id), s.inserted, BUTTON)];
+    let mut row = vec![toggle];
+    if let Some(on) = s.autostart {
+        let label = if on { "[x] Autostart" } else { "[ ] Autostart" };
+        row.push((label, Action::Autostart(s.id), true, BUTTON));
+    }
+    row.push(("Save", Action::Save(s.id), s.inserted, BUTTON));
     for (label, action, live, colour) in row {
         let text = format!(" {label} ");
         let w = strip.text_width(&text);
@@ -361,7 +370,40 @@ mod tests {
             status: DriveStatus::default(),
             dirty: false,
             file: file.map(String::from),
+            autostart: None,
         }
+    }
+
+    #[test]
+    fn an_autostart_checkbox_sits_behind_mount_and_eject() {
+        let with = Slot {
+            autostart: Some(true),
+            ..slot(0, "drive 8", Some("game.d64"))
+        };
+        let p = render(std::slice::from_ref(&with), true, 0, 400, SIZE);
+        let row: Vec<Action> = p
+            .hits
+            .iter()
+            .filter(|h| h.action != Action::Toggle)
+            .map(|h| h.action)
+            .collect();
+        assert_eq!(
+            row,
+            [Action::Eject(0), Action::Autostart(0), Action::Save(0)]
+        );
+        // Also on an empty drive: set before the disk goes in.
+        let empty = Slot {
+            autostart: Some(false),
+            ..slot(0, "drive 8", None)
+        };
+        let p = render(&[empty], true, 0, 400, SIZE);
+        assert!(p.hits.iter().any(|h| h.action == Action::Autostart(0)));
+        // A slot the machine cannot autostart has none.
+        let p = render(&[slot(0, "DF0:", None)], true, 0, 400, SIZE);
+        assert!(!p
+            .hits
+            .iter()
+            .any(|h| matches!(h.action, Action::Autostart(_))));
     }
 
     fn pixel(p: &Picture, x: usize, y: usize) -> Rgb {

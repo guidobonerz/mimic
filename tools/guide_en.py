@@ -219,6 +219,16 @@ bullets(
     "**PAD FIRE** chooses the gamepad button that fires (SOUTH is A on an Xbox "
     "pad); **SAVE MAPPING** keeps JOY KEYS, JOY PORT and PAD FIRE for the "
     "machine, so the next start uses them (`--input FILE.toml` loads another).",
+    "Debug **overlays** appear as OFF/ON switches: **BEAM** (where the beam is), "
+    "**RASTER LINES** (every 8th raster line dotted, every 32nd with its number) and "
+    "the machine's own, such as **VIC-II SPRITES** (a box round each sprite with its "
+    "number), **VIC-II SPRITE BOUNDS** (tight round the pixels really set), "
+    "**VIC-II BAD LINES**, the sprites of the Amiga, NES, SNES and "
+    "TMS9918/V9938 and the Ataris' players. The tight **SPRITE BOUNDS** exist for "
+    "the NES, SNES and TMS9918/V9938 (ColecoVision, TI-99/4A, MSX) too, and "
+    "**TIA OBJECTS** on the 2600 (players, missiles and ball, tight round their "
+    "pixels); the Amiga's sprite boxes are tight round the pixels shown anyway. "
+    "They lie over the machine's picture, not in screenshots.",
     "**Cheats** (from `--cheat`, the cheat database or the debugger) appear as "
     "OFF/ON switches.",
 )
@@ -1383,7 +1393,17 @@ ejects, and **Save**, which writes the copy-on-write overlay back to the
 image file. A datasette or cassette has a second line with its keys
 **Play**, **Rec**, **Stop** and **Rew** (there are no hotkeys for them, so
 F9–F11 reach the machine). On the C64 the drive's line names its mode: `drive 8 (1541)`
-for the true drive with its DOS ROM, `drive 8 (virtual)` without one.""")
+for the true drive with its DOS ROM, `drive 8 (virtual)` without one.
+
+Behind Mount/Eject, drives whose disk the machine can start itself have an
+**Autostart** checkbox: while it is set, a disk mounted there is loaded
+and run from the running system without a reset, as with `--autostart` at
+power-on; the commands are typed, so the machine should be at its BASIC
+prompt. That is
+drive 8 of the C64, C128, VIC-20 and C16/Plus/4 (`LOAD"*",8,1` or `LOAD"*",8`,
+then `RUN`), drive A of the Spectrum's Beta Disk (TR-DOS, then `RUN` for
+"boot") and the IMSAI's drive A (the FIF's bootstrap, run from 0). The box can be set before the
+disk goes in.""")
 
 # ---- 4 headless ------------------------------------------------------------------
 

@@ -1,5 +1,6 @@
 use super::*;
 use mimic_core::gfx::GfxOptions;
+use mimic_core::overlay::Shape;
 use mimic_core::MemSpaceId;
 
 fn reg(v: &mut V9938, n: u8, value: u8) {
@@ -316,6 +317,24 @@ fn sprite_mode_1_and_the_fixed_colours_of_g7() {
     let o = v.overlay("sprites", true).unwrap();
     assert_eq!(o.shapes.len(), 4);
     assert_eq!(v.overlay("limit", true).unwrap().shapes.len(), 1);
+    // The bounds: pattern 0 sets only column 0 of row 0, one picture
+    // column pair on the sprite's first line.
+    assert!(v.overlay("sprite_bounds", true).is_none(), "switched off");
+    v.set_overlays(&["sprite_bounds"]);
+    field(&mut v);
+    v.overlay_end_frame();
+    let b = v.overlay("sprite_bounds", true).unwrap();
+    assert_eq!(b.shapes.len(), 4);
+    let (
+        Shape::Rect { x, y, .. },
+        Shape::Rect {
+            x: bx, y: by, w, h, ..
+        },
+    ) = (&o.shapes[0], &b.shapes[0])
+    else {
+        panic!("{:?} {:?}", o.shapes[0], b.shapes[0]);
+    };
+    assert_eq!((bx, by, w, h), (x, y, &2, &1));
 
     let mut v = chip(mode::G7);
     reg(&mut v, 5, 0xec);

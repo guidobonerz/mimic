@@ -661,6 +661,11 @@ impl Ppu {
                     self.spr_hi[i] = v;
                     self.spr_attr[i] = attr;
                     self.spr_x[i] = x;
+                    if self.ov.sprites && used {
+                        let bits = self.spr_lo[i] | v;
+                        let count = usize::from(self.sec_count);
+                        self.ov.record_pattern(i, count, self.line + 1, bits);
+                    }
                 } else {
                     self.spr_lo[i] = v;
                 }

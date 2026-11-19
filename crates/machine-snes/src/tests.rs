@@ -324,7 +324,7 @@ fn overlays_show_hdma_lines_interrupts_and_sprites() {
     let mut m = machine(&[], "ntsc", upload_rom());
     frames(&mut m, 2);
     let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
-    assert_eq!(ids, ["sprites", "hdma", "irq"]);
+    assert_eq!(ids, ["sprites", "sprite_bounds", "hdma", "irq"]);
     // HDMA channel 2, one byte to CGADD ($2121), table at $7E:1000: one
     // transfer then 2 idle lines, then two transfers (repeat mode), end.
     m.board.wram[0x1000..0x1006].copy_from_slice(&[0x03, 0x0f, 0x82, 0x0a, 0x0b, 0x00]);

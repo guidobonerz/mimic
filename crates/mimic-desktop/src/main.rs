@@ -18,6 +18,7 @@ mod emu;
 mod footer;
 mod gfx;
 mod host;
+mod pads;
 mod panel;
 mod picker;
 mod render;
@@ -211,8 +212,10 @@ switch picks the keys that play the joystick: CURSOR (cursor keys, Space
 fires), NUMPAD or OFF; JOY PORT (machines with several joystick ports)
 moves the joysticks to another port; PAD FIRE picks the gamepad button that
 fires (SOUTH = A on Xbox pads); SAVE MAPPING keeps these three for the
-machine. Cheats (from --cheat, the cheat database or the debugger) appear
-as OFF/ON switches.
+machine. Debug overlays appear as OFF/ON switches: BEAM, RASTER LINES
+(every 8th line, numbered every 32nd) and the machine's own (sprite boxes,
+bad lines …), drawn over the picture. Cheats (from --cheat, the cheat
+database or the debugger) appear as OFF/ON switches.
 Ctrl+Space shows or hides the status footer: a speed slider (click a step
 or drag the knob: -4x (a quarter) to 10x real time, then warp: as fast
 as this computer can; sound is muted off 1x), a snapshot button (saves the picture as <machine>-NNN.png in
@@ -700,6 +703,8 @@ struct App {
     shared: Arc<Shared>,
     input: Sender<HostEvent>,
     gilrs: Option<gilrs::Gilrs>,
+    /// Which host gamepad is pad 0, 1 … (by first use, [`pads`]).
+    pads: pads::PadSlots,
     window: Option<Arc<Window>>,
     /// The render thread, once there is a window.
     render: Option<Renderer>,
@@ -1142,6 +1147,22 @@ impl App {
             }
             return;
         }
+        if (panel::OVERLAY_BASE..panel::CHEAT_BASE).contains(&id) {
+            let i = usize::from(id - panel::OVERLAY_BASE);
+            let wanted = self
+                .shared
+                .overlay_list
+                .lock()
+                .ok()
+                .and_then(|l| l.get(i).map(|(id, _)| id.clone()));
+            if let (Some(wanted), Ok(mut on)) = (wanted, self.shared.overlays_on.lock()) {
+                on.retain(|o| *o != wanted);
+                if value == 1 {
+                    on.push(wanted);
+                }
+            }
+            return;
+        }
         if id >= panel::CHEAT_BASE {
             let i = usize::from(id - panel::CHEAT_BASE);
             let row = self
@@ -1256,6 +1277,14 @@ impl App {
             Some(side::Action::Eject(slot)) => emu::MediaCommand::Eject { slot },
             Some(side::Action::Save(slot)) => emu::MediaCommand::Save { slot },
             Some(side::Action::Tape(slot, key)) => emu::MediaCommand::Tape { slot, key },
+            Some(side::Action::Autostart(slot)) => {
+                if let Ok(mut on) = self.shared.autostart_slots.lock() {
+                    if !on.remove(&slot) {
+                        on.insert(slot);
+                    }
+                }
+                return;
+            }
             None => return,
         };
         if let Ok(mut c) = self.shared.media_commands.lock() {
@@ -1319,6 +1348,13 @@ impl App {
                 s.file = names.get(&s.id).cloned();
             }
         }
+        if let Ok(on) = self.shared.autostart_slots.lock() {
+            for s in &mut slots {
+                if let Some(a) = &mut s.autostart {
+                    *a = on.contains(&s.id);
+                }
+            }
+        }
         let p = side::render(&slots, self.side_open, self.side_scroll, height, font);
         self.side_hits = p.hits;
         self.side_max_scroll = p.max_scroll;
@@ -1366,6 +1402,16 @@ impl App {
             controls.push(panel::paste_control());
         }
         let mut items: Vec<panel::Item> = controls.iter().map(panel::Item::from).collect();
+        if let (Ok(list), Ok(on)) = (
+            self.shared.overlay_list.lock(),
+            self.shared.overlays_on.lock(),
+        ) {
+            items.extend(
+                list.iter()
+                    .enumerate()
+                    .map(|(i, (id, name))| panel::overlay_item(i, name, on.contains(id))),
+            );
+        }
         if let Ok(cheats) = self.shared.cheats.lock() {
             items.extend(cheats.iter().enumerate().map(|(i, c)| panel::Item {
                 id: panel::CHEAT_BASE + i as u16,
@@ -1463,7 +1509,24 @@ impl App {
     fn poll_gamepads(&mut self) {
         let Some(g) = &mut self.gilrs else { return };
         while let Some(ev) = g.next_event() {
-            let pad = usize::from(ev.id) as u8;
+            let id = usize::from(ev.id);
+            // A device becomes a pad when it is first worked: gilrs also
+            // counts HID devices that are no controller.
+            let worked = match ev.event {
+                gilrs::EventType::ButtonPressed(..) => true,
+                gilrs::EventType::AxisChanged(_, v, _) => v.abs() >= pads::CLAIM_AXIS,
+                _ => false,
+            };
+            let known = self.pads.slot(id, false).is_some();
+            let Some(pad) = self.pads.slot(id, worked) else {
+                continue;
+            };
+            if !known {
+                eprintln!(
+                    "gamepad {id} ({}) plays as pad {pad}",
+                    g.gamepad(ev.id).name()
+                );
+            }
             let host = match ev.event {
                 gilrs::EventType::ButtonPressed(b, _) => {
                     gamepad_button(b).map(|button| HostEvent::Button {
@@ -2273,6 +2336,7 @@ fn run() -> Result<(), String> {
                 eprintln!("gamepad {}: {}", usize::from(id), pad.name());
             }
         }),
+        pads: pads::PadSlots::default(),
         window: None,
         render: None,
         error: None,

@@ -1387,6 +1387,20 @@ impl Machine for C128 {
     /// Pasted text goes straight into the KERNAL's keyboard buffer
     /// ([`chips_cbm::keybuf`]) in RAM bank 0: the C128's own or, in C64
     /// mode, the C64's. With the Z80 running (CP/M) the keys type it.
+    fn can_autostart(&self, slot: SlotId) -> bool {
+        slot == SLOT_DRIVE8 && self.drive.is_some()
+    }
+
+    /// `LOAD"*",8` typed into the running BASIC (no reset), then `RUN`
+    /// once it is loaded, as with `autostart=on` at power-on.
+    fn autostart(&mut self, slot: SlotId) -> bool {
+        if !self.can_autostart(slot) || !self.drive.as_ref().is_some_and(|d| d.has_disk()) {
+            return false;
+        }
+        self.autostart = Autostart::Armed;
+        true
+    }
+
     fn paste_chars(&mut self, text: &str) -> Option<usize> {
         if !self.mem.mmu.m8502() {
             return None;

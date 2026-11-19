@@ -13,25 +13,40 @@
 use mimic_core::overlay::{Overlay, OverlayInfo};
 
 use super::{SPpu, LINES};
-use crate::overlay::{sprite_rects, Record, Span};
+use crate::overlay::{bound_rects, sprite_rects, Record, Span};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SPpuOverlays {
+    /// Object spans are recorded (`sprites` or `sprite_bounds` is on).
     pub(super) sprites: bool,
+    /// Which of the two overlays are shown.
+    boxes: bool,
+    bounds: bool,
     spans: Record<Span>,
     /// (interlace, field) the current and the last frame were drawn with.
     rows: [(bool, bool); 2],
 }
 
 impl SPpuOverlays {
-    /// Object `i` in range on line `y` at pixel `x` (−256…255), `w` wide.
-    pub(super) fn record_sprite(&mut self, i: usize, y: u16, x: i32, w: u16, rows: (bool, bool)) {
+    /// Object `i` in range on line `y` at pixel `x` (−256…255), `w` wide;
+    /// `opaque`: the frame columns of its first and last opaque pixel
+    /// drawn on the line.
+    pub(super) fn record_sprite(
+        &mut self,
+        i: usize,
+        y: u16,
+        x: i32,
+        w: u16,
+        rows: (bool, bool),
+        opaque: Option<(i32, i32)>,
+    ) {
         self.rows[0] = rows;
         self.spans.cur.push(Span {
             n: i as u8,
             line: y,
             x: x * 2,
             w: u32::from(w) * 2,
+            opaque,
         });
     }
 }
@@ -51,10 +66,16 @@ pub fn row_of(y: u16, interlace: bool, field: bool) -> Option<u32> {
 }
 
 pub fn infos() -> Vec<OverlayInfo> {
-    vec![OverlayInfo {
-        id: "sprites",
-        name: "S-PPU sprite boxes".into(),
-    }]
+    vec![
+        OverlayInfo {
+            id: "sprites",
+            name: "S-PPU sprite boxes".into(),
+        },
+        OverlayInfo {
+            id: "sprite_bounds",
+            name: "S-PPU sprite bounds".into(),
+        },
+    ]
 }
 
 impl SPpu {
@@ -64,7 +85,9 @@ impl SPpu {
     }
 
     pub fn set_overlays(&mut self, ids: &[&str]) {
-        self.ov.sprites = ids.contains(&"sprites");
+        self.ov.boxes = ids.contains(&"sprites");
+        self.ov.bounds = ids.contains(&"sprite_bounds");
+        self.ov.sprites = self.ov.boxes || self.ov.bounds;
         if !self.ov.sprites {
             self.ov.spans.clear();
         }
@@ -82,14 +105,19 @@ impl SPpu {
     /// Overlay `id` of the last complete frame (`last`) or the frame so
     /// far; None for an unknown id or one switched off.
     pub fn overlay(&self, id: &str, last: bool) -> Option<Overlay> {
-        if id != "sprites" || !self.ov.sprites {
-            return None;
-        }
         let (il, field) = self.ov.rows[usize::from(last)];
+        let spans = self.ov.spans.get(last);
+        let row = |l| row_of(l, il, field);
+        let shapes = match id {
+            "sprites" if self.ov.boxes => sprite_rects(spans, row),
+            "sprite_bounds" if self.ov.bounds => bound_rects(spans, row),
+            _ => return None,
+        };
+        let info = infos().into_iter().find(|i| i.id == id)?;
         Some(Overlay {
-            id: "sprites",
-            name: infos()[0].name.clone(),
-            shapes: sprite_rects(self.ov.spans.get(last), |l| row_of(l, il, field)),
+            id: info.id,
+            name: info.name,
+            shapes,
             legend: vec![],
         })
     }
@@ -136,5 +164,38 @@ mod tests {
         assert!(p.overlay("sprites", false).unwrap().shapes.is_empty());
         assert_eq!(row_of(1, true, true), Some(1));
         assert_eq!(row_of(240, false, false), None);
+
+        // The bounds: tile 0 sets pixels 3 and 4 (plane 0) on rows 2-5; a
+        // tile without pixels gives no box.
+        assert!(
+            p.overlay("sprite_bounds", true).is_none(),
+            "only the boxes on"
+        );
+        p.set_overlays(&["sprite_bounds"]);
+        for y in 1..=224 {
+            p.render_line(y);
+        }
+        p.overlay_end_frame();
+        assert!(p.overlay("sprite_bounds", true).unwrap().shapes.is_empty());
+        for r in 2..6 {
+            p.vram[r] = 0x0018;
+        }
+        for y in 1..=224 {
+            p.render_line(y);
+        }
+        p.overlay_end_frame();
+        let b = p.overlay("sprite_bounds", true).unwrap();
+        assert_eq!(
+            b.shapes,
+            [Shape::Rect {
+                x: 80 + 2 * 3,
+                y: 99 + 2,
+                w: 4,
+                h: 4,
+                color: colors::SERIES[5],
+                label: Some("5".into()),
+            }]
+        );
+        assert!(p.overlay("sprites", true).is_none(), "only the bounds on");
     }
 }

@@ -12,12 +12,16 @@
 use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 use super::{Ppu, BORDER, HEIGHT};
-use crate::overlay::{sprite_rects, Record, Span};
+use crate::overlay::{bound_rects, sprite_rects, Record, Span};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PpuOverlays {
+    /// Sprite spans are recorded (`sprites` or `sprite_bounds` is on).
     pub(super) sprites: bool,
     pub(super) sprite0: bool,
+    /// Which of the two sprite overlays are shown.
+    boxes: bool,
+    bounds: bool,
     spans: Record<Span>,
     /// Pixel x (0–255) and line of the sprite-0 hit.
     hits: Record<(u16, u16)>,
@@ -32,7 +36,29 @@ impl PpuOverlays {
                 line,
                 x: (BORDER + usize::from(x)) as i32,
                 w: 8,
+                opaque: None,
             });
+        }
+    }
+
+    /// The pattern of slot `slot` of `count` found for line `line` was
+    /// fetched: `bits`, the low and high plane ORed (flipped already, the
+    /// leftmost pixel in bit 7). The slots' spans are the last `count`
+    /// recorded, in slot order.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn record_pattern(&mut self, slot: usize, count: usize, line: u16, bits: u8) {
+        if usize::from(line) >= HEIGHT {
+            return;
+        }
+        let cur = &mut self.spans.cur;
+        let Some(i) = (cur.len() + slot).checked_sub(count) else {
+            return;
+        };
+        if let Some(s) = cur.get_mut(i).filter(|s| s.line == line) {
+            let left = BORDER as i32;
+            s.opaque =
+                mimic_core::overlay::row_bounds(u64::from(bits), 8, 1, s.x, left..left + 256);
         }
     }
 
@@ -49,6 +75,10 @@ pub fn infos(chip: &str) -> Vec<OverlayInfo> {
             name: format!("{chip} sprite boxes"),
         },
         OverlayInfo {
+            id: "sprite_bounds",
+            name: format!("{chip} sprite bounds"),
+        },
+        OverlayInfo {
             id: "sprite0",
             name: format!("{chip} sprite-0 hit"),
         },
@@ -60,7 +90,9 @@ impl Ppu {
     /// cleared) for the others.
     pub fn set_overlays(&mut self, ids: &[&str]) {
         let ov = &mut self.ov;
-        ov.sprites = ids.contains(&"sprites");
+        ov.boxes = ids.contains(&"sprites");
+        ov.bounds = ids.contains(&"sprite_bounds");
+        ov.sprites = ov.boxes || ov.bounds;
         ov.sprite0 = ids.contains(&"sprite0");
         if !ov.sprites {
             ov.spans.clear();
@@ -87,8 +119,12 @@ impl Ppu {
             .into_iter()
             .find(|i| i.id == id)?;
         let (shapes, legend) = match id {
-            "sprites" if self.ov.sprites => (
+            "sprites" if self.ov.boxes => (
                 sprite_rects(self.ov.spans.get(last), |l| Some(u32::from(l))),
+                vec![],
+            ),
+            "sprite_bounds" if self.ov.bounds => (
+                bound_rects(self.ov.spans.get(last), |l| Some(u32::from(l))),
                 vec![],
             ),
             "sprite0" if self.ov.sprite0 => {

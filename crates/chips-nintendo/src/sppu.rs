@@ -935,14 +935,12 @@ impl SPpu {
                 found.push((i, x, w, h, row));
             }
         }
-        if self.ov.sprites {
-            let rows = (self.interlace(), self.field);
-            for &(i, x, w, _, _) in &found {
-                self.ov.record_sprite(i, y, x, w, rows);
-            }
-        }
+        // The `sprite_bounds` overlay: each found object's first and last
+        // opaque pixel on the line (recorded only while it is on).
+        let rec = self.ov.sprites;
+        let mut opaque: [Option<(i32, i32)>; 32] = [None; 32];
         let mut slivers = 0;
-        for &(i, x, w, h, row) in found.iter().rev() {
+        for (k, &(i, x, w, h, row)) in found.iter().enumerate().rev() {
             let tile = u16::from(self.oam[i * 4 + 2]);
             let attr = self.oam[i * 4 + 3];
             let name = u16::from(attr & 1) << 8;
@@ -989,11 +987,25 @@ impl SPpu {
                             opaque: true,
                             math: pal >= 4,
                         };
+                        if rec {
+                            // Two frame columns a pixel.
+                            let (a, b) = (ox * 2, ox * 2 + 1);
+                            opaque[k] = Some(match opaque[k] {
+                                Some((f, l)) => (f.min(a), l.max(b)),
+                                None => (a, b),
+                            });
+                        }
                     }
                 }
             }
             if slivers > 34 {
                 break;
+            }
+        }
+        if rec {
+            let rows = (self.interlace(), self.field);
+            for (k, &(i, x, w, _, _)) in found.iter().enumerate() {
+                self.ov.record_sprite(i, y, x, w, rows, opaque[k]);
             }
         }
     }

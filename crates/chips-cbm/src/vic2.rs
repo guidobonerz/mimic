@@ -1505,7 +1505,14 @@ impl Vic2 {
                 gap || self.fetching & (1 << n) != 0 || (i < 3 && self.fetch_done == Some(n));
             if s.display && s.bits_left == 0 && sx == x && !not_yet {
                 if let Some(r) = self.rec.0.as_deref_mut() {
-                    r.sprite_shown(n, self.raster, x, self.sprite_xe & (1 << n) != 0);
+                    r.sprite_shown(
+                        n,
+                        self.raster,
+                        x,
+                        self.sprite_xe & (1 << n) != 0,
+                        s.data,
+                        mc,
+                    );
                 }
                 // The fetched row is shifted out once: a second X match in
                 // the same line shows nothing (VICE test program
@@ -2095,6 +2102,7 @@ impl Savestate for Vic2 {
             let ids: Vec<&str> = [
                 (r.badlines(), overlay::BADLINES),
                 (r.sprites(), overlay::SPRITES),
+                (r.bounds(), overlay::BOUNDS),
             ]
             .into_iter()
             .filter_map(|(on, id)| on.then_some(id))

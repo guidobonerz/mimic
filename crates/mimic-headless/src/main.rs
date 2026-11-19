@@ -626,7 +626,11 @@ fn run(mut args: Args) -> Result<ExitCode, String> {
         }
         session.set_host(Box::new(host::FrontendHost));
         session.set_host_journal(journal.clone());
-        session.type_text(&args.type_text)?;
+        // Only with `--type`: a machine without a keyboard (2600, NES …)
+        // cannot type, and --debug would refuse to start on it.
+        if !args.type_text.is_empty() {
+            session.type_text(&args.type_text)?;
+        }
         let tap = args.preview.map(|_| {
             let tap = FrameTap::new();
             tap.publish(session.machine(), args.run);

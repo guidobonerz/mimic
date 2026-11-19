@@ -845,9 +845,20 @@ impl V9938 {
             let color_byte = self.v(a + 3);
             let color = color_byte & 15;
             let sx = i32::from(self.v(a + 1)) - if color_byte & 0x80 != 0 { 32 } else { 0 };
-            self.ov
-                .sprite(n, self.line, x0 as i32 + 2 * sx, 2 * (size * mag) as u32);
             let bits = self.sprite_row(self.v(a + 2), dy / mag, size);
+            self.ov.sprite(
+                n,
+                self.line,
+                x0 as i32 + 2 * sx,
+                2 * (size * mag) as u32,
+                overlay::Row {
+                    bits,
+                    size,
+                    scale: 2 * mag as u32,
+                    shown: color != 0 || tp,
+                },
+                x0 as i32..x0 as i32 + 512,
+            );
             for p in 0..size * mag {
                 let x = sx + p as i32;
                 if !(0..256).contains(&x) || bits & (0x8000 >> (p / mag)) == 0 {
@@ -906,15 +917,28 @@ impl V9938 {
             let color = cb & 15;
             let cc = cb & 0x40 != 0;
             let sx = i32::from(self.v(a + 1)) - if cb & 0x80 != 0 { 32 } else { 0 };
-            self.ov
-                .sprite(n, self.line, x0 as i32 + 2 * sx, 2 * (size * mag) as u32);
+            let bits = self.sprite_row(self.v(a + 2), row, size);
+            // A CC sprite with no sprite before it shows nothing.
+            let alone = cc && group == 0;
+            self.ov.sprite(
+                n,
+                self.line,
+                x0 as i32 + 2 * sx,
+                2 * (size * mag) as u32,
+                overlay::Row {
+                    bits,
+                    size,
+                    scale: 2 * mag as u32,
+                    shown: (color != 0 || tp) && !alone,
+                },
+                x0 as i32..x0 as i32 + 512,
+            );
             if !cc {
                 group = n + 1;
             } else if group == 0 {
                 // No sprite before it to share a priority with.
                 continue;
             }
-            let bits = self.sprite_row(self.v(a + 2), row, size);
             for p in 0..size * mag {
                 let x = sx + p as i32;
                 if !(0..256).contains(&x) || bits & (0x8000 >> (p / mag)) == 0 {

@@ -1,8 +1,18 @@
-//! Debug overlay of the Atari 2600 (see `mimic_core::overlay`): where in the
-//! picture the program strobed the TIA's position registers (RESP0, RESP1,
-//! RESM0, RESM1, RESBL) and HMOVE in the last field. Recorded only while
-//! switched on; the record is debugger state, not machine state (not in
-//! savestates, ignored by comparisons).
+//! Debug overlays of the Atari 2600 (see `mimic_core::overlay`):
+//!
+//! - `objects`: where in the picture the program strobed the TIA's
+//!   position registers (RESP0, RESP1, RESM0, RESM1, RESBL) and HMOVE in
+//!   the last field.
+//! - `tia_objects`: a box round every run of lines on which a player,
+//!   missile or the ball put pixels, from its first to its last pixel
+//!   (the TIA has no Y position: the program draws each object line by
+//!   line, so the boxes come from what was drawn; [`chips_atari::tia::ObjectRecord`]).
+//!   A run may leave out two lines (two-line kernels); an object the
+//!   program reuses lower down gets a box for each use, its NUSIZ copies
+//!   on one line one box together.
+//!
+//! Recorded only while switched on; the records are debugger state, not
+//! machine state (not in savestates, ignored by comparisons).
 //!
 //! Frame coordinates: the frame is assembled from VSYNC, so TIA line `l`
 //! is frame row `l` (up to the field height of the standard), and colour
@@ -10,11 +20,21 @@
 //! Programmer's Guide, "Horizontal timing"). A strobe during horizontal
 //! blank is marked at column 0, like the beam position.
 
-use chips_atari::tia::{self, HMOVE, RESBL, RESM0, RESM1, RESP0, RESP1};
+use chips_atari::tia::{self, ObjectRecord, HMOVE, RESBL, RESM0, RESM1, RESP0, RESP1};
 use mimic_core::frame::{Rgb8, VideoStandard};
 use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
 
 pub const OBJECTS: &str = "objects";
+pub const BOXES: &str = "tia_objects";
+
+/// The objects' names and colours (P0, P1, M0, M1, BL).
+const OBJECT_NAMES: [(&str, Rgb8); 5] = [
+    ("P0", colors::RED),
+    ("P1", colors::GREEN),
+    ("M0", colors::BLUE),
+    ("M1", colors::YELLOW),
+    ("BL", colors::CYAN),
+];
 
 /// Strobes marked, with their colours.
 const STROBES: [(u8, &str, Rgb8); 6] = [
@@ -27,10 +47,49 @@ const STROBES: [(u8, &str, Rgb8); 6] = [
 ];
 
 pub fn infos() -> Vec<OverlayInfo> {
-    vec![OverlayInfo {
-        id: OBJECTS,
-        name: "TIA position strobes and HMOVE".into(),
-    }]
+    vec![
+        OverlayInfo {
+            id: OBJECTS,
+            name: "TIA position strobes and HMOVE".into(),
+        },
+        OverlayInfo {
+            id: BOXES,
+            name: "TIA objects".into(),
+        },
+    ]
+}
+
+/// The `tia_objects` overlay from the TIA's record: the last complete
+/// field, or the field so far (`mid_field`).
+pub fn boxes(rec: &ObjectRecord, mid_field: bool) -> Overlay {
+    let shapes = rec
+        .boxes(mid_field)
+        .iter()
+        .map(|b| {
+            let (name, color) = OBJECT_NAMES[usize::from(b.object)];
+            Shape::Rect {
+                x: i32::from(b.x0),
+                y: i32::from(b.first),
+                w: u32::from(b.x1 - b.x0) + 1,
+                h: u32::from(b.last - b.first) + 1,
+                color,
+                label: Some(name.into()),
+            }
+        })
+        .collect();
+    let legend = OBJECT_NAMES
+        .iter()
+        .map(|&(name, color)| LegendEntry {
+            color,
+            text: name.into(),
+        })
+        .collect();
+    Overlay {
+        id: BOXES,
+        name: "TIA objects".into(),
+        shapes,
+        legend,
+    }
 }
 
 /// The frame row of TIA line `line`.

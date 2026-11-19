@@ -481,7 +481,8 @@ fn gfx_views_show_the_tia_registers() {
 #[test]
 fn overlay_marks_position_strobes_and_hmove() {
     let mut m = stub("ntsc");
-    assert_eq!(m.overlays().len(), 1);
+    let ids: Vec<&str> = m.overlays().iter().map(|o| o.id).collect();
+    assert_eq!(ids, ["objects", "tia_objects"]);
     assert!(m.overlay("objects").is_none(), "off by default");
     m.set_overlays(&["objects"]);
     frame(&mut m);
@@ -513,6 +514,48 @@ fn overlay_marks_position_strobes_and_hmove() {
     m.set_overlays(&[]);
     assert!(m.overlay("objects").is_none());
     assert!(m.board.overlay.is_none());
+}
+
+#[test]
+fn tia_objects_box_the_pixels_a_player_drew() {
+    let mut m = stub("ntsc");
+    assert!(m.overlay("tia_objects").is_none(), "off by default");
+    m.set_overlays(&["tia_objects"]);
+    frame(&mut m);
+    assert!(m.overlay("tia_objects").unwrap().shapes.is_empty());
+    let to = |m: &mut Atari2600, line: u16, clock: u8| {
+        while m.board.tia.line() != line || m.board.tia.clock() < clock {
+            m.step_cycle();
+        }
+    };
+    // Player 0 in colour $0E, all eight pixels set, from line 50 to 59.
+    to(&mut m, 50, 120);
+    m.board.write(u16::from(tia::COLUP0), 0x0e);
+    m.board.write(u16::from(tia::GRP0), 0xff);
+    m.board.write(u16::from(tia::RESP0), 0);
+    to(&mut m, 60, 0);
+    m.board.write(u16::from(tia::GRP0), 0);
+    frame(&mut m);
+    let o = m.overlay("tia_objects").unwrap();
+    assert_eq!(o.shapes.len(), 1, "{:?}", o.shapes);
+    let mimic_core::overlay::Shape::Rect {
+        x, y, w, h, label, ..
+    } = &o.shapes[0]
+    else {
+        panic!("{:?}", o.shapes[0]);
+    };
+    assert_eq!((*w, label.as_deref()), (8, Some("P0")));
+    assert!((9..=10).contains(h), "lines 50/51 to 59: {h}");
+    assert_eq!(
+        pixel(&m, *x as u32, *y as u32),
+        0x0e >> 1,
+        "the box sits on the player"
+    );
+    assert_ne!(pixel(&m, *x as u32 - 1, *y as u32), 0x0e >> 1);
+    // Off: no record left.
+    m.set_overlays(&[]);
+    assert!(m.overlay("tia_objects").is_none());
+    assert!(m.board.tia.objects().is_none());
 }
 
 #[test]

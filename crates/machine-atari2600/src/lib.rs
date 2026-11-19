@@ -503,8 +503,14 @@ impl Atari2600 {
         }
     }
 
-    /// One CPU cycle. Returns `Some` if emulation must stop.
-    fn cycle(&mut self, mut dbg: Option<&mut DebugHooks>) -> Option<StopReason> {
+    /// One CPU cycle. Returns `Some` if emulation must stop. `RECORD`: the
+    /// `tia_objects` overlay is on (the TIA's object record). A copy of its
+    /// own, so that without it the cycle has no line more: even a call
+    /// that never ran cost the 2600 9 % (2026-11-19).
+    fn cycle<const RECORD: bool>(
+        &mut self,
+        mut dbg: Option<&mut DebugHooks>,
+    ) -> Option<StopReason> {
         let line_before = self.board.tia.line();
         // A cartridge went in or out: power up again.
         if self.cart.take_changed() {
@@ -533,6 +539,10 @@ impl Atari2600 {
         let mut new_field = false;
         for _ in 0..3 {
             new_field |= self.board.tia.tick();
+            if RECORD {
+                // What the clock drew, read after it.
+                self.board.tia.record_last_clock();
+            }
         }
         if new_field {
             if let Some(rec) = &mut self.board.overlay {
@@ -756,15 +766,28 @@ impl Machine for Atari2600 {
         if b.line == 0 && b.cycle == 0 {
             self.apply_frame_freezes(dbg);
         }
+        // The overlays change between frames only (debugger, panel).
+        if self.board.tia.objects().is_some() {
+            loop {
+                if let Some(stop) = self.cycle::<true>(Some(dbg)) {
+                    return stop;
+                }
+            }
+        }
         loop {
-            if let Some(stop) = self.cycle(Some(dbg)) {
+            if let Some(stop) = self.cycle::<false>(Some(dbg)) {
                 return stop;
             }
         }
     }
 
     fn step_cycle(&mut self) -> StopReason {
-        match self.cycle(None) {
+        let stop = if self.board.tia.objects().is_some() {
+            self.cycle::<true>(None)
+        } else {
+            self.cycle::<false>(None)
+        };
+        match stop {
             Some(stop @ StopReason::CpuJam { .. }) => stop,
             _ => StopReason::StepDone,
         }
@@ -835,12 +858,16 @@ impl Machine for Atari2600 {
 
     fn set_overlays(&mut self, ids: &[&str]) {
         self.board.overlay = overlay::Recorder::new(ids).map(Box::new);
+        self.board.tia.record_objects(ids.contains(&overlay::BOXES));
     }
 
     /// The last complete field's strobes; while the beam is past line 0
     /// (halted mid-field) the field's so far.
     fn overlay(&self, id: &str) -> Option<Overlay> {
         let mid_field = self.board.tia.line() != 0;
+        if id == overlay::BOXES {
+            return Some(overlay::boxes(self.board.tia.objects()?, mid_field));
+        }
         self.board.overlay.as_ref()?.overlay(id, mid_field)
     }
 

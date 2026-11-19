@@ -360,7 +360,7 @@ fn overlays_record_sprites_only_while_switched_on() {
     let mut m = stub_with(None, &[]);
     frames(&mut m, 2);
     let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
-    assert_eq!(ids, ["sprites", "limit"]);
+    assert_eq!(ids, ["sprites", "sprite_bounds", "limit"]);
     // Sprites 1–5 at Y = 49 (lines 50–57) from X = 100: five on the line
     // (the stub BIOS moves sprite 0).
     let v = &mut m.board.vdp;

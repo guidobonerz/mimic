@@ -129,6 +129,8 @@ pub trait Machine: Send {
     fn typed_keys(&self, text: &str, start: Cycle) -> Option<(Vec<TimedInput>, Cycle)> { None } // key events that type text (paste, `type`); the caller queues them with input(), `mimic-core::input::TextFeed` line by line
     fn set_warp(&mut self, on: bool) {}                 // warp: the next frames are not looked at, the machine may leave out drawing them; everything a program can observe stays exact (not in the savestate)
     fn paste_chars(&mut self, text: &str) -> Option<usize> { None } // pasted text straight into the OS's keyboard buffer (many times faster than keys); characters taken, None: no buffer, use typed_keys
+    fn can_autostart(&self, slot: SlotId) -> bool { false } // the medium in this slot can be started at run time (the desktop's Autostart checkbox)
+    fn autostart(&mut self, slot: SlotId) -> bool { false } // load and run what is in the slot from the running system (no reset), as autostart=on after power-on
     fn controls(&self) -> Vec<ControlInfo> { vec![] }    // console buttons/switches (power, reset, 2600 switches …) for panels
     fn ports(&self) -> Vec<PortInfo>;                   // physical connectors (see `docs/claude/devices.md`)
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError>;

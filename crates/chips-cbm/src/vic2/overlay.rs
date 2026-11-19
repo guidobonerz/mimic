@@ -7,6 +7,10 @@
 //!   shown (its shifter started at its X coordinate, Bauer 3.8.1), so a
 //!   multiplexed sprite gets one box per use; 24 or 48 (X-expanded) pixels
 //!   wide, labelled with the sprite number.
+//! - `sprite_bounds`: for the same runs, the tight box round the pixels the
+//!   sprite really set: the columns of all bits (multicolour: pairs) that
+//!   are not 0 in the rows the shifter started with, and the lines from the
+//!   first to the last such row. A run with no pixel set gets no box.
 //!
 //! Both are recorded only while switched on ([`Vic2::set_overlays`]); see
 //! `crate::overlay` for the record's rules.
@@ -18,6 +22,7 @@ use crate::overlay::{line_bands, LineMarks, Recorder};
 
 pub const BADLINES: &str = "badlines";
 pub const SPRITES: &str = "sprites";
+pub const BOUNDS: &str = "sprite_bounds";
 
 /// The overlays a VIC-II offers.
 pub fn overlays() -> Vec<OverlayInfo> {
@@ -30,6 +35,10 @@ pub fn overlays() -> Vec<OverlayInfo> {
             id: SPRITES,
             name: "VIC-II sprites".into(),
         },
+        OverlayInfo {
+            id: BOUNDS,
+            name: "VIC-II sprite bounds".into(),
+        },
     ]
 }
 
@@ -41,6 +50,36 @@ struct Run {
     w: u16,
     first: u16,
     last: u16,
+    /// The pixel columns (bit 23 = column 0) set on any of its lines.
+    cols: u32,
+    /// The first and last line with a pixel set.
+    set: Option<(u16, u16)>,
+}
+
+impl Run {
+    /// Line `line` shifts out `mask` (bit 23 = column 0).
+    fn add(&mut self, line: u16, mask: u32) {
+        if mask == 0 {
+            return;
+        }
+        self.cols |= mask;
+        self.set = Some(match self.set {
+            Some((first, _)) => (first, line),
+            None => (line, line),
+        });
+    }
+}
+
+/// The columns a row of sprite data sets: hires every 1 bit, multicolour
+/// both columns of every pair that is not 00.
+fn pixel_mask(data: u32, mc: bool) -> u32 {
+    let data = data & 0xff_ffff;
+    if mc {
+        let pairs = (data | data >> 1) & 0x55_5555;
+        pairs | pairs << 1
+    } else {
+        data
+    }
 }
 
 /// What the overlays need of a field.
@@ -48,6 +87,7 @@ struct Run {
 pub(crate) struct Record {
     badlines: bool,
     sprites: bool,
+    bounds: bool,
     /// The current line had c-accesses.
     line_bad: bool,
     bad: LineMarks,
@@ -66,33 +106,54 @@ impl Record {
         self.sprites
     }
 
+    pub(crate) fn bounds(&self) -> bool {
+        self.bounds
+    }
+
     #[cold]
     #[inline(never)]
     pub(crate) fn mark_bad(&mut self) {
         self.line_bad = true;
     }
 
-    /// Sprite `n`'s shifter started at `x` on `line`.
+    /// Sprite `n`'s shifter started at `x` on `line` with the row `data`
+    /// (24 bits, multicolour if `mc`).
     #[cold]
     #[inline(never)]
-    pub(crate) fn sprite_shown(&mut self, n: usize, line: u16, x: u16, xexp: bool) {
-        if !self.sprites {
+    pub(crate) fn sprite_shown(
+        &mut self,
+        n: usize,
+        line: u16,
+        x: u16,
+        xexp: bool,
+        data: u32,
+        mc: bool,
+    ) {
+        if !self.sprites && !self.bounds {
             return;
         }
         let w = if xexp { 48 } else { 24 };
+        let mask = pixel_mask(data, mc);
         match &mut self.open[n] {
-            Some(r) if r.x == x && r.w == w && r.last + 1 == line => r.last = line,
+            Some(r) if r.x == x && r.w == w && r.last + 1 == line => {
+                r.last = line;
+                r.add(line, mask);
+            }
             open => {
                 if let Some(r) = open.take() {
                     self.runs.push(r);
                 }
-                *open = Some(Run {
+                let mut r = Run {
                     n: n as u8,
                     x,
                     w,
                     first: line,
                     last: line,
-                });
+                    cols: 0,
+                    set: None,
+                };
+                r.add(line, mask);
+                *open = Some(r);
             }
         }
     }
@@ -142,13 +203,15 @@ impl Vic2 {
     pub fn set_overlays(&mut self, ids: &[&str]) {
         let badlines = ids.contains(&BADLINES);
         let sprites = ids.contains(&SPRITES);
-        if !badlines && !sprites {
+        let bounds = ids.contains(&BOUNDS);
+        if !badlines && !sprites && !bounds {
             self.rec = Recorder(None);
             return;
         }
         let r = self.rec.0.get_or_insert_with(Box::default);
         r.badlines = badlines;
         r.sprites = sprites;
+        r.bounds = bounds;
     }
 
     /// Frame-buffer row showing raster line `line`.
@@ -171,6 +234,7 @@ impl Vic2 {
                 "bad lines",
             ),
             SPRITES if r.sprites => self.sprite_boxes(r),
+            BOUNDS if r.bounds => self.bound_boxes(r),
             _ => return None,
         };
         Some(Overlay {
@@ -181,8 +245,9 @@ impl Vic2 {
         })
     }
 
-    fn sprite_boxes(&self, r: &Record) -> Vec<Shape> {
-        let t = self.timing();
+    /// The runs to show: this field's above the beam (finished and open),
+    /// the last field's from the beam down, each with the lines shown.
+    fn field_runs(&self, r: &Record) -> Vec<(Run, u16, u16)> {
         let beam = self.raster;
         // This field above the beam (finished and open runs), the last one
         // from the beam down.
@@ -197,39 +262,69 @@ impl Vic2 {
                 runs.push((*run, run.first.max(beam), run.last));
             }
         }
+        runs
+    }
+
+    fn sprite_boxes(&self, r: &Record) -> Vec<Shape> {
+        let t = self.timing();
         let mut shapes = Vec::new();
-        for (run, first, last) in runs {
-            let Some(x) = t.x_column(run.x) else {
-                continue;
-            };
-            // Split where consecutive lines are not consecutive rows.
-            let mut seg: Option<(u32, u32)> = None;
-            let push = |(y, h): (u32, u32), shapes: &mut Vec<Shape>| {
-                shapes.push(Shape::Rect {
-                    x,
-                    y: y as i32,
-                    w: u32::from(run.w),
-                    h,
-                    color: colors::SERIES[usize::from(run.n)],
-                    label: Some(run.n.to_string()),
-                });
-            };
-            for line in first..=last {
-                match (t.frame_row(line), seg) {
-                    (Some(row), Some((y, h))) if y + h == row => seg = Some((y, h + 1)),
-                    (row, s) => {
-                        if let Some(s) = s {
-                            push(s, &mut shapes);
-                        }
-                        seg = row.map(|y| (y, 1));
-                    }
-                }
-            }
-            if let Some(s) = seg {
-                push(s, &mut shapes);
+        for (run, first, last) in self.field_runs(r) {
+            if let Some(x) = t.x_column(run.x) {
+                rects(t, &run, first, last, x, u32::from(run.w), &mut shapes);
             }
         }
         shapes
+    }
+
+    fn bound_boxes(&self, r: &Record) -> Vec<Shape> {
+        let t = self.timing();
+        let mut shapes = Vec::new();
+        for (run, first, last) in self.field_runs(r) {
+            let (Some(x), Some((set_first, set_last))) = (t.x_column(run.x), run.set) else {
+                continue;
+            };
+            let (first, last) = (first.max(set_first), last.min(set_last));
+            if first > last {
+                continue;
+            }
+            let scale = u32::from(run.w) / 24;
+            let lo = run.cols.leading_zeros() - 8;
+            let hi = 23 - run.cols.trailing_zeros();
+            let x = x + (lo * scale) as i32;
+            rects(t, &run, first, last, x, (hi - lo + 1) * scale, &mut shapes);
+        }
+        shapes
+    }
+}
+
+/// Boxes `w` pixels wide from frame column `x` over raster lines
+/// `first..=last` of `run`, split where consecutive lines are not
+/// consecutive rows of the frame.
+fn rects(t: &Timing, run: &Run, first: u16, last: u16, x: i32, w: u32, shapes: &mut Vec<Shape>) {
+    let mut seg: Option<(u32, u32)> = None;
+    let push = |(y, h): (u32, u32), shapes: &mut Vec<Shape>| {
+        shapes.push(Shape::Rect {
+            x,
+            y: y as i32,
+            w,
+            h,
+            color: colors::SERIES[usize::from(run.n)],
+            label: Some(run.n.to_string()),
+        });
+    };
+    for line in first..=last {
+        match (t.frame_row(line), seg) {
+            (Some(row), Some((y, h))) if y + h == row => seg = Some((y, h + 1)),
+            (row, s) => {
+                if let Some(s) = s {
+                    push(s, shapes);
+                }
+                seg = row.map(|y| (y, 1));
+            }
+        }
+    }
+    if let Some(s) = seg {
+        push(s, shapes);
     }
 }
 
@@ -319,6 +414,86 @@ mod tests {
     }
 
     const PAL_ROWS: [u16; 5] = [15, 16, 287, 288, 312];
+
+    /// Sprite data with empty rows 0-4 and `$0F` bytes after them (the
+    /// sprite pointer reads `$0F` too: data at `$03C0`).
+    struct Sparse;
+
+    impl VicMemory for Sparse {
+        fn read(&self, addr: u16) -> u8 {
+            if (0x3c0..0x3cf).contains(&(addr & 0x3fff)) {
+                0
+            } else {
+                0x0f
+            }
+        }
+        fn color(&self, _index: u16) -> u8 {
+            1
+        }
+    }
+
+    fn sparse_field(v: &mut Vic2) {
+        loop {
+            v.phi1(&Sparse);
+            if v.phi2(&Sparse) {
+                return;
+            }
+        }
+    }
+
+    fn rect(s: &Shape) -> (i32, i32, u32, u32) {
+        match s {
+            Shape::Rect { x, y, w, h, .. } => (*x, *y, *w, *h),
+            _ => panic!("{s:?}"),
+        }
+    }
+
+    #[test]
+    fn sprite_bounds_hug_the_pixels_set() {
+        let mut v = Vic2::new(Model::Mos6569);
+        v.set_overlays(&[SPRITES, BOUNDS]);
+        v.write(0x11, 0x1b);
+        v.write(0x15, 0x01);
+        v.write(0x00, 100);
+        v.write(0x01, 80);
+        sparse_field(&mut v);
+        sparse_field(&mut v);
+        let (r81, r86) = (
+            v.frame_row(81).unwrap() as i32,
+            v.frame_row(86).unwrap() as i32,
+        );
+        let full = v.overlay(SPRITES).unwrap();
+        assert_eq!(rect(&full.shapes[0]), (108, r81, 24, 21));
+        // Rows 5-20 hold $0F $0F $0F: columns 4-7, 12-15, 20-23.
+        let tight = v.overlay(BOUNDS).unwrap();
+        assert_eq!(tight.shapes.len(), 1);
+        assert_eq!(rect(&tight.shapes[0]), (112, r86, 20, 16));
+        // X-expanded: every column twice as wide.
+        v.write(0x1d, 0x01);
+        sparse_field(&mut v);
+        sparse_field(&mut v);
+        let tight = v.overlay(BOUNDS).unwrap();
+        assert_eq!(rect(&tight.shapes[0]), (116, r86, 40, 16));
+        // Multicolour: $0F is the pairs 00 00 11 11, the same columns.
+        v.write(0x1d, 0);
+        v.write(0x1c, 0x01);
+        sparse_field(&mut v);
+        sparse_field(&mut v);
+        let tight = v.overlay(BOUNDS).unwrap();
+        assert_eq!(rect(&tight.shapes[0]), (112, r86, 20, 16));
+        // Only the bounds on: recorded without the full boxes.
+        v.set_overlays(&[BOUNDS]);
+        sparse_field(&mut v);
+        assert!(v.overlay(SPRITES).is_none());
+        assert_eq!(v.overlay(BOUNDS).unwrap().shapes.len(), 1);
+    }
+
+    #[test]
+    fn pixel_masks_of_hires_and_multicolour_rows() {
+        assert_eq!(pixel_mask(0x80_0001, false), 0x80_0001);
+        assert_eq!(pixel_mask(0x40_0001, true), 0xc0_0003);
+        assert_eq!(pixel_mask(0, true), 0);
+    }
 
     #[test]
     fn bad_lines_and_sprite_boxes() {

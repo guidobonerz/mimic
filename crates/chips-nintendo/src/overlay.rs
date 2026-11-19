@@ -12,6 +12,24 @@ pub struct Span {
     pub line: u16,
     pub x: i32,
     pub w: u32,
+    /// First and last frame column with an opaque pixel (`sprite_bounds`).
+    pub opaque: Option<(i32, i32)>,
+}
+
+/// The tight boxes round the opaque pixels of `spans` (the
+/// `sprite_bounds` overlays; [`mimic_core::overlay::bound_boxes`]).
+pub fn bound_rects(spans: &[Span], row: impl Fn(u16) -> Option<u32>) -> Vec<Shape> {
+    let lines: Vec<mimic_core::overlay::SpriteLine> = spans
+        .iter()
+        .map(|s| mimic_core::overlay::SpriteLine {
+            n: s.n,
+            line: s.line,
+            x: s.x,
+            w: s.w,
+            opaque: s.opaque,
+        })
+        .collect();
+    mimic_core::overlay::bound_boxes(&lines, row)
 }
 
 /// A record for the frame being drawn and the last complete one.
@@ -91,7 +109,13 @@ mod tests {
 
     #[test]
     fn spans_merge_into_boxes() {
-        let span = |n, line, x| Span { n, line, x, w: 8 };
+        let span = |n, line, x| Span {
+            n,
+            line,
+            x,
+            w: 8,
+            opaque: None,
+        };
         let spans = [
             span(3, 10, 5),
             span(3, 11, 5),

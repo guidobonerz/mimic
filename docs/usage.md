@@ -296,8 +296,23 @@ weiterlaufen; der Knopf leuchtet, solange die Maschine steht (auch wenn ein
 Debugger sie hält), die Titelleiste zeigt die Stelle. Für einen
 angeschlossenen Debugger ist das dasselbe wie `pause`/`resume`. Shift+Alt+←
 oder ein Klick auf den schmalen Griff am Rand klappt das Panel auf und zu
-(das Medien-Panel rechts mit Shift+Alt+→), `--no-panel` startet es
-zugeklappt. Dieselben Tasten und Schalter
+(das Medien-Panel rechts mit Shift+Alt+→; dort steht hinter Mount/Eject bei
+Laufwerken, deren Diskette die Maschine starten kann – Laufwerk 8 von C64,
+C128, VIC-20 und C16/Plus/4, Beta-Disk-Laufwerk A am Spectrum, Laufwerk A des
+IMSAI –, die Checkbox **Autostart**: gesetzt, wird eine eingelegte Diskette ohne
+Reset aus dem laufenden System geladen und gestartet wie mit `--autostart`;
+die Befehle werden getippt, die Maschine sollte am BASIC-Prompt stehen),
+`--no-panel` startet es
+zugeklappt. Unter den Eingabeschaltern stehen die **Overlays** zum Debuggen
+als OFF/ON-Schalter: BEAM (Strahlposition), RASTER LINES (jede 8. Rasterzeile
+gestrichelt, jede 32. mit Nummer) und die der Maschine, etwa VIC-II SPRITES
+(Rahmen mit Nummer um jedes Sprite), VIC-II SPRITE BOUNDS (eng um die
+wirklich gesetzten Pixel) und VIC-II BAD LINES; enge SPRITE BOUNDS auch bei
+NES, SNES und TMS9918/V9938 (ColecoVision, TI-99/4A, MSX), TIA OBJECTS beim
+2600 (Player, Missiles, Ball); die Sprite-Rahmen des Amiga liegen schon eng um
+die gezeigten Pixel. Dieselben, die der
+Debugger mit `overlay_set` und die Vorschau zeigen. Sie liegen über dem Bild,
+nicht in Bildschirmfotos. Dieselben Tasten und Schalter
 hat der Browser-Viewer (ohne PAUSE); der Debugger bedient sie mit
 `controls`/`set_control` (`polydbg panel`).
 

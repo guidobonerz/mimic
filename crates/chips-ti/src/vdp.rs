@@ -476,14 +476,13 @@ impl Tms9918 {
             let color_byte = self.vram_at(a + 3);
             let color = color_byte & 15;
             let x0 = sx - if color_byte & 0x80 != 0 { 32 } else { 0 };
-            if self.ov.sprites {
-                self.ov
-                    .record_sprite(n, y, LEFT as i32 + x0, (size * mag) as u32);
-            }
             if size == 16 {
                 name &= 0xfc;
             }
             let row = (dy / mag) as usize;
+            if self.ov.sprites {
+                self.record_sprite(n, y, x0, name, row, color, size, mag, patterns);
+            }
             for px in 0..size * mag {
                 let x = x0 + px;
                 if !(0..256).contains(&x) {

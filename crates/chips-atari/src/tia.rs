@@ -405,6 +405,121 @@ fn collisions(p0: bool, p1: bool, m0: bool, m1: bool, bl: bool, pf: bool) -> u16
         .fold(0, |acc, (i, &on)| acc | (u16::from(on) << i))
 }
 
+/// One of the TIA's objects shown on a run of lines: the frame columns
+/// `x0..=x1` and lines `first..=last` it put pixels on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObjectBox {
+    /// P0, P1, M0, M1, BL as 0-4.
+    pub object: u8,
+    pub x0: u16,
+    pub x1: u16,
+    pub first: u16,
+    pub last: u16,
+}
+
+/// Lines an object may leave out and still count as the same run: two-line
+/// kernels draw a player on every other line only.
+const OBJECT_GAP: u16 = 2;
+
+/// Debug record of where each object drew (the `tia_objects` overlay of
+/// the Atari 2600): not machine state, equal to any other record, not in
+/// savestates.
+#[derive(Clone, Debug, Default)]
+pub struct ObjectRecord {
+    /// The current line and each object's columns on it.
+    line: u16,
+    span: [Option<(u16, u16)>; 5],
+    open: [Option<ObjectBox>; 5],
+    cur: Vec<ObjectBox>,
+    last: Vec<ObjectBox>,
+}
+
+impl PartialEq for ObjectRecord {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for ObjectRecord {}
+
+impl ObjectRecord {
+    /// The objects in `drawn` (bit n = object n) put a pixel at column
+    /// `x` of `line`.
+    #[cold]
+    #[inline(never)]
+    fn pixel(&mut self, line: u16, x: u16, drawn: u8) {
+        if line != self.line {
+            self.end_line();
+            self.line = line;
+        }
+        for (i, span) in self.span.iter_mut().enumerate() {
+            if drawn & (1 << i) != 0 {
+                *span = Some(match *span {
+                    Some((x0, x1)) => (x0.min(x), x1.max(x)),
+                    None => (x, x),
+                });
+            }
+        }
+    }
+
+    /// The current line's spans into the runs: one that overlaps an open
+    /// run within [`OBJECT_GAP`] lines continues it, any other starts one.
+    fn end_line(&mut self) {
+        let line = self.line;
+        for i in 0..5 {
+            let Some((x0, x1)) = self.span[i].take() else {
+                continue;
+            };
+            match &mut self.open[i] {
+                Some(b)
+                    if line > b.last && line - b.last <= OBJECT_GAP && x0 <= b.x1 && x1 >= b.x0 =>
+                {
+                    b.x0 = b.x0.min(x0);
+                    b.x1 = b.x1.max(x1);
+                    b.last = line;
+                }
+                open => {
+                    if let Some(b) = open.take() {
+                        self.cur.push(b);
+                    }
+                    *open = Some(ObjectBox {
+                        object: i as u8,
+                        x0,
+                        x1,
+                        first: line,
+                        last: line,
+                    });
+                }
+            }
+        }
+        // Runs that ended more than the gap ago are done.
+        for open in &mut self.open {
+            if open.is_some_and(|b| line.saturating_sub(b.last) > OBJECT_GAP) {
+                self.cur.extend(open.take());
+            }
+        }
+    }
+
+    fn end_field(&mut self) {
+        self.end_line();
+        self.cur
+            .extend(self.open.iter_mut().filter_map(Option::take));
+        self.last = std::mem::take(&mut self.cur);
+        self.line = 0;
+    }
+
+    /// The last complete field's boxes, or (`mid_field`) the field's so
+    /// far, open runs included.
+    pub fn boxes(&self, mid_field: bool) -> Vec<ObjectBox> {
+        if !mid_field {
+            return self.last.clone();
+        }
+        let mut b = self.cur.clone();
+        b.extend(self.open.iter().flatten());
+        b
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tia {
     standard: VideoStandard,
@@ -447,6 +562,9 @@ pub struct Tia {
     /// When VBLANK D7 last released the paddle capacitors.
     charge_from: u64,
     pixels: Vec<u8>,
+    /// Where the objects drew, while the debug overlay wants it (`None`:
+    /// off, nothing recorded).
+    objects: Option<Box<ObjectRecord>>,
 }
 
 impl Tia {
@@ -476,6 +594,7 @@ impl Tia {
             pots: [None; 4],
             charge_from: 0,
             pixels: vec![0; (WIDTH * height(standard)) as usize],
+            objects: None,
         }
     }
 
@@ -722,7 +841,10 @@ impl Tia {
         }
     }
 
-    /// What each object puts out at the current clock.
+    /// What each object puts out at the current clock. Always inlined: a
+    /// second caller ([`Tia::record_last_clock`]) otherwise made it a call
+    /// in [`Tia::tick`] as well.
+    #[inline(always)]
     fn outputs(&self) -> [bool; 5] {
         let player = |i: usize| {
             let m = &self.movers[i];
@@ -854,15 +976,72 @@ impl Tia {
         self.line = 0;
         self.frame += 1;
         self.field_ended = true;
+        if let Some(r) = &mut self.objects {
+            r.end_field();
+        }
+    }
+
+    /// Into the object record: what the objects drew at the colour clock
+    /// [`Tia::tick`] just ran. Called after each tick while the record is
+    /// on, so `tick` itself stays as it is (a call in it slowed the 2600
+    /// by 9 % even while off, 2026-11-19). Nothing has changed since that
+    /// pixel: the movers are clocked at the start of a tick, so the outputs
+    /// are still those the pixel had.
+    #[cold]
+    #[inline(never)]
+    pub fn record_last_clock(&mut self) {
+        if self.objects.is_none() {
+            return;
+        }
+        let (cc, line) = match self.cc {
+            0 => (CLOCKS_PER_LINE - 1, self.line.wrapping_sub(1)),
+            cc => (cc - 1, self.line),
+        };
+        // Pixels only, outside VBLANK, not in HMOVE's blanked clocks (a
+        // line wrap clears that latch, but clock 227 is far past them).
+        if cc < HBLANK
+            || u32::from(line) >= height(self.standard)
+            || self.reg(VBLANK) & 2 != 0
+            || (self.hmove_blank && cc < HBLANK_HMOVE)
+        {
+            return;
+        }
+        let drawn = self
+            .outputs()
+            .iter()
+            .enumerate()
+            .fold(0u8, |acc, (i, &on)| acc | (u8::from(on) << i));
+        if drawn == 0 {
+            return;
+        }
+        if let Some(r) = &mut self.objects {
+            r.pixel(line, u16::from(cc - HBLANK), drawn);
+        }
+    }
+
+    /// Record where the objects draw (on) or stop and free the record.
+    pub fn record_objects(&mut self, on: bool) {
+        match (on, self.objects.is_some()) {
+            (true, false) => self.objects = Some(Box::default()),
+            (false, true) => self.objects = None,
+            _ => {}
+        }
+    }
+
+    /// The object record, while it is on.
+    pub fn objects(&self) -> Option<&ObjectRecord> {
+        self.objects.as_deref()
     }
 
     /// Power-up (the input pins and pots stay as the controllers drive
     /// them).
     pub fn reset(&mut self) {
         let (inputs, pots) = (self.inputs, self.pots);
+        let objects = self.objects.take().map(|_| Box::default());
         *self = Self::new(self.standard);
         self.inputs = inputs;
         self.pots = pots;
+        self.objects = objects;
     }
 }
 

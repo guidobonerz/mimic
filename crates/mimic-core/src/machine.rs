@@ -269,6 +269,24 @@ pub trait Machine: Send {
         None
     }
 
+    /// Can the medium in `slot` be started with [`Machine::autostart`]?
+    /// Frontends offer it there (the desktop's media panel shows an
+    /// Autostart checkbox). Default: no slot can.
+    fn can_autostart(&self, slot: SlotId) -> bool {
+        let _ = slot;
+        false
+    }
+
+    /// Load and run what is in `slot` now from the running system, without
+    /// a reset, as the `autostart` option does after power-on (C64:
+    /// `LOAD"*",8,1` typed, then `RUN`). A command between frames like
+    /// inserting a medium, not an input event. False (nothing done) when
+    /// the slot is empty or cannot autostart. Default: false.
+    fn autostart(&mut self, slot: SlotId) -> bool {
+        let _ = slot;
+        false
+    }
+
     /// The buttons and switches on the case with their current state, for
     /// control panels; operated with [`crate::input::InputEvent::Control`]
     /// on [`crate::input::InputTarget::Panel`]. Default: none.

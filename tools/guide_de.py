@@ -224,6 +224,16 @@ bullets(
     "Xbox-Pad); **SAVE MAPPING** merkt sich JOY KEYS, JOY PORT und PAD FIRE für die "
     "Maschine, so dass der nächste Start sie nimmt (`--input DATEI.toml` lädt eine "
     "andere).",
+    "**Overlays** zum Debuggen erscheinen als OFF/ON-Schalter: **BEAM** (die Position "
+    "des Strahls), **RASTER LINES** (jede 8. Rasterzeile gestrichelt, jede 32. mit ihrer "
+    "Nummer) und die Overlays der Maschine, etwa **VIC-II SPRITES** (ein Rahmen um "
+    "jedes Sprite mit seiner Nummer), **VIC-II SPRITE BOUNDS** (eng um die wirklich "
+    "gesetzten Pixel), **VIC-II BAD LINES**, die Sprites von Amiga, NES, "
+    "SNES, TMS9918/V9938 und die Player der Ataris. Die engen **SPRITE BOUNDS** gibt "
+    "es auch für NES, SNES und TMS9918/V9938 (ColecoVision, TI-99/4A, MSX), dazu "
+    "**TIA OBJECTS** beim 2600 (Player, Missiles und Ball, eng um ihre Pixel); die "
+    "Sprite-Rahmen des Amiga liegen ohnehin eng um die gezeigten Pixel. Sie liegen "
+    "über dem Bild der Maschine, nicht in Bildschirmfotos.",
     "**Cheats** (aus `--cheat`, der Cheat-Datenbank oder dem Debugger) erscheinen "
     "als OFF/ON-Schalter.",
 )
@@ -1430,7 +1440,16 @@ die Abbilddatei zurückschreibt. Eine Datasette oder Kassette hat eine
 zweite Zeile mit ihren Tasten **Play**, **Rec**, **Stop** und **Rew** (dafür
 gibt es keine Tastenkürzel, F9–F11 gehen an die Maschine). Beim C64 nennt die Laufwerkszeile die
 Betriebsart: `drive 8 (1541)` für das echte Laufwerk mit DOS-ROM, `drive 8
-(virtual)` ohne.""")
+(virtual)` ohne.
+
+Hinter Mount/Eject steht bei Laufwerken, deren Diskette die Maschine selbst
+starten kann, die Checkbox **Autostart**: Ist sie gesetzt, wird eine
+eingelegte Diskette ohne Reset aus dem laufenden System geladen und
+gestartet, wie mit `--autostart` beim Einschalten; die Befehle werden
+getippt, die Maschine sollte also am BASIC-Prompt stehen. Das gilt für Laufwerk 8 von C64, C128,
+VIC-20 und C16/Plus/4 (`LOAD"*",8,1` bzw. `LOAD"*",8`, dann `RUN`), Laufwerk A
+der Beta Disk am Spectrum (TR-DOS, dann `RUN` für "boot") und Laufwerk A des
+IMSAI (Bootstrap der FIF, Start bei 0). Die Checkbox lässt sich auch vor dem Einlegen setzen.""")
 
 # ---- 14 Headless ------------------------------------------------------------------
 

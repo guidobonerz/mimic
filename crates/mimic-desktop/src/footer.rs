@@ -66,6 +66,10 @@ pub struct Slot {
     pub dirty: bool,
     /// The image's file name, filled in by the window.
     pub file: Option<String>,
+    /// `Some` when the machine can autostart this slot
+    /// (`Machine::can_autostart`): whether its checkbox is set, filled in
+    /// by the window.
+    pub autostart: Option<bool>,
 }
 
 /// What the emulation thread publishes for the footer.
@@ -179,6 +183,7 @@ impl Tracker {
                 status,
                 dirty,
                 file: None,
+                autostart: m.can_autostart(info.id).then_some(false),
             });
             if matches!(info.kind, MediaKind::Disk | MediaKind::Tape) {
                 drives.push(Drive {

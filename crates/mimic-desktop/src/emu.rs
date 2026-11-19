@@ -17,10 +17,12 @@ use std::time::{Duration, Instant};
 
 use mimic_core::frame::{FrameRef, SignalInfo};
 use mimic_core::input::{InputEvent, InputTarget, TimedInput};
+use mimic_core::overlay::OverlayWants;
 use mimic_core::{ControlId, ControlInfo, Machine, ScreenId, StopReason};
 use mimic_debug::protocol::Command;
 use mimic_debug::{Endpoint, Service, Session};
 use mimic_input::{HostEvent, JoyKeys, Mapper};
+use mimic_preview::overlay::{OverlaySet, BEAM, GRID};
 use mimic_preview::server::FrameTap;
 use video_crt::field::FieldStage;
 use video_crt::phosphor::VectorPhosphor;
@@ -162,6 +164,16 @@ pub struct Shared {
     /// shown; clicks on them (freeze id, on).
     pub cheats: Mutex<Vec<CheatRow>>,
     pub cheat_clicks: Mutex<Vec<(u32, bool)>>,
+    /// The debug overlays the panel offers (id, name): the beam and the
+    /// raster lines where the machine places its lines in the picture, then
+    /// the machine's own (sprite boxes, bad lines …); published by the
+    /// emulation thread at start.
+    pub overlay_list: Mutex<Vec<(String, String)>>,
+    /// The overlays the panel switched on, drawn over the main screen.
+    pub overlays_on: Mutex<Vec<String>>,
+    /// Media slots whose Autostart checkbox is set: an image mounted there
+    /// is started at once (`Machine::autostart`).
+    pub autostart_slots: Mutex<std::collections::BTreeSet<u8>>,
     /// Taken by the emulation thread at start: the cheat database folder,
     /// cheat files to apply and the images inserted at start (their
     /// database entries apply too).
@@ -295,6 +307,9 @@ impl Shared {
             pad_fire: AtomicU8::new(0),
             save_mapping: AtomicBool::new(false),
             cheats: Mutex::default(),
+            overlay_list: Mutex::default(),
+            overlays_on: Mutex::default(),
+            autostart_slots: Mutex::default(),
             cheat_clicks: Mutex::default(),
             cheats_dir: Mutex::default(),
             host_journal: Mutex::default(),
@@ -551,6 +566,13 @@ fn finish_mount(
             if info.kind == mimic_core::media::MediaKind::Cartridge {
                 cartridge_overlay(shared, Some(path));
                 return battery_ram(shared, m, path);
+            }
+            let wanted = shared
+                .autostart_slots
+                .lock()
+                .is_ok_and(|on| on.contains(&slot));
+            if wanted && m.autostart(info.id) {
+                return format!("{name}: autostart");
             }
             String::new()
         }
@@ -897,6 +919,25 @@ pub fn spawn(
             session.set_frame_hook(Box::new(move |m, running| tap.frame(m, running)));
             session.set_idle_hook(Box::new(move |m| idle_tap.idle(m)));
         }
+        // The panel's overlays join the debugger's and the preview's wishes,
+        // so the machine records what any of them wants.
+        let wants = match &preview {
+            Some(tap) => tap.overlay_wants(),
+            None => {
+                let w = OverlayWants::default();
+                session.set_overlay_wants(w.clone());
+                w
+            }
+        };
+        let offered = panel_overlays(session.machine());
+        if let Ok(mut on) = shared.overlays_on.lock() {
+            // Another machine: only the overlays it has stay on.
+            on.retain(|id| offered.iter().any(|(o, _)| o == id));
+        }
+        if let Ok(mut l) = shared.overlay_list.lock() {
+            *l = offered;
+        }
+        let mut overlays_on: Vec<String> = Vec::new();
         // Cheats: the database, files from --cheat, the start images' entries.
         if let Ok(mut d) = shared.cheats_dir.lock() {
             session.set_cheats_dir(d.take());
@@ -1002,6 +1043,19 @@ pub fn spawn(
                 .lock()
                 .map(|mut c| std::mem::take(&mut *c))
                 .unwrap_or_default();
+            let want = shared
+                .overlays_on
+                .lock()
+                .map(|o| o.clone())
+                .unwrap_or_default();
+            if want != overlays_on {
+                wants.want(&overlays_on, false);
+                wants.want(&want, true);
+                wants.apply(session.machine_mut());
+                overlays_on = want;
+                // A halted machine shows its picture again, with them.
+                shown_at = None;
+            }
             for command in commands {
                 // A second mount replaces one still waiting for its slot.
                 let (msg, pending) =
@@ -1585,6 +1639,64 @@ fn save_snapshot(shared: &Shared, machine: &dyn Machine, screen: ScreenId) -> St
     }
 }
 
+/// The overlays the console panel offers for `m`: the beam and the raster
+/// lines (every 8th, numbered every 32nd) where the machine places its
+/// raster lines in the picture, then the machine's own.
+pub fn panel_overlays(m: &dyn Machine) -> Vec<(String, String)> {
+    let mut list = Vec::new();
+    if (0..1024u16).any(|l| m.frame_row(l).is_some()) {
+        list.push((BEAM.to_string(), "BEAM".to_string()));
+        list.push((GRID.to_string(), "RASTER LINES".to_string()));
+    }
+    list.extend(
+        m.overlays()
+            .into_iter()
+            .map(|o| (o.id.to_string(), o.name.to_uppercase())),
+    );
+    list
+}
+
+/// Draw the overlays `ids` over `frame`, the main screen as the machine
+/// made it (the preview's drawing, so both look alike). A frame of another
+/// size (woven interlace fields, a vector display's phosphor) gets none:
+/// the overlays' coordinates are the machine's frame pixels.
+fn draw_overlays(machine: &dyn Machine, ids: &[String], frame: &mut Frame) {
+    let Some(f) = machine.screen(ScreenId::MAIN) else {
+        return;
+    };
+    if (f.width, f.height) != (frame.width, frame.height) {
+        return;
+    }
+    let set = OverlaySet::collect(machine, ids);
+    if set.is_empty() {
+        return;
+    }
+    let mut img = mimic_preview::RgbImage {
+        width: frame.width,
+        height: frame.height,
+        data: frame
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect(),
+    };
+    set.draw(&mut img);
+    for (d, s) in frame
+        .rgba
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(img.data.as_chunks::<3>().0)
+    {
+        d[..3].copy_from_slice(s);
+    }
+    // The composite signal path would rebuild the picture from the
+    // machine's luma and chroma, without the overlays.
+    frame.luma_chroma = None;
+}
+
 fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {
     let mut frame = match (shared.fields.lock(), shared.vectors.lock()) {
         (Ok(mut fields), Ok(mut vectors)) => to_frame(machine, screen, &mut fields, &mut vectors),
@@ -1596,6 +1708,14 @@ fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {
             if let Some(o) = &o.current {
                 o.apply_rgba(frame.width, frame.height, &mut frame.rgba);
             }
+        }
+        let ids = shared
+            .overlays_on
+            .lock()
+            .map(|o| o.clone())
+            .unwrap_or_default();
+        if !ids.is_empty() {
+            draw_overlays(machine, &ids, &mut frame);
         }
     }
     if let Ok(mut q) = shared.frames.lock() {
@@ -1612,6 +1732,67 @@ fn push_frame(shared: &Shared, machine: &dyn Machine, screen: ScreenId) {
 mod tests {
     use super::*;
     use mimic_core::registry::MachineConfig;
+
+    #[test]
+    fn the_panel_draws_raster_lines_and_sprite_boxes() {
+        let mut config = MachineConfig::default();
+        config.options.insert("roms".into(), "stub".into());
+        let mut m = mimic_machines::registry().create("c64", &config).unwrap();
+        let ids: Vec<String> = panel_overlays(m.as_ref())
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(ids[..2], [BEAM.to_string(), GRID.to_string()]);
+        assert!(ids.iter().any(|i| i == "sprites"), "{ids:?}");
+        // Sprite 0 switched on in the middle of the screen.
+        let mut bus_write = |a: u16, v: u8| {
+            m.debug_target(mimic_core::DeviceId("cpu")).unwrap().poke(
+                mimic_core::MemSpaceId(0),
+                u32::from(a),
+                mimic_core::Size::Byte,
+                u32::from(v),
+            );
+        };
+        bus_write(0xd000, 160);
+        bus_write(0xd001, 140);
+        bus_write(0xd015, 1);
+        let wants = OverlayWants::default();
+        let on = vec![GRID.to_string(), "sprites".to_string()];
+        wants.want(&on, true);
+        wants.apply(m.as_mut());
+        let mut hooks = mimic_core::DebugHooks::default();
+        for _ in 0..3 {
+            m.run_frame(&mut hooks);
+        }
+        let mut fields = FieldStage::default();
+        let mut vectors = VectorStage::default();
+        let plain = to_frame(m.as_ref(), ScreenId::MAIN, &mut fields, &mut vectors);
+        let mut drawn = to_frame(m.as_ref(), ScreenId::MAIN, &mut fields, &mut vectors);
+        draw_overlays(m.as_ref(), &on, &mut drawn);
+        let changed = plain
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(drawn.rgba.as_chunks::<4>().0)
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            changed > 1000,
+            "grid and sprite box drawn ({changed} pixels)"
+        );
+        let set = OverlaySet::collect(m.as_ref(), &on);
+        assert!(
+            set.overlays
+                .iter()
+                .any(|o| o.id == "sprites" && !o.shapes.is_empty()),
+            "a sprite box"
+        );
+        // Nothing switched on: the picture stays as the machine made it.
+        let mut untouched = to_frame(m.as_ref(), ScreenId::MAIN, &mut fields, &mut vectors);
+        draw_overlays(m.as_ref(), &[], &mut untouched);
+        assert!(untouched.rgba == plain.rgba);
+    }
 
     #[test]
     fn warp_needs_a_still_picture() {
@@ -1681,6 +1862,35 @@ mod tests {
         assert!(!shared.audio.lock().unwrap().is_empty(), "audio produced");
         shared.quit.store(true, Ordering::Relaxed);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn a_panel_click_sets_the_atari_2600_tv_type() {
+        let mut config = MachineConfig::default();
+        config.options.insert("roms".into(), "stub".into());
+        let machine = mimic_machines::registry()
+            .create("atari2600", &config)
+            .unwrap();
+        let mapper = Mapper::new(mimic_input::Profile::default_for("atari2600"));
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let shared = Arc::new(Shared::new());
+        shared.panel_on.store(true, Ordering::Relaxed);
+        let handle = spawn(machine, mapper, rx, shared.clone(), None, None);
+        let tv = || {
+            shared
+                .controls
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|c| c.name == "TV TYPE")
+                .map(|c| c.value)
+        };
+        assert!(eventually(|| tv() == Some(0)), "COLOR at start: {:?}", tv());
+        shared.panel_events.lock().unwrap().push((3, 1));
+        let ok = eventually(|| tv() == Some(1));
+        shared.quit.store(true, Ordering::Relaxed);
+        handle.join().unwrap();
+        assert!(ok, "B/W after the click: {:?}", tv());
     }
 
     #[test]

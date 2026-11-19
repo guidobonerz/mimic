@@ -789,7 +789,7 @@ fn a_1351_in_port_1_shows_in_potx_poty() {
 fn overlays_record_bad_lines_and_sprites() {
     let mut m = stub();
     let ids: Vec<_> = m.overlays().iter().map(|o| o.id).collect();
-    assert_eq!(ids, ["badlines", "sprites"]);
+    assert_eq!(ids, ["badlines", "sprites", "sprite_bounds"]);
     assert!(m.overlay("badlines").is_none(), "off by default");
     assert_eq!(m.frame_row(16), Some(0));
     assert_eq!(m.frame_row(15), None);

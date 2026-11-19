@@ -1805,6 +1805,29 @@ impl Machine for Imsai {
         None
     }
 
+    /// Drive A of the FIF: RESET, RUN boots it (through the MPU-B's
+    /// monitor when its ROM is in).
+    fn can_autostart(&self, slot: SlotId) -> bool {
+        slot == SLOT_DISKS[0]
+    }
+
+    /// What RESET, RUN does to boot, without resetting the CPU and the
+    /// rest: the FIF puts its bootstrap into memory, the ROM is mapped in,
+    /// the CPU runs from 0.
+    fn autostart(&mut self, slot: SlotId) -> bool {
+        if slot != SLOT_DISKS[0] || !self.power || self.disks[0].disk.media.is_none() {
+            return false;
+        }
+        self.board.rom_low = true;
+        self.board.rom_high = true;
+        self.board.rom_low_leaving = false;
+        self.fif_restart();
+        self.cpu.pc = 0;
+        self.running = true;
+        self.show_fetch();
+        true
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         vec![
             MediaSlotInfo {

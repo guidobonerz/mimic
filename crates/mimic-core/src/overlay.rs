@@ -182,3 +182,135 @@ impl OverlayWants {
         true
     }
 }
+
+/// One sprite on one raster line, as a video chip found it, for
+/// [`bound_boxes`]: sprite number, line, the frame columns it covers
+/// (`x`, `w` wide) and the first and last frame column (inclusive) where
+/// it set a pixel (`None`: nothing set on this line).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpriteLine {
+    pub n: u8,
+    pub line: u16,
+    pub x: i32,
+    pub w: u32,
+    pub opaque: Option<(i32, i32)>,
+}
+
+/// Tight boxes round the pixels sprites really set (the `sprite_bounds`
+/// overlays): the lines of a sprite at one column and width on
+/// consecutive lines are one use of it (as its full-size box), and its box
+/// spans the columns and lines of that use's set pixels. A use without a
+/// set pixel gets none. `row` maps a raster line to its frame row (lines
+/// without one are left out). Label: the sprite number; colour:
+/// [`colors::SERIES`] by number.
+pub fn bound_boxes(lines: &[SpriteLine], row: impl Fn(u16) -> Option<u32>) -> Vec<Shape> {
+    let mut sorted = lines.to_vec();
+    sorted.sort_by_key(|s| (s.n, s.x, s.w, s.line));
+    let mut shapes = Vec::new();
+    let mut i = 0;
+    while i < sorted.len() {
+        let s = sorted[i];
+        let mut j = i + 1;
+        while j < sorted.len()
+            && (sorted[j].n, sorted[j].x, sorted[j].w) == (s.n, s.x, s.w)
+            && sorted[j].line == sorted[j - 1].line + 1
+        {
+            j += 1;
+        }
+        let set: Vec<(u32, (i32, i32))> = sorted[i..j]
+            .iter()
+            .filter_map(|l| Some((row(l.line)?, l.opaque?)))
+            .collect();
+        if let (Some(top), Some(bottom)) = (
+            set.iter().map(|&(r, _)| r).min(),
+            set.iter().map(|&(r, _)| r).max(),
+        ) {
+            let x0 = set.iter().map(|&(_, (a, _))| a).min().unwrap_or(0);
+            let x1 = set.iter().map(|&(_, (_, b))| b).max().unwrap_or(0);
+            shapes.push(Shape::Rect {
+                x: x0,
+                y: top as i32,
+                w: (x1 - x0 + 1).max(1) as u32,
+                h: bottom - top + 1,
+                color: colors::SERIES[usize::from(s.n) % 8],
+                label: Some(s.n.to_string()),
+            });
+        }
+        i = j;
+    }
+    shapes
+}
+
+/// The first and last set column of a sprite row: `bits` with the
+/// leftmost of `cols` pattern columns in bit `cols - 1`, each column `scale`
+/// frame pixels wide from frame column `x`; only columns in `visible`
+/// (frame columns, end exclusive) count. `None` when none is set there.
+pub fn row_bounds(
+    bits: u64,
+    cols: u32,
+    scale: u32,
+    x: i32,
+    visible: std::ops::Range<i32>,
+) -> Option<(i32, i32)> {
+    let mut first = None;
+    let mut last = None;
+    for c in 0..cols {
+        if bits >> (cols - 1 - c) & 1 == 0 {
+            continue;
+        }
+        let a = x + (c * scale) as i32;
+        let b = a + scale as i32 - 1;
+        let (a, b) = (a.max(visible.start), b.min(visible.end - 1));
+        if a > b {
+            continue;
+        }
+        first.get_or_insert(a);
+        last = Some(b);
+    }
+    Some((first?, last?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bound_boxes_hug_the_set_pixels_of_each_use() {
+        let line = |line, opaque| SpriteLine {
+            n: 2,
+            line,
+            x: 100,
+            w: 16,
+            opaque,
+        };
+        let lines = [
+            line(10, None),
+            line(11, Some((104, 107))),
+            line(12, Some((102, 105))),
+            line(13, None),
+            // Another use further down, nothing set: no box.
+            line(30, None),
+        ];
+        let b = bound_boxes(&lines, |l| Some(u32::from(l)));
+        assert_eq!(
+            b,
+            [Shape::Rect {
+                x: 102,
+                y: 11,
+                w: 6,
+                h: 2,
+                color: colors::SERIES[2],
+                label: Some("2".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn row_bounds_scale_and_clip() {
+        // 8 columns, bits 0b0011_1000: columns 2-4.
+        assert_eq!(row_bounds(0b0011_1000, 8, 1, 10, 0..256), Some((12, 14)));
+        assert_eq!(row_bounds(0b0011_1000, 8, 2, 10, 0..256), Some((14, 19)));
+        assert_eq!(row_bounds(0b1000_0000, 8, 1, -1, 0..256), None, "clipped");
+        assert_eq!(row_bounds(0, 16, 1, 0, 0..256), None);
+    }
+}

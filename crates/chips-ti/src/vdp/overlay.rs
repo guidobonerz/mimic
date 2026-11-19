@@ -10,7 +10,9 @@
 //! ([`Tms9918::overlay_end_frame`]) so a finished field can be shown while
 //! the next is drawn.
 
-use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{
+    bound_boxes, colors, row_bounds, LegendEntry, Overlay, OverlayInfo, Shape, SpriteLine,
+};
 
 use super::Tms9918;
 
@@ -22,6 +24,8 @@ struct Span {
     line: u16,
     x: i32,
     w: u32,
+    /// First and last frame column with a set pixel (`sprite_bounds`).
+    opaque: Option<(i32, i32)>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -34,15 +38,32 @@ struct Field {
 /// The overlay switches and the records of the current and the last field.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VdpOverlays {
+    /// Sprite spans are recorded (`sprites` or `sprite_bounds` is on).
     pub(super) sprites: bool,
     pub(super) limit: bool,
+    /// Which of the two sprite overlays are shown.
+    boxes: bool,
+    bounds: bool,
     cur: Field,
     last: Field,
 }
 
 impl VdpOverlays {
-    pub(super) fn record_sprite(&mut self, n: u8, line: u16, x: i32, w: u32) {
-        self.cur.spans.push(Span { n, line, x, w });
+    pub(super) fn record_sprite(
+        &mut self,
+        n: u8,
+        line: u16,
+        x: i32,
+        w: u32,
+        opaque: Option<(i32, i32)>,
+    ) {
+        self.cur.spans.push(Span {
+            n,
+            line,
+            x,
+            w,
+            opaque,
+        });
     }
 
     pub(super) fn record_limit(&mut self, line: u16) {
@@ -60,6 +81,10 @@ pub fn infos(chip: &str) -> Vec<OverlayInfo> {
             name: format!("{chip} sprite boxes"),
         },
         OverlayInfo {
+            id: "sprite_bounds",
+            name: format!("{chip} sprite bounds"),
+        },
+        OverlayInfo {
             id: "limit",
             name: format!("{chip} fifth-sprite lines"),
         },
@@ -70,7 +95,9 @@ impl Tms9918 {
     /// Switch recording on for the overlays in `ids`, off (and cleared)
     /// for the others.
     pub fn set_overlays(&mut self, ids: &[&str]) {
-        let sprites = ids.contains(&"sprites");
+        self.ov.boxes = ids.contains(&"sprites");
+        self.ov.bounds = ids.contains(&"sprite_bounds");
+        let sprites = self.ov.boxes || self.ov.bounds;
         let limit = ids.contains(&"limit");
         if !sprites {
             self.ov.cur.spans.clear();
@@ -82,6 +109,41 @@ impl Tms9918 {
         }
         self.ov.sprites = sprites;
         self.ov.limit = limit;
+    }
+
+    /// Sprite `n` on line `y` at X `x0` (−32…255), pattern `name` (16×16:
+    /// already masked to its first of four), pattern row `row`: its span
+    /// and, unless its colour is transparent, the columns its row sets.
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn record_sprite(
+        &mut self,
+        n: u8,
+        y: u16,
+        x0: i32,
+        name: usize,
+        row: usize,
+        color: u8,
+        size: i32,
+        mag: i32,
+        patterns: usize,
+    ) {
+        let x = super::LEFT as i32 + x0;
+        let opaque = (color != 0)
+            .then(|| {
+                let byte =
+                    |half: usize| u64::from(self.vram_at(patterns + name * 8 + half * 16 + row));
+                let bits = if size == 16 {
+                    byte(0) << 8 | byte(1)
+                } else {
+                    byte(0)
+                };
+                let left = super::LEFT as i32;
+                row_bounds(bits, size as u32, mag as u32, x, left..left + 256)
+            })
+            .flatten();
+        self.ov.record_sprite(n, y, x, (size * mag) as u32, opaque);
     }
 
     /// Whether any overlay records.
@@ -105,7 +167,21 @@ impl Tms9918 {
             .into_iter()
             .find(|i| i.id == id)?;
         let (shapes, legend) = match id {
-            "sprites" if self.ov.sprites => (self.sprite_rects(&f.spans), vec![]),
+            "sprites" if self.ov.boxes => (self.sprite_rects(&f.spans), vec![]),
+            "sprite_bounds" if self.ov.bounds => {
+                let lines: Vec<SpriteLine> = f
+                    .spans
+                    .iter()
+                    .map(|s| SpriteLine {
+                        n: s.n,
+                        line: s.line,
+                        x: s.x,
+                        w: s.w,
+                        opaque: s.opaque,
+                    })
+                    .collect();
+                (bound_boxes(&lines, |l| self.line_row(l)), vec![])
+            }
             "limit" if self.ov.limit => {
                 let mut shapes = Vec::new();
                 for (first, n) in runs(&f.limit) {
@@ -240,6 +316,45 @@ mod tests {
         vdp.set_overlays(&[]);
         assert!(vdp.overlay("limit", true).is_none());
         assert_eq!(vdp.ov, VdpOverlays::default());
+    }
+
+    #[test]
+    fn sprite_bounds_hug_the_pattern_bits() {
+        let mut vdp = scene();
+        // Pattern 0: rows 3-7 set columns 3 and 4.
+        for r in 3..8 {
+            vdp.vram[0x3800 + r] = 0x18;
+        }
+        vdp.set_overlays(&["sprite_bounds"]);
+        run_field(&mut vdp);
+        assert!(vdp.overlay("sprites", true).is_none(), "only the bounds on");
+        let o = vdp.overlay("sprite_bounds", true).unwrap();
+        assert_eq!(o.shapes.len(), 4);
+        let top = 10 + u32::from(VdpModel::Ntsc.top());
+        assert_eq!(
+            o.shapes[1],
+            Shape::Rect {
+                x: 13 + 30 + 3,
+                y: top as i32 + 3,
+                w: 2,
+                h: 5,
+                color: colors::SERIES[1],
+                label: Some("1".into()),
+            }
+        );
+        // Magnified: every column and row twice.
+        vdp.regs[1] |= 0x01;
+        run_field(&mut vdp);
+        run_field(&mut vdp);
+        let o = vdp.overlay("sprite_bounds", true).unwrap();
+        assert!(
+            matches!(
+                o.shapes[1],
+                Shape::Rect { x, w: 4, h: 10, .. } if x == 13 + 30 + 6
+            ),
+            "{:?}",
+            o.shapes[1]
+        );
     }
 
     #[test]

@@ -83,6 +83,21 @@ pub fn paste_control() -> ControlInfo {
     ControlInfo::button(PASTE, "PASTE", false)
 }
 
+/// Debug overlays (sprite boxes, raster lines …) are shown as OFF/ON
+/// switches with ids from here on (the index into the list the emulation
+/// thread published, `Shared::overlay_list`); clicks stay in the window.
+pub const OVERLAY_BASE: u16 = 0xd000;
+
+/// The panel entry for overlay `index` of the published list.
+pub fn overlay_item(index: usize, name: &str, on: bool) -> Item {
+    Item {
+        id: OVERLAY_BASE + index as u16,
+        name: name.chars().take(COLUMNS).collect(),
+        positions: vec!["OFF".into(), "ON".into()],
+        value: u8::from(on),
+    }
+}
+
 /// Cheats are shown as switches with ids from here on (the index into the
 /// list the emulation thread published).
 pub const CHEAT_BASE: u16 = 0xe000;

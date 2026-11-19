@@ -7,7 +7,9 @@
 //! not machine state; the machine swaps it at the end of each field
 //! ([`V9938::overlay_end_frame`]).
 
-use mimic_core::overlay::{colors, LegendEntry, Overlay, OverlayInfo, Shape};
+use mimic_core::overlay::{
+    bound_boxes, colors, row_bounds, LegendEntry, Overlay, OverlayInfo, Shape, SpriteLine,
+};
 
 use super::V9938;
 
@@ -18,6 +20,19 @@ struct Span {
     line: u16,
     x: i32,
     w: u32,
+    /// First and last frame column with a set pixel (`sprite_bounds`).
+    opaque: Option<(i32, i32)>,
+}
+
+/// A sprite row as the renderer read it, for [`Records::sprite`]: the
+/// pattern bits (column 0 in bit 15), the columns (8 or 16), the frame
+/// pixels a column covers (2 × magnification) and whether the row shows
+/// (colour not transparent, or TP set).
+pub(super) struct Row {
+    pub bits: u16,
+    pub size: usize,
+    pub scale: u32,
+    pub shown: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -29,16 +44,55 @@ struct Field {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Records {
     sprites: bool,
+    bounds: bool,
     limit: bool,
     cur: Field,
     last: Field,
 }
 
 impl Records {
-    pub(super) fn sprite(&mut self, n: u8, line: u16, x: i32, w: u32) {
-        if self.sprites {
-            self.cur.spans.push(Span { n, line, x, w });
+    /// Sprite `n` on picture row `line` from frame column `x`, `w` wide;
+    /// `visible`: the active area's frame columns.
+    #[inline]
+    pub(super) fn sprite(
+        &mut self,
+        n: u8,
+        line: u16,
+        x: i32,
+        w: u32,
+        row: Row,
+        visible: std::ops::Range<i32>,
+    ) {
+        if self.sprites || self.bounds {
+            self.record(n, line, x, w, row, visible);
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn record(
+        &mut self,
+        n: u8,
+        line: u16,
+        x: i32,
+        w: u32,
+        row: Row,
+        visible: std::ops::Range<i32>,
+    ) {
+        let cols = row.size as u32;
+        let bits = u64::from(row.bits >> (16 - cols));
+        let opaque = if row.shown {
+            row_bounds(bits, cols, row.scale, x, visible)
+        } else {
+            None
+        };
+        self.cur.spans.push(Span {
+            n,
+            line,
+            x,
+            w,
+            opaque,
+        });
     }
 
     pub(super) fn limit(&mut self, line: u16) {
@@ -59,6 +113,10 @@ pub fn infos() -> Vec<OverlayInfo> {
             id: "limit",
             name: "V9938 lines with too many sprites".into(),
         },
+        OverlayInfo {
+            id: "sprite_bounds",
+            name: "V9938 sprite bounds".into(),
+        },
     ]
 }
 
@@ -68,13 +126,14 @@ impl V9938 {
     pub fn set_overlays(&mut self, ids: &[&str]) {
         self.ov = Records {
             sprites: ids.contains(&"sprites"),
+            bounds: ids.contains(&"sprite_bounds"),
             limit: ids.contains(&"limit"),
             ..Records::default()
         };
     }
 
     pub fn overlays_on(&self) -> bool {
-        self.ov.sprites || self.ov.limit
+        self.ov.sprites || self.ov.bounds || self.ov.limit
     }
 
     /// End of a field: the record becomes the last complete one.
@@ -92,6 +151,20 @@ impl V9938 {
         let info = infos().into_iter().find(|i| i.id == id)?;
         let (shapes, legend) = match id {
             "sprites" if self.ov.sprites => (rects(&f.spans), vec![]),
+            "sprite_bounds" if self.ov.bounds => {
+                let lines: Vec<SpriteLine> = f
+                    .spans
+                    .iter()
+                    .map(|s| SpriteLine {
+                        n: s.n,
+                        line: s.line,
+                        x: s.x,
+                        w: s.w,
+                        opaque: s.opaque,
+                    })
+                    .collect();
+                (bound_boxes(&lines, |l| Some(u32::from(l))), vec![])
+            }
             "limit" if self.ov.limit => {
                 let mut shapes: Vec<Shape> = Vec::new();
                 for &l in &f.limit {

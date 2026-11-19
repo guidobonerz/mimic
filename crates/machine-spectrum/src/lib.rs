@@ -1306,6 +1306,25 @@ impl Machine for Spectrum {
         self.ports.get_mut(usize::from(port.0))?.take()
     }
 
+    /// Beta Disk drive A: into TR-DOS, then RUN starts the disk's "boot".
+    fn can_autostart(&self, slot: SlotId) -> bool {
+        slot == SlotId(SLOT_BETA) && self.beta.is_some()
+    }
+
+    /// The steps of `autostart=on` with a disk in drive A, from the
+    /// running BASIC (no reset): the 48K jumps into TR-DOS, the 128K types
+    /// RANDOMIZE USR 15616 into its BASIC (the menu step is left out); then
+    /// RUN starts "boot".
+    fn autostart(&mut self, slot: SlotId) -> bool {
+        if !self.can_autostart(slot) || !self.beta.as_ref().is_some_and(|b| b.inserted(0)) {
+            return false;
+        }
+        self.autostart = true;
+        let stage = u8::from(self.model.is_128());
+        self.beta_run = (stage, self.ula.frames);
+        true
+    }
+
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         let drives = self.if1.iter().flat_map(|i| {
             i.drives.iter().enumerate().map(|(n, d)| MediaSlotInfo {

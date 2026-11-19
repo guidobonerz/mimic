@@ -1562,6 +1562,20 @@ impl Machine for C64 {
 
     /// Pasted text goes straight into the KERNAL's keyboard buffer
     /// ([`chips_cbm::keybuf`]).
+    fn can_autostart(&self, slot: SlotId) -> bool {
+        slot == SLOT_DRIVE8 && self.drive.is_some()
+    }
+
+    /// `LOAD"*",8,1` typed into the running BASIC (no reset), then `RUN`
+    /// once it is loaded, as with `autostart=on` at power-on.
+    fn autostart(&mut self, slot: SlotId) -> bool {
+        if !self.can_autostart(slot) || !self.drive.as_ref().is_some_and(|d| d.has_disk()) {
+            return false;
+        }
+        self.autostart = Autostart::Armed;
+        true
+    }
+
     fn paste_chars(&mut self, text: &str) -> Option<usize> {
         let has_key = |c| keyboard::key_for_char(c).is_some();
         chips_cbm::keybuf::C64.paste(&mut self.mem.ram[..], text, has_key)
