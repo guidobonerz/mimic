@@ -1997,6 +1997,7 @@ fn start(mut args: Args, settings: &mimic_profile::Settings) -> Result<Started, 
                     | PortKind::SnesControl
                     | PortKind::VectrexControl
                     | PortKind::SegaJoy
+                    | PortKind::MegaDrivePad
                     | PortKind::AppleGame
             )
         })

@@ -2212,6 +2212,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-megadrive"
+version = "0.1.0"
+dependencies = [
+ "chips-sega",
+ "chips-ti",
+ "chips-yamaha",
+ "cpu-m68k",
+ "cpu-z80",
+ "devices-cartridge",
+ "devices-input",
+ "mimic-core",
+]
+
+[[package]]
 name = "machine-msx"
 version = "0.1.0"
 dependencies = [
@@ -2542,6 +2556,7 @@ dependencies = [
  "machine-logophor16",
  "machine-mac",
  "machine-mega65",
+ "machine-megadrive",
  "machine-msx",
  "machine-nes",
  "machine-pet",
@@ -2604,6 +2619,7 @@ dependencies = [
  "machine-logophor16",
  "machine-mac",
  "machine-mega65",
+ "machine-megadrive",
  "machine-msx",
  "machine-pet",
  "machine-snes",

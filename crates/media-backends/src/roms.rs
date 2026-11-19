@@ -545,6 +545,12 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             0x400,
         ),
     ];
+    // Mega Drive: the TMSS boot ROM of the later models (optional).
+    const MEGADRIVE: &[RomSpec] = &[optional(
+        "md-tmss",
+        &["md-tmss", "tmss", "bios-md", "md-bios"],
+        0x800,
+    )];
     const COLECO: &[RomSpec] = &[rom(
         "coleco",
         &[
@@ -786,6 +792,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "vectrex" => VECTREX,
         "coleco" => COLECO,
         "sega8" => SEGA8,
+        "megadrive" => MEGADRIVE,
         "msx" => MSX,
         "ti99" => TI99,
         "bbc" => BBC,
@@ -824,6 +831,7 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
         "sega8" => &["sega8", "sms", "gg", "sega"],
+        "megadrive" => &["megadrive", "genesis", "md"],
         "msx" => &["msx", "msx1", "msx2"],
         "ti99" => &["ti99", "ti-99", "ti994a"],
         "bbc" => &[

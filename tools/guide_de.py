@@ -38,6 +38,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Video (`--videoformat
     ["`zx81`", "Sinclair ZX81 / Timex Sinclair 1000", "`zx81` (Standard, PAL), `ts1000` (NTSC)", "–"],
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (Standard), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (Standard), `pal`"],
+    ["`megadrive`", "Sega Mega Drive / Genesis", "`megadrive`", "`ntsc`, `pal` (Standard nach der Region)"],
     ["`sega8`", "Sega SG-1000 / SC-3000 / Master System / Game Gear", "`sg1000` (Standard), `sg1000ii`, `sc3000`, `sc3000h`, `mark3`, `sms`, `sms2`, `gg`", "`ntsc` (Standard), `pal`"],
     ["`msx`", "MSX", "`msx1` (Standard), `msx2`", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
     ["`kc85`", "Robotron KC85/2, /3, /4, /5", "`4` (Standard), `2`, `3`, `5`", "–"],
@@ -614,6 +615,19 @@ Tastatur (über einen 8255, nach Position; F5 ist die RESET-Taste), 2 KB
 Arbeits-RAM, Modul-RAM für die BASIC-Module (`--option cartram`) und eine
 Kassette ohne Motorsteuerung (`--tape`, WAV): das Band läuft, solange das
 Programm es liest. `--option cart=demo` legt ein kleines Testmodul ein.""")
+
+h2("Sega Mega Drive und Genesis")
+p("""`--machine megadrive` ist das Mega Drive (Genesis): 68000 und Z80, der
+VDP 315-5313, YM2612 und SN76489. Module (`.md`, `.bin`, `.gen`, `.smd`,
+bis 10 MB; größere als 4 MB mit dem SSF2-Mapper) laufen ohne BIOS.
+`--option region=japan|usa|europe` stellt die Version (Standard USA, mit
+`--videoformat pal` Europa), `--option port1=pad6` steckt ein Pad mit
+sechs Tasten an. Das Backup-RAM eines Moduls (laut Modulkopf) oder mit
+`--option save=eeprom` das EEPROM landet in der `.srm`-Datei neben
+dem Modul. Pad: Richtungen, Süd = B, Ost = C, West = A, Start, Nord =
+Y, Schultertasten X und Z, Select = MODE. `--option tmss=on` ahmt die
+späteren Modelle mit TMSS nach. Die Grafikansichten des Debuggers:
+`tiles`, `plane_a`, `plane_b`, `window`, `sprites`, `palette`.""")
 
 h2("Sega Master System und Game Gear")
 p("""Mark III, Master System und Master System 2 (`--model mark3`, `sms`,
@@ -1298,6 +1312,7 @@ table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Videoformate (`--vide
     ["`zx81`", "Sinclair ZX81 / TS1000", "`zx81` (Standard), `ts1000`", "–"],
     ["`spectrum`", "Sinclair ZX Spectrum", "`48k` (Standard), `128k`, `plus2`", "–"],
     ["`coleco`", "ColecoVision", "–", "`ntsc` (Standard), `pal`"],
+    ["`megadrive`", "Sega Mega Drive / Genesis", "`megadrive`", "`ntsc`, `pal` (Standard nach der Region)"],
     ["`sega8`", "Sega SG-1000 / SC-3000 / Master System / Game Gear", "`sg1000` (Standard), `sg1000ii`, `sc3000`, `sc3000h`, `mark3`, `sms`, `sms2`, `gg`", "`ntsc` (Standard), `pal`"],
     ["`msx`", "MSX", "`msx1` (Standard), `msx2`", "ohne Angabe nach dem BIOS; `ntsc`, `pal`"],
     ["`kc85`", "Robotron KC85/2, /3, /4, /5", "`4` (Standard), `2`, `3`, `5`", "–"],

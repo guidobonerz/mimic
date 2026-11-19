@@ -383,4 +383,24 @@ if [ ! -e "$DEST/peterlemon-snes/COMMIT" ]; then
   echo "$PLSNES_COMMIT" > "$DEST/peterlemon-snes/COMMIT"
 fi
 
+# The Mega Drive test ROMs collected in Genesis Plus GX's downloads
+# (md_test.zip: TmEE's shadow/highlight and palette tests, the 68000
+# memory map test, window, V counter and DMA tests, the VDP interrupt and
+# HV counter test VDPTEST with its sources; no licence given); Phase 37.
+# Run only, never committed.
+MDTEST_URL="https://bitbucket.org/eke/genesis-plus-gx/downloads/md_test.zip"
+MDTEST_SHA256=5daef612489627a403657482b7a86727f2f8ea07e214a0c9e9c4c212ace2103f
+if [ ! -s "$DEST/md-tests/memtest_68k.bin" ]; then
+  echo "md_test -> $DEST/md-tests"
+  mkdir -p "$DEST/md-tests"
+  fetch "$MDTEST_URL" "$DEST/md-tests/md_test.zip"
+  [ "$(sha256 "$DEST/md-tests/md_test.zip")" = "$MDTEST_SHA256" ] || {
+    echo "error: md_test archive checksum mismatch" >&2; exit 1; }
+  unzip_py='import io, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1]); z.extractall(sys.argv[2])
+zipfile.ZipFile(io.BytesIO(z.read("VDP_TEST.zip"))).extractall(sys.argv[2])'
+  python3 -c "$unzip_py" "$DEST/md-tests/md_test.zip" "$DEST/md-tests" 2>/dev/null     || python -c "$unzip_py" "$DEST/md-tests/md_test.zip" "$DEST/md-tests"
+  rm "$DEST/md-tests/md_test.zip" "$DEST/md-tests/VDP_TEST.zip"
+fi
+
 echo "done. export EMU_TESTDATA_DIR=$DEST"

@@ -51,6 +51,10 @@ pub enum PortKind {
     /// common, driven by the keyboard row select (Charles MacDonald, "Sega
     /// SC-3000H hardware notes").
     SegaJoy,
+    /// Mega Drive / Genesis control port: 9-pin, the directions, TL (pin
+    /// 6), TR (pin 9) and TH (pin 7) as a select line from the console
+    /// (3- and 6-button pads).
+    MegaDrivePad,
     /// Kempston mouse interface on the ZX Spectrum: the mouse's X and Y
     /// counters and buttons, read through ports $FBDF, $FFDF, $FADF.
     KempstonMouse,

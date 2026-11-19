@@ -52,7 +52,8 @@ crates/
   chips-amstrad/   CRTC 6845, Gate Array, AY-3-8912, 8255 PPI, FDC 765
   chips-acorn/     MEMC, IOC, VIDC, PCF8583, WD1772 (Archimedes), Video ULA, SAA5050 teletext, Intel 8271 FDC and MC146818 clock (BBC Micro, Master)
   chips-ti/        TMS9918A/TMS9929A VDP, SN76489 (ColecoVision, TI-99/4A, MSX), TMS9901, GROM (TMC0430), TMS5220 speech
-  chips-yamaha/    V9938 VDP (MSX2): 128 KB VRAM, palette, G4–G7 bitmaps, sprite mode 2, commands
+  chips-yamaha/    V9938 VDP (MSX2): 128 KB VRAM, palette, G4–G7 bitmaps, sprite mode 2, commands; YM2413 (OPLL) and YM2612 (OPN2) FM
+  chips-sega/      Sega's VDPs: Master System / SMS 2 / Game Gear (mode 4 and the TMS modes), Mega Drive 315-5313 (mode 5)
   chips-zilog/     Z80 CTC and PIO with their interrupt daisy chain (KC85)
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)
@@ -77,6 +78,7 @@ crates/
   machine-archimedes/ Acorn Archimedes A305, A310, A440, A3000 as models
   machine-imsai/   IMSAI 8080: the picture is the front panel (clickable paddles, lamps by bus duty), serial terminal as second screen; card reader
   machine-keypunch/ IBM 029 card punch: the user types card decks (picture: the card), read back by the IMSAI's card reader
+  machine-megadrive/ Sega Mega Drive / Genesis (Phase 37): 68000 + Z80, VDP 315-5313 (`chips-sega::mdvdp`), YM2612 (`chips-yamaha`), SN76489, 3/6-button pads, SRAM/EEPROM, SSF2 mapper, TMSS
   machine-sega8/   Sega SG-1000, SG-1000 II, SC-3000, SC-3000H, Mark III, Master System 1/2 and Game Gear as models (Phase 36): TMS9918A or the SMS VDP, SN76489, YM2413, Sega/Codemasters mappers, 8255 PPI with the SC-3000 keyboard, cassette
   machine-msx/     MSX1 and MSX2 as models: slots, keyboard, joysticks, cassette, SVI-738 disk interface; MSX2 with V9938, memory mapper, sub ROM, RP5C01; C-BIOS or a user-supplied BIOS
   machine-kc85/    Robotron KC85/2, /3, /4, /5 as models: IRM picture, keyboard over its pulse protocol, cassette (KC-TAP, KCC), module slots
@@ -169,7 +171,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35 and 36 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35, 36 and 37 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

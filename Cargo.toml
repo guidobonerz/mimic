@@ -67,6 +67,7 @@ machine-trs80 = { path = "crates/machine-trs80" }
 machine-spectrum = { path = "crates/machine-spectrum" }
 machine-coleco = { path = "crates/machine-coleco" }
 machine-sega8 = { path = "crates/machine-sega8" }
+machine-megadrive = { path = "crates/machine-megadrive" }
 machine-msx = { path = "crates/machine-msx" }
 machine-ti99 = { path = "crates/machine-ti99" }
 machine-bbc = { path = "crates/machine-bbc" }

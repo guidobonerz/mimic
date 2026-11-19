@@ -24,6 +24,7 @@ fn joystick_port(kind: PortKind) -> bool {
             | PortKind::Ti99Joy
             | PortKind::MsxJoy
             | PortKind::SegaJoy
+            | PortKind::MegaDrivePad
     )
 }
 
@@ -44,6 +45,7 @@ pub fn device_names(kind: PortKind) -> Vec<&'static str> {
         PortKind::ColecoControl => vec!["controller", "superaction", "driving", "roller"],
         PortKind::NesControl => vec!["controller", "zapper", "arkanoid"],
         PortKind::SnesControl => vec!["pad", "mouse", "superscope"],
+        PortKind::MegaDrivePad => vec!["pad3", "pad6"],
         PortKind::VectrexControl => vec!["controller", "lightpen"],
         PortKind::AppleGame => vec!["joystick", "paddles"],
         PortKind::MacMouse => vec!["mouse"],
@@ -88,6 +90,15 @@ pub fn create_device(name: &str, kind: PortKind) -> Option<Box<dyn PortDevice>> 
             _ => return None,
         };
         return Some(Box::new(SnesController::new(k)));
+    }
+    if kind == PortKind::MegaDrivePad {
+        return match name {
+            "pad3" | "pad" | "controller" | "joystick" => {
+                Some(Box::new(devices_input::MdPad::three_button()))
+            }
+            "pad6" => Some(Box::new(devices_input::MdPad::six_button())),
+            _ => None,
+        };
     }
     if kind == PortKind::VectrexControl {
         use devices_input::{VectrexController, VectrexKind};
@@ -170,6 +181,7 @@ pub fn registry() -> Registry {
     r.register(machine_spectrum::entry());
     r.register(machine_coleco::entry());
     r.register(machine_sega8::entry());
+    r.register(machine_megadrive::entry());
     r.register(machine_msx::entry());
     r.register(machine_ti99::entry());
     r.register(machine_bbc::entry());

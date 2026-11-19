@@ -154,6 +154,7 @@ impl Tracker {
                             | PortKind::SnesControl
                             | PortKind::VectrexControl
                             | PortKind::SegaJoy
+                            | PortKind::MegaDrivePad
                             | PortKind::AppleGame
                     )
                     && !self.analog.contains_key(&p.id.0)

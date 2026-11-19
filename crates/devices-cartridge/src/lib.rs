@@ -20,6 +20,7 @@ pub mod easyflash;
 pub mod expansion;
 pub mod flash;
 pub mod freezer;
+pub mod megadrive;
 pub mod msx;
 pub mod nes;
 pub mod pagefox;
