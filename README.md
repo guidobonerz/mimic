@@ -8,6 +8,8 @@ The user guide — how to use the emulator plus the complete reference of every 
 
 Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test, the BBC Micro's teletext test page and the Master's `*TIME` from the `bbc_boot` tests, the MEGA65's Open ROMs with `--crt lite`); the consoles without a start screen show a game. ROMs and software are not part of this repository.
 
+### Home computers
+
 <table>
 <tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/c64-basic.png" alt="Commodore 64: BASIC V2"><br><b>Commodore 64</b><br>BASIC V2</td>
@@ -31,41 +33,48 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/cpc-6128.png" alt="Amstrad CPC 6128: BASIC 1.1"><br><b>Amstrad CPC 6128</b><br>BASIC 1.1</td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/colecovision.png" alt="ColecoVision: BIOS title"><br><b>ColecoVision</b><br>BIOS title</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/apple2.png" alt="Apple IIe: Power-on"><br><b>Apple IIe</b><br>Power-on</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/spectrum-128.png" alt="ZX Spectrum 128K: Start menu"><br><b>ZX Spectrum 128K</b><br>Start menu</td>
 </tr>
 <tr>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/spectrum-128.png" alt="ZX Spectrum 128K: Start menu"><br><b>ZX Spectrum 128K</b><br>Start menu</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/spectrum-48.png" alt="ZX Spectrum 48K: Power-on"><br><b>ZX Spectrum 48K</b><br>Power-on</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/zx81.png" alt="ZX81: BASIC prompt"><br><b>ZX81</b><br>BASIC prompt</td>
-</tr>
-<tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/imsai-8080.png" alt="IMSAI 8080: Front panel, clickable"><br><b>IMSAI 8080</b><br>Front panel, clickable</td>
+</tr>
+<tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/keypunch.png" alt="IBM 029 Card Punch: a FORTRAN deck's END card"><br><b>IBM 029 Card Punch</b><br>A FORTRAN deck's END card</td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/nes.png" alt="NES: Track &amp; Field II"><br><b>NES</b><br><i>Track &amp; Field II</i></td>
-</tr>
-<tr>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/snes.png" alt="SNES: Sonic the Hedgehog 4"><br><b>SNES</b><br><i>Sonic the Hedgehog 4</i></td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/atari-2600.png" alt="Atari 2600: Pitfall II"><br><b>Atari 2600</b><br><i>Pitfall II</i></td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/vectrex.png" alt="Vectrex: Power-on"><br><b>Vectrex</b><br>Power-on</td>
-</tr>
-<tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/logophor16.png" alt="Logophor 16: Panorama desktop"><br><b>Logophor 16</b><br>Panorama desktop</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/trs80.png" alt="TRS-80 Model I: Level II BASIC power-on"><br><b>TRS-80 Model I</b><br>Level II BASIC power-on</td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/ti99.png" alt="TI-99/4A: Title screen"><br><b>TI-99/4A</b><br>Title screen</td>
 </tr>
 <tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/ti99.png" alt="TI-99/4A: Title screen"><br><b>TI-99/4A</b><br>Title screen</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/bbc.png" alt="BBC Micro Model B: Mode 7 teletext test page"><br><b>BBC Micro Model B</b><br>Mode 7 teletext test page</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/bbc-master.png" alt="BBC Master 128: MOS 3.20, *TIME from the clock"><br><b>BBC Master 128</b><br>MOS 3.20, <code>*TIME</code> from the clock</td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/mega65.png" alt="MEGA65: Open ROMs start screen"><br><b>MEGA65</b><br>Open ROMs start screen</td>
 </tr>
 <tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/mega65.png" alt="MEGA65: Open ROMs start screen"><br><b>MEGA65</b><br>Open ROMs start screen</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/msx.png" alt="MSX: MSX BASIC 1.0"><br><b>MSX</b><br>MSX BASIC 1.0</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/msx2.png" alt="MSX2: SCREEN 8, 256 colours"><br><b>MSX2</b><br>SCREEN 8, 256 colours</td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/kc85-basic.png" alt="Robotron KC85/4: HC-BASIC, the foreground and background colours"><br><b>Robotron KC85/4</b><br>HC-BASIC, the foreground and background colours</td>
 </tr>
 <tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/kc85-basic.png" alt="Robotron KC85/4: HC-BASIC, the foreground and background colours"><br><b>Robotron KC85/4</b><br>HC-BASIC, the foreground and background colours</td>
+</tr>
+</table>
+
+### Game consoles
+
+<table>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/colecovision.png" alt="ColecoVision: BIOS title"><br><b>ColecoVision</b><br>BIOS title</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/nes.png" alt="NES: Track &amp; Field II"><br><b>NES</b><br><i>Track &amp; Field II</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/snes.png" alt="SNES: Sonic the Hedgehog 4"><br><b>SNES</b><br><i>Sonic the Hedgehog 4</i></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/atari-2600.png" alt="Atari 2600: Pitfall II"><br><b>Atari 2600</b><br><i>Pitfall II</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/vectrex.png" alt="Vectrex: Power-on"><br><b>Vectrex</b><br>Power-on</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/sms-sonic.png" alt="Sega Master System: Sonic the Hedgehog"><br><b>Sega Master System</b><br><i>Sonic the Hedgehog</i></td>
+</tr>
+<tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/gg-asterix.png" alt="Sega Game Gear: Asterix and the Great Rescue"><br><b>Sega Game Gear</b><br><i>Asterix and the Great Rescue</i></td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/md-flashback.png" alt="Sega Mega Drive: Flashback"><br><b>Sega Mega Drive</b><br><i>Flashback</i></td>
 </tr>
