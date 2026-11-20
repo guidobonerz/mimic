@@ -16,6 +16,14 @@
 //! ends the last word with a pulse and then keeps quiet for 25 ms before
 //! it sends another key.
 //!
+//! A key pressed anew is a new key for CAOS only after that silence, so
+//! the emitter here also keeps quiet before the word of a key that was
+//! released and pressed again while its last word was still on the way
+//! (a doubled letter typed fast on a host keyboard; without the silence
+//! CAOS took it for the same key held and the letter was lost), and it
+//! remembers a key pressed and released while another word was on the
+//! way and sends it once.
+//!
 //! The word: key number · 2, plus 1 while SHIFT is **not** pressed. CAOS
 //! looks `word XOR 1` up in its key table (two codes per key, plain and
 //! shifted). [`MachineKey`] = the key number, 0 to 63; 64 is SHIFT.
@@ -158,6 +166,11 @@ pub struct Keyboard {
     shift: bool,
     /// The key pressed last, if it is still held.
     key: Option<u8>,
+    /// The word of a key pressed anew that no word has been started for
+    /// since.
+    fresh: Option<u8>,
+    /// The word sent last.
+    last: u8,
     phase: Phase,
     /// The pauses in CPU clocks.
     zero: u64,
@@ -173,6 +186,8 @@ impl Keyboard {
             held: 0,
             shift: false,
             key: None,
+            fresh: None,
+            last: 0,
             phase: Phase::Idle,
             zero: us(5120),
             one: us(7168),
@@ -190,6 +205,7 @@ impl Keyboard {
                 if down {
                     self.held |= bit;
                     self.key = Some(key as u8);
+                    self.fresh = self.word();
                 } else {
                     self.held &= !bit;
                     if self.key == Some(key as u8) {
@@ -207,10 +223,28 @@ impl Keyboard {
         self.held = 0;
         self.shift = false;
         self.key = None;
+        self.fresh = None;
     }
 
+    /// The word of the key held.
     fn word(&self) -> Option<u8> {
         self.key.map(|k| k << 1 | u8::from(!self.shift))
+    }
+
+    /// The word to send next: the key held, else a key that was pressed
+    /// and is up again before its word could start.
+    fn next_word(&self) -> Option<u8> {
+        self.word().or(self.fresh)
+    }
+
+    fn start(&mut self, word: u8, from: u64) -> Phase {
+        self.fresh = None;
+        self.last = word;
+        Phase::Word {
+            word,
+            sent: 0,
+            next: from + self.pause(word, 0),
+        }
     }
 
     fn pause(&self, word: u8, bit: u8) -> u64 {
@@ -225,13 +259,9 @@ impl Keyboard {
     /// the last call (at most one: callers come by every instruction).
     pub fn run(&mut self, now: u64) -> bool {
         match self.phase {
-            Phase::Idle => match self.word() {
+            Phase::Idle => match self.next_word() {
                 Some(word) => {
-                    self.phase = Phase::Word {
-                        word,
-                        sent: 0,
-                        next: now + self.pause(word, 0),
-                    };
+                    self.phase = self.start(word, now);
                     true
                 }
                 None => false,
@@ -253,14 +283,11 @@ impl Keyboard {
             }
             Phase::End { next } if now >= next => {
                 // The pulse that ends the word starts the next one while
-                // a key is held.
-                self.phase = match self.word() {
-                    Some(word) => Phase::Word {
-                        word,
-                        sent: 0,
-                        next: next + self.pause(word, 0),
-                    },
-                    None => Phase::Rest {
+                // a key is held; the same key pressed anew waits for the
+                // silence that tells CAOS it was released.
+                self.phase = match self.next_word() {
+                    Some(word) if self.fresh != Some(self.last) => self.start(word, next),
+                    _ => Phase::Rest {
                         until: next + self.rest,
                     },
                 };
@@ -278,6 +305,8 @@ impl Keyboard {
         w.u64(self.held);
         w.bool(self.shift);
         w.u8(self.key.unwrap_or(0xff));
+        w.u8(self.fresh.unwrap_or(0xff));
+        w.u8(self.last);
         match self.phase {
             Phase::Idle => w.u8(0),
             Phase::Word { word, sent, next } => {
@@ -305,6 +334,12 @@ impl Keyboard {
             k @ 0..=63 => Some(k),
             _ => return Err(StateError::Invalid("KC85 key")),
         };
+        let fresh = match r.u8()? {
+            0xff => None,
+            w @ 0..=127 => Some(w),
+            _ => return Err(StateError::Invalid("KC85 key word")),
+        };
+        let last = r.u8()? & 127;
         let phase = match r.u8()? {
             0 => Phase::Idle,
             1 => {
@@ -325,6 +360,8 @@ impl Keyboard {
         self.held = held;
         self.shift = shift;
         self.key = key;
+        self.fresh = fresh;
+        self.last = last;
         self.phase = phase;
         Ok(())
     }
@@ -391,5 +428,49 @@ mod tests {
             let missing = "`{|}~".contains(c);
             assert_eq!(keys_for_char(c).is_none(), missing, "{c:?}");
         }
+    }
+
+    /// The pauses between the pulses while `kb` runs from `from` to `until`.
+    fn pauses(kb: &mut Keyboard, from: u64, until: u64) -> Vec<u64> {
+        let p: Vec<u64> = (from..until).filter(|&t| kb.run(t)).collect();
+        p.windows(2).map(|w| w[1] - w[0]).collect()
+    }
+
+    #[test]
+    fn a_key_pressed_again_during_its_word_is_sent_after_the_silence() {
+        // Down, up after 30 ms, down again after 45 ms: all inside the
+        // first word (53 ms).
+        let mut kb = Keyboard::new(1_000_000);
+        kb.key(1, true);
+        let mut p = pauses(&mut kb, 0, 30_000);
+        kb.key(1, false);
+        p.extend(pauses(&mut kb, 30_000, 45_000));
+        kb.key(1, true);
+        let all: Vec<u64> = (45_000..200_000).filter(|&t| kb.run(t)).collect();
+        // The first word ends, then more than CAOS' 20.6 ms of silence.
+        let gaps: Vec<u64> = all.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(gaps.iter().any(|&g| g >= 25_000), "{gaps:?}");
+        // Held on, the word repeats without silence afterwards.
+        let after = gaps.iter().position(|&g| g >= 25_000).unwrap();
+        assert!(gaps[after + 1..].iter().all(|&g| g <= 14_336), "{gaps:?}");
+    }
+
+    #[test]
+    fn a_key_pressed_and_released_during_another_word_is_sent_once() {
+        let mut kb = Keyboard::new(1_000_000);
+        kb.key(1, true);
+        assert!(kb.run(0));
+        kb.key(1, false);
+        // Key 2 comes and goes while key 1's word is on the way.
+        kb.key(2, true);
+        kb.key(2, false);
+        let p: Vec<u64> = (1..400_000).filter(|&t| kb.run(t)).collect();
+        // Key 1's word (7 more pulses and its end, which starts the next
+        // word), then key 2's seven bits and its end.
+        assert_eq!(p.len(), 8 + 8, "{p:?}");
+        assert!(kb.phase == Phase::Idle);
+        // Key 2 without SHIFT: word 5, bits 1 0 1 0 0 0 0.
+        let gaps: Vec<u64> = p[7..].windows(2).map(|w| w[1] - w[0]).collect();
+        assert_eq!(gaps[..3], [7168, 5120, 7168]);
     }
 }

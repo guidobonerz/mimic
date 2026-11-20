@@ -58,6 +58,15 @@ pub struct Mapper {
     /// The light-pen event last sent for the host pointer (only changes
     /// are sent).
     pointer_sent: Option<InputEvent>,
+    /// Cycles a keyboard key stays down at least, and stays up at least
+    /// before it goes down again (0: events go in as they come); see
+    /// [`Mapper::set_frame`].
+    key_hold: u64,
+    key_gap: u64,
+    /// Per keyboard key the event sent last: its time and "down".
+    key_last: BTreeMap<MachineKey, (u64, bool)>,
+    /// The time of the keyboard event sent last.
+    key_at: u64,
 }
 
 fn set(d: &mut Dirs, dir: Dirs, on: bool) {
@@ -88,7 +97,55 @@ impl Mapper {
             sticks: BTreeMap::new(),
             paddle_fire: BTreeMap::new(),
             pointer_sent: None,
+            key_hold: 0,
+            key_gap: 0,
+            key_last: BTreeMap::new(),
+            key_at: 0,
         }
+    }
+
+    /// Tell the mapper how many cycles a frame of the machine has. From
+    /// then on a keyboard key stays down for at least a frame and a half
+    /// and up for at least four frames before the same key goes down
+    /// again; an event that comes sooner is queued for later, and the
+    /// events behind it keep their order.
+    ///
+    /// Why: the frontends hand over the host's events once a frame, so a
+    /// key let go and pressed again within a frame went in as "up, down"
+    /// in the same cycle and the machine never saw it released; and a
+    /// machine's own keyboard routine wants a key released for a while
+    /// before it counts it again (the Atari's OS for three fields,
+    /// KEYDEL; CAOS on the KC85 for 20.6 ms of silence), more than the
+    /// 30 to 60 ms a doubled letter leaves on a host keyboard: "HALLO"
+    /// came out as "HALO" (the user's report, 2026-11-20). Keys of the
+    /// keyboard joystick and of keypads are not held back.
+    pub fn set_frame(&mut self, cycles: u64) {
+        self.key_hold = cycles * 3 / 2;
+        self.key_gap = cycles * 4;
+    }
+
+    /// When a keyboard event that came at `now` goes in.
+    fn key_time(&mut self, key: MachineKey, down: bool, now: Cycle) -> Cycle {
+        if self.key_hold == 0 && self.key_gap == 0 {
+            return now;
+        }
+        // Times further ahead than this are not kept to: the machine's
+        // clock went back (a state was loaded), or a key is hammered
+        // faster than the machine could take it.
+        let limit = now.0 + 2 * (self.key_hold + self.key_gap);
+        let mut at = now.0;
+        if let Some(&(t, was_down)) = self.key_last.get(&key) {
+            let min = t + if down { self.key_gap } else { self.key_hold };
+            if was_down != down && min <= limit {
+                at = at.max(min);
+            }
+        }
+        if self.key_at <= limit {
+            at = at.max(self.key_at);
+        }
+        self.key_last.insert(key, (at, down));
+        self.key_at = at;
+        Cycle(at)
     }
 
     pub fn profile(&self) -> &Profile {
@@ -491,8 +548,9 @@ impl Mapper {
                 *n = n.saturating_sub(1);
             }
             if (before == 0) != (*n == 0) {
+                let at = self.key_time(k, down, now);
                 out.push(TimedInput {
-                    at: now,
+                    at,
                     target: InputTarget::Keyboard,
                     event: InputEvent::Key {
                         machine_key: k,
@@ -905,5 +963,41 @@ mod pad_fire_tests {
         assert!(fired
             .iter()
             .any(|e| matches!(e.event, InputEvent::Digital { buttons, .. } if buttons & 1 != 0)));
+    }
+
+    #[test]
+    fn a_key_stays_down_and_up_long_enough_for_the_machine() {
+        let key = |code: &str, down| HostEvent::Key {
+            code: code.into(),
+            down,
+        };
+        let mut m = Mapper::new(Profile::default_for("c64"));
+        m.set_frame(1000);
+        let mut times = Vec::new();
+        // A doubled letter: down, up and down again within one frame,
+        // then another key right behind it.
+        for (code, down, now) in [
+            ("KeyL", true, 5000),
+            ("KeyL", false, 5000),
+            ("KeyL", true, 5000),
+            ("KeyL", false, 5100),
+            ("KeyO", true, 5200),
+            ("KeyO", false, 20_000),
+        ] {
+            let ev = m.handle(&key(code, down), Cycle(now));
+            assert_eq!(ev.len(), 1);
+            times.push(ev[0].at.0);
+        }
+        // Down for a frame and a half, up for four frames; the O keeps
+        // its place behind the second L; a slow key is not held back.
+        assert_eq!(times, [5000, 6500, 10_500, 12_000, 12_000, 20_000]);
+        // The clock went back (a state was loaded): no waiting for times
+        // far ahead.
+        let ev = m.handle(&key("KeyO", true), Cycle(100));
+        assert_eq!(ev[0].at.0, 100);
+        // Without a frame length the events go in as they come.
+        let mut m = Mapper::new(Profile::default_for("c64"));
+        m.handle(&key("KeyL", true), Cycle(5000));
+        assert_eq!(m.handle(&key("KeyL", false), Cycle(5000))[0].at.0, 5000);
     }
 }

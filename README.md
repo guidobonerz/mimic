@@ -68,6 +68,15 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/kc85-4.png" alt="Robotron KC85/4: CAOS 4.2 menu"><br><b>Robotron KC85/4</b><br>CAOS 4.2 menu</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/kc85-basic.png" alt="Robotron KC85/4: HC-BASIC, the foreground and background colours"><br><b>Robotron KC85/4</b><br>HC-BASIC, the foreground and background colours</td>
 </tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/sms-sonic.png" alt="Sega Master System: Sonic the Hedgehog"><br><b>Sega Master System</b><br><i>Sonic the Hedgehog</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/sms-shinobi.png" alt="Sega Master System: Shinobi"><br><b>Sega Master System</b><br><i>Shinobi</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/sms-phantasy-star.png" alt="Sega Master System: Phantasy Star"><br><b>Sega Master System</b><br><i>Phantasy Star</i></td>
+</tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/gg-asterix.png" alt="Sega Game Gear: Asterix and the Great Rescue"><br><b>Sega Game Gear</b><br><i>Asterix and the Great Rescue</i></td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/md-flashback.png" alt="Sega Mega Drive: Flashback"><br><b>Sega Mega Drive</b><br><i>Flashback</i></td>
+</tr>
 </table>
 
 ## Test overview
@@ -187,8 +196,8 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | Sinclair ZX81 / TS1000 | `machine-zx81` | 1/2/16 KB | boots, PRINT, .P files through traps | 85 % |
 | ColecoVision | `machine-coleco` | NTSC, PAL | 231 of 235 cartridges show a picture; MegaCart; four controller kinds | 90 % |
 | Sega SG-1000 / SC-3000 | `machine-sega8` | SG-1000, SG-1000 II, SC-3000, SC-3000H; NTSC, PAL | own test cartridge: picture, pads, PAUSE, keyboard, typing, cassette record/play; no real game or BASIC tried yet | 50 % |
-| Sega Mega Drive / Genesis | `machine-megadrive` | Mega Drive / Genesis; NTSC, PAL; Japan, USA, Europe; TMSS optional | own 68000 test cartridge: picture, sprites, Z80 + YM2612 note, PSG, 3/6-button pads, SRAM, EEPROM, SSF2 mapper, TMSS; no real game tried yet | 35 % |
-| Sega Master System / Game Gear | `machine-sega8` | Mark III, Master System, Master System 2, Game Gear; NTSC, PAL; YM2413 FM | own mode-4 test cartridge: picture, sprites, pads, PAUSE/RESET, mappers, BIOS hand-over, FM detection; no real game tried yet | 40 % |
+| Sega Mega Drive / Genesis | `machine-megadrive` | Mega Drive / Genesis; NTSC, PAL; Japan, USA, Europe; TMSS optional | own 68000 test cartridge: picture, sprites, Z80 + YM2612 note, PSG, 3/6-button pads, SRAM, EEPROM, SSF2 mapper, TMSS; one game (Flashback) runs its intro to the title menu | 35 % |
+| Sega Master System / Game Gear | `machine-sega8` | Mark III, Master System, Master System 2, Game Gear; NTSC, PAL; YM2413 FM | own mode-4 test cartridge: picture, sprites, pads, PAUSE/RESET, mappers, BIOS hand-over, FM detection; three Master System games (Sonic the Hedgehog, Shinobi, Phantasy Star) run their demos, one Game Gear game (Asterix and the Great Rescue) plays into its first level | 40 % |
 | MSX (MSX1, MSX2) | `machine-msx` | NTSC, PAL | C-BIOS boots (MSX1 and MSX2) and starts cartridges; MSX BASIC 1.0 and 2.0 start; MSX2 with the V9938 (all modes, sprite mode 2, commands), memory mapper, sub ROM and clock; Konami, Konami SCC (with its sound chip), ASCII 8/16 MegaROM schemes, battery RAM; cassette (CAS, play and record), disks with the SVI-738 interface; one cartridge, one cassette and two disk games (one of them MSX2) run | 70 % |
 | Robotron KC85 | `machine-kc85` | KC85/2, /3, /4, /5 | all boot to CAOS with real ROMs; picture, keyboard, sound, cassette loading (KC-TAP, KCC), ROM and RAM modules, the D004 floppy unit (own Z80, U8272, two drives, boots its loader from disc); no saving to tape, no real software or system discs tried | 60 % |
 | NES / Famicom | `machine-nes` | NTSC, PAL, Four Score | 116 of 119 test ROMs; mappers 0–4 | 90 % |

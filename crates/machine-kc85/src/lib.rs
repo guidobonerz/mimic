@@ -962,6 +962,54 @@ impl Machine for Kc85 {
         ))
     }
 
+    /// Pasted text goes straight to CAOS, which has no keyboard buffer
+    /// but one place for a key: the keyboard's interrupt routine leaves
+    /// the code in `(IX+13)` and sets bit 0 of `(IX+8)`; KBD takes the
+    /// code and clears the bit. So one character goes in whenever the
+    /// bit is clear, as the interrupt routine would put it (at most one
+    /// per call, that is per field: 50 a second against 7 typed).
+    ///
+    /// Nothing goes in while CAOS reads the tape (PIO A's interrupt is
+    /// on): the load routine keeps its checksum in `(IX+13)`, which is
+    /// why a key pressed while loading spoils the block on the real
+    /// machine too. Without CAOS' working cells (IX at `$01F0`,
+    /// interrupt page 1, RAM0 switched on) the text is typed with keys.
+    ///
+    /// Source: the user's CAOS ROMs (HC900, 3.1, 4.2, 4.4: the interrupt
+    /// routine's `SET 0,(IX+8)` and KBD's `BIT 0,(IX+8)`, `LD A,(IX+13)`,
+    /// `RES 0,(IX+8)`; in CAOS 4.2 at `$E3B5` and `$E3CA`).
+    fn paste_chars(&mut self, text: &str) -> Option<usize> {
+        const IX: u16 = 0x01f0;
+        const READY: u16 = IX + 8;
+        const CODE: u16 = IX + 13;
+        let caos = self.cpu.ix == IX
+            && self.cpu.i == 1
+            && self.cpu.im == 2
+            && self.mem.pio_a & memory::A_RAM0 != 0;
+        if !caos {
+            return None;
+        }
+        let loading = self.pio.registers(pio::A).2 & 0x80 != 0;
+        if loading || self.mem.read(READY) & 1 != 0 {
+            return Some(0);
+        }
+        let code = |c: char| {
+            keyboard::keys_for_char(c)?;
+            Some(if c == '\n' || c == '\r' {
+                0x0d
+            } else {
+                c as u8
+            })
+        };
+        let mut key = None;
+        let used = mimic_core::input::fill_key_buffer(text, 1, code, |_, b| key = Some(b));
+        if let Some(b) = key {
+            self.mem.poke(CODE, b);
+            self.mem.poke(READY, self.mem.read(READY) | 1);
+        }
+        Some(used)
+    }
+
     fn controls(&self) -> Vec<mimic_core::ControlInfo> {
         vec![
             mimic_core::ControlInfo::button(CONTROL_RESET, "RESET", false),

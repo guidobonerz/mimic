@@ -222,3 +222,54 @@ fn other_models_boot() {
         eprintln!("{model} basic={basic}: {expect} — {path}");
     }
 }
+
+/// Key `key` pressed twice: down at field 0 and at `again`, each time for
+/// `hold` fields (in tenths of a field).
+fn double_tap(m: &mut dyn Machine, key: u16, hold: u64, again: u64) {
+    use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    let start = m.now().0;
+    run(m, 1);
+    let field = m.now().0 - start;
+    let now = m.now().0;
+    for (tenths, down) in [
+        (0, true),
+        (hold, false),
+        (again, true),
+        (again + hold, false),
+    ] {
+        m.input(TimedInput {
+            at: mimic_core::Cycle(now + field * tenths / 10),
+            target: InputTarget::Keyboard,
+            event: InputEvent::Key {
+                machine_key: MachineKey(key),
+                down,
+            },
+        });
+    }
+    run(m, 40);
+}
+
+/// A doubled letter typed fast on the host's keyboard counts twice when
+/// it comes as the input mapper hands it over: down a field and a half,
+/// up four fields (measured here: the OS wants the key up for two to three,
+/// KEYDEL). Up for one field only, the second letter is lost, on the real machine as here.
+#[test]
+#[ignore = "needs the user's Atari ROMs"]
+fn a_doubled_letter_typed_fast_counts_twice() {
+    for format in ["pal", "ntsc"] {
+        let count = |hold: u64, again: u64| {
+            let mut m = boot(format, "on");
+            run(&mut *m, 150);
+            // Key code 0: L.
+            double_tap(&mut *m, 0, hold, again);
+            let screen = screen(&mut *m);
+            if find(&screen, "LL").is_some() {
+                2
+            } else {
+                usize::from(find(&screen, "L").is_some())
+            }
+        };
+        assert_eq!(count(15, 55), 2, "{format}: as the mapper sends it");
+        assert_eq!(count(15, 25), 1, "{format}: too fast for the OS");
+    }
+}

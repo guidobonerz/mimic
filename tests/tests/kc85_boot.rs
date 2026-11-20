@@ -63,6 +63,18 @@ fn dump(m: &mut dyn Machine) {
         .map(|r| format!("{}={:X}", r.name, r.value))
         .collect();
     println!("{}", line.join(" "));
+    let sp = regs
+        .0
+        .iter()
+        .find(|r| r.name == "SP")
+        .map_or(0, |r| r.value);
+    let stack: Vec<_> = (0..12)
+        .map(|i| {
+            let a = sp + 2 * i;
+            format!("{:02X}{:02X}", byte(m, a + 1), byte(m, a))
+        })
+        .collect();
+    println!("stack: {} pioA={:02X}", stack.join(" "), byte(m, 0x1_0088));
 }
 
 #[test]
@@ -84,7 +96,7 @@ fn every_model_boots_to_the_caos_menu() {
     }
 }
 
-/// Disassembly for studying the ROMs: `KC_DIS=3:e060:e0a0[:frames]`.
+/// Disassembly for studying the ROMs: `KC_DIS=3:e060:e0a0[:frames[:line]]`.
 #[test]
 #[ignore = "a tool: needs the user's KC85 ROMs"]
 fn disassemble() {
@@ -94,6 +106,17 @@ fn disassemble() {
     let p: Vec<&str> = spec.split(':').collect();
     let mut m = machine(p[0], &[]);
     run(&mut *m, p.get(3).map_or(150, |f| f.parse().unwrap()));
+    // A fifth part: a line typed first (`BASIC` switches its ROM in).
+    if let Some(line) = p.get(4) {
+        type_text(
+            &mut *m,
+            &format!(
+                "{line}
+"
+            ),
+        );
+        run(&mut *m, 300);
+    }
     let mut a = u32::from_str_radix(p[1], 16).unwrap();
     let end = u32::from_str_radix(p[2], 16).unwrap();
     for chip in m.chips() {
@@ -114,6 +137,25 @@ fn disassemble() {
         .collect();
     println!("KTAB {ktab:04X}: {}", keys.join(" "));
     let t = m.debug_target(DeviceId("cpu")).unwrap();
+    // `KC_ROM=file`: that ROM file's bytes (it sits at $C000) are put
+    // into RAM at $4000 and read there; relative targets are $8000 low.
+    if let Ok(file) = std::env::var("KC_ROM") {
+        let rom = std::fs::read(file).unwrap();
+        for (i, &b) in rom.iter().enumerate().take(0x4000) {
+            t.poke(
+                machine_kc85::CPU_SPACE,
+                0x4000 + i as u32,
+                Size::Byte,
+                u32::from(b),
+            );
+        }
+        while a < end {
+            let i = t.disassemble(a - 0x8000);
+            println!("{a:04X}  {i}");
+            a += i.bytes.len().max(1) as u32;
+        }
+        return;
+    }
     while a < end {
         let i = t.disassemble(a);
         println!("{a:04X}  {i}");
@@ -145,6 +187,77 @@ fn watch() {
             get("E"),
             byte(&mut *m, 0x1_0088),
         );
+    }
+}
+
+/// A tape of the user's in BASIC:
+/// `KC_TAPE=4|file.tap|CLOAD"NAME"|1400[|RUN]` (model, image, the line
+/// typed in BASIC, fields to run, a line typed after that), the screen
+/// every 100 fields; a CSAVE file is compared with the memory.
+/// `KC_PPM=file.ppm` writes the last picture.
+#[test]
+#[ignore = "a tool: needs the user's KC85 ROMs"]
+fn tape_tool() {
+    let Ok(spec) = std::env::var("KC_TAPE") else {
+        return;
+    };
+    let p: Vec<&str> = spec.split('|').collect();
+    let mut m = machine(p[0], &[]);
+    run(&mut *m, 400);
+    type_text(&mut *m, "BASIC\n");
+    run(&mut *m, 300);
+    type_text(&mut *m, "\n");
+    run(&mut *m, 300);
+    let media = mimic_core::media::Media {
+        name: p[1].into(),
+        kind: mimic_core::media::MediaKind::Tape,
+        backend: Box::new(media_backends::image::MemoryBackend {
+            data: std::fs::read(p[1]).unwrap(),
+        }),
+    };
+    m.media_slot(machine_kc85::SLOT_TAPE)
+        .unwrap()
+        .insert(media)
+        .unwrap();
+    type_text(&mut *m, &format!("{}\n", p[2]));
+    let fields: usize = p[3].parse().unwrap();
+    for f in (0..fields).step_by(100) {
+        run(&mut *m, 100);
+        println!("--- field {}", f + 100);
+        dump(&mut *m);
+    }
+    // A CSAVE file: D3 D3 D3, the name, the length, then the program
+    // from $0401; compare it with the memory.
+    let image = std::fs::read(p[1]).unwrap();
+    let blocks = machine_kc85::tape::parse(&image).unwrap();
+    let data: Vec<u8> = blocks.iter().flat_map(|b| b.data).collect();
+    if data.starts_with(&[0xd3; 3]) {
+        let len = usize::from(data[11]) | usize::from(data[12]) << 8;
+        let wrong: Vec<usize> = (0..len.min(data.len() - 13))
+            .filter(|&i| byte(&mut *m, 0x401 + i as u32) != data[13 + i])
+            .collect();
+        println!(
+            "program: {len} bytes, {} differ, first {:?}",
+            wrong.len(),
+            wrong.first()
+        );
+    }
+    if let Some(then) = p.get(4) {
+        type_text(&mut *m, &format!("{then}\n"));
+        run(&mut *m, 600);
+        dump(&mut *m);
+    }
+    // `KC_PPM=file`: the last picture.
+    if let Ok(file) = std::env::var("KC_PPM") {
+        let f = m.framebuffer();
+        let mut out = format!("P6 {} {} 255\n", f.width, f.height).into_bytes();
+        if let mimic_core::frame::PixelData::Indexed { pixels, palette } = f.pixels {
+            for &p in pixels {
+                let c = palette[usize::from(p)];
+                out.extend([c.r, c.g, c.b]);
+            }
+        }
+        std::fs::write(file, out).unwrap();
     }
 }
 
@@ -289,5 +402,165 @@ fn jump_fc_boots_the_d004_from_disc() {
         let regs = d.regs();
         let pc = regs.0.iter().find(|r| r.name == "PC").unwrap().value;
         assert_eq!(pc, 0x900a, "KC85/{model}: halted behind the code");
+    }
+}
+
+/// BASIC at its prompt (the answer to MEMORY END given).
+fn basic(model: &str) -> Box<dyn Machine> {
+    let mut m = machine(model, &[]);
+    run(&mut *m, 400);
+    type_text(&mut *m, "BASIC\n");
+    run(&mut *m, 300);
+    type_text(&mut *m, "\n");
+    run(&mut *m, 300);
+    m
+}
+
+/// A BASIC program as tools write it to a KC-TAP file: the CSAVE header
+/// (three `$D3`, the name, the length), `10 PRINT 4242` and a long REM
+/// line that reaches into the second block, and zeros where CSAVE itself
+/// leaves the end mark `$03`.
+fn csave_tap() -> Vec<u8> {
+    // Per line: link (set anew after loading), number, text, 0.
+    let mut program = vec![0x0b, 0x04, 10, 0, 0x9e, b' ', b'4', b'2', b'4', b'2', 0];
+    program.extend([0x01, 0x05, 20, 0, 0x8e]);
+    program.extend([b'x'; 150]);
+    program.extend([0, 0, 0]);
+    let mut data = vec![0xd3; 3];
+    data.extend(b"TEST    ");
+    data.extend((program.len() as u16).to_le_bytes());
+    data.extend(program);
+    data.resize(256, 0);
+    let mut tap = b"\xc3KC-TAPE by AF. ".to_vec();
+    for (number, block) in [1, 0xff].into_iter().zip(data.chunks(128)) {
+        tap.push(number);
+        tap.extend(block);
+    }
+    tap
+}
+
+/// CLOAD reads a BASIC program, and the keyboard works again afterwards:
+/// BASIC goes on reading its input from the tape until the end mark
+/// CSAVE writes, which the tape adds to an image without it.
+#[test]
+#[ignore = "needs the user's KC85 ROMs"]
+fn cload_reads_a_basic_program_and_gives_the_keyboard_back() {
+    for model in ["3", "4", "5"] {
+        let mut m = basic(model);
+        let media = mimic_core::media::Media {
+            name: "test.tap".into(),
+            kind: mimic_core::media::MediaKind::Tape,
+            backend: Box::new(media_backends::image::MemoryBackend { data: csave_tap() }),
+        };
+        m.media_slot(machine_kc85::SLOT_TAPE)
+            .unwrap()
+            .insert(media)
+            .unwrap();
+        type_text(&mut *m, "CLOAD\"TEST\"\n");
+        run(&mut *m, 700);
+        type_text(&mut *m, "RUN\n");
+        run(&mut *m, 200);
+        println!("--- KC85/{model}");
+        dump(&mut *m);
+        let text = screen(&mut *m);
+        assert!(
+            text.iter().any(|l| l.ends_with("FILE FOUND")),
+            "KC85/{model}"
+        );
+        assert!(text.iter().any(|l| l == " 4242"), "KC85/{model}: RUN");
+    }
+}
+
+/// Pasted text goes into CAOS' key cell, one character a field, and
+/// arrives whole however long BASIC takes for a line.
+#[test]
+#[ignore = "needs the user's KC85 ROMs"]
+fn pasted_text_reaches_basic_faster_than_typed() {
+    let mut text = String::new();
+    for i in 1..=20 {
+        text += &format!("{} A=A+{}:REM pasted \"text\" (line {})\n", i * 10, i, i);
+    }
+    text += "210 PRINT \"sum=\";A\nRUN\n";
+    for model in ["2", "3", "4", "5"] {
+        // The KC85/2 has BASIC in a module only: its CAOS takes the text.
+        let (mut m, text, want) = if model == "2" {
+            let mut m = machine(model, &[]);
+            run(&mut *m, 400);
+            (m, "MODIFY 3000\n".to_string(), "3000")
+        } else {
+            (basic(model), text.clone(), "sum= 210")
+        };
+        let mut feed = mimic_core::input::TextFeed::new();
+        assert_eq!(feed.push(&text), text.chars().count());
+        let mut dbg = DebugHooks::new();
+        let mut fields = 0;
+        while feed.pending() > 0 {
+            let events = feed.feed(&mut *m);
+            assert!(events.is_empty(), "KC85/{model}: no keys are typed");
+            m.run_frame(&mut dbg);
+            fields += 1;
+            assert!(fields < 5000, "KC85/{model}: the text is stuck");
+        }
+        run(&mut *m, 100);
+        println!(
+            "--- KC85/{model}: {} characters in {fields} fields",
+            text.len()
+        );
+        dump(&mut *m);
+        let screen = screen(&mut *m);
+        assert!(screen.iter().any(|l| l.contains(want)), "KC85/{model}");
+        // Typed, a character takes 135 ms: nearly seven fields.
+        assert!(fields < text.len() * 3, "KC85/{model}: {fields} fields");
+    }
+}
+
+/// Key `key` pressed twice: down at field 0 and at `again`, each time for
+/// `hold` fields (in tenths of a field).
+fn double_tap(m: &mut dyn Machine, key: u16, hold: u64, again: u64) {
+    use mimic_core::input::{InputEvent, InputTarget, MachineKey, TimedInput};
+    let start = m.now().0;
+    run(m, 1);
+    let field = m.now().0 - start;
+    let now = m.now().0;
+    for (tenths, down) in [
+        (0, true),
+        (hold, false),
+        (again, true),
+        (again + hold, false),
+    ] {
+        m.input(TimedInput {
+            at: mimic_core::Cycle(now + field * tenths / 10),
+            target: InputTarget::Keyboard,
+            event: InputEvent::Key {
+                machine_key: MachineKey(key),
+                down,
+            },
+        });
+    }
+    run(m, 40);
+}
+
+/// A doubled letter typed fast on the host's keyboard counts twice: as
+/// the input mapper hands it over (down a field and a half, up four),
+/// and on the keyboard's own account when the key comes again while its
+/// first word is still on the way (up half a field after a field down).
+#[test]
+#[ignore = "needs the user's KC85 ROMs"]
+fn a_doubled_letter_typed_fast_counts_twice() {
+    for model in ["2", "3", "4", "5"] {
+        for (hold, again) in [(15, 55), (10, 15), (2, 4), (25, 30)] {
+            let mut m = machine(model, &[]);
+            run(&mut *m, 400);
+            // Key 44: L.
+            double_tap(&mut *m, 44, hold, again);
+            let text = screen(&mut *m);
+            let line = text.iter().rev().find(|l| !l.trim().is_empty()).cloned();
+            println!("KC85/{model} {hold}/{again}: {line:?}");
+            assert!(
+                line.as_deref()
+                    .is_some_and(|l| l.len() == 3 && l.ends_with("LL")),
+                "KC85/{model}, down {hold}, again at {again}: {line:?}"
+            );
+        }
     }
 }

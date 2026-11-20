@@ -693,7 +693,7 @@ p("""CAOS switches modules on: `SWITCH 8 C1` (slot 8, ROM from $C000), then
 `MENU` shows the new commands; on the KC85/2 the M006 starts its own CAOS
 with BASIC by `JUMP C`. Cassette: `--tape program.kcc` or a KC-TAP image
 (`.tap`); `LOAD` in the CAOS menu loads machine programs and starts them,
-the computer switches the motor (BASIC programs from tape are untried). Saving to tape is not there yet. Floppy: with
+the computer switches the motor. BASIC programs load with `CLOAD"NAME"` in BASIC; press no key while loading (CAOS keeps the checksum in the key code's cell). Saving to tape is not there yet. Floppy: with
 `--option d004=on` the D004 sits on top (its own Z80 at 4 MHz); `--disk
 system.img` inserts a disc (raw MicroDOS dumps `.img`: 80 tracks, 2 sides,
 5 × 1024, 9 × 512 or 16 × 256 bytes a track, or DSK), `JUMP FC` starts the

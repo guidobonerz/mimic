@@ -714,8 +714,9 @@ p("""Module schaltet CAOS ein: `SWITCH 8 C1` (Schacht 8, ROM ab $C000), danach
 zeigt `MENU` die neuen Befehle; das M006 startet auf dem KC85/2 mit `JUMP C`
 sein eigenes CAOS mit BASIC. Kassette: `--tape programm.kcc` oder ein
 KC-TAP-Abbild (`.tap`); `LOAD` im CAOS-Menü lädt Maschinenprogramme und
-startet sie, den Motor schaltet der Rechner (BASIC-Programme vom Band sind
-nicht erprobt). Speichern auf Band gibt es noch nicht. Floppy: mit
+startet sie, den Motor schaltet der Rechner. BASIC-Programme lädt
+`CLOAD"NAME"` in BASIC; während des Ladens keine Taste drücken (CAOS führt
+die Prüfsumme in der Zelle des Tastencodes). Speichern auf Band gibt es noch nicht. Floppy: mit
 `--option d004=on` sitzt die D004 auf dem Rechner (eigener Z80 mit 4 MHz);
 `--disk system.img` legt eine Diskette ein (rohe MicroDOS-Abbilder `.img`:
 80 Spuren, 2 Seiten, 5 × 1024, 9 × 512 oder 16 × 256 Byte je Spur, oder

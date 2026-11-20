@@ -1440,7 +1440,10 @@ pub fn spawn(
 
             let slice_start = Instant::now();
             session.machine_mut().set_warp(unseen);
+            let before = session.machine().now();
             session.run_slice();
+            // The frame's length in cycles, for the keys' shortest times.
+            mapper.set_frame(session.machine().now().0.saturating_sub(before.0));
             frames_run += 1;
             shared.emulated.store(frames_run, Ordering::Relaxed);
             warp_hold = if disk_working(session.machine_mut()) {

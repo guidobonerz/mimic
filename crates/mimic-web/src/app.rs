@@ -372,6 +372,7 @@ impl WebEmu {
             for ev in r.feed.feed(r.machine.as_mut()) {
                 r.machine.input(ev);
             }
+            let before = r.machine.now();
             for _ in 0..MAX_FRAME_STEPS {
                 match r.machine.run_frame(&mut r.hooks) {
                     StopReason::FrameDone => break,
@@ -382,6 +383,9 @@ impl WebEmu {
                     _ => {}
                 }
             }
+            // The frame's length in cycles, for the keys' shortest times.
+            r.mapper
+                .set_frame(r.machine.now().0.saturating_sub(before.0));
         }
         r.render();
         r.samples.clear();

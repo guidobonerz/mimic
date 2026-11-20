@@ -293,3 +293,36 @@ fn the_d004_boots_from_the_koppel_ram_and_reads_a_sector_by_dma() {
         let _ = n.load_state(&state[..cut]);
     }
 }
+
+/// CAOS' key cell: `(IX+13)` the code, bit 0 of `(IX+8)` "a key is
+/// there" (set here by hand: the stub ROM has no CAOS).
+#[test]
+fn pasted_text_goes_into_caos_key_cell_one_character_at_a_time() {
+    let mut m = stub("4");
+    run(&mut m, 2);
+    // Without CAOS' working cells the text is typed.
+    assert_eq!(m.paste_chars("A"), None);
+    m.cpu.ix = 0x01f0;
+    m.cpu.i = 1;
+    m.cpu.im = 2;
+    m.mem.pio_a |= memory::A_RAM0 | memory::A_RAM0_WRITE;
+    m.mem.poke(0x01f8, 0x80);
+    // A character the keyboard lacks is dropped with the one behind it.
+    assert_eq!(m.paste_chars("\u{e4}a\nB"), Some(2));
+    assert_eq!(m.peek_cpu(0x01fd), b'a');
+    assert_eq!(m.peek_cpu(0x01f8), 0x81, "the other bits stay");
+    // Nothing more until KBD took the key.
+    assert_eq!(m.paste_chars("\nB"), Some(0));
+    m.mem.poke(0x01f8, 0x80);
+    assert_eq!(m.paste_chars("\nB"), Some(1));
+    assert_eq!(m.peek_cpu(0x01fd), 0x0d);
+    // While CAOS reads the tape (PIO A's interrupt on) the cell holds
+    // the block's checksum.
+    m.mem.poke(0x01f8, 0x80);
+    m.pio.write_control(pio::A, 0x83);
+    assert_eq!(m.paste_chars("B"), Some(0));
+    assert_eq!(m.peek_cpu(0x01fd), 0x0d);
+    m.pio.write_control(pio::A, 0x03);
+    assert_eq!(m.paste_chars("B"), Some(1));
+    assert_eq!(m.peek_cpu(0x01fd), b'B');
+}

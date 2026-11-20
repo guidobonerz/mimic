@@ -22,6 +22,9 @@
 //!   end and start address) and the data in blocks of 128 bytes; the
 //!   block numbers are made here (1, 2, … and `$FF` for the last).
 //!
+//! A BASIC program (CSAVE) whose image lacks the end mark behind the
+//! program gets it when the tape goes in ([`mend_basic`]).
+//!
 //! Sources: KC85/3 and KC85/4 Systemhandbuch (tape format: frequencies,
 //! block layout); the half-wave lengths and the lead CAOS needs are read
 //! from the user's CAOS 4.2 ROM (save routine at `$E56B`, load routine at
@@ -98,7 +101,75 @@ pub fn parse(image: &[u8]) -> Result<Vec<Block>, MediaError> {
     if blocks.is_empty() {
         return Err(bad("no blocks on the tape"));
     }
+    mend_basic(&mut blocks);
     Ok(blocks)
+}
+
+/// The byte CSAVE's close call leaves behind the program.
+const BASIC_END: u8 = 0x03;
+
+/// Give BASIC programs the end mark their image lacks.
+///
+/// A CSAVE file starts with three bytes `$D3` (`$D7` with the list
+/// protection), the name (8 bytes) and the program's length (2 bytes);
+/// the program follows. BASIC closes the file with the data byte `$03`,
+/// which lands right behind the program in the last block. After CLOAD
+/// BASIC goes on reading its input from the tape, and it is this `$03`
+/// (BRK) that closes the tape and gives the keyboard back; without it
+/// BASIC uses up the block and CAOS waits for another one for ever.
+/// Images made by tools (not recorded from a KC) often hold zeros there.
+/// So a file without any `$03` behind its program gets one behind the
+/// last byte that is not zero (text a tape may carry there to start the
+/// program stays); in a new last block if there is no room.
+///
+/// Source: the user's BASIC ROM (CLOAD at `$DC43`, the input loop at
+/// `$C5AE` with the end test at `$DF27`, CSAVE's close at `$DD5C`) and
+/// CAOS 4.2 (the tape drivers at `$C72B` and `$C7A7`).
+fn mend_basic(blocks: &mut Vec<Block>) {
+    let mut start = 0;
+    while start < blocks.len() {
+        // A file ends with block $FF or before the next file's lead.
+        let mut end = start + 1;
+        while end < blocks.len() && blocks[end - 1].number != 0xff && !blocks[end].first {
+            end += 1;
+        }
+        let head = &blocks[start].data;
+        if (head[0] == 0xd3 || head[0] == 0xd7) && head[1] == head[0] && head[2] == head[0] {
+            let len = usize::from(head[11]) | usize::from(head[12]) << 8;
+            let total = (end - start) * 128;
+            let tail = 13 + len;
+            // The file's bytes from `tail` on, by position in the file.
+            let at = |blocks: &[Block], i: usize| blocks[start + i / 128].data[i % 128];
+            if tail <= total && !(tail..total).any(|i| at(blocks, i) == BASIC_END) {
+                let mark = (tail..total)
+                    .rev()
+                    .find(|&i| at(blocks, i) != 0)
+                    .map_or(tail, |i| i + 1);
+                if mark < total {
+                    blocks[start + mark / 128].data[mark % 128] = BASIC_END;
+                } else {
+                    // No room: the last block gets its number in the
+                    // row, a new last block follows.
+                    let last = &mut blocks[end - 1];
+                    if last.number == 0xff {
+                        last.number = (end - start) as u8;
+                    }
+                    let mut data = [0; 128];
+                    data[0] = BASIC_END;
+                    blocks.insert(
+                        end,
+                        Block {
+                            number: 0xff,
+                            data,
+                            first: false,
+                        },
+                    );
+                    end += 1;
+                }
+            }
+        }
+        start = end;
+    }
 }
 
 /// The tape's half waves ([`HALF`] indices), block after block.
@@ -297,6 +368,62 @@ mod tests {
         assert!(b[2].first);
         tap.extend([1, 2, 3]);
         assert!(parse(&tap).is_err());
+    }
+
+    /// A CSAVE file of `blocks` blocks with a program of `len` bytes
+    /// (all `$41`), `tail` behind it, then zeros.
+    fn csave(blocks: usize, len: usize, tail: &[u8]) -> Vec<u8> {
+        let mut data = vec![0xd3; 3];
+        data.extend(b"TEST    ");
+        data.extend((len as u16).to_le_bytes());
+        data.extend(vec![0x41; len]);
+        data.extend(tail);
+        assert!(data.len() <= blocks * 128);
+        data.resize(blocks * 128, 0);
+        let mut tap = TAP_MAGIC.to_vec();
+        for (i, block) in data.chunks(128).enumerate() {
+            tap.push(if i + 1 == blocks { 0xff } else { i as u8 + 1 });
+            tap.extend(block);
+        }
+        tap
+    }
+
+    #[test]
+    fn a_basic_program_gets_the_end_mark_csave_writes() {
+        // Zeros behind the program: the mark goes right behind it.
+        let b = parse(&csave(2, 150, &[])).unwrap();
+        assert_eq!(b.len(), 2);
+        assert_eq!(b[1].data[13 + 150 - 128..][..2], [BASIC_END, 0]);
+        assert_eq!(b[1].data[13 + 150 - 128 - 1], 0x41);
+        // A mark that is there stays alone, wherever it is.
+        let b = parse(&csave(2, 150, b"RUN\r\x03")).unwrap();
+        let tail = &b[1].data[13 + 150 - 128..];
+        assert_eq!(tail[..6], *b"RUN\r\x03\0");
+        assert_eq!(tail.iter().filter(|&&c| c == BASIC_END).count(), 1);
+        // Text without a mark keeps its place, the mark follows it.
+        let b = parse(&csave(2, 150, b"RUN\r")).unwrap();
+        assert_eq!(b[1].data[13 + 150 - 128..][..6], *b"RUN\r\x03\0");
+        // No room in the last block: a new last block.
+        let b = parse(&csave(2, 2 * 128 - 13, &[])).unwrap();
+        let numbers: Vec<u8> = b.iter().map(|b| b.number).collect();
+        assert_eq!(numbers, [1, 2, 0xff]);
+        assert_eq!(b[2].data[..2], [BASIC_END, 0]);
+        assert!(!b[2].first);
+        // A second file on the tape is found; a machine program is not
+        // touched.
+        let mut tap = csave(1, 20, &[]);
+        tap.extend(&csave(1, 30, &[]));
+        tap.extend(TAP_MAGIC);
+        tap.push(0xff);
+        tap.extend([0; 128]);
+        let b = parse(&tap).unwrap();
+        assert_eq!(b[0].data[33], BASIC_END);
+        assert_eq!(b[1].data[43], BASIC_END);
+        assert_eq!(b[2].data, [0; 128]);
+        // A length beyond the file: left alone.
+        let mut tap = csave(1, 20, &[]);
+        tap[16 + 1 + 12] = 0x40;
+        assert!(!parse(&tap).unwrap()[0].data.contains(&BASIC_END));
     }
 
     #[test]
