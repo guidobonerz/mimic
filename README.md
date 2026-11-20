@@ -70,10 +70,6 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 </tr>
 <tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/sms-sonic.png" alt="Sega Master System: Sonic the Hedgehog"><br><b>Sega Master System</b><br><i>Sonic the Hedgehog</i></td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/sms-shinobi.png" alt="Sega Master System: Shinobi"><br><b>Sega Master System</b><br><i>Shinobi</i></td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/sms-phantasy-star.png" alt="Sega Master System: Phantasy Star"><br><b>Sega Master System</b><br><i>Phantasy Star</i></td>
-</tr>
-<tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/gg-asterix.png" alt="Sega Game Gear: Asterix and the Great Rescue"><br><b>Sega Game Gear</b><br><i>Asterix and the Great Rescue</i></td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/md-flashback.png" alt="Sega Mega Drive: Flashback"><br><b>Sega Mega Drive</b><br><i>Flashback</i></td>
 </tr>
