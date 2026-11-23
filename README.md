@@ -61,9 +61,7 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/kc85-basic.png" alt="Robotron KC85/4: HC-BASIC, the foreground and background colours"><br><b>Robotron KC85/4</b><br>HC-BASIC, the foreground and background colours</td>
 </tr>
 <tr>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/ultimate64-updater.png" alt="Ultimate 64 Elite II: the firmware's own updater on the emulated board"><br><b>Ultimate 64 Elite II</b><br>the real updater (firmware 3.15a)</td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/ultimate64-menu.png" alt="Ultimate 64 Elite II: the firmware's menu"><br><b>Ultimate 64 Elite II</b><br>the firmware's menu</td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/c64u-menu.png" alt="Commodore 64 Ultimate: the firmware's menu"><br><b>Commodore 64 Ultimate</b><br>the firmware's menu (1.2.1)</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/ultimate64-menu.png" alt="Ultimate 64 Elite II: the menu of the board's own firmware, with SD card and network"><br><b>Ultimate 64 Elite II</b><br>the real firmware's menu (3.15a)</td>
 </tr>
 </table>
 
