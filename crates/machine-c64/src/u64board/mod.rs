@@ -248,7 +248,12 @@ impl Sys<'_> {
             Block::Rmii => self.rmii.write(addr, v, &mut ctx),
             Block::Misc => self.misc.write(addr, v, &mut ctx),
             Block::Overlay => self.overlay.write(addr, v, &mut ctx),
-            Block::U64Io => self.u64io.write(addr, v, &mut ctx),
+            Block::U64Io => {
+                self.u64io.write(addr, v, &mut ctx);
+                // LEDSTRIP_EN: the pins the LED strip hangs on.
+                let on = self.u64io.latch(chips_ultimate::u64io::reg::LEDSTRIP_EN) & 1 != 0;
+                self.misc.set_led_enable(on);
+            }
             Block::C64 => self.c64.write(addr, v, &mut ctx),
             Block::None => {}
         }
@@ -345,7 +350,7 @@ impl Rv32Bus for Sys<'_> {
 
 impl Elite2 {
     pub fn new(kind: Kind) -> Self {
-        Self {
+        let mut b = Self {
             kind,
             cpu: Rv32::default(),
             ram: vec![0; RAM_SIZE],
@@ -365,6 +370,24 @@ impl Elite2 {
             console: Vec::new(),
             deadline: 0,
             halt: Halt::NoFirmware,
+        };
+        b.apply_kind();
+        b
+    }
+
+    /// What the model fixes in the blocks (configuration; again after a
+    /// state was loaded).
+    ///
+    /// The Commodore 64 Ultimate carries the Blingboard (LED and
+    /// keyboard controller). Its "blackboard" register reads 0: Gideon's
+    /// board reads 1 there, and Commodore's updater (1.2.1) reads it
+    /// right after its heading and refuses the board as "not from
+    /// Commodore" for every other value tried (1, 2, 3, 5, $80, $FF).
+    /// Found by trying, 2026-11-23; what the register means is not known.
+    fn apply_kind(&mut self) {
+        if self.kind == Kind::C64Ultimate {
+            self.misc.set_blingboard(true);
+            self.u64io.set_blackboard(0);
         }
     }
 
@@ -429,6 +452,8 @@ impl Elite2 {
         self.overlay.reset();
         self.u64io.reset();
         self.misc.reset();
+        self.misc.led.power_on();
+        self.misc.bling_led.power_on();
         self.wifi.reset();
         self.sd.reset();
         self.usb.reset();
@@ -666,6 +691,7 @@ impl Elite2 {
                 page.fill(0);
             }
         }
+        self.apply_kind();
         self.halt = halt;
         self.now = now;
         self.target = target;

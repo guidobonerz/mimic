@@ -1385,7 +1385,9 @@ impl App {
 
     /// Draw the console panel at the left edge for the render thread,
     /// `rows` above the window's bottom: the machine's controls, then the
-    /// frontend's own (PAUSE first) and the cheats.
+    /// frontend's own (PAUSE first), the cheats and the machine's lamps
+    /// (an LED strip). Called every few milliseconds; the picture goes to
+    /// the render thread only when it changed.
     fn update_left(&mut self, window: &Window, rows: u32) {
         let Some(render) = &self.render else { return };
         let mut controls = vec![panel::pause_control(
@@ -1434,7 +1436,21 @@ impl App {
         }
         let font = footer::font_size(window.scale_factor());
         let height = window.inner_size().height.saturating_sub(rows).max(1);
-        let p = panel::render_side(&items, self.panel_on, self.panel_scroll, height, font);
+        // The machine's lamps, as the emulation last published them.
+        let lights = self
+            .shared
+            .lights
+            .lock()
+            .map(|l| l.clone())
+            .unwrap_or_default();
+        let p = panel::render_side(
+            &items,
+            &lights,
+            self.panel_on,
+            self.panel_scroll,
+            height,
+            font,
+        );
         self.panel_hits = p.hits;
         self.panel_max_scroll = p.max_scroll;
         self.panel_scroll = self.panel_scroll.min(p.max_scroll);

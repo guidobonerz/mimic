@@ -7,8 +7,14 @@
 //! [`InputEvent::Control`](mimic_core::input::InputEvent::Control) events.
 //! The frontend adds its own controls (PAUSE, JOY KEYS, JOY PORT) whose
 //! clicks stay in the window.
+//!
+//! Under the controls the panel shows the machine's lamps
+//! ([`Machine::lights`](mimic_core::Machine::lights): an LED strip, case
+//! lighting): each group's name and its LEDs as rows of small cells in
+//! the LEDs' colours, outlined so that a dark LED is seen too. They are
+//! not clickable.
 
-use mimic_core::{ControlInfo, ControlKind};
+use mimic_core::{ControlInfo, ControlKind, LightGroup};
 use noto_sans_mono_bitmap::{get_raster_width, FontWeight, RasterHeight};
 
 use crate::footer::{Rgb, Strip, BACKGROUND, BUSY, DIM, TEXT};
@@ -242,10 +248,75 @@ fn column(controls: &[Item], x0: usize, width: u32, size: RasterHeight) -> (Vec<
     (lines, hits)
 }
 
+/// Outline of an LED cell.
+const LED_EDGE: Rgb = [0x48, 0x48, 0x48];
+
+/// How `count` LEDs lie in a column `width` pixels wide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LightGrid {
+    /// LEDs a row (the last row may have fewer).
+    pub per_row: usize,
+    pub rows: usize,
+    /// From one cell's left edge to the next's.
+    pub pitch: usize,
+    /// A cell's width and height, outline included.
+    pub cell: usize,
+    /// Rows of pixels above a cell in its line.
+    pub top: usize,
+}
+
+/// The grid for `count` LEDs: as many rows as the width asks for, all
+/// about equally long (30 LEDs where 17 fit: two rows of 15).
+pub fn light_grid(count: usize, width: usize, size: RasterHeight) -> LightGrid {
+    let line = crate::footer::height(size) as usize;
+    let pitch = char_width(size) * 3 / 2;
+    let mut cell = (pitch - 2).min(line - 4);
+    // As much room above as below.
+    cell -= (line - cell) % 2;
+    let fit = (width / pitch).max(1);
+    let rows = count.div_ceil(fit);
+    LightGrid {
+        per_row: count.div_ceil(rows.max(1)),
+        rows,
+        pitch,
+        cell,
+        top: (line - cell) / 2,
+    }
+}
+
+/// The lamps under the controls: per group a line with its name, then
+/// its LEDs from `x0` on in lines `width` pixels wide.
+fn light_lines(lights: &[LightGroup], x0: usize, width: u32, size: RasterHeight) -> Vec<Strip> {
+    let mut lines = Vec::new();
+    for group in lights.iter().filter(|g| !g.leds.is_empty()) {
+        let mut name = Strip::new(width, size);
+        name.text(x0, group.name, DIM);
+        lines.push(name);
+        let grid = light_grid(group.leds.len(), width as usize - x0, size);
+        for row in group.leds.chunks(grid.per_row) {
+            let mut s = Strip::new(width, size);
+            for (i, led) in row.iter().enumerate() {
+                let x = x0 + i * grid.pitch;
+                s.fill(x, x + grid.cell, grid.top, LED_EDGE);
+                s.fill(
+                    x + 1,
+                    x + grid.cell - 1,
+                    grid.top + 1,
+                    [led.r, led.g, led.b],
+                );
+            }
+            lines.push(s);
+        }
+    }
+    lines
+}
+
 /// Draw the side panel, `height` window pixels high, from line `scroll`
-/// on; closed it is only its handle at the right.
+/// on; closed it is only its handle at the right. `lights` come under
+/// the controls and scroll with them.
 pub fn render_side(
     controls: &[Item],
+    lights: &[LightGroup],
     open: bool,
     scroll: usize,
     height: u32,
@@ -284,6 +355,17 @@ pub fn render_side(
             row: h.row + 1,
             ..h
         }));
+        for strip in light_lines(lights, x0, handle_x0 as u32, size) {
+            let mut line = Strip::new(width, size);
+            for (dst, src) in line
+                .px
+                .chunks_exact_mut(width as usize * 4)
+                .zip(strip.px.chunks_exact(strip.width * 4))
+            {
+                dst[..src.len()].copy_from_slice(src);
+            }
+            lines.push(line);
+        }
     }
     let max_scroll = lines.len().saturating_sub(visible);
     let scroll = scroll.min(max_scroll);
@@ -341,6 +423,7 @@ mod tests {
         let size = RasterHeight::Size16;
         let p = render_side(
             &items(&[ControlInfo::button(0, "RESET", false)]),
+            &[],
             false,
             0,
             300,
@@ -360,7 +443,7 @@ mod tests {
             ControlInfo::switch(3, "TV TYPE", &["COLOR", "B/W"], 1),
             ControlInfo::button(1, "RESET", false),
         ]);
-        let p = render_side(&controls, true, 0, 400, size);
+        let p = render_side(&controls, &[], true, 0, 400, size);
         assert_eq!(p.width, open_width(size));
         assert_eq!(
             p.handle_x0,
@@ -394,12 +477,12 @@ mod tests {
             .map(|i| Item::from(&ControlInfo::button(i, "RESET", false)))
             .collect();
         let height = 4 * crate::footer::height(size);
-        let p = render_side(&controls, true, 0, height, size);
+        let p = render_side(&controls, &[], true, 0, height, size);
         assert_eq!(p.max_scroll, 11 - 4);
         assert_eq!(hit(&p.hits, 1, p.hits[0].x0).map(|h| h.id), Some(0));
-        let down = render_side(&controls, true, 3, height, size);
+        let down = render_side(&controls, &[], true, 3, height, size);
         assert_eq!(hit(&down.hits, 1, down.hits[0].x0).map(|h| h.id), Some(3));
-        let far = render_side(&controls, true, 99, height, size);
+        let far = render_side(&controls, &[], true, 99, height, size);
         assert_eq!(far.rgba.len(), (far.width * height * 4) as usize);
         assert!(far.hits.iter().any(|h| h.id == 9));
     }
@@ -413,8 +496,192 @@ mod tests {
             &["FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH"],
             0,
         )]);
-        let p = render_side(&controls, true, 0, 400, size);
+        let p = render_side(&controls, &[], true, 0, 400, size);
         assert!(p.hits.last().unwrap().row > p.hits[0].row, "positions wrap");
         assert!(p.hits.iter().all(|h| h.x1 <= p.handle_x0));
+    }
+
+    fn strip(name: &'static str, leds: &[Rgb]) -> LightGroup {
+        LightGroup {
+            name,
+            leds: leds
+                .iter()
+                .map(|c| mimic_core::frame::Rgb8 {
+                    r: c[0],
+                    g: c[1],
+                    b: c[2],
+                })
+                .collect(),
+        }
+    }
+
+    /// The pixel at (`x`, `y` within line `row`) of a panel picture.
+    fn pixel(p: &Side, size: RasterHeight, row: usize, x: usize, y: usize) -> Rgb {
+        let line = crate::footer::height(size) as usize;
+        let i = ((row * line + y) * p.width as usize + x) * 4;
+        [p.rgba[i], p.rgba[i + 1], p.rgba[i + 2]]
+    }
+
+    #[test]
+    fn lights_are_cells_under_the_controls() {
+        let size = RasterHeight::Size16;
+        let controls = items(&[ControlInfo::button(0, "RESET", false)]);
+        const RED: Rgb = [255, 0, 0];
+        const BLUE: Rgb = [0, 63, 255];
+        const DARK: Rgb = [0, 0, 0];
+        let lights = [strip("LED STRIP", &[RED, DARK, BLUE])];
+        let p = render_side(&controls, &lights, true, 0, 400, size);
+        let plain = render_side(&controls, &[], true, 0, 400, size);
+        assert_eq!((p.width, p.height), (plain.width, plain.height));
+        // Clicks are the controls' as before; the lamps take none.
+        assert_eq!(p.hits, plain.hits);
+        // Title, RESET, the group's name, one row of LEDs.
+        let line = crate::footer::height(size) as usize;
+        let row_bytes = p.width as usize * 4;
+        assert_eq!(
+            p.rgba[..2 * line * row_bytes],
+            plain.rgba[..2 * line * row_bytes]
+        );
+        assert_ne!(
+            p.rgba[2 * line * row_bytes..3 * line * row_bytes],
+            plain.rgba[2 * line * row_bytes..3 * line * row_bytes],
+            "the name is drawn"
+        );
+        assert_eq!(
+            p.rgba[4 * line * row_bytes..],
+            plain.rgba[4 * line * row_bytes..]
+        );
+        let x0 = char_width(size);
+        let g = light_grid(3, p.handle_x0 - x0, size);
+        assert_eq!((g.rows, g.per_row), (1, 3));
+        assert!(g.cell >= 6 && g.pitch > g.cell && g.top + g.cell <= line);
+        let mid = g.top + g.cell / 2;
+        for (i, colour) in [RED, DARK, BLUE].into_iter().enumerate() {
+            let x = x0 + i * g.pitch;
+            // The outline all around, the colour inside, the gap after.
+            assert_eq!(pixel(&p, size, 3, x, mid), LED_EDGE);
+            assert_eq!(pixel(&p, size, 3, x + g.cell - 1, mid), LED_EDGE);
+            assert_eq!(pixel(&p, size, 3, x + g.cell / 2, g.top), LED_EDGE);
+            assert_eq!(
+                pixel(&p, size, 3, x + g.cell / 2, g.top + g.cell - 1),
+                LED_EDGE
+            );
+            assert_eq!(pixel(&p, size, 3, x + 1, g.top + 1), colour);
+            assert_eq!(
+                pixel(&p, size, 3, x + g.cell - 2, g.top + g.cell - 2),
+                colour
+            );
+            assert_eq!(pixel(&p, size, 3, x + g.cell / 2, mid), colour);
+            assert_eq!(pixel(&p, size, 3, x + g.cell, mid), BACKGROUND);
+            assert_eq!(pixel(&p, size, 3, x + g.cell / 2, g.top - 1), BACKGROUND);
+        }
+        // Nothing after the last LED.
+        assert_eq!(pixel(&p, size, 3, x0 + 3 * g.pitch + 1, mid), BACKGROUND);
+        // A new colour is a new picture, the same colours the same one.
+        let again = render_side(&controls, &lights, true, 0, 400, size);
+        assert_eq!(again.rgba, p.rgba);
+        let other = [strip("LED STRIP", &[RED, DARK, RED])];
+        let changed = render_side(&controls, &other, true, 0, 400, size);
+        assert_ne!(changed.rgba, p.rgba);
+    }
+
+    #[test]
+    fn without_lights_the_panel_is_as_before() {
+        let size = RasterHeight::Size16;
+        let controls = items(&[
+            ControlInfo::button(0, "POWER", false),
+            ControlInfo::switch(3, "TV TYPE", &["COLOR", "B/W"], 1),
+        ]);
+        let plain = render_side(&controls, &[], true, 0, 300, size);
+        // A group without LEDs is no group.
+        let empty = render_side(&controls, &[strip("LED STRIP", &[])], true, 0, 300, size);
+        assert_eq!(empty.rgba, plain.rgba);
+        assert_eq!(empty.max_scroll, plain.max_scroll);
+        assert_eq!(empty.hits, plain.hits);
+        // The closed panel shows none.
+        let lights = [strip("LED STRIP", &[[255, 0, 0]; 8])];
+        let closed = render_side(&controls, &lights, false, 0, 300, size);
+        assert_eq!(
+            closed.rgba,
+            render_side(&controls, &[], false, 0, 300, size).rgba
+        );
+    }
+
+    #[test]
+    fn many_lights_wrap_into_even_rows() {
+        for size in [
+            RasterHeight::Size16,
+            RasterHeight::Size20,
+            RasterHeight::Size24,
+        ] {
+            let x0 = char_width(size);
+            let width = (open_width(size) - handle_width(size)) as usize - x0;
+            let fit = width / light_grid(1, width, size).pitch;
+            assert!((12..30).contains(&fit), "{fit} LEDs a row");
+            // One more than fits: two rows, the longer first.
+            let g = light_grid(fit + 1, width, size);
+            assert_eq!((g.rows, g.per_row), (2, fit.div_ceil(2) + (fit + 1) % 2));
+            assert_eq!(light_grid(fit, width, size).rows, 1);
+            let g = light_grid(84, width, size);
+            assert!(g.per_row <= fit && g.per_row * g.rows >= 84);
+            assert!(g.per_row * (g.rows - 1) < 84);
+            assert!(
+                (g.per_row - 1) * g.pitch + g.cell <= width,
+                "inside the column"
+            );
+        }
+        let size = RasterHeight::Size16;
+        // Two groups: the LEDs' colour tells where each one lies.
+        let leds: Vec<Rgb> = (0..30).map(|i| [10 + i as u8, 200, 0]).collect();
+        let lights = [
+            strip("CASE TOP", &leds),
+            strip("KEYBOARD", &[[0, 0, 255]; 5]),
+        ];
+        let p = render_side(&[], &lights, true, 0, 600, size);
+        let x0 = char_width(size);
+        let g = light_grid(30, p.handle_x0 - x0, size);
+        assert_eq!((g.rows, g.per_row), (2, 15));
+        let mid = g.top + g.cell / 2;
+        let centre = |i: usize| x0 + i * g.pitch + g.cell / 2;
+        // Title, "no console controls", name, two rows, name, one row.
+        for (k, led) in leds.iter().enumerate() {
+            assert_eq!(pixel(&p, size, 3 + k / 15, centre(k % 15), mid), *led);
+        }
+        assert_eq!(pixel(&p, size, 4, centre(15), mid), BACKGROUND);
+        assert_eq!(pixel(&p, size, 6, centre(4), mid), [0, 0, 255]);
+        assert_eq!(pixel(&p, size, 6, centre(5), mid), BACKGROUND);
+        assert_eq!(pixel(&p, size, 7, centre(0), mid), BACKGROUND);
+        // Every cell stays left of the handle.
+        assert!(centre(14) + g.cell < p.handle_x0);
+    }
+
+    #[test]
+    fn lights_scroll_with_the_panel() {
+        let size = RasterHeight::Size16;
+        let controls: Vec<Item> = (0..3)
+            .map(|i| Item::from(&ControlInfo::button(i, "RESET", false)))
+            .collect();
+        let lights = [strip("LED STRIP", &[[255, 0, 0]; 40])];
+        let x0 = char_width(size);
+        let height = 4 * crate::footer::height(size);
+        let p = render_side(&controls, &lights, true, 0, height, size);
+        let g = light_grid(40, p.handle_x0 - x0, size);
+        // Title, three buttons, the name, the LEDs' rows; four lines fit.
+        assert_eq!(p.max_scroll, 5 + g.rows - 4);
+        let mid = g.top + g.cell / 2;
+        let x = x0 + g.cell / 2;
+        assert!((0..4).all(|row| pixel(&p, size, row, x, mid) != [255, 0, 0]));
+        // Scrolled to the end, the LEDs' rows are the last lines.
+        let end = render_side(&controls, &lights, true, p.max_scroll, height, size);
+        for row in 4 - g.rows.min(4)..4 {
+            assert_eq!(pixel(&end, size, row, x, mid), [255, 0, 0]);
+        }
+        // The buttons moved up with them.
+        let full = render_side(&controls, &lights, true, 0, 20 * height, size);
+        assert_eq!(full.max_scroll, 0);
+        for h in &end.hits {
+            let at = full.hits.iter().find(|f| f.id == h.id).unwrap();
+            assert_eq!(at.row, h.row + p.max_scroll);
+        }
     }
 }

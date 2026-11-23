@@ -70,7 +70,14 @@ pub(crate) struct BoardPart {
     /// The board's drive B (Commodore 64 Ultimate); drive A is the
     /// machine's drive 8 ([`super::drives`]).
     pub drive_b: Option<Drive8>,
+    /// LEDs on the strip plugged into an Elite II's LED connector
+    /// (`options["ledstrip"]`, configuration).
+    strip_leds: usize,
 }
+
+/// LEDs on an Elite II's strip unless `options["ledstrip"]` says
+/// otherwise: the firmware's own default for "Strip Length".
+pub const STRIP_LEDS: usize = 24;
 
 /// A state's board, loaded into new parts (taken over only when all of
 /// the machine has loaded).
@@ -256,6 +263,34 @@ fn write_file(host: &HostServices, path: &str, pos: u64, data: &[u8]) -> bool {
 }
 
 impl BoardPart {
+    /// The board's LEDs as they are lit ([`mimic_core::Machine::lights`]).
+    ///
+    /// Elite II: the strip on the LED connector, as many LEDs as it has
+    /// (the controller always sends 84 colours; a strip takes as many as
+    /// it has LEDs). Commodore 64 Ultimate: what its firmware calls the
+    /// "Case Lights", in the controller's order 30 along the bottom, 30
+    /// along the top and a strip of 24 at the keyboard (top shown first),
+    /// and the "Keyboard Lights", the Blingboard's 71 LEDs in the order
+    /// their controller sends them (where each lies under the keyboard is
+    /// not known).
+    pub fn lights(&self) -> Vec<mimic_core::LightGroup> {
+        use mimic_core::LightGroup;
+        let leds = self.board.misc.led.leds();
+        match self.board.kind() {
+            Kind::Elite2 if self.strip_leds == 0 => Vec::new(),
+            Kind::Elite2 => vec![LightGroup::from_light(
+                "LED STRIP",
+                &leds[..self.strip_leds.min(leds.len())],
+            )],
+            Kind::C64Ultimate => vec![
+                LightGroup::from_light("CASE LIGHTS TOP", &leds[30..60]),
+                LightGroup::from_light("CASE LIGHTS BOTTOM", &leds[..30]),
+                LightGroup::from_light("CASE LIGHTS STRIP", &leds[60..]),
+                LightGroup::from_light("KEYBOARD LIGHTS", &self.board.misc.bling_led.leds()),
+            ],
+        }
+    }
+
     pub fn new(
         kind: Kind,
         cpu_hz: u64,
@@ -263,8 +298,10 @@ impl BoardPart {
         firmware_roms: bool,
         chargen: &[u8],
         net: super::net::Cable,
+        strip_leds: usize,
     ) -> Self {
         Self {
+            strip_leds,
             board: Elite2::new(kind),
             lines: Lines {
                 firmware_roms,

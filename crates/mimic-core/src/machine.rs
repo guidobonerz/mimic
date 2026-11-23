@@ -3,7 +3,7 @@
 use crate::audio::AudioFormat;
 use crate::beam::BeamPos;
 use crate::bus::Size;
-use crate::controls::ControlInfo;
+use crate::controls::{ControlInfo, LightGroup};
 use crate::cpu::{Instr, RegisterSet};
 use crate::cycle::Cycle;
 use crate::debug::{BpId, DebugHooks};
@@ -291,6 +291,13 @@ pub trait Machine: Send {
     /// control panels; operated with [`crate::input::InputEvent::Control`]
     /// on [`crate::input::InputTarget::Panel`]. Default: none.
     fn controls(&self) -> Vec<ControlInfo> {
+        Vec::new()
+    }
+
+    /// The lamps the machine shows besides its picture (an LED strip,
+    /// case lighting) as they are lit now, for control panels. Looking
+    /// changes nothing. Default: none.
+    fn lights(&self) -> Vec<LightGroup> {
         Vec::new()
     }
 

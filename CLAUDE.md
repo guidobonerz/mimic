@@ -141,6 +141,7 @@ pub trait Machine: Send {
     fn can_autostart(&self, slot: SlotId) -> bool { false } // the medium in this slot can be started at run time (the desktop's Autostart checkbox)
     fn autostart(&mut self, slot: SlotId) -> bool { false } // load and run what is in the slot from the running system (no reset), as autostart=on after power-on
     fn controls(&self) -> Vec<ControlInfo> { vec![] }    // console buttons/switches (power, reset, 2600 switches …) for panels
+    fn lights(&self) -> Vec<LightGroup> { vec![] }       // lamps besides the picture (an LED strip, status LEDs) for panels: named groups of colours
     fn ports(&self) -> Vec<PortInfo>;                   // physical connectors (see `docs/claude/devices.md`)
     fn connect(&mut self, port: PortId, dev: Box<dyn PortDevice>) -> Result<(), PortError>;
     fn disconnect(&mut self, port: PortId) -> Option<Box<dyn PortDevice>>;

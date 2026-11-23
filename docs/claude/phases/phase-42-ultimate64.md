@@ -56,13 +56,29 @@ Built and checked with the user's update 3.15a (`update_v3.15a.ue2`):
 - SID tunes (the user: tunes picked at random through the firmware's Assembly 64 search sometimes crashed): the board's stop held the 6510 through `stall_off_bus`, which is for a read stopped by RDY and carries on interrupt polls with the flags saved by that read; with the stop landing in mid instruction and the IRQ line low, an IRQ was taken with I set. The firmware's SID player waits for its DMA load inside an IRQ handler with `$01` = `$34`, so the IRQ went through the RAM vector to `$0000` and the CPU jammed. Now the 6510 stands and polls nothing while the board holds it (NMI edges are latched). Before: 2 of 9 plays through Assembly 64 crashed; after: 40 of 40 ran (two HVSC queries of 20, PSID and RSID). "Ran" = no jam, the CPU in the player's or the tune's code; sound was not recorded.
 - Tests: `chips-ultimate` 256, `machine-c64` 89 (+3 ignored).
 
+2026-11-23, the Commodore 64 Ultimate's firmware (the user supplied `update_1.2.1.ue2`/`.cfw` in `~/.mimic/ultimate/Board/`):
+- Commodore's updater refused the board ("… on a board that is not from Commodore"). The check is not in the open sources. A trace of what the updater reads showed the "blackboard" register `$10100407` right after its heading; with 0 there the updater goes on, with 1 (Gideon's board), 2, 3, 5, `$80` or `$FF` it refuses. The model `c64u` now reads 0 there and has the Blingboard fitted (`$10100802` bit 2; 1.2.1's updater does not read that one). Found by trying; what the register means is not known.
+- Checked with 1.2.1 on `--model c64u`: the updater ("Commodore 64 Ultimate Updater") detects the Winbond W25Q128, the XC7A50T and "C64U V2.5", checks its images, writes the flash disk, FPGA image and application (to `$220000`), flashes the WiFi module through the ROM loader ("Flashing ESP32 Success!"), and switches off. From the flash the firmware boots; with `c64roms=firmware` the C64 shows the BASIC start screen (this firmware carries C64 ROMs), and the MENU button opens Commodore's menu ("Disk File Browser", "CommoServe File Search", "Turbo Boost", "LED Lighting" …).
+- Not checked on the C64U: storage, drives (drive B = `drive9`), network, SID playing, "Run Update" from its menu.
+- Tests: `machine-c64` 90 (+3 ignored).
+
+2026-11-23, LED strip (the user: "add led stripe emulation in left sidebar", "auch für eliteii boards"):
+- `Machine::lights()` (new, with an empty default; `mimic_core::LightGroup`): lamps a machine shows besides its picture. The desktop's console panel (left) draws each group under the controls as rows of outlined cells. Decided by Claude: a generic trait method instead of anything Ultimate-specific in the frontend (golden rule 1); the display curve (square root, so dim LEDs are visible) and the Elite II option `ledstrip=N` (0–84, default 24 = the firmware's own default length; the controller always sends 84 colours).
+- `chips-ultimate::board::LedStrip`: both controllers (`$100600`: 84 LEDs; `$100900` on the Blingboard: 71 LEDs, which Commodore's firmware drives), colours latched when a frame is sent, brightness applied. The FPGA's driver is not published; the map arithmetic follows the firmware's comments.
+- Seen with the installed firmwares (in-process): Elite II 3.15a sends one fixed colour ("Royal Blue", intensity 8 of 31) to all LEDs; the C64 Ultimate's 1.2.1 plays a rainbow for about 6 s on case and keyboard lights, then fades all through the colours. Changing mode and pattern through the Elite II's menu (F2, "LED Lighting") changes what is sent.
+- Groups: Elite II "LED STRIP"; C64U "CASE LIGHTS TOP"/"BOTTOM" (30 each), "CASE LIGHTS STRIP" (24), "KEYBOARD LIGHTS" (71, in controller order).
+- Not seen: the desktop window itself (the panel is checked by its picture tests). Assumed: the C64U's case lights do not depend on LEDSTRIP_EN (its firmware animates with the register at 0).
+- Savestates of `ultimate64` made before this do not load any more (board chunk version 2).
+- Tests: `chips-ultimate` 259, `machine-c64` 91 (+5 ignored), `mimic-desktop` 40.
+
 Open (each a later step; the blocks are T0 in `chips-ultimate` and say what they need):
 - The overlay menu (HDMI picture): built and drawn over a stretched C64 picture, not yet seen with the firmware set to "overlay" mode; the firmware's freeze menu on the C64 screen works.
 - Storage, further: USB HID keyboard/mouse; loading other cores from a stick.
+- LEDs, further: the firmware's SID-music mode (reads the voices' envelope levels, which the C64 side returns as 0), the programmatic mode, where the C64U's keyboard LEDs lie; headless and web show no lights.
 - SID playing, further: sub-tunes, 2SID/3SID routing, MUS files; the stop conditions (bad line, write-then-read) are not modelled, the stop is at once.
 - The ESP32 loader: stub upload, MD5 and compressed flashing are refused (the updater uses none).
 - The other cartridge types (CRT files through the firmware, freezers, EasyFlash, Ocean, REU/GeoRAM, the KERNAL replacement), the `$DFFE`/`$DFFF` trigger and sync, SERVE_CONTROL; the command interface, sampler, SIDs, turbo, tape, ACIA.
 - Drives: 1571/1581 (WD177x), RAMMAP, drive sounds, bus IDs above 11; drive B untested with the C64U's firmware.
 - Headless: `polydbg.py panel MENU press`/`release` opened the menu in the first sessions and not in a later one; a timed press (one `input` request: control 5 on, off 200 000 cycles later) works. Not looked into.
 - Network, further: FTP data connections (passive mode ports are not forwarded), the firmware's UDP identify (broadcast), bridged mode, WiFi beyond the identity stub, the ESP32 serial loader.
-- The C64U's real update file (not at hand), speed (idle skip; a full C64 frame with the board costs about 12 ms in release builds).
+- The C64U beyond boot, update and menu (see above), speed (idle skip; a full C64 frame with the board costs about 12 ms in release builds).

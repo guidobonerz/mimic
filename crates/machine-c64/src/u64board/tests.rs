@@ -56,6 +56,27 @@ fn an_empty_flash_does_not_start() {
     assert_eq!(b.now(), 1_000_000);
 }
 
+#[test]
+fn the_commodore_board_is_told_apart() {
+    let mut c64 = NullC64::default();
+    let read = |b: &mut Elite2, c64: &mut NullC64, addr: u32| b.io_access(addr, None, c64);
+    let mut e = Elite2::new(Kind::Elite2);
+    assert_eq!(read(&mut e, &mut c64, 0x10_0407), 1);
+    assert_eq!(read(&mut e, &mut c64, 0x10_0802) & 4, 0);
+    let mut c = Elite2::new(Kind::C64Ultimate);
+    assert_eq!(read(&mut c, &mut c64, 0x10_0407), 0);
+    assert_eq!(read(&mut c, &mut c64, 0x10_0802) & 4, 4);
+    // Power-on and a loaded state keep it.
+    c.power_on(None, &mut c64);
+    let mut w = StateWriter::new();
+    c.save(&mut w);
+    let bytes = w.into_bytes();
+    let mut d = Elite2::new(Kind::C64Ultimate);
+    d.load(&mut StateReader::new(&bytes)).unwrap();
+    assert_eq!(read(&mut d, &mut c64, 0x10_0407), 0);
+    assert_eq!(read(&mut d, &mut c64, 0x10_0802) & 4, 4);
+}
+
 /// The updater of the user's file, started as the factory would.
 #[test]
 #[ignore]
@@ -68,7 +89,11 @@ fn updater_boots() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
-    let mut b = Elite2::new(Kind::Elite2);
+    let mut b = Elite2::new(if std::env::var("MIMIC_U64_C64U").is_ok() {
+        Kind::C64Ultimate
+    } else {
+        Kind::Elite2
+    });
     let mut c64 = NullC64::default();
     b.power_on(Some(&file), &mut c64);
     for _ in 0..secs * 100 {

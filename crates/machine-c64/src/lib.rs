@@ -177,6 +177,11 @@ pub fn entry() -> MachineEntry {
 ///   `options["c64roms"] = "firmware"` they are those the firmware loads
 ///   (without ROM files in its flash disk that is its welcome page).
 ///
+/// - The board's LEDs are the machine's lights ([`Machine::lights`]): on
+///   the Elite II the strip on its LED connector, `options["ledstrip"]`
+///   LEDs long (0–84, 24 unless given, 0: none plugged in); on the
+///   Commodore 64 Ultimate the case lights and the LEDs under the
+///   keyboard.
 /// - Drive 8 is the board's drive A, a 1541 the firmware powers, resets
 ///   and gives its ROM and disks (images it mounts from the SD card or a
 ///   USB stick); the Commodore 64 Ultimate's drive B is a second one
@@ -884,6 +889,20 @@ impl C64 {
                         }
                     },
                 ),
+                match (kind, option("ledstrip")) {
+                    (_, None) => u64board::glue::STRIP_LEDS,
+                    (u64board::Kind::Elite2, Some(n)) => n
+                        .parse()
+                        .ok()
+                        .filter(|&n| n <= chips_ultimate::board::LEDS)
+                        .ok_or_else(|| ConfigError::Invalid(format!("ledstrip option '{n}'")))?,
+                    (u64board::Kind::C64Ultimate, Some(_)) => {
+                        return Err(ConfigError::Invalid(
+                            "option 'ledstrip': the Commodore 64 Ultimate's lights are built in"
+                                .into(),
+                        ))
+                    }
+                },
             )));
             m.board_power_on();
         }
@@ -1841,6 +1860,10 @@ impl Machine for C64 {
             controls.push(ControlInfo::button(4, "SD2IEC PREV", sd.button_held(true)));
         }
         controls
+    }
+
+    fn lights(&self) -> Vec<mimic_core::LightGroup> {
+        self.board.as_ref().map_or_else(Vec::new, |b| b.lights())
     }
 
     fn ports(&self) -> Vec<PortInfo> {

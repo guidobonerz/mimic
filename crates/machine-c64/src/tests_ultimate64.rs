@@ -757,3 +757,246 @@ fn installed_firmware_menu() {
         println!("|{}|", String::from_utf8_lossy(row));
     }
 }
+
+/// What the firmware does for one colour on all LEDs of a controller:
+/// the map 0, 1, 2 throughout, brightness, the colour, a frame.
+fn light_leds(m: &mut C64, base: u32, rgb: [u8; 3], brightness: u8) {
+    let b = &mut m.board.as_mut().unwrap().board;
+    let mut side = chips_ultimate::NullC64::default();
+    let mut wr = |addr: u32, v: u8| {
+        b.io_access(addr, Some(v), &mut side);
+    };
+    wr(base + 0xFC, 1);
+    for i in 0..252 {
+        wr(base + i, (i % 3) as u8);
+    }
+    wr(base + 0xFC, 0);
+    wr(base + 0xFE, brightness << 2);
+    for (i, c) in rgb.into_iter().enumerate() {
+        wr(base + i as u32, c);
+    }
+    wr(base + 0xFD, 0);
+    wr(base + 0xFF, 0);
+}
+
+#[test]
+fn the_led_strip_is_the_machines_lights() {
+    use mimic_core::frame::Rgb8;
+    // A plain C64 has none.
+    assert!(C64::new(&config(&[])).unwrap().lights().is_empty());
+    // Elite II: the strip on the connector, 24 LEDs, dark at first.
+    let mut m = C64::new_ultimate(&config(&[])).unwrap();
+    let lights = m.lights();
+    assert_eq!(lights.len(), 1);
+    assert_eq!(lights[0].name, "LED STRIP");
+    assert_eq!(lights[0].leds, vec![Rgb8::default(); 24]);
+    // Sent while the pins are the user port's: nothing.
+    light_leds(&mut m, 0x10_0600, [255, 0, 64], 31);
+    assert_eq!(m.lights()[0].leds, vec![Rgb8::default(); 24]);
+    // LEDSTRIP_EN, then the frame: the light as a screen shows it.
+    let mut side = chips_ultimate::NullC64::default();
+    let b = &mut m.board.as_mut().unwrap().board;
+    b.io_access(0x10_040C, Some(1), &mut side);
+    light_leds(&mut m, 0x10_0600, [255, 0, 64], 31);
+    let lit = Rgb8 {
+        r: 255,
+        g: 0,
+        b: 127,
+    };
+    assert_eq!(m.lights()[0].leds, vec![lit; 24]);
+    // A savestate keeps what the strip shows; power-on darkens it.
+    let state = m.save_state();
+    let mut other = C64::new_ultimate(&config(&[])).unwrap();
+    other.load_state(&state).unwrap();
+    assert_eq!(other.lights(), m.lights());
+    m.reset(mimic_core::ResetKind::Hard);
+    assert_eq!(m.lights()[0].leds, vec![Rgb8::default(); 24]);
+    // The strip's length is an option; 0: no strip.
+    let m = C64::new_ultimate(&config(&[("ledstrip", "40")])).unwrap();
+    assert_eq!(m.lights()[0].leds.len(), 40);
+    let m = C64::new_ultimate(&config(&[("ledstrip", "0")])).unwrap();
+    assert!(m.lights().is_empty());
+    assert!(C64::new_ultimate(&config(&[("ledstrip", "85")])).is_err());
+    assert!(C64::new_ultimate(&config(&[("ledstrip", "x")])).is_err());
+
+    // Commodore 64 Ultimate: case lights and the keyboard's LEDs.
+    let mut c = config(&[]);
+    c.model = Some("c64u".into());
+    let mut m = C64::new_ultimate(&c).unwrap();
+    let groups: Vec<(&str, usize)> = m.lights().iter().map(|g| (g.name, g.leds.len())).collect();
+    assert_eq!(
+        groups,
+        [
+            ("CASE LIGHTS TOP", 30),
+            ("CASE LIGHTS BOTTOM", 30),
+            ("CASE LIGHTS STRIP", 24),
+            ("KEYBOARD LIGHTS", 71)
+        ]
+    );
+    // No LEDSTRIP_EN needed here; the two controllers are apart.
+    light_leds(&mut m, 0x10_0600, [255, 0, 64], 31);
+    let lights = m.lights();
+    assert!(lights[..3].iter().all(|g| g.leds.iter().all(|&c| c == lit)));
+    assert!(lights[3].leds.iter().all(|&c| c == Rgb8::default()));
+    light_leds(&mut m, 0x10_0900, [0, 255, 0], 31);
+    let green = Rgb8 { r: 0, g: 255, b: 0 };
+    assert_eq!(m.lights()[3].leds, vec![green; 71]);
+    c.options.insert("ledstrip".into(), "24".into());
+    assert!(C64::new_ultimate(&c).is_err());
+}
+
+/// An installed flash for the ignored tests: `MIMIC_U64_FLASH` is the
+/// flash file (`elite2-flash.bin` or `c64u-flash.bin`, its `.reg` beside
+/// it); the file's name picks the model.
+fn installed() -> Option<C64> {
+    let Ok(path) = std::env::var("MIMIC_U64_FLASH") else {
+        eprintln!("MIMIC_U64_FLASH not set");
+        return None;
+    };
+    let flash = std::fs::read(&path).unwrap();
+    let reg = std::fs::read(path.replace(".bin", ".reg")).unwrap();
+    let c64u = path.contains("c64u");
+    let name = if c64u { "c64u" } else { "elite2" };
+    let mut c = config(&[("c64roms", "firmware")]);
+    if c64u {
+        c.model = Some("c64u".into());
+    }
+    let mut m = C64::new_ultimate(&c).unwrap();
+    let mut fs = MemFileHost::new();
+    fs.insert(&format!("/Board/{name}-flash.bin"), flash)
+        .unwrap();
+    fs.insert(&format!("/Board/{name}-flash.reg"), reg).unwrap();
+    m.attach_host(HostServices::new(None, Some(Box::new(fs))));
+    Some(m)
+}
+
+/// The installed firmware's LED task: what the LED controllers hold and
+/// what the LEDs show, every second for twelve (printed;
+/// `MIMIC_U64_FLASH` as for [`installed`]).
+///
+/// Seen 2026-11-23: Gideon's 3.15a lights the strip in one colour,
+/// "Royal Blue" at brightness 8 of 31 (four frames a second, chip type
+/// APA102). Commodore's 1.2.1 plays a rainbow from the middle outwards
+/// on the case lights and across the keyboard for about six seconds and
+/// then fades all LEDs slowly through the colours, the case at brightness
+/// 25, the keyboard at 6.
+#[test]
+#[ignore]
+fn installed_firmware_leds() {
+    let Some(mut m) = installed() else { return };
+    for step in 0..12 {
+        frames(&mut m, 100);
+        println!("after {} frames:", (step + 1) * 100);
+        let b = board(&m);
+        println!(
+            "  LEDSTRIP_EN {:02x}, PWM_DUTY {:02x}, CASELED_SELECT {:02x}",
+            b.u64io.latch(0x0C),
+            b.u64io.latch(0x0D),
+            b.u64io.latch(0x0E)
+        );
+        for (name, led) in [("board", &b.misc.led), ("blingboard", &b.misc.bling_led)] {
+            println!(
+                "  {name}: {} frames sent, enabled {}, brightness {}, {:?} (map register {:02x}), start {}",
+                led.frames,
+                led.enabled(),
+                led.brightness(),
+                led.protocol(),
+                led.map_reg,
+                led.start,
+            );
+            println!("    pattern {:?}", led.pattern());
+        }
+        for g in m.lights() {
+            let leds: Vec<String> = g
+                .leds
+                .iter()
+                .map(|c| format!("{:02x}{:02x}{:02x}", c.r, c.g, c.b))
+                .collect();
+            println!("  {}: {}", g.name, leds.join(" "));
+        }
+    }
+}
+
+/// The installed firmware worked by hand, for looking at what a menu
+/// setting does to the LEDs: `MIMIC_U64_KEYS` is a list of steps
+/// separated by commas: `menu` (the menu button), a number (a key of the
+/// C64's matrix, column × 8 + row: RETURN 1, cursor right 2, F7 3, F1 4,
+/// F3 5, F5 6, cursor down 7, RUN/STOP 63), a number with `s` (with left
+/// SHIFT: cursor up `7s`, F2 `4s`), `wN` (N frames go by). After every
+/// step the screen and the lights are printed. `MIMIC_U64_FLASH` as for
+/// [`installed`].
+///
+/// Seen 2026-11-23 with Gideon's 3.15a (Elite II): the LED settings are
+/// the page "LED Lighting" of the configuration (F2 in the menu), its
+/// part "LED Strip (if installed)": LED Type, Strip Length, Mode,
+/// Pattern, Intensity, Color, Tint. The steps
+/// `menu,4s,7,7,7,1,7,7,7,7,1,7,7,1,w100,7,1,7,1,w100` set Mode to
+/// "Rainbow" (all LEDs fade through the colours together) and then
+/// Pattern to "Left to Right" (the colours run along the strip).
+/// Commodore's 1.2.1 has the page as "LED LIGHTING" in its menu and as
+/// "LEDs" under F2, with "Case Lights" and "Keyboard Lights" (each Mode,
+/// Music Detect, Pattern, Brightness, Color, Tint).
+#[test]
+#[ignore]
+fn installed_firmware_keys() {
+    let Some(mut m) = installed() else { return };
+    let steps = std::env::var("MIMIC_U64_KEYS").unwrap_or_default();
+    frames(&mut m, 900);
+    let key = |m: &mut C64, k: u8, down: bool| {
+        let at = m.now();
+        m.input(TimedInput {
+            at,
+            target: InputTarget::Keyboard,
+            event: mimic_core::input::InputEvent::Key {
+                machine_key: mimic_core::input::MachineKey(k.into()),
+                down,
+            },
+        });
+    };
+    for step in steps.split(',').filter(|s| !s.is_empty()) {
+        if step == "menu" {
+            m.control(5, 1);
+            frames(&mut m, 10);
+            m.control(5, 0);
+            frames(&mut m, 100);
+        } else if let Some(n) = step.strip_prefix('w') {
+            frames(&mut m, n.parse().unwrap());
+        } else {
+            let shift = step.ends_with('s');
+            let k: u8 = step.trim_end_matches('s').parse().unwrap();
+            if shift {
+                key(&mut m, 15, true);
+                frames(&mut m, 1);
+            }
+            key(&mut m, k, true);
+            frames(&mut m, 4);
+            key(&mut m, k, false);
+            if shift {
+                frames(&mut m, 1);
+                key(&mut m, 15, false);
+            }
+            frames(&mut m, 30);
+        }
+        println!("--- {step}");
+        let text: String = m.mem.ram[0x400..0x7e8]
+            .iter()
+            .map(|&c| match c & 0x7f {
+                c @ 0x20..=0x7e => c as char,
+                _ => ' ',
+            })
+            .collect();
+        for row in text.as_bytes().chunks(40) {
+            if row.iter().any(|&c| c != b' ') {
+                println!("|{}|", String::from_utf8_lossy(row));
+            }
+        }
+        for g in m.lights() {
+            let leds: Vec<String> = g
+                .leds
+                .iter()
+                .map(|c| format!("{:02x}{:02x}{:02x}", c.r, c.g, c.b))
+                .collect();
+            println!("  {}: {}", g.name, leds.join(" "));
+        }
+    }
+}

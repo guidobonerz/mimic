@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use mimic_core::frame::{FrameRef, SignalInfo};
 use mimic_core::input::{InputEvent, InputTarget, TimedInput};
 use mimic_core::overlay::OverlayWants;
-use mimic_core::{ControlId, ControlInfo, Machine, ScreenId, StopReason};
+use mimic_core::{ControlId, ControlInfo, LightGroup, Machine, ScreenId, StopReason};
 use mimic_debug::protocol::Command;
 use mimic_debug::{Endpoint, Service, Session};
 use mimic_input::{HostEvent, JoyKeys, Mapper};
@@ -196,6 +196,9 @@ pub struct Shared {
     /// emulation publishes [`Shared::controls`] after every frame.
     pub panel_on: AtomicBool,
     pub controls: Mutex<Vec<ControlInfo>>,
+    /// The machine's lamps ([`Machine::lights`]) for the console panel,
+    /// published with the controls; empty for a machine without.
+    pub lights: Mutex<Vec<LightGroup>>,
     /// Panel clicks from the window, (control, value); queued as input.
     pub panel_events: Mutex<Vec<(u16, u8)>>,
     /// Which host keys play the joystick (index into `JoyKeys::ALL`); set by
@@ -320,6 +323,7 @@ impl Shared {
             footer: Mutex::default(),
             panel_on: AtomicBool::new(false),
             controls: Mutex::default(),
+            lights: Mutex::default(),
             panel_events: Mutex::default(),
             joy_keys: AtomicU8::new(0),
             joy_port: AtomicU8::new(0),
@@ -1213,6 +1217,13 @@ pub fn spawn(
                 if let Ok(mut c) = shared.controls.lock() {
                     *c = controls;
                 }
+                // No lamps (most machines): an empty list, nothing to copy.
+                let lights = session.machine().lights();
+                if let Ok(mut l) = shared.lights.lock() {
+                    if *l != lights {
+                        *l = lights;
+                    }
+                }
                 let rows = cheat_rows(&mut session);
                 if let Ok(mut c) = shared.cheats.lock() {
                     *c = rows;
@@ -1894,6 +1905,31 @@ mod tests {
         shared.quit.store(true, Ordering::Relaxed);
         handle.join().unwrap();
         assert!(ok, "B/W after the click: {:?}", tv());
+    }
+
+    /// The machine's lamps reach the panel like its controls: the
+    /// Ultimate 64's LED strip (dark without firmware), none for a C64.
+    #[test]
+    fn the_panel_gets_the_machines_lights() {
+        for (machine, leds) in [("ultimate64", Some(24)), ("c64", None)] {
+            let mut config = MachineConfig::default();
+            config.options.insert("roms".into(), "stub".into());
+            let m = mimic_machines::registry().create(machine, &config).unwrap();
+            let mapper = Mapper::new(mimic_input::Profile::default_for(machine));
+            let (_tx, rx) = std::sync::mpsc::channel();
+            let shared = Arc::new(Shared::new());
+            shared.panel_on.store(true, Ordering::Relaxed);
+            let handle = spawn(m, mapper, rx, shared.clone(), None, None);
+            let lights = || shared.lights.lock().unwrap().clone();
+            assert!(eventually(|| !shared.controls.lock().unwrap().is_empty()));
+            let ok = eventually(|| lights().first().map(|g| g.leds.len()) == leds);
+            shared.quit.store(true, Ordering::Relaxed);
+            handle.join().unwrap();
+            assert!(ok, "{machine}: {:?}", lights());
+            if leds.is_some() {
+                assert_eq!(lights()[0].name, "LED STRIP");
+            }
+        }
     }
 
     #[test]
