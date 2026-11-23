@@ -2157,7 +2157,7 @@ pub static MSX: Keymap = Keymap {
 /// The positional keymap for a machine id.
 pub fn positional(machine: &str) -> Option<&'static Keymap> {
     match machine {
-        "c64" => Some(&C64),
+        "c64" | "ultimate64" => Some(&C64),
         "c128" => Some(&C128),
         "vic20" => Some(&VIC20),
         "pet" => Some(&PET),

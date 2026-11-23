@@ -16,7 +16,7 @@ pub mod tcbm;
 pub mod virtual_drive;
 pub mod wd177x;
 
-pub use c1541::{CbmDrive, DriveModel};
+pub use c1541::{CbmDrive, DiskSurface, DriveModel};
 pub use c1581::Drive1581;
 pub use dos::VirtualDos;
 pub use iec::IecLines;

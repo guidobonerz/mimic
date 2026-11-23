@@ -37,6 +37,10 @@ usage: mimic-headless [options]
                         hard disk images to SCSI); repeat for the next drives
                         (Amiga DF1: with --option drives=2); a drive refusing an
                         image passes it on to the next
+  --sd PATH             Ultimate 64 Elite II: the SD card, an image file or a
+                        folder (shown as a FAT32 volume, changes written back)
+  --usb PATH            Ultimate 64 Elite II: a USB stick, the same; repeat for
+                        the hub's ports 2 and 3
   --tape FILE           TAP image into the datasette, CAS into the Atari
                         program recorder, WAV into the Apple II cassette
                         (PLAY pressed); a PRG is recorded
@@ -115,6 +119,9 @@ struct Args {
     rom_dir: Option<String>,
     prg: Option<String>,
     disk: Vec<String>,
+    /// `--sd`, `--usb`: block media (Ultimate 64 Elite II).
+    sd: Option<String>,
+    usb: Vec<String>,
     tape: Option<String>,
     cart: Option<String>,
     /// `--type` and `--type-file`, in the order given.
@@ -184,6 +191,8 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Args, String> {
             }
             "--prg" => args.prg = Some(value("--prg")?),
             "--disk" => args.disk.push(value("--disk")?),
+            "--sd" => args.sd = Some(value("--sd")?),
+            "--usb" => args.usb.push(value("--usb")?),
             "--tape" => args.tape = Some(value("--tape")?),
             "--cart" => args.cart = Some(value("--cart")?),
             "--overlay" => args.overlay = Some(value("--overlay")?),
@@ -552,6 +561,7 @@ fn run(mut args: Args) -> Result<ExitCode, String> {
             None => return Err(first_err.unwrap_or_else(|| format!("{path}: no free drive"))),
         }
     }
+    media_backends::block::insert_all(machine.as_mut(), args.sd.as_deref(), &args.usb)?;
     if let Some(path) = &args.tape {
         let slot = slot_of(machine.as_ref(), MediaKind::Tape)
             .ok_or_else(|| format!("{} has no datasette", args.machine))?;

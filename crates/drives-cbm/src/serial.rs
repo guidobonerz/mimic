@@ -23,7 +23,7 @@ use mimic_core::{
     StateError, StateReader, StateWriter, StopReason,
 };
 
-use crate::c1541::{CbmDrive, DriveModel};
+use crate::c1541::{CbmDrive, DiskSurface, DriveModel};
 use crate::c1581::Drive1581;
 use crate::iec::IecLines;
 use crate::virtual_drive::VirtualDrive;
@@ -57,6 +57,24 @@ pub trait TrueDrive: MediaSlot + DebugTarget + Savestate + Send {
     fn iec_out(&self, atn_low: bool) -> IecLines;
     /// One microsecond with the lines the host pulls.
     fn tick(&mut self, host: IecLines, dbg: Option<&mut DebugHooks>) -> Cycle;
+    /// The same with the disk on an outside surface; a drive that cannot
+    /// take one ignores it.
+    fn tick_on(
+        &mut self,
+        host: IecLines,
+        dbg: Option<&mut DebugHooks>,
+        surface: &mut dyn DiskSurface,
+    ) -> Cycle {
+        let _ = surface;
+        self.tick(host, dbg)
+    }
+    /// The 1541/1571 behind the trait, for what only it has.
+    fn as_cbm(&self) -> Option<&CbmDrive> {
+        None
+    }
+    fn as_cbm_mut(&mut self) -> Option<&mut CbmDrive> {
+        None
+    }
 }
 
 impl TrueDrive for CbmDrive {
@@ -80,6 +98,20 @@ impl TrueDrive for CbmDrive {
     }
     fn tick(&mut self, host: IecLines, dbg: Option<&mut DebugHooks>) -> Cycle {
         CbmDrive::tick(self, host, dbg)
+    }
+    fn tick_on(
+        &mut self,
+        host: IecLines,
+        dbg: Option<&mut DebugHooks>,
+        surface: &mut dyn DiskSurface,
+    ) -> Cycle {
+        CbmDrive::tick_on(self, host, dbg, surface)
+    }
+    fn as_cbm(&self) -> Option<&CbmDrive> {
+        Some(self)
+    }
+    fn as_cbm_mut(&mut self) -> Option<&mut CbmDrive> {
+        Some(self)
     }
 }
 
@@ -303,6 +335,22 @@ impl SerialDrive {
         }
     }
 
+    /// A true 1541 or 1571 (for its outside-surface mode, ROM and
+    /// jumpers).
+    pub fn cbm(&self) -> Option<&CbmDrive> {
+        match &self.kind {
+            DriveKind::True(d) => d.as_cbm(),
+            DriveKind::Virtual(_) => None,
+        }
+    }
+
+    pub fn cbm_mut(&mut self) -> Option<&mut CbmDrive> {
+        match &mut self.kind {
+            DriveKind::True(d) => d.as_cbm_mut(),
+            DriveKind::Virtual(_) => None,
+        }
+    }
+
     /// The debug memory space of a true drive.
     pub fn space(&self) -> Option<MemSpaceId> {
         match &self.kind {
@@ -324,13 +372,37 @@ impl SerialDrive {
     pub fn run(
         &mut self,
         host: IecLines,
+        dbg: Option<&mut DebugHooks>,
+    ) -> (IecLines, Option<StopReason>) {
+        self.run_with(host, dbg, None)
+    }
+
+    /// [`SerialDrive::run`] with the disk on an outside surface (a true
+    /// 1541 or 1571 in that mode, see `CbmDrive::set_external_surface`).
+    pub fn run_on(
+        &mut self,
+        host: IecLines,
+        dbg: Option<&mut DebugHooks>,
+        surface: &mut dyn DiskSurface,
+    ) -> (IecLines, Option<StopReason>) {
+        self.run_with(host, dbg, Some(surface))
+    }
+
+    fn run_with(
+        &mut self,
+        host: IecLines,
         mut dbg: Option<&mut DebugHooks>,
+        mut surface: Option<&mut (dyn DiskSurface + '_)>,
     ) -> (IecLines, Option<StopReason>) {
         let mut stop = None;
         for _ in 0..self.clock.tick() {
             match &mut self.kind {
                 DriveKind::True(d) => {
-                    if let CycleResult::Jammed = d.tick(host, dbg.as_deref_mut()) {
+                    let r = match surface.as_deref_mut() {
+                        Some(s) => d.tick_on(host, dbg.as_deref_mut(), s),
+                        None => d.tick(host, dbg.as_deref_mut()),
+                    };
+                    if let CycleResult::Jammed = r {
                         stop = Some(StopReason::CpuJam {
                             device: self.device,
                             pc: u32::from(d.pc()),

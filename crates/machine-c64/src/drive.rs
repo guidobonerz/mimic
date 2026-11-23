@@ -12,6 +12,10 @@ use mimic_core::{DeviceId, MemSpaceId};
 pub const DRIVE8: DeviceId = DeviceId("drive8");
 /// The drive CPU's address space.
 pub const DRIVE_SPACE: MemSpaceId = MemSpaceId(3);
+/// The Ultimate board's drive B (device 9 unless the firmware sets
+/// another) and its CPU's address space.
+pub const DRIVE9: DeviceId = DeviceId("drive9");
+pub const DRIVE9_SPACE: MemSpaceId = MemSpaceId(6);
 
 /// What the computer pulls on the bus, from CIA2 port A.
 pub fn c64_lines(cia2_pa: u8) -> IecLines {

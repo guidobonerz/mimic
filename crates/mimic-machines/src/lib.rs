@@ -166,6 +166,7 @@ pub fn registry() -> Registry {
     let mut r = Registry::new();
     r.register(machine_sim6502::entry());
     r.register(machine_c64::entry());
+    r.register(machine_c64::ultimate64_entry());
     r.register(machine_vic20::entry());
     r.register(machine_pet::entry());
     r.register(machine_ted::c16_entry());

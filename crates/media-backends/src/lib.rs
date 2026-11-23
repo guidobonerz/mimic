@@ -14,6 +14,10 @@
 #![cfg_attr(not(feature = "opencbm"), forbid(unsafe_code))]
 #![cfg_attr(feature = "opencbm", deny(unsafe_code))]
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod block;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod fat_dir;
 #[cfg(feature = "flux")]
 pub mod flux;
 #[cfg(feature = "greaseweazle")]

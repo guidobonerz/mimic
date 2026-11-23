@@ -1,0 +1,12 @@
+[package]
+name = "cpu-rv32"
+description = "RISC-V RV32IM + Zicsr, machine mode (rvlite soft CPU of the Ultimate 64 Elite II board)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mimic-core.workspace = true

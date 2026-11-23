@@ -89,6 +89,7 @@ pub mod io;
 pub mod keyboard;
 pub mod loader;
 pub mod memory;
+pub mod u64board;
 pub use chips_cbm::pla;
 pub mod stub;
 pub mod ultimate;
@@ -159,6 +160,42 @@ pub fn entry() -> MachineEntry {
     }
 }
 
+/// The Ultimate 64 Elite II (Gideon's Logic) and the Commodore 64
+/// Ultimate built on the same board: this C64 with the board around it
+/// ([`u64board`]), whose RISC-V processor runs the board's own firmware.
+/// Models "elite2" (default) and "c64u".
+///
+/// - The firmware is the user's: it starts from the board's flash, a
+///   file in the frontend's file area (`/Board/elite2-flash.bin` or
+///   `/Board/c64u-flash.bin`), which is empty at first. An update file
+///   (`.ue2`) in the file area's root named by `options["update"]` is
+///   started in its place, as the firmware's "Run Update" does: its
+///   updater writes the flash. Without firmware the board stands still
+///   and the C64 with it.
+/// - Panel control 5 "MENU" is the board's menu button.
+/// - The C64's ROMs are the machine's own (the `c64` ROM folder); with
+///   `options["c64roms"] = "firmware"` they are those the firmware loads
+///   (without ROM files in its flash disk that is its welcome page).
+///
+/// - Drive 8 is the board's drive A, a 1541 the firmware powers, resets
+///   and gives its ROM and disks (images it mounts from the SD card or a
+///   USB stick); the Commodore 64 Ultimate's drive B is a second one
+///   ([`u64board::drives`]). The C64's own drive 8 has no media slot here.
+///
+/// Not built yet: network, cartridge logic, command interface, the SIDs'
+/// configuration, turbo, the drives as 1571 or 1581. The C64's options
+/// `uci`, `reu` and `drive8` are the board's business here and are
+/// refused.
+pub fn ultimate64_entry() -> MachineEntry {
+    MachineEntry {
+        id: "ultimate64",
+        name: "Ultimate 64 Elite II",
+        models: &["elite2", "c64u"],
+        video_formats: mimic_core::registry::PAL_NTSC,
+        create: |config| Ok(Box::new(C64::new_ultimate(config)?)),
+    }
+}
+
 /// Interrupt sources on the open-collector IRQ and NMI lines.
 pub mod irq {
     pub const VIC: u8 = 1 << 0;
@@ -171,6 +208,8 @@ pub mod nmi {
     pub const CIA2: u8 = 1 << 0;
     pub const RESTORE: u8 = 1 << 1;
     pub const CARTRIDGE: u8 = 1 << 2;
+    /// The Ultimate board ([`crate::u64board`]).
+    pub const BOARD: u8 = 1 << 3;
 }
 
 /// Wired-OR interrupt lines: a line is active while any source pulls it.
@@ -243,11 +282,36 @@ fn cpu_peek(
     }
 }
 
+/// The cartridge on the expansion port: the Ultimate board's own while
+/// the board is there ([`u64board::cart`]), else the slot's.
+fn port_cart<'a>(
+    board: &'a mut Option<u64board::cart::BoardCart<'_>>,
+    slot: &'a mut ExpansionSlot,
+) -> Option<&'a mut (dyn ExpansionCart + 'a)> {
+    match board {
+        Some(b) => Some(b),
+        None => slot
+            .cart_mut()
+            .map(|c| c.as_mut() as &mut (dyn ExpansionCart + 'a)),
+    }
+}
+
+/// The same for peeks and the VIC-II.
+fn port_cart_peek<'a>(
+    board: &'a Option<u64board::cart::BoardCartPeek<'_>>,
+    slot: &'a ExpansionSlot,
+) -> Option<&'a dyn ExpansionCart> {
+    match board {
+        Some(b) => Some(b),
+        None => slot.cart().map(|c| c.as_ref() as &dyn ExpansionCart),
+    }
+}
+
 /// The CPU's bus: PLA-resolved memory, I/O and the cartridge.
 struct C64Bus<'a> {
     mem: &'a mut Memory,
     io: &'a mut Io,
-    cart: Option<&'a mut (dyn ExpansionCart + 'static)>,
+    cart: Option<&'a mut (dyn ExpansionCart + 'a)>,
     /// The Ultimate command interface, if enabled: it wins `$DF1C–$DF1F`.
     uci: Option<&'a mut Uci>,
     /// The REU, if enabled: I/O2 but for the UCI. `None` on the REU's own
@@ -522,6 +586,10 @@ pub const SLOT_TAPE: SlotId = SlotId(2);
 pub const SLOT_CARTRIDGE: SlotId = SlotId(3);
 /// The SD2IEC (`options["sd2iec"]`): a disk image inserted here is mounted.
 pub const SLOT_SD2IEC: SlotId = SlotId(4);
+/// The Ultimate board's SD card slot; its USB ports follow
+/// (`SLOT_BOARD_SD + 1` … `+ 3`). Block media: an image, or a folder the
+/// frontend shows as a FAT volume.
+pub const SLOT_BOARD_SD: SlotId = SlotId(5);
 /// The SD2IEC's card in the frontend's file area.
 pub const SD2IEC_FOLDER: &str = "/SD2IEC";
 
@@ -567,6 +635,9 @@ pub struct C64 {
     fastload: bool,
     /// A trapped exchange with the virtual drive is in progress.
     fast_serving: bool,
+    /// The Ultimate 64 Elite II board around the C64 ([`u64board`]);
+    /// `None` on a C64.
+    board: Option<Box<u64board::glue::BoardPart>>,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -582,6 +653,32 @@ struct Snapshot {
 
 impl C64 {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
+        Self::with_board(config, None)
+    }
+
+    /// The machine "ultimate64" (see [`ultimate64_entry`]).
+    pub fn new_ultimate(config: &MachineConfig) -> Result<Self, ConfigError> {
+        let kind = match config.model.as_deref() {
+            None | Some("elite2") => u64board::Kind::Elite2,
+            Some("c64u") => u64board::Kind::C64Ultimate,
+            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        };
+        for own in ["uci", "reu", "drive8"] {
+            if config.options.contains_key(own) {
+                return Err(ConfigError::Invalid(format!(
+                    "option '{own}': on the Ultimate 64 this is the board's"
+                )));
+            }
+        }
+        let mut plain = config.clone();
+        plain.model = None;
+        Self::with_board(&plain, Some(kind))
+    }
+
+    fn with_board(
+        config: &MachineConfig,
+        board: Option<u64board::Kind>,
+    ) -> Result<Self, ConfigError> {
         // `options["vicii"]`: the VIC-II type, "6569"/"8565" (PAL) or
         // "6567"/"8562" (NTSC; the 6567R8); without it the model's old
         // type. The HMOS-II types 8565/8562 (C64C) show the grey dot.
@@ -667,11 +764,20 @@ impl C64 {
             DRIVE_SPACE,
             cpu_hz,
         )?;
+        let ppm =
+            drives_cbm::serial::crystal_ppm(config.options.get("drive8_ppm").map(String::as_str))?;
         if let Some(d) = &mut drive {
-            let ppm = drives_cbm::serial::crystal_ppm(
-                config.options.get("drive8_ppm").map(String::as_str),
-            )?;
             d.set_crystal_ppm(ppm, cpu_hz);
+        }
+        // The Ultimate board: drive 8 is its drive A.
+        if board.is_some() {
+            drive = Some(u64board::drives::new_board_drive(
+                8,
+                DRIVE8,
+                DRIVE_SPACE,
+                cpu_hz,
+                ppm,
+            ));
         }
         if sd2iec_on && sd2iec_device == 8 && drive.is_some() {
             return Err(ConfigError::Invalid(
@@ -754,12 +860,77 @@ impl C64 {
             boot_frame: 0,
             fastload,
             fast_serving: false,
+            board: None,
         };
+        if let Some(kind) = board {
+            m.board = Some(Box::new(u64board::glue::BoardPart::new(
+                kind,
+                u64::from(cpu_hz),
+                config.options.get("update").cloned(),
+                match option("c64roms") {
+                    None | Some("own") => false,
+                    Some("firmware") => true,
+                    Some(other) => {
+                        return Err(ConfigError::Invalid(format!("c64roms option '{other}'")))
+                    }
+                },
+                &m.mem.roms.chargen[..],
+                u64board::net::Cable::new(
+                    !net_off,
+                    &match option("netfwd") {
+                        None => u64board::net::FORWARDS.to_vec(),
+                        Some(s) => {
+                            u64board::net::parse_forwards(s).map_err(ConfigError::Invalid)?
+                        }
+                    },
+                ),
+            )));
+            m.board_power_on();
+        }
         m.io.debugcart = debugcart;
         // The devices' lines from the start (paddles sit at mid travel).
         m.refresh_port(PortId(0));
         m.refresh_port(PortId(1));
         Ok(m)
+    }
+
+    /// The C64's reset (see [`Machine::reset`]), without the Ultimate
+    /// board's part.
+    fn reset_c64(&mut self, kind: ResetKind) {
+        if let Some(p) = &mut self.printer {
+            p.reset();
+        }
+        let hard = kind == ResetKind::Hard;
+        self.cpu.reset();
+        self.mem.reset(hard);
+        self.io.reset(hard);
+        if self.board.is_some() {
+            self.board_drives_follow_reset(hard);
+        } else if let Some(d) = &mut self.drive {
+            d.reset(hard);
+        }
+        if let Some(sd) = &mut self.sd2iec {
+            sd.reset(hard);
+        }
+        self.ints = Interrupts::default();
+        if let Some(c) = self.cart.cart_mut() {
+            c.reset();
+        }
+        if let Some(u) = &mut self.uci {
+            u.reset();
+        }
+        if let Some(r) = &mut self.reu {
+            r.reset();
+        }
+        self.cartridge_cycle();
+        self.input.clear();
+        if self.autostart == Autostart::Loading {
+            self.autostart = Autostart::Done;
+        }
+        self.fast_serving = false;
+        self.field_done_pending = false;
+        self.boot_frame = self.io.vic.beam().frame;
+        self.sync_light_pen();
     }
 
     pub fn interrupts_mut(&mut self) -> &mut Interrupts {
@@ -813,9 +984,17 @@ impl C64 {
             }
             None => CartLines::default(),
         };
-        // Line levels: true = high (not pulled).
-        if (self.mem.game, self.mem.exrom) != (!lines.game, !lines.exrom) {
-            self.mem.set_cartridge_lines(!lines.game, !lines.exrom);
+        // Line levels: true = high (not pulled). On the Ultimate board the
+        // board drives the port: its cartridge, or the ULTIMAX it forces.
+        let (game, exrom) = match &self.board {
+            Some(b) => {
+                let (game, exrom) = b.cart_lines();
+                (!game, !exrom)
+            }
+            None => (!lines.game, !lines.exrom),
+        };
+        if (self.mem.game, self.mem.exrom) != (game, exrom) {
+            self.mem.set_cartridge_lines(game, exrom);
         }
         self.ints.set_irq(irq::CARTRIDGE, lines.irq);
         self.ints.set_nmi(nmi::CARTRIDGE, lines.nmi);
@@ -838,10 +1017,11 @@ impl C64 {
         }
         // φ1: VIC-II access; its BA decides whether the CPU may read.
         let bank = self.io.vic_bank();
+        let board_cart = self.board.as_ref().map(|b| b.cart_peek());
         self.io.vic.phi1(&VicView {
             mem: &self.mem,
             bank,
-            cart: self.cart.cart().map(|c| c.as_ref()),
+            cart: port_cart_peek(&board_cart, &self.cart),
             cpu_data: self.io.cpu_data,
         });
         self.cpu.set_rdy(self.io.vic.ba());
@@ -860,6 +1040,9 @@ impl C64 {
         }
         // CIAs clock before the CPU access: a read sees this cycle's state.
         self.io.tick_cias();
+        // While the Ultimate board holds the 6510 (its menu is open, or
+        // it moves data), the last note would sound on: no sound then.
+        self.io.mute = self.board.as_ref().is_some_and(|b| b.lines.stop);
         self.io.tick_sid();
         // Lines are sampled after the CIA clock: an NMI raised now is an edge
         // even if the CPU's ICR read in this cycle releases it (Lorenz icr01).
@@ -877,21 +1060,26 @@ impl C64 {
                 let mut bus = C64Bus {
                     mem: &mut self.mem,
                     io: &mut self.io,
-                    cart: self.cart.cart_mut().map(|c| c.as_mut()),
+                    cart: self
+                        .cart
+                        .cart_mut()
+                        .map(|c| c.as_mut() as &mut dyn ExpansionCart),
                     uci: self.uci.as_mut(),
                     reu: None,
                 };
                 r.step(&mut bus);
             }
             CycleResult::Busy
-        } else if !self.io.vic.aec() {
+        } else if !self.io.vic.aec() || self.board.as_ref().is_some_and(|b| b.holds()) {
+            // (Also while the Ultimate board holds the 6510.)
             self.cpu.stall_off_bus();
             CycleResult::Busy
         } else {
+            let mut board_cart = self.board.as_mut().map(|b| b.cart());
             let mut bus = C64Bus {
                 mem: &mut self.mem,
                 io: &mut self.io,
-                cart: self.cart.cart_mut().map(|c| c.as_mut()),
+                cart: port_cart(&mut board_cart, &mut self.cart),
                 uci: self.uci.as_mut(),
                 reu: self.reu.as_mut(),
             };
@@ -904,10 +1092,11 @@ impl C64 {
             // A CPU stopped by RDY repeats its read: the data of that read
             // is on the bus for the VIC-II (see `Io::cpu_data`).
             if let Some(a) = self.cpu.stalled_read() {
+                let board_cart = self.board.as_ref().map(|b| b.cart_peek());
                 self.io.cpu_data = cpu_peek(
                     &self.mem,
                     &self.io,
-                    self.cart.cart().map(|c| c.as_ref()),
+                    port_cart_peek(&board_cart, &self.cart),
                     self.uci.as_ref(),
                     self.reu.as_ref(),
                     a,
@@ -944,10 +1133,11 @@ impl C64 {
         }
         // φ2: VIC-II's own phi2 accesses, pixel output, beam advance.
         let bank = self.io.vic_bank();
+        let board_cart = self.board.as_ref().map(|b| b.cart_peek());
         let new_field = self.io.vic.phi2(&VicView {
             mem: &self.mem,
             bank,
-            cart: self.cart.cart().map(|c| c.as_ref()),
+            cart: port_cart_peek(&board_cart, &self.cart),
             cpu_data: self.io.cpu_data,
         });
         self.cartridge_cycle();
@@ -965,6 +1155,13 @@ impl C64 {
         let mut drive_stop = None;
         let mut others = host;
         self.io.iec = match &mut self.drive {
+            // The Ultimate board's drives.
+            Some(_) if self.board.is_some() => {
+                let (bus, out, stop) = self.board_drives(c64, host, dbg.as_deref_mut());
+                drive_stop = stop;
+                others = out;
+                bus
+            }
             Some(d) if self.drive_power => {
                 let (bus, stop) = d.run(c64, dbg.as_deref_mut());
                 drive_stop = stop;
@@ -991,6 +1188,12 @@ impl C64 {
         self.mem.cassette_sense = self.tape.sense();
         self.update_interrupts();
         self.sched.tick();
+        if self.board.is_some() {
+            self.board_cycle();
+            if new_field {
+                self.board_frame();
+            }
+        }
         if new_field {
             self.frame_tasks();
         }
@@ -1039,7 +1242,12 @@ impl C64 {
         match ev.target {
             InputTarget::Keyboard => {
                 if let mimic_core::input::InputEvent::Key { machine_key, down } = ev.event {
-                    self.io.keyboard.set(machine_key, down);
+                    // The board reads the keyboard too; its open menu
+                    // keeps keys going down from the C64.
+                    let c64 = self.board.as_mut().is_none_or(|b| b.key(machine_key, down));
+                    if c64 {
+                        self.io.keyboard.set(machine_key, down);
+                    }
                 }
             }
             InputTarget::Port(p) if p.0 > USER_PORT.0 => {
@@ -1069,6 +1277,15 @@ impl C64 {
             1 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Soft),
             2 => {
                 self.io.keyboard.set(keyboard::RESTORE, value == 1);
+                if let Some(b) = &mut self.board {
+                    b.board.u64io.set_restore(value == 1);
+                }
+            }
+            // The Ultimate board's menu button.
+            5 => {
+                if let Some(b) = &mut self.board {
+                    b.board.itu.set_menu_button(value == 1);
+                }
             }
             // The SD2IEC's disk change buttons (swap lists).
             3 | 4 => {
@@ -1133,6 +1350,7 @@ impl C64 {
         if self.io.vic.beam().frame.saturating_sub(self.boot_frame) < BOOT_FRAMES {
             return;
         }
+        self.board_hint();
         if let Some(prg) = self.program.pending.take() {
             self.inject(&prg);
             if prg.load == 0x0801 {
@@ -1236,14 +1454,17 @@ impl C64 {
                 let addr = f.addr.wrapping_add(i);
                 let v = (f.value >> (8 * i)) as u8;
                 match f.space {
-                    CPU_SPACE => C64Bus {
-                        mem: &mut self.mem,
-                        io: &mut self.io,
-                        cart: self.cart.cart_mut().map(|c| c.as_mut()),
-                        uci: self.uci.as_mut(),
-                        reu: self.reu.as_mut(),
+                    CPU_SPACE => {
+                        let mut board_cart = self.board.as_mut().map(|b| b.cart());
+                        C64Bus {
+                            mem: &mut self.mem,
+                            io: &mut self.io,
+                            cart: port_cart(&mut board_cart, &mut self.cart),
+                            uci: self.uci.as_mut(),
+                            reu: self.reu.as_mut(),
+                        }
+                        .write(addr & 0xffff, Size::Byte, u32::from(v))
                     }
-                    .write(addr & 0xffff, Size::Byte, u32::from(v)),
                     RAM_SPACE => self.mem.ram[(addr & 0xffff) as usize] = v,
                     COLOR_SPACE => self.mem.color[(addr & 0x3ff) as usize] = v & 0x0f,
                     _ => {}
@@ -1279,42 +1500,32 @@ impl Machine for C64 {
     /// The RESET line reaches the 6510, both CIAs, the SID and (through the
     /// serial bus) drive 8, but not the VIC-II.
     fn reset(&mut self, kind: ResetKind) {
-        if let Some(p) = &mut self.printer {
-            p.reset();
+        self.reset_c64(kind);
+        match kind {
+            // Power: the board starts anew and holds the C64 until its
+            // firmware lets it go.
+            ResetKind::Hard => self.board_power_on(),
+            // The reset button: the firmware is told.
+            ResetKind::Soft => {
+                if let Some(b) = &mut self.board {
+                    b.board.c64_reset_event();
+                }
+            }
         }
-        let hard = kind == ResetKind::Hard;
-        self.cpu.reset();
-        self.mem.reset(hard);
-        self.io.reset(hard);
-        if let Some(d) = &mut self.drive {
-            d.reset(hard);
-        }
-        if let Some(sd) = &mut self.sd2iec {
-            sd.reset(hard);
-        }
-        self.ints = Interrupts::default();
-        if let Some(c) = self.cart.cart_mut() {
-            c.reset();
-        }
-        if let Some(u) = &mut self.uci {
-            u.reset();
-        }
-        if let Some(r) = &mut self.reu {
-            r.reset();
-        }
-        self.cartridge_cycle();
-        self.input.clear();
-        if self.autostart == Autostart::Loading {
-            self.autostart = Autostart::Done;
-        }
-        self.fast_serving = false;
-        self.field_done_pending = false;
-        self.boot_frame = self.io.vic.beam().frame;
-        self.sync_light_pen();
     }
 
     fn framebuffer(&self) -> FrameRef<'_> {
         let t = self.io.vic.timing();
+        // The Ultimate board's overlay shows: the HDMI picture.
+        if let Some((pixels, w, h)) = self.board.as_ref().and_then(|b| b.picture()) {
+            return FrameRef {
+                width: w as u32,
+                height: h as u32,
+                pixels: PixelData::Rgb(pixels),
+                luma_chroma: None,
+                signal: t.signal(),
+            };
+        }
         FrameRef {
             width: t.width,
             height: t.height,
@@ -1380,10 +1591,11 @@ impl Machine for C64 {
             (None, Some(a)) => a as u16 & 0xc000,
             (None, None) => self.io.vic_bank(),
         };
+        let board_cart = self.board.as_ref().map(|b| b.cart_peek());
         let view = VicView {
             mem: &self.mem,
             bank,
-            cart: self.cart.cart().map(|c| c.as_ref()),
+            cart: port_cart_peek(&board_cart, &self.cart),
             cpu_data: self.io.cpu_data,
         };
         let ctx = vic2::gfx::GfxContext {
@@ -1427,6 +1639,15 @@ impl Machine for C64 {
                 id: DRIVE_SPACE,
                 name: "drive8",
                 device: DRIVE8,
+                addr_bits: 16,
+                big_endian: false,
+            });
+        }
+        if self.board.as_ref().is_some_and(|b| b.drive_b.is_some()) {
+            spaces.push(MemSpace {
+                id: drive::DRIVE9_SPACE,
+                name: "drive9",
+                device: drive::DRIVE9,
                 addr_bits: 16,
                 big_endian: false,
             });
@@ -1531,6 +1752,7 @@ impl Machine for C64 {
                 ],
             });
         }
+        chips.extend(self.board_chip());
         chips
     }
 
@@ -1539,12 +1761,18 @@ impl Machine for C64 {
         if self.drive.as_ref().is_some_and(|d| d.is_true()) {
             d.push(DRIVE8);
         }
+        if self.board.as_ref().is_some_and(|b| b.drive_b.is_some()) {
+            d.push(drive::DRIVE9);
+        }
         d
     }
 
     fn debug_target(&mut self, dev: DeviceId) -> Option<&mut dyn DebugTarget> {
         if dev == CPU {
             return Some(self as &mut dyn DebugTarget);
+        }
+        if dev == drive::DRIVE9 {
+            return self.board.as_mut()?.drive_b.as_mut()?.debug_target();
         }
         match &mut self.drive {
             Some(d) if dev == DRIVE8 => d.debug_target(),
@@ -1563,7 +1791,7 @@ impl Machine for C64 {
     /// Pasted text goes straight into the KERNAL's keyboard buffer
     /// ([`chips_cbm::keybuf`]).
     fn can_autostart(&self, slot: SlotId) -> bool {
-        slot == SLOT_DRIVE8 && self.drive.is_some()
+        slot == SLOT_DRIVE8 && self.drive.is_some() && self.board.is_none()
     }
 
     /// `LOAD"*",8,1` typed into the running BASIC (no reset), then `RUN`
@@ -1598,6 +1826,9 @@ impl Machine for C64 {
             ControlInfo::button(1, "RESET", false),
             ControlInfo::button(2, "RESTORE", self.io.keyboard.restore),
         ];
+        if let Some(b) = &self.board {
+            controls.push(ControlInfo::button(5, "MENU", b.board.itu.menu_button()));
+        }
         if let Some(sd) = &self.sd2iec {
             controls.push(ControlInfo::button(3, "SD2IEC NEXT", sd.button_held(false)));
             controls.push(ControlInfo::button(4, "SD2IEC PREV", sd.button_held(true)));
@@ -1682,7 +1913,8 @@ impl Machine for C64 {
 
     fn media_slots(&self) -> Vec<MediaSlotInfo> {
         let mut slots = Vec::new();
-        if let Some(d) = &self.drive {
+        // On the Ultimate board the firmware mounts drive 8's disks.
+        if let Some(d) = self.drive.as_ref().filter(|_| self.board.is_none()) {
             slots.push(MediaSlotInfo {
                 id: SLOT_DRIVE8,
                 name: d.slot_name(),
@@ -1702,12 +1934,15 @@ impl Machine for C64 {
             kind: MediaKind::Tape,
             inserted: self.tape.has_tape(),
         });
-        slots.push(MediaSlotInfo {
-            id: SLOT_CARTRIDGE,
-            name: "cartridge",
-            kind: MediaKind::Cartridge,
-            inserted: self.cart.is_inserted(),
-        });
+        // On the Ultimate board the board's cartridge owns the port.
+        if self.board.is_none() {
+            slots.push(MediaSlotInfo {
+                id: SLOT_CARTRIDGE,
+                name: "cartridge",
+                kind: MediaKind::Cartridge,
+                inserted: self.cart.is_inserted(),
+            });
+        }
         if let Some(sd) = &self.sd2iec {
             slots.push(MediaSlotInfo {
                 id: SLOT_SD2IEC,
@@ -1716,16 +1951,34 @@ impl Machine for C64 {
                 inserted: sd.dos.has_media(),
             });
         }
+        if let Some(b) = &self.board {
+            const NAMES: [&str; 4] = ["sd card", "usb 1", "usb 2", "usb 3"];
+            for (i, u) in b.storage.units.iter().enumerate() {
+                slots.push(MediaSlotInfo {
+                    id: SlotId(SLOT_BOARD_SD.0 + i as u8),
+                    name: NAMES[i],
+                    kind: MediaKind::Disk,
+                    inserted: u.inserted(),
+                });
+            }
+        }
         slots
     }
 
     fn media_slot(&mut self, slot: SlotId) -> Option<&mut dyn MediaSlot> {
         match slot {
+            SLOT_DRIVE8 if self.board.is_some() => None,
             SLOT_DRIVE8 => self.drive.as_mut().map(|d| d.media_slot()),
             SLOT_PROGRAM => Some(&mut self.program),
             SLOT_TAPE => Some(&mut self.tape),
+            SLOT_CARTRIDGE if self.board.is_some() => None,
             SLOT_CARTRIDGE => Some(&mut self.cart),
             SLOT_SD2IEC => self.sd2iec.as_mut().map(|s| s as &mut dyn MediaSlot),
+            SlotId(n) if n >= SLOT_BOARD_SD.0 => {
+                let b = self.board.as_mut()?;
+                let u = b.storage.units.get_mut(usize::from(n - SLOT_BOARD_SD.0))?;
+                Some(u as &mut dyn MediaSlot)
+            }
             _ => None,
         }
     }
@@ -1747,12 +2000,16 @@ impl Machine for C64 {
         if let Some(d) = &mut self.user_port {
             d.attach_host(&host);
         }
+        self.board_attach();
     }
 
     fn save_state(&self) -> Vec<u8> {
         let mut w = StateWriter::new();
         if let Some(p) = &self.printer {
             p.save_chunk(&mut w);
+        }
+        if let Some(b) = &self.board {
+            b.save(&mut w);
         }
         w.chunk(*b"C64S", 7, |w| {
             w.u8(self.ints.irq);
@@ -1816,6 +2073,11 @@ impl Machine for C64 {
     /// Atomic: components load into copies; port devices (not clonable)
     /// are restored from their own backup if a later one fails.
     fn load_state(&mut self, s: &[u8]) -> Result<(), StateError> {
+        // The Ultimate board loads into a new one, taken over at the end.
+        let next_board = match &self.board {
+            Some(b) => Some(b.loaded(s)?),
+            None => None,
+        };
         let mut next = Snapshot {
             cpu: self.cpu.clone(),
             mem: self.mem.clone(),
@@ -2072,6 +2334,10 @@ impl Machine for C64 {
                 self.palette = vic2::palette::palette();
             }
         }
+        if let (Some(b), Some(n)) = (&mut self.board, next_board) {
+            b.take_loaded(n);
+        }
+        self.board_drives_loaded();
         self.cpu = next.cpu;
         self.mem = next.mem;
         self.mem.cassette_sense = self.tape.sense();
@@ -2115,16 +2381,19 @@ impl DebugTarget for C64 {
     fn peek(&self, space: MemSpaceId, addr: u32, size: Size) -> Option<u32> {
         let byte = |a: u32| -> Option<u32> {
             match space {
-                CPU_SPACE => Some(
-                    PeekBus(
-                        &self.mem,
-                        &self.io,
-                        self.cart.cart().map(|c| c.as_ref()),
-                        self.uci.as_ref(),
-                        self.reu.as_ref(),
+                CPU_SPACE => {
+                    let board_cart = self.board.as_ref().map(|b| b.cart_peek());
+                    Some(
+                        PeekBus(
+                            &self.mem,
+                            &self.io,
+                            port_cart_peek(&board_cart, &self.cart),
+                            self.uci.as_ref(),
+                            self.reu.as_ref(),
+                        )
+                        .peek(a & 0xffff, Size::Byte),
                     )
-                    .peek(a & 0xffff, Size::Byte),
-                ),
+                }
                 RAM_SPACE => Some(u32::from(self.mem.ram[(a & 0xffff) as usize])),
                 COLOR_SPACE => Some(u32::from(self.mem.color[(a & 0x3ff) as usize])),
                 REU_SPACE => self
@@ -2132,7 +2401,8 @@ impl DebugTarget for C64 {
                     .as_ref()
                     .map(|r| u32::from(r.ram()[a as usize % r.size()])),
                 CART_SPACE => {
-                    let cart = self.cart.cart()?;
+                    let board_cart = self.board.as_ref().map(|b| b.cart_peek());
+                    let cart = port_cart_peek(&board_cart, &self.cart)?;
                     let a = (a & 0xffff) as u16;
                     let byte = match a {
                         0x8000..=0x9fff => cart.peek_roml(a),
@@ -2169,14 +2439,21 @@ impl DebugTarget for C64 {
                         Bank::Basic | Bank::Kernal | Bank::Char | Bank::RomL | Bank::RomH => {
                             return false
                         }
-                        _ => C64Bus {
-                            mem: &mut self.mem,
-                            io: &mut self.io,
-                            cart: self.cart.cart_mut().map(|c| c.as_mut()),
-                            uci: self.uci.as_mut(),
-                            reu: self.reu.as_mut(),
+                        _ => {
+                            let mut board_cart = self.board.as_mut().map(|b| b.cart());
+                            C64Bus {
+                                mem: &mut self.mem,
+                                io: &mut self.io,
+                                cart: port_cart(&mut board_cart, &mut self.cart),
+                                uci: self.uci.as_mut(),
+                                reu: self.reu.as_mut(),
+                            }
+                            .write(
+                                u32::from(a),
+                                Size::Byte,
+                                u32::from(b),
+                            )
                         }
-                        .write(u32::from(a), Size::Byte, u32::from(b)),
                     }
                 }
                 RAM_SPACE => self.mem.ram[(a & 0xffff) as usize] = b,
@@ -2195,11 +2472,12 @@ impl DebugTarget for C64 {
     }
 
     fn disassemble(&self, addr: u32) -> Instr {
+        let board_cart = self.board.as_ref().map(|b| b.cart_peek());
         self.cpu.disassemble(
             &PeekBus(
                 &self.mem,
                 &self.io,
-                self.cart.cart().map(|c| c.as_ref()),
+                port_cart_peek(&board_cart, &self.cart),
                 self.uci.as_ref(),
                 self.reu.as_ref(),
             ),
@@ -2216,3 +2494,5 @@ mod tests_fourplayer;
 mod tests_net;
 #[cfg(test)]
 mod tests_ultimate;
+#[cfg(test)]
+mod tests_ultimate64;

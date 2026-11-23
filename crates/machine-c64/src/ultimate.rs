@@ -34,7 +34,10 @@ impl UciContext<'_> {
         C64Bus {
             mem: self.mem,
             io: self.io,
-            cart: self.cart.cart_mut().map(|c| c.as_mut()),
+            cart: self
+                .cart
+                .cart_mut()
+                .map(|c| c.as_mut() as &mut dyn devices_cartridge::ExpansionCart),
             uci: None,
             reu: self.reu.as_deref_mut(),
         }

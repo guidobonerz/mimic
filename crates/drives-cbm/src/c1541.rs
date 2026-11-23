@@ -62,6 +62,19 @@
 //! backend (a copy-on-write overlay for user images: the original file
 //! changes only when the overlay is committed). Side 1 of a single-sided
 //! image (D64) reads as unformatted and keeps no writes.
+//!
+//! An outside surface ([`CbmDrive::set_external_surface`]): the disk is
+//! not a media image but tracks the machine keeps (the Ultimate 64's
+//! drive A reads its GCR tracks from the board's memory). Each tick is
+//! then given a [`DiskSurface`] ([`CbmDrive::tick_on`]), which hands out
+//! the bytes of the track under the head, takes written bytes in place
+//! (whole bytes on byte boundaries, as such a drive writes them) and
+//! hears of every bit cell the head writes; write protection
+//! ([`CbmDrive::set_surface_protected`]) is the sensor as the machine
+//! drives it, which also tells the DOS that a disk changed. The ROM can
+//! be replaced ([`CbmDrive::set_rom`]) and the device number set
+//! ([`CbmDrive::set_device`]). The mode is configuration and the sensor
+//! an input set every cycle: neither is in the savestate.
 
 use chips_cbm::cia::{Cia, CiaModel};
 use chips_cbm::tia::Tia6523;
@@ -133,6 +146,27 @@ impl DriveModel {
             Self::C1571 | Self::C1581 => 2,
         }
     }
+}
+
+/// A disk surface the machine keeps outside the drive (see the module
+/// documentation). Sides count from 0, half tracks from 0 (track 1).
+pub trait DiskSurface {
+    /// The bytes of one revolution of the track at a head position;
+    /// `None` or empty: nothing there (no flux).
+    fn track(&self, side: u8, half_track: u8) -> Option<&[u8]>;
+    /// The same to write into; `None`: nothing can be written there.
+    fn track_mut(&mut self, side: u8, half_track: u8) -> Option<&mut [u8]>;
+    /// The head is in write mode with the motor on over this track for a
+    /// bit cell, whether or not the disk takes the bit.
+    fn writing(&mut self, _side: u8, _half_track: u8) {}
+}
+
+/// The own disk's track at a head position.
+fn own_track(disk: &Option<Disk>, side: u8, half_track: u8) -> Option<&[u8]> {
+    disk.as_ref()
+        .and_then(|d| d.tracks.get(d.slot(side, half_track)))
+        .and_then(Option::as_ref)
+        .map(Vec::as_slice)
 }
 
 /// What the disk's tracks come from and go back to.
@@ -286,6 +320,10 @@ pub struct CbmDrive {
     pub tia: Tia6523,
     irq_timer: u32,
     tcbm_host: TcbmHost,
+    /// The disk is an outside [`DiskSurface`] (configuration).
+    external: bool,
+    /// Its write-protect sensor is dark (an input).
+    surface_protected: bool,
 }
 
 /// TCBM lines as the host drives them at the 1551's pins (1 = released
@@ -543,7 +581,64 @@ impl CbmDrive {
             tia: Tia6523::new(),
             irq_timer: 0,
             tcbm_host: TcbmHost::default(),
+            external: false,
+            surface_protected: false,
         }
+    }
+
+    /// Take the disk from an outside [`DiskSurface`] (`on`) or from an
+    /// inserted image. Switching ejects the image (written tracks go back
+    /// first).
+    pub fn set_external_surface(&mut self, on: bool) {
+        if on != self.external {
+            let _ = self.eject();
+            self.mech.notch_covered = 0;
+        }
+        self.external = on;
+    }
+
+    pub fn external_surface(&self) -> bool {
+        self.external
+    }
+
+    /// The outside surface's write-protect sensor: dark (`on`), the
+    /// drive writes nothing and the DOS sees a protected disk.
+    pub fn set_surface_protected(&mut self, on: bool) {
+        self.surface_protected = on;
+    }
+
+    /// A new DOS ROM, as long as [`DriveModel::rom_size`] (missing bytes
+    /// read `$FF`, more are left out). Takes effect at once; a reset
+    /// starts it.
+    pub fn set_rom(&mut self, rom: &[u8]) {
+        let mut new = vec![0xff; self.model.rom_size()];
+        let n = rom.len().min(new.len());
+        new[..n].copy_from_slice(&rom[..n]);
+        self.rom = new.into_boxed_slice();
+    }
+
+    /// The device number the PB5/6 jumpers select (8-11).
+    pub fn set_device(&mut self, device: u8) {
+        self.device = device.clamp(8, 11);
+    }
+
+    pub fn device(&self) -> u8 {
+        self.device
+    }
+
+    /// The half track under the head (0 = track 1).
+    pub fn half_track(&self) -> u8 {
+        self.mech.half_track
+    }
+
+    /// The head is in write mode (VIA2 CB2 low; 1551: MODE low).
+    pub fn head_writing(&self) -> bool {
+        self.writing()
+    }
+
+    /// The drive's 2 KB RAM.
+    pub fn ram(&self) -> &[u8] {
+        &self.ram[..]
     }
 
     pub fn model(&self) -> DriveModel {
@@ -691,12 +786,19 @@ impl CbmDrive {
         (pa, pb)
     }
 
+    /// The write-protect sensor sees no light.
+    fn sensor_dark(&self) -> bool {
+        if self.external {
+            return self.surface_protected;
+        }
+        self.mech.notch_covered > 0 || self.disk.as_ref().is_some_and(|d| d.protected)
+    }
+
     fn via2_pins(&self) -> (u8, u8) {
         // No disk lets the light through the write-protect notch sensor;
         // a disk going in or out covers it for a moment, which is how the
         // DOS finds out that the disk has changed.
-        let protected =
-            self.mech.notch_covered > 0 || self.disk.as_ref().is_some_and(|d| d.protected);
+        let protected = self.sensor_dark();
         let pb = 0x6f | if protected { 0 } else { 0x10 } | if self.mech.sync { 0 } else { 0x80 };
         (self.mech.last_byte, pb)
     }
@@ -717,8 +819,7 @@ impl CbmDrive {
         if self.model != DriveModel::C1551 {
             return (0, [0; 3]);
         }
-        let protected =
-            self.mech.notch_covered > 0 || self.disk.as_ref().is_some_and(|d| d.protected);
+        let protected = self.sensor_dark();
         let port = 0x6f | if protected { 0 } else { 0x10 } | if self.byte_ready { 0x80 } else { 0 };
         // Line levels: the TIA's own outputs ANDed with the other drivers.
         let h = self.tcbm_host;
@@ -753,7 +854,7 @@ impl CbmDrive {
     }
 
     /// Advance the disk under the head by one microsecond.
-    fn rotate(&mut self) {
+    fn rotate(&mut self, surface: Option<&mut (dyn DiskSurface + '_)>) {
         let motor = self.motor_on();
         if self.motor_was_on && !motor {
             // Errors writing back reach the user on the next flush.
@@ -770,12 +871,14 @@ impl CbmDrive {
         let zone = usize::from(self.mech_out() >> 5 & 3);
         let side = self.side();
         let half = self.mech.half_track;
-        let data = self
-            .disk
-            .as_ref()
-            .and_then(|d| d.tracks.get(d.slot(side, half)))
-            .and_then(Option::as_ref);
-        let bits = data.map_or(TRACK_BYTES[zone], Vec::len) * 8;
+        let mut surface = surface.filter(|_| self.external);
+        let data = match surface.as_deref() {
+            Some(s) => s.track(side, half),
+            None if self.external => None,
+            None => own_track(&self.disk, side, half),
+        }
+        .filter(|d| !d.is_empty());
+        let bits = data.map_or(TRACK_BYTES[zone], <[u8]>::len) * 8;
         self.mech.bit_clock += bits as u32;
         if self.mech.bit_clock < REVOLUTION_US {
             return;
@@ -785,9 +888,18 @@ impl CbmDrive {
         if self.writing() {
             self.mech.sync = false;
             self.mech.ones = 0;
-            self.write_bit(zone);
+            match surface.as_deref_mut() {
+                Some(s) => self.write_bit_on(s),
+                None => self.write_bit(zone),
+            }
             return;
         }
+        let data = match surface.as_deref() {
+            Some(s) => s.track(side, half),
+            None if self.external => None,
+            None => own_track(&self.disk, side, half),
+        }
+        .filter(|d| !d.is_empty());
         let Some(data) = data else {
             self.mech.position += 1;
             self.mech.sync = false;
@@ -858,6 +970,36 @@ impl CbmDrive {
             }
             d.dirty[index] = true;
         }
+        self.end_bit_written();
+    }
+
+    /// Write mode on an outside surface: the bit goes into its track,
+    /// bytes on the track's byte boundaries, unless the sensor is dark.
+    fn write_bit_on(&mut self, surface: &mut dyn DiskSurface) {
+        let side = self.side();
+        let half = self.mech.half_track;
+        let bit = self.mech.write_shift >> 7;
+        self.mech.write_shift <<= 1;
+        surface.writing(side, half);
+        if !self.surface_protected {
+            if let Some(track) = surface.track_mut(side, half).filter(|t| !t.is_empty()) {
+                if self.mech.bit_count == 0 {
+                    self.mech.position = (self.mech.position + 7) & !7;
+                }
+                let pos = self.mech.position % (track.len() * 8);
+                let mask = 0x80 >> (pos % 8);
+                if bit != 0 {
+                    track[pos / 8] |= mask;
+                } else {
+                    track[pos / 8] &= !mask;
+                }
+            }
+        }
+        self.end_bit_written();
+    }
+
+    /// The head moved on by a written bit; after eight the next byte.
+    fn end_bit_written(&mut self) {
         self.mech.position += 1;
         self.mech.bit_count += 1;
         if self.mech.bit_count >= 8 {
@@ -870,20 +1012,20 @@ impl CbmDrive {
     }
 
     /// Bits on a track, as long as an unformatted track in its zone would be.
-    fn track_bits(&self, half_track: u8) -> usize {
+    fn track_bits(&self, half_track: u8, surface: Option<&(dyn DiskSurface + '_)>) -> usize {
         let side = self.side();
-        self.disk
-            .as_ref()
-            .and_then(|d| d.tracks.get(d.slot(side, half_track)))
-            .and_then(Option::as_ref)
-            .map_or(
-                TRACK_BYTES[usize::from(speed_zone(half_track / 2 + 1))],
-                Vec::len,
-            )
-            * 8
+        let data = match surface {
+            Some(s) if self.external => s.track(side, half_track),
+            _ if self.external => None,
+            _ => own_track(&self.disk, side, half_track),
+        };
+        data.filter(|d| !d.is_empty()).map_or(
+            TRACK_BYTES[usize::from(speed_zone(half_track / 2 + 1))],
+            <[u8]>::len,
+        ) * 8
     }
 
-    fn step_head(&mut self) {
+    fn step_head(&mut self, surface: Option<&(dyn DiskSurface + '_)>) {
         let phase = self.mech_out() & 3;
         let old = self.mech.half_track;
         if phase == (self.mech.phase + 1) & 3 && old < HALF_TRACKS - 1 {
@@ -894,7 +1036,10 @@ impl CbmDrive {
         self.mech.phase = phase;
         if self.mech.half_track != old {
             // The disk keeps its angle; the new track may be longer.
-            let (from, to) = (self.track_bits(old), self.track_bits(self.mech.half_track));
+            let (from, to) = (
+                self.track_bits(old, surface),
+                self.track_bits(self.mech.half_track, surface),
+            );
             if from != to {
                 self.mech.position = (self.mech.position % from) * to / from;
             }
@@ -907,6 +1052,7 @@ impl CbmDrive {
         host: IecLines,
         rotate: bool,
         mut dbg: Option<&mut DebugHooks>,
+        mut surface: Option<&mut (dyn DiskSurface + '_)>,
     ) -> CycleResult {
         let bus = IecLines::combine(&[host, self.iec_out(host.atn)]);
         self.mech.notch_covered = self.mech.notch_covered.saturating_sub(1);
@@ -923,7 +1069,7 @@ impl CbmDrive {
         self.via1.set_ca1(bus.atn, pins.via1.0);
         if rotate {
             self.byte_ready_tick();
-            self.rotate();
+            self.rotate(surface.as_deref_mut());
             if self.model == DriveModel::C1551 {
                 self.irq_timer = (self.irq_timer + 1) % IRQ_PERIOD_US;
             }
@@ -971,21 +1117,41 @@ impl CbmDrive {
                 dbg.check_exec(space, next_pc);
             }
         }
-        self.step_head();
+        self.step_head(surface.as_deref());
         r
     }
 
     /// One microsecond (two CPU cycles on a 1571 at 2 MHz) with the lines
     /// the host pulls. Exec breakpoints are checked here; the result is
     /// that of the last CPU cycle, or `Jammed`.
-    pub fn tick(&mut self, host: IecLines, mut dbg: Option<&mut DebugHooks>) -> CycleResult {
+    pub fn tick(&mut self, host: IecLines, dbg: Option<&mut DebugHooks>) -> CycleResult {
+        self.tick_with(host, dbg, None)
+    }
+
+    /// [`CbmDrive::tick`] with the disk on an outside surface (see
+    /// [`CbmDrive::set_external_surface`]).
+    pub fn tick_on(
+        &mut self,
+        host: IecLines,
+        dbg: Option<&mut DebugHooks>,
+        surface: &mut dyn DiskSurface,
+    ) -> CycleResult {
+        self.tick_with(host, dbg, Some(surface))
+    }
+
+    fn tick_with(
+        &mut self,
+        host: IecLines,
+        mut dbg: Option<&mut DebugHooks>,
+        mut surface: Option<&mut (dyn DiskSurface + '_)>,
+    ) -> CycleResult {
         let host = std::mem::replace(&mut self.host_delayed, host);
         let fast = self.fast_clock();
-        let r = self.cycle(host, true, dbg.as_deref_mut());
+        let r = self.cycle(host, true, dbg.as_deref_mut(), surface.as_deref_mut());
         if !fast || matches!(r, CycleResult::Jammed) {
             return r;
         }
-        self.cycle(host, false, dbg)
+        self.cycle(host, false, dbg, surface)
     }
 
     pub fn pc(&self) -> u16 {
@@ -1079,6 +1245,11 @@ impl MediaSlot for CbmDrive {
     fn insert(&mut self, mut media: Media) -> Result<(), MediaError> {
         if media.kind != MediaKind::Disk {
             return Err(MediaError::Unsupported(media.kind));
+        }
+        if self.external {
+            return Err(MediaError::Control(
+                "this drive's disk comes from the machine, not from an image".into(),
+            ));
         }
         let mut bytes = vec![0; media.backend.len() as usize];
         media.backend.read(0, &mut bytes)?;

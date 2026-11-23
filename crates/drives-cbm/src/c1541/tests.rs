@@ -452,3 +452,140 @@ fn c1571_status_counts_side_1_from_track_36() {
     d.mech.half_track = 0;
     assert_eq!(d.status().track, Some(36));
 }
+
+/// An outside surface: one optional track per side and half track, and
+/// where the head wrote.
+#[derive(Default)]
+struct Surface {
+    tracks: Vec<Option<Vec<u8>>>,
+    written: Vec<(u8, u8)>,
+}
+
+impl Surface {
+    fn with_track(half: u8, data: Vec<u8>) -> Self {
+        let mut s = Self {
+            tracks: vec![None; 2 * 84],
+            written: Vec::new(),
+        };
+        s.tracks[usize::from(half)] = Some(data);
+        s
+    }
+}
+
+impl DiskSurface for Surface {
+    fn track(&self, side: u8, half: u8) -> Option<&[u8]> {
+        self.tracks
+            .get(usize::from(side) * 84 + usize::from(half))?
+            .as_deref()
+    }
+    fn track_mut(&mut self, side: u8, half: u8) -> Option<&mut [u8]> {
+        self.tracks
+            .get_mut(usize::from(side) * 84 + usize::from(half))?
+            .as_deref_mut()
+    }
+    fn writing(&mut self, side: u8, half: u8) {
+        if self.written.last() != Some(&(side, half)) {
+            self.written.push((side, half));
+        }
+    }
+}
+
+#[test]
+fn reads_the_track_from_an_outside_surface() {
+    let code = [
+        0xa9, 0x6f, 0x8d, 0x02, 0x1c, // DDRB
+        0xa9, 0x04, 0x8d, 0x00, 0x1c, // motor on
+        0xa9, 0x0e, 0x8d, 0x0c, 0x1c, // SOE
+        0xa2, 0x00, // LDX #0
+        0xb8, // C011: CLV
+        0x50, 0xfe, // BVC *
+        0xad, 0x01, 0x1c, // LDA $1C01
+        0x9d, 0x00, 0x03, // STA $0300,X
+        0xe8, // INX
+        0xe0, 0x10, // CPX #16
+        0xd0, 0xf2, // BNE $C011
+        0x4c, 0x1f, 0xc0, // JMP *
+    ];
+    let mut d = drive_with(&code);
+    d.set_external_surface(true);
+    assert!(d.insert(disk()).is_err(), "no image in this mode");
+    let track = gcr::encode_track(&D64::blank(b"TEST", *b"AB"), 18);
+    let mut s = Surface::with_track(34, track.clone());
+    for _ in 0..20_000 {
+        d.tick_on(IecLines::default(), None, &mut s);
+    }
+    assert!((0xc01f..=0xc021).contains(&d.pc()), "loop finished");
+    let got = &d.ram[0x301..0x310];
+    let framed = |shift: u32| -> Vec<u8> {
+        (0..track.len())
+            .map(|i| {
+                let word = u16::from(track[i]) << 8 | u16::from(track[(i + 1) % track.len()]);
+                (word >> (8 - shift)) as u8
+            })
+            .collect()
+    };
+    assert!((0..8).any(|sh| framed(sh).windows(15).any(|w| w == got)));
+    assert!(s.written.is_empty());
+    // The sensor is the machine's.
+    assert_eq!(d.via2_pins().1 & 0x10, 0x10);
+    d.set_surface_protected(true);
+    assert_eq!(d.via2_pins().1 & 0x10, 0);
+    // Without a surface in this mode the disk is gone.
+    d.via2.write(0xc, 0x0e);
+    let before = d.mech.position;
+    for _ in 0..2000 {
+        d.tick(IecLines::default(), None);
+    }
+    assert!(d.mech.position > before && !d.mech.sync);
+}
+
+#[test]
+fn writes_whole_bytes_into_an_outside_surface() {
+    let len = 7000;
+    let mut s = Surface::with_track(34, vec![0x55; len]);
+    let mut d = drive_with(&[0x4c, 0x00, 0xc0]);
+    d.set_external_surface(true);
+    // Motor on, DDRA out, CB2 low (write); $A5 to write.
+    d.via2.write(0x2, 0x6f);
+    d.via2.write(0x0, 0x04);
+    d.via2.write(0x3, 0xff);
+    d.via2.write(0x1, 0xa5);
+    d.via2.write(0xc, 0xc0);
+    for _ in 0..4000 {
+        d.tick_on(IecLines::default(), None, &mut s);
+    }
+    assert_eq!(s.written, [(0, 34)]);
+    let t = s.track(0, 34).unwrap();
+    let a5 = t.iter().filter(|&&b| b == 0xa5).count();
+    assert!(a5 > 100, "{a5} bytes of $A5");
+    // Only whole bytes: nothing but $55 and $A5, and the byte the shift
+    // register held when writing began.
+    let other = t.iter().filter(|&&b| b != 0x55 && b != 0xa5).count();
+    assert!(other <= 1, "{other} bytes cut");
+    // A dark sensor: the head still writes, the disk takes nothing.
+    let mut s = Surface::with_track(34, vec![0x55; len]);
+    d.set_surface_protected(true);
+    for _ in 0..4000 {
+        d.tick_on(IecLines::default(), None, &mut s);
+    }
+    assert_eq!(s.written, [(0, 34)]);
+    assert!(s.track(0, 34).unwrap().iter().all(|&b| b == 0x55));
+}
+
+#[test]
+fn rom_and_device_number_from_outside() {
+    let mut d = drive_with(&[0x4c, 0x00, 0xc0]);
+    let mut rom = vec![0xea; ROM_SIZE];
+    // Reset entry $C000: INC $10; JMP $C000.
+    rom[..5].copy_from_slice(&[0xe6, 0x10, 0x4c, 0x00, 0xc0]);
+    rom[0x3ffc..].copy_from_slice(&[0x00, 0xc0, 0x00, 0xc0]);
+    d.set_rom(&rom);
+    d.reset(true);
+    run(&mut d, IecLines::default(), 100);
+    assert!(d.ram()[0x10] > 5);
+    d.set_device(10);
+    assert_eq!(d.device(), 10);
+    assert_eq!((d.via1_pins(IecLines::default()).1 >> 5) & 3, 2);
+    d.set_device(30);
+    assert_eq!(d.device(), 11);
+}

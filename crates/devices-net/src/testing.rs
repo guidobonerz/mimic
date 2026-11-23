@@ -15,8 +15,17 @@
 //! - `listen` works on any port; [`FakeNet::incoming`] connections (echo
 //!   sockets) are handed out by `accept`.
 //! - The clock stands at [`FakeNet::time`].
+//! - Scripted peers ([`FakeNet::script_host`]): `connect` to such a name
+//!   stands; what the device sends is kept ([`FakeNet::sent`], datagrams of
+//!   a UDP socket in [`FakeNet::sent_datagrams`]), the test feeds what
+//!   arrives ([`FakeNet::push_rx`], one datagram per call on a UDP socket)
+//!   and closes from the far side ([`FakeNet::peer_close`]);
+//!   [`FakeNet::set_quota`] limits how many bytes `send` takes. Accepted
+//!   connections ([`FakeNet::accepted`]) can be driven the same way.
+//!   Every `connect` is logged in [`FakeNet::connects`];
+//!   [`FakeNet::refuse_listen`] makes `listen` fail.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use mimic_core::host::{
     ConnState, HostTime, HttpRequest, HttpResponse, HttpTicket, NetBackend, NetError, NetHandle,
@@ -31,6 +40,33 @@ struct Socket {
     /// Closes once `rx` is empty.
     closing: bool,
     failed: Option<NetError>,
+    /// Keep what is sent (scripted peers, accepted connections).
+    capture: bool,
+    sent: Vec<u8>,
+    /// How many bytes `send` still takes; `None`: all.
+    quota: Option<usize>,
+    /// A scripted UDP socket: datagrams keep their boundaries.
+    udp: bool,
+    rx_datagrams: VecDeque<Vec<u8>>,
+    sent_datagrams: Vec<Vec<u8>>,
+}
+
+impl Socket {
+    fn new(polls_left: u32) -> Self {
+        Self {
+            polls_left,
+            rx: VecDeque::new(),
+            echo: false,
+            closing: false,
+            failed: None,
+            capture: false,
+            sent: Vec::new(),
+            quota: None,
+            udp: false,
+            rx_datagrams: VecDeque::new(),
+            sent_datagrams: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +83,13 @@ pub struct FakeNet {
     pub requests: Vec<HttpRequest>,
     pub incoming: u32,
     pub time: HostTime,
+    /// Every `connect`: handle, kind, host name, port.
+    pub connects: Vec<(NetHandle, SocketKind, String, u16)>,
+    /// The connections handed out by `accept`.
+    pub accepted: Vec<NetHandle>,
+    /// `true`: `listen` fails.
+    pub refuse_listen: bool,
+    scripted: BTreeSet<String>,
     sockets: BTreeMap<NetHandle, Socket>,
     listeners: BTreeMap<NetHandle, u16>,
     http: BTreeMap<HttpTicket, (u32, Result<HttpResponse, NetError>)>,
@@ -74,6 +117,10 @@ impl FakeNet {
                 unix_secs: 1_792_934_055,
                 utc_offset_secs: 3600,
             },
+            connects: Vec::new(),
+            accepted: Vec::new(),
+            refuse_listen: false,
+            scripted: BTreeSet::new(),
             sockets: BTreeMap::new(),
             listeners: BTreeMap::new(),
             http: BTreeMap::new(),
@@ -85,6 +132,64 @@ impl FakeNet {
     pub fn page(mut self, url: &str, body: &[u8]) -> Self {
         self.pages.insert(url.into(), (200, body.to_vec()));
         self
+    }
+
+    /// Make `host` a scripted peer (see the module documentation).
+    pub fn script_host(&mut self, host: &str) {
+        self.scripted.insert(host.into());
+    }
+
+    /// What was sent on a scripted or accepted stream socket so far.
+    pub fn sent(&self, h: NetHandle) -> &[u8] {
+        self.sockets.get(&h).map_or(&[], |s| s.sent.as_slice())
+    }
+
+    /// The datagrams sent on a scripted UDP socket so far.
+    pub fn sent_datagrams(&self, h: NetHandle) -> &[Vec<u8>] {
+        self.sockets
+            .get(&h)
+            .map_or(&[], |s| s.sent_datagrams.as_slice())
+    }
+
+    /// Let `data` arrive on socket `h` (one datagram on a scripted UDP
+    /// socket).
+    pub fn push_rx(&mut self, h: NetHandle, data: &[u8]) {
+        if let Some(s) = self.sockets.get_mut(&h) {
+            if s.udp {
+                s.rx_datagrams.push_back(data.to_vec());
+            } else {
+                s.rx.extend(data);
+            }
+        }
+    }
+
+    /// Bytes that arrived on `h` and were not read yet.
+    pub fn unread(&self, h: NetHandle) -> usize {
+        self.sockets.get(&h).map_or(0, |s| s.rx.len())
+    }
+
+    /// The far side closes `h` (what arrived before can still be read).
+    pub fn peer_close(&mut self, h: NetHandle) {
+        if let Some(s) = self.sockets.get_mut(&h) {
+            s.closing = true;
+        }
+    }
+
+    /// Limit how many bytes `send` on `h` takes from now on (`None`: all).
+    pub fn set_quota(&mut self, h: NetHandle, quota: Option<usize>) {
+        if let Some(s) = self.sockets.get_mut(&h) {
+            s.quota = quota;
+        }
+    }
+
+    /// Whether socket `h` exists (was not closed by the device).
+    pub fn is_open(&self, h: NetHandle) -> bool {
+        self.sockets.contains_key(&h)
+    }
+
+    /// Whether a listener stands on `port`.
+    pub fn listening(&self, port: u16) -> bool {
+        self.listeners.values().any(|p| *p == port)
     }
 
     fn handle(&mut self) -> u32 {
@@ -141,16 +246,14 @@ impl FakeNet {
 }
 
 impl NetBackend for FakeNet {
-    fn connect(&mut self, _: SocketKind, host: &str, _port: u16) -> Result<NetHandle, NetError> {
+    fn connect(&mut self, kind: SocketKind, host: &str, port: u16) -> Result<NetHandle, NetError> {
         self.online()?;
-        let mut s = Socket {
-            polls_left: self.connect_polls,
-            rx: VecDeque::new(),
-            echo: false,
-            closing: false,
-            failed: None,
-        };
+        let mut s = Socket::new(self.connect_polls);
         match host {
+            h if self.scripted.contains(h) => {
+                s.capture = true;
+                s.udp = kind == SocketKind::Udp;
+            }
             "echo" => s.echo = true,
             "greeter" => {
                 s.rx.extend(b"HELLO\r\n");
@@ -161,11 +264,15 @@ impl NetBackend for FakeNet {
         }
         let h = self.handle();
         self.sockets.insert(h, s);
+        self.connects.push((h, kind, host.into(), port));
         Ok(h)
     }
 
     fn listen(&mut self, port: u16) -> Result<NetHandle, NetError> {
         self.online()?;
+        if self.refuse_listen {
+            return Err(NetError::Connect(format!("port {port} in use")));
+        }
         let h = self.handle();
         self.listeners.insert(h, port);
         Ok(h)
@@ -180,16 +287,11 @@ impl NetBackend for FakeNet {
         }
         self.incoming -= 1;
         let h = self.handle();
-        self.sockets.insert(
-            h,
-            Socket {
-                polls_left: 0,
-                rx: VecDeque::new(),
-                echo: true,
-                closing: false,
-                failed: None,
-            },
-        );
+        let mut s = Socket::new(0);
+        s.echo = true;
+        s.capture = true;
+        self.sockets.insert(h, s);
+        self.accepted.push(h);
         Ok(Some(h))
     }
 
@@ -214,16 +316,43 @@ impl NetBackend for FakeNet {
         if s.failed.is_some() {
             return Err(NetError::Io("not connected".into()));
         }
+        let n = match &mut s.quota {
+            Some(q) => {
+                let n = data.len().min(*q);
+                *q -= n;
+                n
+            }
+            None => data.len(),
+        };
+        let data = &data[..n];
+        if s.udp {
+            s.sent_datagrams.push(data.to_vec());
+            return Ok(n);
+        }
+        if s.capture {
+            s.sent.extend_from_slice(data);
+        }
         if s.echo {
             s.rx.extend(data);
         }
-        Ok(data.len())
+        Ok(n)
     }
 
     fn recv(&mut self, h: NetHandle, buf: &mut [u8]) -> Result<Recv, NetError> {
         let s = self.sockets.get_mut(&h).ok_or(NetError::BadHandle)?;
         if s.failed.is_some() {
             return Err(NetError::Io("not connected".into()));
+        }
+        if s.udp {
+            return Ok(match s.rx_datagrams.pop_front() {
+                Some(d) => {
+                    let n = buf.len().min(d.len());
+                    buf[..n].copy_from_slice(&d[..n]);
+                    Recv::Data(n)
+                }
+                None if s.closing => Recv::Closed,
+                None => Recv::Data(0),
+            });
         }
         if s.rx.is_empty() {
             return Ok(if s.closing {

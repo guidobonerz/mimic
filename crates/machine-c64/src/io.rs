@@ -70,6 +70,10 @@ pub struct Io {
     /// for the test runner like `samples` and not part of savestates.
     pub debugcart: bool,
     pub debugcart_exit: Option<u8>,
+    /// The sound output is switched off (the Ultimate board's menu holds
+    /// the C64): the SID runs on, silence goes out. Set by the machine
+    /// every cycle, not state.
+    pub mute: bool,
     /// The data of the CPU's (or the REU's) last bus access, for the
     /// VIC-II's colour read while the CPU still drives the bus. A halted
     /// CPU repeats its read, so the value stays; not saved (it is set again
@@ -135,6 +139,7 @@ impl Io {
             user_lines: 0,
             pc2: false,
             debugcart: false,
+            mute: false,
             debugcart_exit: None,
             cpu_data: 0xff,
         }
@@ -167,6 +172,7 @@ impl Io {
         self.sid
             .set_pots(pot_lines(self.cia1.port_a_out(), self.port_analog));
         let s = self.sid.clock();
+        let s = if self.mute { Default::default() } else { s };
         if let Some(out) = self.resampler.push(s) {
             // Bound the backlog if nobody drains it (headless without --wav).
             if self.samples.len() < SAMPLE_RATE as usize * 4 {

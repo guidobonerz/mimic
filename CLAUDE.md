@@ -45,6 +45,7 @@ crates/
   cpu-8080/        Intel 8080A (IMSAI 8080), machine cycles reported with their status word
   cpu-sm83/        Sharp SM83 / LR35902 (Game Boy): every machine cycle reported to the bus as read, write or idle
   cpu-tms9900/     TI TMS9900 (TI-99/4A): workspace registers in memory, CRU, wait states from the bus
+  cpu-rv32/        RISC-V RV32IM + Zicsr, machine mode (the Ultimate 64 Elite II board's rvlite soft CPU)
   cpu-ada/         Ada, the 16-bit RISC CPU of the fictional Logophor 16 (Phase 31)
   asm-ada/         assembler + linker for Ada (tests, Foundry ROM build, host tool)
   chips-cbm/       VIC, VIC-II(e), TED, VDC 8563, SID, CIA, VIA, PIA, MMU 8722, TIA 6523
@@ -58,21 +59,23 @@ crates/
   chips-zilog/     Z80 CTC and PIO with their interrupt daisy chain (KC85)
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)
+  chips-ultimate/  Ultimate 64 Elite II board (FPGA blocks its firmware talks to): ITU, SPI flash, overlay, U64 I/O page, SD card, USB host (hub, mass storage), Ethernet MAC and PHY, I2C/RTC/GCR and the rest, WiFi stub, the C64 side (DMA, stop/reset, ROM windows)
   chips-nintendo/  NES: PPU 2C02/2C07 with its palette, APU of the 2A03/2A07; SNES: S-PPU, S-DSP; Game Boy: picture unit, sound unit, timer
   drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU), TCBM bus with the 1551
   drives-other/    WD FD1771/FD1793 (TRS-80, TI-99/4A disk card, MSX, MAX-80; 5.25-inch and 8-inch rates), ATA/IDE hard disks (A1200), Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, MSX cassette, ZX Microdrives
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX, Kempston), light pens, keypads
   devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts, MSX ROMs with the MegaROM schemes, battery RAM and the Konami SCC sound chip; the battery RAM (`.srm`) slot
-  devices-net/     Devices that reach outside through mimic-core::host: Ultimate 64 command interface (UCI), WiC64
+  devices-net/     Devices that reach outside through mimic-core::host: Ultimate 64 command interface (UCI), WiC64, a virtual router (user-mode NAT for a machine's Ethernet frames)
   devices-printer/ Printers: Epson FX-80, NEC P6+ and ImageWriter models with page pictures, Commodore bus end, output through mimic-core::host
   media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, DMK/JV1/JV3 and ImageDisk IMD (TRS-80, MAX-80), CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR, MSX CAS, Amiga HDF (RDB), punched-card decks (.deck/.crd/.chx)
-  media-backends/  Where media bytes come from: image file, copy-on-write overlay, host directory, real hardware
+  media-backends/  Where media bytes come from: image file, copy-on-write overlay, host directory (as D64/D81, or as a FAT32 volume), real hardware
   mimic-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
   mimic-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends
   mimic-cheats/      Cheat files with patches, POKE/VICE/code imports, CRC-32 database, memory search
   basic-dialects/  BASIC interpreters' memory decoded for the BASIC debugger (program, variables, stack, stop points): Commodore BASIC and Applesoft, Microsoft's Z80 BASICs (TRS-80 Level II, MSX), TRS-80 Level I, Sinclair BASIC (ZX81, Spectrum), Atari BASIC, Locomotive BASIC (CPC), BBC BASIC II/IV and V (Archimedes), HC-BASIC (KC85), TI BASIC; linked by the machines
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
+                   (machine-c64 also holds `ultimate64`: the C64 inside the Ultimate 64 Elite II board, whose RISC-V runs the user's firmware; module `u64board`)
   machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-bbc/  machine-mega65/  machine-nes/  machine-snes/  machine-vectrex/
   machine-apple2/  Apple II, II+, IIe (enhanced and unenhanced) as models; Mockingboard in slot 4
   machine-mac/     Macintosh 128K, 512K, Plus, SE as models: RTC, keyboard, ADB, SCC 8530, SCSI 5380 with hard disks
@@ -174,7 +177,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35, 36, 37, 40 and 41 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35, 36, 37, 40, 41 and 42 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

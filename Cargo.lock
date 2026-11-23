@@ -640,6 +640,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "chips-ultimate"
+version = "0.1.0"
+dependencies = [
+ "mimic-core",
+]
+
+[[package]]
 name = "chips-yamaha"
 version = "0.1.0"
 dependencies = [
@@ -915,6 +922,13 @@ dependencies = [
  "mimic-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cpu-rv32"
+version = "0.1.0"
+dependencies = [
+ "mimic-core",
 ]
 
 [[package]]
@@ -2118,7 +2132,9 @@ version = "0.1.0"
 dependencies = [
  "basic-dialects",
  "chips-cbm",
+ "chips-ultimate",
  "cpu-6502",
+ "cpu-rv32",
  "devices-cartridge",
  "devices-input",
  "devices-net",

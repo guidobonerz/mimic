@@ -94,6 +94,10 @@ usage: mimic-desktop [options]
   --model NAME          model variant (Atari: 130xe, Amiga: 1200 ...)
   --videoformat FORMAT  pal, ntsc or auto (machine default; Atari 2600: detect)
   --prg FILE            program (PRG/T64, Atari XEX) to load and run
+  --sd PATH             Ultimate 64 Elite II: the SD card, an image file or a
+                        folder (shown as a FAT32 volume, changes written back)
+  --usb PATH            Ultimate 64 Elite II: a USB stick, the same; repeat for
+                        the hub's ports 2 and 3
   --disk FILE           disk image for drive 8 (Atari: ATR for D1:, Amiga: DF0:,
                         Apple II: DSK/DO/PO/NIB/WOZ for slot 6 drive 1; Mac:
                         400K/800K DSK or DiskCopy 4.2, hard disk images to
@@ -241,6 +245,9 @@ struct Args {
     rom_dir: Option<PathBuf>,
     prg: Option<String>,
     disk: Vec<String>,
+    /// `--sd`, `--usb`: block media (Ultimate 64 Elite II).
+    sd: Option<String>,
+    usb: Vec<String>,
     /// Disks the first drive swaps through (Ctrl+D), filled by
     /// `build_machine`.
     disk_swap: Vec<String>,
@@ -294,6 +301,8 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
         rom_dir: None,
         prg: None,
         disk: Vec::new(),
+        sd: None,
+        usb: Vec::new(),
         disk_swap: Vec::new(),
         mounted: Vec::new(),
         tape: None,
@@ -336,6 +345,8 @@ fn parse_args(argv: Vec<String>) -> Result<Option<Args>, String> {
             }
             "--prg" => a.prg = Some(value("--prg")?),
             "--disk" => a.disk.push(value("--disk")?),
+            "--sd" => a.sd = Some(value("--sd")?),
+            "--usb" => a.usb.push(value("--usb")?),
             "--tape" => a.tape = Some(value("--tape")?),
             "--cart" => a.cart = Some(value("--cart")?),
             "--overlay" => a.overlay = Some(value("--overlay")?),
@@ -638,6 +649,7 @@ fn build_machine(args: &mut Args) -> Result<Box<dyn Machine>, String> {
             .chain(args.disk.iter().skip(drives.len()).cloned())
             .collect();
     }
+    media_backends::block::insert_all(m.as_mut(), args.sd.as_deref(), &args.usb)?;
     if let Some(t) = &args.tape {
         let slot = m
             .media_slots()

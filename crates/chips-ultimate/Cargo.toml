@@ -1,0 +1,12 @@
+[package]
+name = "chips-ultimate"
+description = "Ultimate 64 Elite II board: the FPGA blocks its firmware talks to (ITU, SPI flash, overlay, I2C, C64 port ...)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mimic-core.workspace = true
