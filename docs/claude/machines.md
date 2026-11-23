@@ -36,6 +36,8 @@ Part of the project's instructions for Claude Code; the core is `CLAUDE.md` at t
 
 Model variants (Kernal revisions, RAM sizes) are **configuration**, not separate machine crates. PAL or NTSC is `--videoformat pal|ntsc|auto` (`MachineConfig::video_format`, `MachineEntry::video_formats`; `Registry::create` refuses it on machines with one format and refuses `--model pal` and `ntsc`), never a model name.
 
+- C64 VIC-II gotcha (2026-11-23): a bad line condition switches the display state on in any cycle of the line, not only up to cycle 54; a `$D011` write in cycles 55–57 still lets RC count to 0 in cycle 58. The Booze demo by Extend starts its FLI with such a write from an unstabilised raster interrupt (3 cycles of jitter): with the old rule a third of the frames sat 7 lines high.
+
 ## Ultimate 64 Elite II / Commodore 64 Ultimate (`ultimate64`, Phase 42)
 
 - The C64 of `machine-c64` with the board around it (`machine-c64::u64board`): an RV32IM processor (`cpu-rv32`, model rvlite) with 64 MB, running the user's firmware, and the FPGA's blocks (`chips-ultimate`) on its I/O bus `$10000000`–`$10FFFFFF`. Models `elite2` (XC7A100T, FPGA type 3, S25FL128L) and `c64u` (XC7A50T, type 2, W25Q128JV); the type decides the flash layout (application at `$3C0000` / `$220000`).

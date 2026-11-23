@@ -13,7 +13,9 @@ Run on 2026-10-28, VICE test programs and Lorenz with real ROMs again on
 | Klaus Dormann 6502 functional test | all documented instructions, flags, decimal mode | passed | 100 % | 1 s |
 | Lorenz 2.15, real ROMs (`lorenz_suite`) | CPU, CIA, VIC-II timing on the C64 | 264 / 264 | 100 % | 9.4 min |
 | Lorenz 2.15, stub ROMs (`lorenz_suite_stub`, CI) | the same without ROMs (3 tests need real ROMs) | 261 / 261 (3 skipped) | 100 % | 4.4 min |
-| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1173 / 1240 projected (62 failed, 5 errors, 303 skipped; full run 1163 on 2026-11-04, then `C64/` and `general/` runs) | 94.6 % | 48.8 min |
+| VICE test programs (`c64-testlist.in`) | CIA, CPU, VIC-II, SID, interrupts, drives, expansions | 1174 / 1240 projected since 2026-11-23 (`VICII/` 229 → 230, see the trend below); before: 1173 / 1240 projected (62 failed, 5 errors, 303 skipped; full run 1163 on 2026-11-04, then `C64/` and `general/` runs) | 94.6 % | 48.8 min |
+
+Trend 2026-11-23: `VICII/` 229 → 230/273 (newly green `fldscroll-20-60`, nothing newly red; `general/` 323/324 and `C64/` 68/70 unchanged, C128 `2mhzVIC` 4/4): a bad line condition now switches the display on in any cycle (the user's Booze demo by Extend, whose logo and scroller jumped). Projected total 1173 → 1174; no full run.
 
 Trend: VICE test programs 1163 → 1173 projected (runs of `C64/` and `general/` on 2026-11-04 with the power-on RAM pattern, the port write and the autostart changes below: `C64` 60 → 68, `general` 321 → 323, none newly failing). Before that: 1141 → 1163 (full run 2026-11-04, confirming the projection from the runs of `drive/` and `VICII/` the same day: `drive` 26 → 45 with the VIA rules, the 1541 address decoding and the byte-ready delay below, `VICII` 226 → 229 with the graphics sequencer rules, none newly failing; every other area unchanged by the VIA users' tests). Before that: 1073 → 1141 (full run 2026-11-01: `C64` 12 → 60, `drive` 6 → 26, every other area unchanged; the per-test trend shows +0 because filtered runs had already moved its base), Lorenz 264 → 264. Before that: 1056 → 1073 (full run 2026-10-31, none newly failing: `interrupts/` 22 → 39, all of `irqdma`), Lorenz 264 → 264, Acid800 54 → 54, NES 116 → 116, Harte 6502/2A03/65C02 complete green after the CPU change. Before that: 913 → 1056 (full run 2026-10-31, none newly failing: `SID/` 14 → 155, `general` 319 → 321 alongside the VIC-II work). Before that: 902 → 913 (+11, none newly failing: `VICII/` 215 → 226,
 projected from runs of `VICII/`, `interrupts/` and Lorenz 264 → 264 on 2026-10-31;
@@ -38,7 +40,7 @@ on 2026-10-26.
 | CPU | 115 | 0 | 0 | 5 | 100 % |
 | CIA | 188 | 0 | 0 | 3 | 100 % |
 | interrupts | 39 | 0 | 0 | 4 | 100 % |
-| VICII | 229 | 44 | 0 | 88 | 83.9 % |
+| VICII | 230 | 43 | 0 | 88 | 84.2 % |
 | SID | 155 | 14 | 0 | 22 | 91.7 % |
 | C64 | 68 | 2 | 0 | 25 | 97.1 % |
 | drive | 45 | 1 | 5 | 4 | 88.2 % |
@@ -399,9 +401,13 @@ VIC-II (`chips-cbm/src/vic2.rs`), 112 → 215:
 - the Y expansion flip-flop turns in cycle 55 after the CPU's write
   (`spritecrunch2`);
 - the display logic sees a bad line one cycle after BA (display state from
-  the next g-access), a c-access needs BA low since phi1, and a bad line
-  made after cycle 54 no longer switches the display on (`dmadelay`,
-  `colorfetchbug`, `fldscroll`);
+  the next g-access), a c-access needs BA low since phi1 (`dmadelay`,
+  `colorfetchbug`, `fldscroll`). A bad line condition switches the display
+  on in whatever cycle it comes (2026-11-23, measured in x64sc 3.10 with a
+  probe program: a `$D011` write in cycles 46–57 gives display state and
+  RC 0 on the next line, in 59–62 display state with RC staying 7, in 63
+  nothing; an earlier rule here, "not after cycle 54", was wrong and kept
+  `fldscroll-20-60` red);
 - in the three cycles after BA falls a c-access takes its colour from the
   low nibble of the CPU's data bus; a CPU stopped by RDY keeps repeating its
   read (`Cpu6502::stalled_read`), so it is the data of that read
@@ -452,7 +458,7 @@ finished byte waits restarts the four-cycle wait once (with latch 0 the
 byte never completes). The rest is under "Changes of 2026-10-30, CIA".
 
 Still failing and looked at: `VICII/videomode` (mode-change pixels per
-combination, references marked unsafe), `fldscroll-20`, the 8565 variants
+combination, references marked unsafe), the 8565 variants
 of the multicolour splits in `VICII/spritesplit`,
 `spritex/demusinterruptus`, `spritevssprite`, `spritefetchbug`,
 `vicii_reg_timing`, `modesplit`, `fetchsplit`, `spritescan`.

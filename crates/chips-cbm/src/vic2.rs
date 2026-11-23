@@ -745,7 +745,11 @@ impl Vic2 {
                     self.display_state = false;
                 }
             }
-            if self.display_state {
+            // A bad line condition means display state here, also one the
+            // g-accesses have not seen yet: made by a $D011 write as late
+            // as cycle 57 it still lets RC count (measured in x64sc; see
+            // below).
+            if self.display_state || self.bad_line {
                 self.rc = (self.rc + 1) & 7;
             }
         }
@@ -860,10 +864,15 @@ impl Vic2 {
         // bad line made by a $D011 write in cycle 15 has BA low from cycle
         // 16 and display state from cycle 17's g-access (VICE test program
         // VICII/colorfetchbug, readme).
-        // A bad line made after cycle 54 no longer switches the display on
-        // (VICE test programs VICII/fldscroll: $D011 written in cycle 54
-        // makes the line a display line, in cycle 56 not).
-        if self.bad_line && c <= 55 {
+        // A bad line condition switches the display on in any cycle of
+        // the line, also after the last g-access. From idle state with RC
+        // 7, a $D011 write that makes one in cycles 55-57 has RC step to 0
+        // in cycle 58, so the next line shows row line 0; in cycles 58-62
+        // the display is on with RC still 7; in cycle 63 the line is over
+        // before the display logic sees it (the Booze demo's FLI start,
+        // whose write falls in cycle 54, 55 or 56; the same sequence
+        // measured in x64sc; VICE test programs VICII/fldscroll).
+        if self.bad_line {
             self.display_state = true;
         }
         self.last_bus = phi1_value;

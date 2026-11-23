@@ -24,6 +24,7 @@ Browser-Vorschau und die Debug-Werkzeuge anschließen.""")
 h2("Unterstützte Maschinen")
 table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Video (`--videoformat`)"], [
     ["`c64`", "Commodore 64", "–", "`pal` (Standard), `ntsc`"],
+    ["`ultimate64`", "Ultimate 64 Elite II, Commodore 64 Ultimate", "`elite2` (Standard), `c64u`", "`pal` (Standard), `ntsc`"],
     ["`vic20`", "Commodore VIC-20", "–", "`pal` (Standard), `ntsc`"],
     ["`pet`", "Commodore PET", "`4032` (Standard), `2001`, `3032`, `8032`", "–"],
     ["`c16`, `plus4`", "Commodore 16, Plus/4", "–", "`pal` (Standard), `ntsc`"],
@@ -211,7 +212,7 @@ h2("Das Konsolenpanel")
 p("""Links vom Bild zeigt ein Panel die Knöpfe und Schalter des Gehäuses
 untereinander (Umschalt+Alt+Links oder ein Klick auf seinen Griff öffnet und
 schließt es): POWER und RESET, die Konsolenschalter des Atari 2600,
-START/SELECT/OPTION des 800XL, RESTORE des C64 und VIC-20, 40/80 und CAPS
+START/SELECT/OPTION des 800XL, RESTORE des C64 und VIC-20, MENU des Ultimate 64, 40/80 und CAPS
 LOCK des C128 und so weiter. Ein Knopf bleibt gedrückt, solange Sie die
 Maustaste darauf halten; ein Klick auf eine Schalterstellung legt den
 Schalter um.""")
@@ -459,6 +460,60 @@ PREV; beide zusammen springen zum ersten Eintrag, ohne Liste legen sie
 `AUTOSWAP.GEN` mit den Abbildern des Ordners an), `XI`, `XD`, `XR` und die
 übliche Laufwerkserkennung per `M-R`. Ein Abbild im Medienschacht „sd2iec“
 bleibt eingehängt, bis es ausgeworfen wird.""")
+
+h2("Ultimate 64 Elite II und Commodore 64 Ultimate")
+p("""Die Maschine `ultimate64` ist der C64 von oben auf dem FPGA-Board von
+Gideon's Logic: `--model elite2` (Standard, Ultimate 64 Elite II) oder
+`--model c64u` (Commodore 64 Ultimate). Auf ihr läuft die echte,
+unveränderte Firmware des Boards: mimic bildet den RISC-V-Prozessor des
+Boards und die Bausteine seines FPGA nach, den C64 darin stellt mimic
+selbst. Die Firmware ist Ihre eigene Update-Datei; mimic bringt keine mit.""")
+p("""**Firmware installieren.** Legen Sie die Update-Datei (`.ue2`) in den
+Dateibereich (`--uci-dir`, Standard `.mimic/ultimate` im Benutzerordner,
+oberste Ebene) und starten Sie einmal mit `--option update=DATEI.ue2`. Der
+Updater der Firmware erscheint auf dem C64-Bildschirm; bedient wird er mit
+der C64-Tastatur (Y und N, RETURN). Er schreibt FPGA-Image, Anwendung und
+Dateien in den nachgebildeten Flash, aktualisiert das WLAN-Modul und
+schaltet die Maschine aus. Danach genügt `--machine ultimate64`: die
+Firmware startet aus dem Flash. Ohne Firmware läuft der C64 allein und
+zeigt einen Hinweis.""")
+table(["Option", "Bedeutung"], [
+    ["`--option update=DATEI`", "Update-Datei aus dem Dateibereich einmal starten"],
+    ["`--option c64roms=own|firmware`", "C64-ROMs: mimics eigene (Standard) oder die der Firmware "
+     "(die Firmware des Commodore 64 Ultimate bringt welche mit, die des Elite II nicht)"],
+    ["`--usb PFAD`, `--sd PFAD`", "USB-Stick (bis zu drei) und SD-Karte: ein Image oder ein Ordner, "
+     "der als FAT32-Laufwerk erscheint"],
+    ["`--option netfwd=PC:BOARD,…`", "Portweiterleitungen (Standard 6480:80, 6421:21, 6423:23, 6464:64)"],
+    ["`--net off`", "kein Netzwerkkabel"],
+    ["`--option ledstrip=N`", "Elite II: Länge der LED-Leiste (0 bis 84, Standard 24)"],
+], [0.34, 0.66])
+bullets(
+    "Menü: Der Knopf MENU im Konsolenpanel ist der Menüknopf des Boards. Das Menü der "
+    "Firmware erscheint auf dem C64-Bildschirm und wird mit der C64-Tastatur bedient; "
+    "solange es offen ist, schweigt der Ton.",
+    "Dateien: Sticks und SD-Karte erscheinen im Dateibrowser der Firmware. „Mount Disk“ "
+    "legt ein D64 in das Laufwerk A des Boards, das Laufwerk 8 des C64 ist; „Run Disk“ und "
+    "„Run“ starten Programme, SID-Dateien spielt der Player der Firmware.",
+    "Ordner als Laufwerk: Was die Firmware schreibt, landet rund zwei Sekunden nach dem "
+    "letzten Schreibzugriff im Ordner. Gelöschtes wird nach `.mimic-trash` verschoben; "
+    "Dateien, die Sie inzwischen auf dem PC geändert haben, werden nie überschrieben "
+    "(die Fassung der Firmware heißt dann `name (mimic).ext`).",
+    "Updates testen: Update-Datei (`.cfw` oder `.ue2`) auf Stick oder Karte legen, im "
+    "Dateibrowser RETURN drücken und „Run Update“ wählen, wie auf dem echten Gerät.",
+    "Netzwerk: Die Firmware bekommt per DHCP die Adresse 10.0.2.15 hinter einem "
+    "virtuellen Router (NAT über den PC; das Board hat keine eigene Adresse im LAN). Vom "
+    "PC aus erreichen Sie die Weboberfläche unter `http://127.0.0.1:6480/`, FTP auf Port "
+    "6421 (nur die Steuerverbindung) und Telnet auf 6423.",
+    "LEDs: Die LED-Leiste des Boards (beim Commodore 64 Ultimate Gehäuse- und "
+    "Tastaturlichter) zeigt das Konsolenpanel links unter den Bedienelementen.",
+    "Der Flash ist die Datei `Board/elite2-flash.bin` bzw. `Board/c64u-flash.bin` im "
+    "Dateibereich. Löschen Sie sie, um ein Board ohne Firmware zurückzubekommen.",
+)
+p("""Grenzen: Das FPGA selbst wird nicht ausgeführt; ein fehlerhaftes
+FPGA-Image in einem Update fällt nicht auf. Nicht gebaut sind weitere
+Modultypen (CRT-Dateien, Freezer, REU), 1571 und 1581, der Turbo, das Menü
+als HDMI-Overlay und WLAN. Die C64-Optionen `uci`, `reu` und `drive8` gibt
+es hier nicht.""")
 
 h2("Commodore VIC-20, C16/Plus/4, PET und C128")
 h3("VIC-20")
@@ -1301,6 +1356,7 @@ table(["Option", "Bedeutung"], [
 h2("Maschinen und Modelle")
 table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Videoformate (`--videoformat`)"], [
     ["`c64`", "Commodore 64", "–", "`pal` (Standard), `ntsc`"],
+    ["`ultimate64`", "Ultimate 64 Elite II, Commodore 64 Ultimate", "`elite2` (Standard), `c64u`", "`pal` (Standard), `ntsc`"],
     ["`vic20`", "Commodore VIC-20", "–", "`pal` (Standard), `ntsc`"],
     ["`pet`", "Commodore PET", "`4032` (Standard), `2001`, `3032`, `8032`", "–"],
     ["`c16`, `plus4`", "Commodore 16, Plus/4", "–", "`pal` (Standard), `ntsc`"],

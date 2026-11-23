@@ -673,3 +673,39 @@ fn xscroll_is_compared_when_the_byte_is_due() {
     assert_eq!(v.ctrl2 & 7, 7);
     assert_eq!(px(&v, v.timing().cycle_x(35), 100), 1);
 }
+
+/// A $D011 write late in a line that makes it a bad line, from idle state
+/// with RC 7 (nothing shown yet in this field): the display turns on
+/// whatever the cycle; RC steps to 0 in cycle 58 when the write came up to
+/// cycle 57, and stays 7 after that; a write in cycle 63 comes too late
+/// (the line is over). The Booze demo (Extend) starts its FLI picture that
+/// way with the write in cycle 54, 55 or 56, depending on its interrupt's
+/// jitter; x64sc shows the same for every cycle from 46 to 63 (measured
+/// with a test loop and its monitor), and the VICE test program
+/// VICII/fldscroll-20 needs the display on after a write in cycle 62.
+#[test]
+fn a_late_bad_line_turns_the_display_on_in_any_cycle() {
+    for w in 46..=63u8 {
+        let (mut v, m) = text_setup();
+        frame(&mut v, &m);
+        // YSCROLL 7: no bad line before line $37.
+        v.write(0x11, 0x17);
+        run_to(&mut v, &m, 0x31, w);
+        assert!(!v.display_state, "idle before the write, cycle {w}");
+        assert_eq!(v.rc, 7);
+        v.phi1(&m);
+        v.write(0x11, 0x11);
+        v.phi2(&m);
+        run_to(&mut v, &m, 0x32, 2);
+        let (display, rc) = match w {
+            ..=57 => (true, 0),
+            58..=62 => (true, 7),
+            _ => (false, 7),
+        };
+        assert_eq!(v.display_state, display, "display state, cycle {w}");
+        assert_eq!(v.rc, rc, "RC, cycle {w}");
+        // The g-accesses count from the second cycle after the write.
+        let counted = u16::from(54u8.saturating_sub(w));
+        assert_eq!(v.vcbase, counted, "VCBASE, cycle {w}");
+    }
+}

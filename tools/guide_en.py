@@ -24,6 +24,7 @@ debugging tools.""")
 h2("Supported machines")
 table(["Machine id", "Machine", "Models (`--model`)", "Video (`--videoformat`)"], [
     ["`c64`", "Commodore 64", "–", "`pal` (default), `ntsc`"],
+    ["`ultimate64`", "Ultimate 64 Elite II, Commodore 64 Ultimate", "`elite2` (default), `c64u`", "`pal` (default), `ntsc`"],
     ["`vic20`", "Commodore VIC-20", "–", "`pal` (default), `ntsc`"],
     ["`pet`", "Commodore PET", "`4032` (default), `2001`, `3032`, `8032`", "–"],
     ["`c16`, `plus4`", "Commodore 16, Plus/4", "–", "`pal` (default), `ntsc`"],
@@ -208,7 +209,7 @@ h2("The console panel")
 p("""At the left of the picture, a panel shows the buttons and switches of
 the machine's case one under the other (Shift+Alt+Left or a click on its
 handle opens and closes it): POWER and RESET, the Atari 2600 console switches, START/SELECT/OPTION
-of the 800XL, RESTORE of the C64 and VIC-20, 40/80 and CAPS LOCK of the
+of the 800XL, RESTORE of the C64 and VIC-20, MENU of the Ultimate 64, 40/80 and CAPS LOCK of the
 C128, and so on. A button is pressed for as long as you hold the mouse
 button on it; clicking a switch position moves the switch.""")
 bullets(
@@ -443,6 +444,58 @@ together go to the first entry, and without a list they write an
 `AUTOSWAP.GEN` with the folder's images), `XI`, `XD`, `XR` and the usual
 `M-R` drive detection. A disk image in the "sd2iec" media slot stays
 mounted until ejected.""")
+
+h2("Ultimate 64 Elite II and Commodore 64 Ultimate")
+p("""The machine `ultimate64` is the C64 above on Gideon's Logic's FPGA
+board: `--model elite2` (default, Ultimate 64 Elite II) or `--model c64u`
+(Commodore 64 Ultimate). It runs the board's real, unmodified firmware:
+mimic models the board's RISC-V processor and the blocks of its FPGA, and
+the C64 inside is mimic's own. The firmware is your own update file; mimic
+ships none.""")
+p("""**Installing the firmware.** Put the update file (`.ue2`) into the
+file area (`--uci-dir`, default `.mimic/ultimate` in your user folder, top
+level) and start once with `--option update=FILE.ue2`. The firmware's
+updater appears on the C64's screen and is worked with the C64's keyboard
+(Y and N, RETURN). It writes the FPGA image, the application and its files
+into the emulated flash, updates the WiFi module and switches the machine
+off. After that `--machine ultimate64` is enough: the firmware starts from
+the flash. Without firmware the C64 runs alone and shows a hint.""")
+table(["Option", "Meaning"], [
+    ["`--option update=FILE`", "start an update file of the file area once"],
+    ["`--option c64roms=own|firmware`", "C64 ROMs: mimic's own (default) or the firmware's "
+     "(the Commodore 64 Ultimate's firmware carries them, the Elite II's does not)"],
+    ["`--usb PATH`, `--sd PATH`", "USB stick (up to three) and SD card: an image, or a folder "
+     "shown as a FAT32 volume"],
+    ["`--option netfwd=PC:BOARD,…`", "port forwards (default 6480:80, 6421:21, 6423:23, 6464:64)"],
+    ["`--net off`", "no network cable"],
+    ["`--option ledstrip=N`", "Elite II: length of the LED strip (0 to 84, default 24)"],
+], [0.34, 0.66])
+bullets(
+    "Menu: the console panel's MENU button is the board's menu button. The firmware's "
+    "menu appears on the C64's screen and is worked with the C64's keyboard; while it is "
+    "open the sound is off.",
+    "Files: sticks and the SD card appear in the firmware's file browser. \"Mount Disk\" "
+    "puts a D64 into the board's drive A, which is the C64's drive 8; \"Run Disk\" and "
+    "\"Run\" start programs, and the firmware's player plays SID files.",
+    "A folder as a volume: what the firmware writes reaches the folder about two seconds "
+    "after its last write. Deleted files are moved to `.mimic-trash`; files you changed "
+    "on the PC meanwhile are never overwritten (the firmware's version is then named "
+    "`name (mimic).ext`).",
+    "Trying updates: put an update file (`.cfw` or `.ue2`) on a stick or the card, press "
+    "RETURN on it in the file browser and choose \"Run Update\", as on the real machine.",
+    "Network: the firmware gets the address 10.0.2.15 by DHCP behind a virtual router "
+    "(NAT through the PC; the board has no address of its own in the LAN). From the PC "
+    "the web interface is at `http://127.0.0.1:6480/`, FTP on port 6421 (the control "
+    "connection only) and Telnet on 6423.",
+    "LEDs: the console panel shows the board's LED strip (on the Commodore 64 Ultimate "
+    "the case and keyboard lights) at the left under the controls.",
+    "The flash is the file `Board/elite2-flash.bin` or `Board/c64u-flash.bin` in the file "
+    "area. Delete it to get a board without firmware back.",
+)
+p("""Limits: the FPGA itself is not run; a faulty FPGA image in an update
+goes unnoticed. Not built: further cartridge types (CRT files, freezers,
+REU), the 1571 and 1581, turbo, the menu as an HDMI overlay and WiFi. The
+C64's options `uci`, `reu` and `drive8` do not exist here.""")
 
 h2("Commodore VIC-20, C16/Plus/4, PET and C128")
 h3("VIC-20")
@@ -1256,6 +1309,7 @@ table(["Flag", "Meaning"], [
 h2("Machines and models")
 table(["Machine id", "Machine", "Models (`--model`)", "Video formats (`--videoformat`)"], [
     ["`c64`", "Commodore 64", "–", "`pal` (default), `ntsc`"],
+    ["`ultimate64`", "Ultimate 64 Elite II, Commodore 64 Ultimate", "`elite2` (default), `c64u`", "`pal` (default), `ntsc`"],
     ["`vic20`", "Commodore VIC-20", "–", "`pal` (default), `ntsc`"],
     ["`pet`", "Commodore PET", "`4032` (default), `2001`, `3032`, `8032`", "–"],
     ["`c16`, `plus4`", "Commodore 16, Plus/4", "–", "`pal` (default), `ntsc`"],

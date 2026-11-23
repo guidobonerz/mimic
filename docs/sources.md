@@ -435,6 +435,8 @@ own section.
 - Commodore 1764 RAM Expansion Module User's Guide, appendix "REC registers", and the 1700/1750 RAM Expansion Module user's guide — REC 8726 registers $DF00–$DF0A, command and status bits, the $FF00 trigger, autoload, address control, interrupt mask, transfer types and timing (`devices-cartridge::reu`).
 - AMD Am29F040B data sheet — the 64 KB flash sector the EASYFLASH_ERASE command clears (`devices-cartridge::flash::Flash::erase_sector`).
 
+- VIC-II, late bad lines (2026-11-23): behaviour of x64sc 3.10 observed through its monitor (`io d000` after a probe program that writes `$D011` once on line `$31` at varying cycles; no VICE source read); the user's disk "Booze demo" by Extend as the case that showed it; `testdata/vice-testprogs/VICII/fldscroll` (readme and source); Christian Bauer, "The MOS 6567/6569 video controller (VIC-II) and its application in the Commodore 64", section 3.7.2 — `chips-cbm::vic2`.
+
 ### Ultimate 64 Elite II board (`chips-ultimate`, `machine-c64::u64board`, Phase 42)
 
 Read 2026-11-23 for facts only and described in own words (golden rule 7); no code, table or comment taken over, no `.rs` file of UE2 opened.

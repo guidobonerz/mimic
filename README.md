@@ -60,6 +60,11 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/max80.png" alt="Lobo MAX-80: LDOS 5.1.3"><br><b>Lobo MAX-80</b><br>LDOS 5.1.3</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/kc85-basic.png" alt="Robotron KC85/4: HC-BASIC, the foreground and background colours"><br><b>Robotron KC85/4</b><br>HC-BASIC, the foreground and background colours</td>
 </tr>
+<tr>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/ultimate64-updater.png" alt="Ultimate 64 Elite II: the firmware's own updater on the emulated board"><br><b>Ultimate 64 Elite II</b><br>the real updater (firmware 3.15a)</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/ultimate64-menu.png" alt="Ultimate 64 Elite II: the firmware's menu"><br><b>Ultimate 64 Elite II</b><br>the firmware's menu</td>
+<td align="center" valign="top" width="33%"><img src="docs/screenshots/c64u-menu.png" alt="Commodore 64 Ultimate: the firmware's menu"><br><b>Commodore 64 Ultimate</b><br>the firmware's menu (1.2.1)</td>
+</tr>
 </table>
 
 ### Game consoles
@@ -188,6 +193,7 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | Machine | Crate | Models | Verification / state | Completeness |
 | --- | --- | --- | --- | --- |
 | Commodore 64 | `machine-c64` | PAL, NTSC | Lorenz 264/264; debugged with VS64 through the VICE monitor | 95 % |
+| Ultimate 64 Elite II, Commodore 64 Ultimate | `machine-c64` (`ultimate64`), `chips-ultimate`, `cpu-rv32` | `elite2`, `c64u` | runs the user's unmodified firmware on an emulated board (RISC-V): update files flash it, the firmware boots from the flash, menu, SD/USB (image or PC folder), drive A as drive 8, boot and SID cartridges, network (NAT), LED strip; other cartridge types, 1571/1581, turbo, overlay menu open | 60 % |
 | Commodore VIC-20 | `machine-vic20` | PAL, NTSC, RAM expansions | boots BASIC, tape, cartridges | 85 % |
 | Commodore PET | `machine-pet` | 2001, 3032, 4032, 8032 | boots BASIC; IEEE drive virtual only (no true 2031) | 85 % |
 | Commodore C16 / Plus/4 | `machine-ted` | PAL, NTSC | boots BASIC, tape, cartridges | 85 % |

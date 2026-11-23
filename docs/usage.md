@@ -127,6 +127,7 @@ Programm statt der echten ROMs, nur für Tests.
 | ID | Maschine | Modelle (`--model`) |
 | --- | --- | --- |
 | `c64` | Commodore 64 | – (`--videoformat`: `pal` Standard, `ntsc`) |
+| `ultimate64` | Ultimate 64 Elite II, Commodore 64 Ultimate (mit der echten Firmware, Abschnitt 7c) | `elite2` (Standard), `c64u`; `--videoformat`: `pal` Standard, `ntsc` |
 | `vic20` | VIC-20 | – (`--videoformat`: `pal` Standard, `ntsc`) |
 | `pet` | PET | `4032` (Standard), `2001`, `3032`, `8032` |
 | `c16`, `plus4` | C16, Plus/4 | – (`--videoformat`: `pal` Standard, `ntsc`) |
@@ -694,6 +695,41 @@ Eingaben jede Antwort von Netz und Ordner auf (Feld `host` der Aufnahme);
 exakt. Offene Verbindungen und Dateien sind nicht Teil eines Savestates:
 nach dem Laden sieht das Programm Fehler (in einer Wiedergabe antwortet
 die Aufnahme).
+
+## 7c. Ultimate 64 Elite II und Commodore 64 Ultimate (`ultimate64`)
+
+Die Maschine `ultimate64` ist der C64 aus Abschnitt 4 auf dem FPGA-Board von Gideon's Logic: `--model elite2` (Standard, Ultimate 64 Elite II) oder `--model c64u` (Commodore 64 Ultimate). Anders als beim Command Interface aus 7b läuft hier **die echte, unveränderte Firmware des Boards**: mimic bildet den RISC-V-Prozessor des Boards und die Bausteine seines FPGA nach, den C64 darin stellt mimic selbst. Die Firmware ist Ihre eigene Update-Datei; im Repo liegt keine.
+
+**Firmware installieren (einmal):** Update-Datei (`.ue2`) in den Dateibereich legen (`--uci-dir`, Standard `~/.mimic/ultimate`, oberste Ebene) und einmal mit `--option update=DATEI.ue2` starten. Der Updater der Firmware erscheint auf dem C64-Bildschirm und wird mit der C64-Tastatur bedient (`Y`/`N`, RETURN); er schreibt FPGA-Image, Anwendung und Dateien in den nachgebildeten Flash, aktualisiert das WLAN-Modul und schaltet die Maschine aus. Danach genügt `--machine ultimate64`: die Firmware startet aus dem Flash.
+
+```
+mimic-desktop --machine ultimate64 --option update=update_v3.15a.ue2                       # Elite II, einmalig
+mimic-desktop --machine ultimate64                                                          # danach
+mimic-desktop --machine ultimate64 --model c64u --option update=update_1.2.1.ue2            # Commodore 64 Ultimate, einmalig
+mimic-desktop --machine ultimate64 --model c64u --option c64roms=firmware --usb D:\c64stick
+```
+
+Ohne Firmware im Flash läuft der C64 allein und zeigt einen Hinweis.
+
+| Option | Bedeutung |
+| --- | --- |
+| `--option update=DATEI` | Update-Datei aus dem Dateibereich einmal starten (wie „Run Update“) |
+| `--option c64roms=own\|firmware` | C64-ROMs: mimics eigene (Standard) oder die, die die Firmware lädt (die Firmware des Commodore 64 Ultimate bringt welche mit, die des Elite II nicht) |
+| `--usb PFAD` (bis zu 3), `--sd PFAD` | USB-Stick bzw. SD-Karte: ein Image oder ein Ordner. Ein Ordner erscheint als FAT32-Laufwerk; Änderungen der Firmware werden rund 2 s nach dem letzten Schreibzugriff zurückgeschrieben, Gelöschtes landet in `.mimic-trash`, auf dem PC geänderte Dateien werden nie überschrieben (`name (mimic).ext`) |
+| `--option netfwd=PC:BOARD,…` | Portweiterleitungen (Standard `6480:80,6421:21,6423:23,6464:64`) |
+| `--net off` | kein Netzwerkkabel |
+| `--option ledstrip=N` | Elite II: Länge der LED-Leiste (0–84, Standard 24, 0 = keine) |
+
+Bedienung und Verhalten:
+
+- **Menü:** der Knopf MENU im Konsolenpanel ist der Menüknopf des Boards. Das Menü der Firmware erscheint auf dem C64-Bildschirm und wird mit der C64-Tastatur bedient; solange es offen ist, schweigt der Ton.
+- **Dateien:** USB-Sticks und die SD-Karte erscheinen im Dateibrowser der Firmware (`USB0`, `SD`). „Mount Disk“ legt ein D64 in das Laufwerk A des Boards, das Laufwerk 8 des C64 ist; „Run Disk“ und „Run“ starten über das Boot-Modul der Firmware; SID-Dateien spielt der SID-Player der Firmware.
+- **Updates testen:** eine Update-Datei (`.cfw`, `.ue2`) auf Stick oder Karte, im Dateibrowser RETURN und „Run Update“ – derselbe Weg wie auf dem echten Gerät.
+- **Netzwerk:** die Firmware bekommt per DHCP die Adresse 10.0.2.15 hinter einem virtuellen Router (NAT über den PC, kein eigener Eintrag im LAN). Vom PC aus: Weboberfläche und REST-API auf `http://127.0.0.1:6480/`, FTP auf Port 6421 (nur die Steuerverbindung; Datenverbindungen im Passivmodus werden nicht weitergeleitet), Telnet auf 6423. Verbindungen der Firmware nach außen (Assembly64 usw.) laufen über den PC.
+- **LEDs:** die LED-Leiste des Boards (beim Commodore 64 Ultimate Gehäuse- und Tastaturlichter) zeigt das Konsolenpanel links unter den Bedienelementen.
+- **Dateien des Boards:** `Board/elite2-flash.bin` bzw. `Board/c64u-flash.bin` im Dateibereich ist der Flash (löschen = Auslieferungszustand ohne Firmware), daneben `…-flash.reg` und `…-esp32.ver`.
+
+Was nicht geht: Das FPGA selbst wird nicht ausgeführt – ein fehlerhaftes FPGA-Image in einem Update fällt nicht auf. Nicht gebaut sind weitere Modultypen (CRT-Dateien, Freezer, REU), 1571/1581, Turbo, das Command Interface der Firmware, das Menü als HDMI-Overlay, WLAN. Die Optionen `uci`, `reu` und `drive8` des C64 gibt es hier nicht (das ist Sache des Boards).
 
 ## 8. Monitorprofile (CRT)
 
