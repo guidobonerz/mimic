@@ -1,0 +1,12 @@
+[package]
+name = "cpu-sm83"
+description = "Sharp SM83 (LR35902), the CPU of the Game Boy"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mimic-core.workspace = true

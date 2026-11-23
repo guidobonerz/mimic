@@ -755,6 +755,8 @@ impl Bus for PeekBus<'_> {
 }
 
 pub struct Bbc {
+    /// The decoder of BBC BASIC for the BASIC debugger (not machine state).
+    basic: basic_dialects::bbc::BbcBasic,
     cpu: Cpu6502,
     board: Board,
     sched: Scheduler,
@@ -908,6 +910,7 @@ impl Bbc {
             },
             sched: Scheduler::new(),
             input: InputQueue::new(),
+            basic: basic_dialects::bbc::BbcBasic::new(CPU_SPACE),
             field_done_pending: false,
             cassette: Cassette::new(),
             disc,
@@ -1159,6 +1162,13 @@ impl Machine for Bbc {
             }
         }
         spaces
+    }
+
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -1528,6 +1538,8 @@ impl Machine for Bbc {
         Ok(())
     }
 }
+
+basic_dialects::impl_basic_debug!(Bbc, basic);
 
 impl DebugTarget for Bbc {
     fn regs(&self) -> RegisterSet {

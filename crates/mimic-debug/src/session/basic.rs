@@ -191,6 +191,12 @@ impl Session {
         let Some(state) = self.machine.basic().map(|b| b.state()) else {
             return Some(None);
         };
+        // A program runs, but the interpreter is between two statements
+        // (BBC BASIC V passes its loop for every blank and colon before a
+        // statement): not a statement's start.
+        if state.mode == BasicMode::Running && state.pos.is_none() {
+            return Some(None);
+        }
         let prev = std::mem::replace(&mut self.basic.prev, state.pos);
         let entered = match (state.pos, prev) {
             (Some(p), Some(q)) => p.statement == 0 || p.line != q.line,

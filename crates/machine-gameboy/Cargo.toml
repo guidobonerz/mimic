@@ -1,0 +1,15 @@
+[package]
+name = "machine-gameboy"
+description = "Nintendo Game Boy (DMG) and Game Boy Pocket"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mimic-core.workspace = true
+cpu-sm83.workspace = true
+chips-nintendo.workspace = true
+devices-cartridge.workspace = true

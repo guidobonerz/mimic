@@ -15,4 +15,5 @@ chips-acorn.workspace = true
 chips-amstrad.workspace = true
 chips-cbm.workspace = true
 chips-ti.workspace = true
+basic-dialects.workspace = true
 media.workspace = true

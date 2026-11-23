@@ -4,7 +4,8 @@
 //! cartridges ([`atari`]), the Atari 2600 cartridges ([`atari2600`]) and
 //! the ColecoVision's plain and MegaCart cartridges ([`coleco`]) and the
 //! NES cartridges with their mappers ([`nes`]) and the MSX's plain ROMs
-//! and MegaROM schemes ([`msx`]) with the Konami SCC sound chip ([`scc`]).
+//! and MegaROM schemes ([`msx`]) with the Konami SCC sound chip ([`scc`]) and the Game Boy's cartridges
+//! with their bank controllers ([`gameboy`]).
 //! Machines plug a
 //! [`slot::CartSlot`] into their memory map; the images come from CRT files
 //! (or raw ROM dumps) through the media layer.
@@ -20,6 +21,7 @@ pub mod easyflash;
 pub mod expansion;
 pub mod flash;
 pub mod freezer;
+pub mod gameboy;
 pub mod megadrive;
 pub mod msx;
 pub mod nes;

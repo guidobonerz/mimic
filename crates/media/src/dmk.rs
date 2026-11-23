@@ -23,7 +23,21 @@
 //! density; `$FF` track = unused), one write-protect byte (`0` =
 //! protected), then the sector data in descriptor order.
 //!
-//! JV images are built into tracks on load (gaps, marks and CRCs as the
+//! **IMD** (Dave Dunfield's ImageDisk, as its documentation describes the
+//! file): the text `IMD v.vv: date time`, a comment, the byte `$1A`, then
+//! one record a track: the mode (0–2 FM at 500, 300 and 250 kbit/s, 3–5
+//! MFM at the same rates), the cylinder, the head (bit 0; bit 7 a
+//! cylinder map follows, bit 6 a head map), the number of sectors, the
+//! size code (128 << n), the sector numbers in the order they lie on the
+//! track, the optional maps (the cylinder and head each ID carries), and
+//! for each sector a type byte and its data: 0 no data, 1 the bytes, 2
+//! one byte that fills the sector; 3 and 4 the same with the deleted data
+//! mark, 5 to 8 the same read with a data error (taken as good here).
+//! Tracks at 500 kbit/s are an 8-inch disk's ([`Image::eight_inch`]):
+//! 10416 bytes a turn at 360 rpm in MFM, where a 5.25-inch track has 6250
+//! at 300 rpm.
+//!
+//! JV and IMD images are built into tracks on load (gaps, marks and CRCs as the
 //! TRSDOS formatter writes them) and written back sector by sector.
 //!
 //! **TI-99/4A DSK** (V9T9/PC99 sector dumps, [`Image::parse_ti_dsk`]):
@@ -86,7 +100,13 @@ pub enum Format {
     Jv3,
     TiDsk,
     MsxDsk,
+    Imd,
 }
+
+/// Bytes on an 8-inch track (360 rpm, 500 kbit/s MFM; half in FM).
+pub const DD8_TRACK_BYTES: usize = 10416;
+/// The highest cylinder an IMD image may name.
+const IMD_CYLINDERS: usize = 85;
 
 /// TI disks: sectors per track, tracks per side, their order on a track.
 const TI_SECTORS: usize = 9;
@@ -113,6 +133,8 @@ pub struct Image {
     track_len: usize,
     /// JV3: the descriptors as read (for writing back).
     jv3: Vec<(u8, u8, u8)>,
+    /// The tracks are an 8-inch disk's: twice the data rate, 360 rpm.
+    pub eight_inch: bool,
 }
 
 fn err(msg: impl Into<String>) -> MediaError {
@@ -137,6 +159,9 @@ impl Image {
     /// Recognise and parse an image: DMK by its header, JV3 by its
     /// descriptor table, JV1 by a size that is a whole number of tracks.
     pub fn parse(bytes: &[u8]) -> Result<Self, MediaError> {
+        if let Some(img) = Self::parse_imd(bytes)? {
+            return Ok(img);
+        }
         if let Some(img) = Self::parse_dmk(bytes)? {
             return Ok(img);
         }
@@ -185,6 +210,7 @@ impl Image {
             sd_single: true,
             track_len: DEFAULT_TRACK_LEN,
             jv3: Vec::new(),
+            eight_inch: false,
         })
     }
 
@@ -227,6 +253,7 @@ impl Image {
             sd_single: true,
             track_len: DEFAULT_TRACK_LEN,
             jv3: Vec::new(),
+            eight_inch: false,
         })
     }
 
@@ -278,6 +305,7 @@ impl Image {
             sd_single,
             track_len,
             jv3: Vec::new(),
+            eight_inch: false,
         }))
     }
 
@@ -313,6 +341,7 @@ impl Image {
             sd_single: true,
             track_len: DEFAULT_TRACK_LEN,
             jv3: Vec::new(),
+            eight_inch: false,
         })
     }
 
@@ -384,7 +413,162 @@ impl Image {
             sd_single: true,
             track_len: DEFAULT_TRACK_LEN,
             jv3: descs,
+            eight_inch: false,
         }))
+    }
+
+    /// An ImageDisk file (see the module doc), told by its first bytes.
+    fn parse_imd(bytes: &[u8]) -> Result<Option<Self>, MediaError> {
+        if !bytes.starts_with(b"IMD ") {
+            return Ok(None);
+        }
+        let short = || err("IMD image ends inside a track");
+        let mut i = bytes
+            .iter()
+            .position(|&b| b == 0x1a)
+            .ok_or_else(|| err("IMD image without the end of its comment"))?
+            + 1;
+        // (cylinder, head, MFM, sectors)
+        let mut found: Vec<(usize, usize, bool, Vec<SectorSpec>)> = Vec::new();
+        let mut eight_inch = false;
+        while i < bytes.len() {
+            let head = bytes.get(i..i + 5).ok_or_else(short)?;
+            let (mode, cyl, flags, count, code) = (head[0], head[1], head[2], head[3], head[4]);
+            if mode > 5 || flags & 0x3e != 0 || code > 3 || usize::from(cyl) >= IMD_CYLINDERS {
+                return Err(err(format!(
+                    "IMD track header: mode {mode}, cylinder {cyl}, head {flags:#04x}, size code {code}"
+                )));
+            }
+            i += 5;
+            let n = usize::from(count);
+            let size = 128usize << code;
+            let mut map = |on: bool| -> Result<Option<&[u8]>, MediaError> {
+                if !on {
+                    return Ok(None);
+                }
+                let m = bytes.get(i..i + n).ok_or_else(short)?;
+                i += n;
+                Ok(Some(m))
+            };
+            let numbers = map(true)?.unwrap_or(&[]);
+            let cylinders = map(flags & 0x80 != 0)?;
+            let heads = map(flags & 0x40 != 0)?;
+            let mfm = mode >= 3;
+            let mut sectors = Vec::with_capacity(n);
+            for s in 0..n {
+                let kind = *bytes.get(i).ok_or_else(short)?;
+                i += 1;
+                let data = match kind {
+                    0 => vec![0xe5; size],
+                    1 | 3 | 5 | 7 => {
+                        let d = bytes.get(i..i + size).ok_or_else(short)?;
+                        i += size;
+                        d.to_vec()
+                    }
+                    2 | 4 | 6 | 8 => {
+                        let b = *bytes.get(i).ok_or_else(short)?;
+                        i += 1;
+                        vec![b; size]
+                    }
+                    _ => return Err(err(format!("IMD sector type {kind}"))),
+                };
+                sectors.push(SectorSpec {
+                    track: cylinders.map_or(cyl, |m| m[s]),
+                    side: heads.map_or(flags & 1, |m| m[s]),
+                    sector: numbers[s],
+                    size,
+                    dam: if matches!(kind, 3 | 4 | 7 | 8) {
+                        0xf8
+                    } else {
+                        0xfb
+                    },
+                    data,
+                    mfm,
+                });
+            }
+            if n == 0 {
+                continue;
+            }
+            eight_inch |= mode % 3 == 0;
+            found.push((usize::from(cyl), usize::from(flags & 1), mfm, sectors));
+        }
+        if found.is_empty() {
+            return Err(err("IMD image without tracks"));
+        }
+        let sides = if found.iter().any(|t| t.1 == 1) { 2 } else { 1 };
+        let cylinders = found.iter().map(|t| t.0 + 1).max().unwrap_or(0);
+        let full = if eight_inch {
+            DD8_TRACK_BYTES
+        } else {
+            DD_TRACK_BYTES
+        };
+        let mut tracks = vec![Track::blank(full, true); cylinders * sides];
+        for (cyl, head, mfm, sectors) in &found {
+            let len = if *mfm { full } else { full / 2 };
+            tracks[cyl * sides + head] = build_track_len(sectors, *mfm, len);
+        }
+        Ok(Some(Self {
+            format: Format::Imd,
+            protected: false,
+            sides: sides as u8,
+            tracks,
+            sd_single: true,
+            track_len: DEFAULT_TRACK_LEN,
+            jv3: Vec::new(),
+            eight_inch,
+        }))
+    }
+
+    /// The tracks as an ImageDisk file: the sectors each track holds now,
+    /// under the comment `original` had. A track's sectors of another size
+    /// than its first are left out (the format has one size a track).
+    fn to_imd(&self, original: &[u8]) -> Vec<u8> {
+        let mut out = match original.iter().position(|&b| b == 0x1a) {
+            Some(end) if original.starts_with(b"IMD ") => original[..=end].to_vec(),
+            _ => b"IMD 1.18: 01/01/1980 00:00:00\r\n\x1a".to_vec(),
+        };
+        let sides = usize::from(self.sides.max(1));
+        for (t, track) in self.tracks.iter().enumerate() {
+            let (cyl, head) = ((t / sides) as u8, (t % sides) as u8);
+            let mut sectors = decode_sectors(track);
+            let Some(size) = sectors.first().map(|s| s.size) else {
+                continue;
+            };
+            sectors.retain(|s| s.size == size);
+            sectors.truncate(255);
+            let mode = match (track.is_mfm(), self.eight_inch) {
+                (false, true) => 0,
+                (false, false) => 2,
+                (true, true) => 3,
+                (true, false) => 5,
+            };
+            let cylinders = sectors.iter().any(|s| s.track != cyl);
+            let heads = sectors.iter().any(|s| s.side != head);
+            out.extend([
+                mode,
+                cyl,
+                head | u8::from(cylinders) << 7 | u8::from(heads) << 6,
+                sectors.len() as u8,
+                size_code(size),
+            ]);
+            out.extend(sectors.iter().map(|s| s.sector));
+            if cylinders {
+                out.extend(sectors.iter().map(|s| s.track));
+            }
+            if heads {
+                out.extend(sectors.iter().map(|s| s.side));
+            }
+            for s in &sectors {
+                let deleted = if s.dam == 0xf8 { 2 } else { 0 };
+                if s.data.iter().all(|&b| b == s.data[0]) {
+                    out.extend([2 + deleted, s.data[0]]);
+                } else {
+                    out.push(1 + deleted);
+                    out.extend(&s.data);
+                }
+            }
+        }
+        out
     }
 
     /// The image as a file in its own format. JV images get their sectors
@@ -393,6 +577,7 @@ impl Image {
     pub fn to_bytes(&self, original: &[u8]) -> Vec<u8> {
         match self.format {
             Format::Dmk => self.to_dmk(),
+            Format::Imd => self.to_imd(original),
             Format::Jv1 => {
                 let mut out = original.to_vec();
                 for (t, track) in self.tracks.iter().enumerate() {
@@ -548,7 +733,16 @@ fn size_code(size: usize) -> u8 {
 /// (IBM-style gaps; FM: 6 × $00 before the marks, MFM: 12 × $00 and three
 /// $A1 sync bytes).
 pub fn build_track(sectors: &[SectorSpec], mfm: bool) -> Track {
-    let len = if mfm { DD_TRACK_BYTES } else { SD_TRACK_BYTES };
+    build_track_len(
+        sectors,
+        mfm,
+        if mfm { DD_TRACK_BYTES } else { SD_TRACK_BYTES },
+    )
+}
+
+/// [`build_track`] for a track of `len` bytes (an 8-inch disk's are
+/// longer).
+pub fn build_track_len(sectors: &[SectorSpec], mfm: bool, len: usize) -> Track {
     let gap = if mfm { 0x4e } else { 0xff };
     let mut data = Vec::with_capacity(len);
     let mut idam = Vec::new();
@@ -711,6 +905,60 @@ pub fn blank_jv1(tracks: usize) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    /// An IMD image: cylinder 0 in FM with 128-byte sectors, cylinder 1
+    /// in MFM with 256-byte ones numbered from 5, one of them filled, one
+    /// with the deleted mark, the IDs naming cylinder 7.
+    fn imd(rate: u8) -> Vec<u8> {
+        let mut b = b"IMD 1.18: 01/02/2026 03:04:05\r\na comment\r\n\x1a".to_vec();
+        b.extend([rate, 0, 0, 2, 0, 1, 2]);
+        b.extend([2, 0x11, 2, 0x22]);
+        b.extend([rate + 3, 1, 0x80, 3, 1, 5, 7, 6, 7, 7, 7]);
+        b.push(1);
+        b.extend((0..=255u8).collect::<Vec<u8>>());
+        b.extend([2, 0xe5]);
+        b.extend([4, 0x33]);
+        b
+    }
+
+    #[test]
+    fn imd_images_become_tracks_and_go_back() {
+        let bytes = imd(2);
+        let img = Image::parse(&bytes).unwrap();
+        assert_eq!(img.format, Format::Imd);
+        assert!(!img.eight_inch);
+        assert_eq!((img.sides, img.cylinders()), (1, 2));
+        assert_eq!(img.tracks[0].data.len(), SD_TRACK_BYTES);
+        assert_eq!(img.tracks[1].data.len(), DD_TRACK_BYTES);
+        assert!(!img.tracks[0].is_mfm() && img.tracks[1].is_mfm());
+        let s = decode_sectors(&img.tracks[1]);
+        // The order on the track and the cylinder the IDs carry.
+        assert_eq!(
+            s.iter().map(|s| (s.track, s.sector)).collect::<Vec<_>>(),
+            [(7, 5), (7, 7), (7, 6)]
+        );
+        assert!(s.iter().all(|s| s.crc_ok && s.size == 256));
+        assert_eq!(s[0].data[200], 200);
+        assert!(s[1].data.iter().all(|&b| b == 0xe5));
+        assert_eq!((s[1].dam, s[2].dam), (0xfb, 0xf8));
+        // Written back: the same file, comment and all.
+        assert_eq!(img.to_bytes(&bytes), bytes);
+
+        // 500 kbit/s: an 8-inch disk with its longer tracks.
+        let fast = Image::parse(&imd(0)).unwrap();
+        assert!(fast.eight_inch);
+        assert_eq!(fast.tracks[1].data.len(), DD8_TRACK_BYTES);
+        assert_eq!(fast.tracks[0].data.len(), DD8_TRACK_BYTES / 2);
+        assert_eq!(fast.to_bytes(&imd(0)), imd(0));
+
+        // A file cut short is refused, never read past.
+        for cut in [44, 50, 60, bytes.len() - 1] {
+            assert!(Image::parse(&bytes[..cut]).is_err(), "{cut}");
+        }
+        let mut bad = bytes.clone();
+        bad[43] = 9; // the mode
+        assert!(Image::parse(&bad).is_err());
+    }
+
     #[test]
     fn msx_sector_dumps_round_trip() {
         let mut bytes = vec![0u8; 737_280];
@@ -842,6 +1090,7 @@ mod tests {
             sd_single: false,
             track_len: DEFAULT_TRACK_LEN,
             jv3: Vec::new(),
+            eight_inch: false,
         };
         let bytes = img.to_dmk();
         assert_eq!(bytes.len(), DMK_HEADER + 2 * DEFAULT_TRACK_LEN);

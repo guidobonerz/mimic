@@ -38,3 +38,5 @@ Done 2026-11-11: M7 — graphics views (`machine-bbc/src/gfx.rs`): `screen` (the
 - M5 B+: 64 KB with shadow RAM, the 1770 (reuse `chips-acorn`) with DFS 2.26.
 - M6 Master 128: 65SC12 (`cpu-6502` CMOS variant), MOS 3.20 banking (ACCCON, ROMSEL, private and shadow RAM), CMOS RAM and clock, ADFS.
 - M7 Frontends, debugger targets, graphics views, docs, screenshot. Gate.
+
+BASIC debugger (2026-11-20, Phase 35 M7): BBC BASIC II (Model B, B+) and IV (Master) are decoded for the debugger (`basic-dialects::bbc`, gate test `basic_debug` `bbc`).

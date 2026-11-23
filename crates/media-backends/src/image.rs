@@ -267,6 +267,8 @@ pub fn kind_for(path: &Path) -> Option<MediaKind> {
         "hdf" => Some(MediaKind::Disk),
         // ZX Microdrive cartridges, TR-DOS disks.
         "mdr" | "trd" => Some(MediaKind::Disk),
+        // ImageDisk (Lobo MAX-80) and the TRS-80's formats.
+        "imd" | "dmk" | "jv1" | "jv3" => Some(MediaKind::Disk),
         // Acorn DFS (BBC Micro): single- and double-sided; ADFS L (BBC
         // Master; ADFS S/M as .adf like the Amiga's).
         "ssd" | "dsd" | "adl" => Some(MediaKind::Disk),

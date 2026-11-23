@@ -12,3 +12,4 @@ workspace = true
 mimic-core.workspace = true
 cpu-arm.workspace = true
 chips-acorn.workspace = true
+basic-dialects.workspace = true

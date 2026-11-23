@@ -337,6 +337,67 @@ if [ ! -e "$DEST/nes-test-roms/COMMIT" ]; then
   echo "$NESROMS_COMMIT" > "$DEST/nes-test-roms/COMMIT"
 fi
 
+# Lobo MAX-80 test disks, Phase 41: the lobo_max80 project's diagnostic
+# disk for both drive sizes (MIT; the Internet Archive's item
+# lobo-max80-homebrew_202611) and LDOS 5.1.3 for the MAX-80 from Tim Mann's
+# pages (free to download and use by its owners' permission, see
+# https://www.tim-mann.org/misosys.html). Lobo's CP/M is not free and not
+# fetched: the user's to put there as cpm22_8in.imd.
+MAX80_DIAG525_SHA256=79730c8afcf2adff540946b931f76d835f3689dc1e0031475b31f4626234978d
+MAX80_DIAG8_SHA256=b2b25ce377f71928291455323234d930484312282f8821975eaacacdab89b2c1
+MAX80_LDOS_SHA256=9a81149ae5f34159b1f7911082900e1a77b291b76bc5d74ae5d3cecc2a39e1da
+if [ ! -s "$DEST/max80/ldm-513.dsk" ]; then
+  echo "MAX-80 test disks -> $DEST/max80"
+  mkdir -p "$DEST/max80"
+  fetch "https://archive.org/download/lobo-max80-homebrew_202611/diag_525.imd" "$DEST/max80/diag_525.imd"
+  fetch "https://archive.org/download/lobo-max80-homebrew_202611/diag.imd" "$DEST/max80/diag.imd"
+  fetch "https://www.tim-mann.org/trs80/ldm-513.zip" "$DEST/max80/ldm-513.zip"
+  [ "$(sha256 "$DEST/max80/diag_525.imd")" = "$MAX80_DIAG525_SHA256" ] &&
+    [ "$(sha256 "$DEST/max80/diag.imd")" = "$MAX80_DIAG8_SHA256" ] &&
+    [ "$(sha256 "$DEST/max80/ldm-513.zip")" = "$MAX80_LDOS_SHA256" ] || {
+    echo "error: MAX-80 test disk checksum mismatch" >&2; exit 1; }
+  unzip_py='import sys, zipfile
+zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])'
+  python3 -c "$unzip_py" "$DEST/max80/ldm-513.zip" "$DEST/max80" 2>/dev/null     || python -c "$unzip_py" "$DEST/max80/ldm-513.zip" "$DEST/max80"
+  rm "$DEST/max80/ldm-513.zip"
+fi
+
+# Game Boy test ROMs, Phase 40: Shay Green's ("blargg") suites (no licence
+# given: run only, never committed), Matt Currie's dmg-acid2 with its
+# reference picture (MIT) and Joonas Javanainen's mooneye test suite (MIT)
+# as its author's prebuilt archive.
+MTS_BUILD=mts-20260714-0944-31510e1
+MTS_SHA256=6d4fdda2f1d8d2f5f51b0ff3f6f3cc2fbae047aa395a39c82bda3a0e7cbd2641
+if [ ! -e "$DEST/gb/mooneye/BUILD" ]; then
+  echo "mooneye test suite -> $DEST/gb/mooneye"
+  mkdir -p "$DEST/gb/mooneye"
+  fetch "https://gekkio.fi/files/mooneye-test-suite/$MTS_BUILD/$MTS_BUILD.tar.xz" "$DEST/gb/mooneye.tar.xz"
+  [ "$(sha256 "$DEST/gb/mooneye.tar.xz")" = "$MTS_SHA256" ] || {
+    echo "error: mooneye test suite archive checksum mismatch" >&2; exit 1; }
+  tar -xJf "$DEST/gb/mooneye.tar.xz" -C "$DEST/gb/mooneye" --strip-components=1
+  rm "$DEST/gb/mooneye.tar.xz"
+  echo "$MTS_BUILD" > "$DEST/gb/mooneye/BUILD"
+fi
+GBROMS_COMMIT=c240dd7d700e5c0b00a7bbba52b53e4ee67b5f15
+GBROMS_SHA256=1e121842bc380cc69ec4d5946335c0e6656926af8a794ccc732d1b293f29e411
+DMGACID2_SHA256=464e14b7d42e7feea0b7ede42be7071dc88913f75b9ffa444299424b63d1dff1
+if [ ! -e "$DEST/gb/blargg/COMMIT" ]; then
+  echo "Game Boy test ROMs -> $DEST/gb"
+  mkdir -p "$DEST/gb/blargg"
+  fetch "https://codeload.github.com/retrio/gb-test-roms/tar.gz/$GBROMS_COMMIT" "$DEST/gb/blargg.tar.gz"
+  [ "$(sha256 "$DEST/gb/blargg.tar.gz")" = "$GBROMS_SHA256" ] || {
+    echo "error: gb-test-roms archive checksum mismatch" >&2; exit 1; }
+  tar -xzf "$DEST/gb/blargg.tar.gz" -C "$DEST/gb/blargg" --strip-components=1
+  rm "$DEST/gb/blargg.tar.gz"
+  echo "$GBROMS_COMMIT" > "$DEST/gb/blargg/COMMIT"
+fi
+if [ ! -s "$DEST/gb/dmg-acid2.gb" ]; then
+  fetch "https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/dmg-acid2.gb" "$DEST/gb/dmg-acid2.gb"
+  [ "$(sha256 "$DEST/gb/dmg-acid2.gb")" = "$DMGACID2_SHA256" ] || {
+    echo "error: dmg-acid2 checksum mismatch" >&2; exit 1; }
+  fetch "https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-dmg.png" "$DEST/gb/dmg-acid2-reference.png"
+fi
+
 # Fuse Test 2008-03-28 (Philip Kendall, GPL): ZX Spectrum timing tests —
 # frame length, contended memory and I/O, floating bus, LDIR at the
 # contended boundary, $7FFD reads; Phase 15. Run only, never committed.

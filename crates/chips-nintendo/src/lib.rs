@@ -4,6 +4,9 @@
 //! counter); the CPU core of the 2A03 is `cpu-6502`'s `Rp2A03` variant.
 //! SNES: the [`sppu`] S-PPU and the [`sdsp`] S-DSP (the CPUs are
 //! `cpu-65816` and `cpu-spc700`).
+//! Game Boy: the picture unit [`gbppu`], the sound unit [`gbapu`] and the
+//! timer [`gbtimer`] (the CPU
+//! is `cpu-sm83`); their sources are named in the modules.
 //!
 //! Sources: NESdev wiki, "PPU", "PPU registers", "PPU rendering", "PPU
 //! scrolling", "PPU sprite evaluation", "PPU palettes", "NTSC video",
@@ -15,6 +18,9 @@
 #![forbid(unsafe_code)]
 
 pub mod apu;
+pub mod gbapu;
+pub mod gbppu;
+pub mod gbtimer;
 pub mod overlay;
 pub mod palette;
 pub mod ppu;

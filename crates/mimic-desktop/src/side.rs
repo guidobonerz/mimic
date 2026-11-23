@@ -317,6 +317,10 @@ pub fn extensions(kind: MediaKind) -> &'static [&'static str] {
             "g64",
             "atr",
             "dsk",
+            "imd",
+            "dmk",
+            "jv1",
+            "jv3",
             "adf",
             "dms",
             "do",
@@ -342,7 +346,7 @@ pub fn extensions(kind: MediaKind) -> &'static [&'static str] {
         ],
         MediaKind::Cartridge => &[
             "crt", "car", "a26", "vec", "bin", "rom", "col", "nes", "sfc", "smc", "sg", "sc",
-            "sms", "gg", "md", "gen", "smd",
+            "sms", "gg", "md", "gen", "smd", "gb",
         ],
     }
 }

@@ -406,6 +406,12 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
             0x3800,
         ),
     ];
+    // Lobo MAX-80: the 512-byte boot ROM.
+    const MAX80: &[RomSpec] = &[optional(
+        "boot",
+        &["max80.e12", "max80", "maxrom13", "maxrom", "boot"],
+        0x200,
+    )];
     // ZX Spectrum: one ROM per model (the 128K and +2 files hold both
     // 16 KB ROMs, the 128 editor first).
     const SPECTRUM: &[RomSpec] = &[
@@ -550,6 +556,15 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "md-tmss",
         &["md-tmss", "tmss", "bios-md", "md-bios"],
         0x800,
+    )];
+    // Game Boy: the boot ROM of the DMG (optional; without it the
+    // machine starts as the boot ROM leaves it).
+    const GAMEBOY: &[RomSpec] = &[optional(
+        "gameboy-boot",
+        &[
+            "dmg_boot", "dmg-boot", "gb_bios", "gb-bios", "dmg_rom", "boot",
+        ],
+        0x100,
     )];
     const COLECO: &[RomSpec] = &[rom(
         "coleco",
@@ -788,11 +803,13 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "apple2" => APPLE2,
         "zx81" => ZX81,
         "trs80" => TRS80,
+        "max80" => MAX80,
         "spectrum" => SPECTRUM,
         "vectrex" => VECTREX,
         "coleco" => COLECO,
         "sega8" => SEGA8,
         "megadrive" => MEGADRIVE,
+        "gameboy" => GAMEBOY,
         "msx" => MSX,
         "ti99" => TI99,
         "bbc" => BBC,
@@ -828,10 +845,12 @@ fn folders(machine: &str) -> &'static [&'static str] {
         "archimedes" => &["archimedes", "riscos", "acorn"],
         "zx81" => &["zx81", "sinclair"],
         "trs80" => &["trs80", "trs-80", "tandy"],
+        "max80" => &["max80", "max-80", "lobo"],
         "spectrum" => &["spectrum", "zxspectrum", "sinclair"],
         "coleco" => &["coleco", "colecovision"],
         "sega8" => &["sega8", "sms", "gg", "sega"],
         "megadrive" => &["megadrive", "genesis", "md"],
+        "gameboy" => &["gameboy", "gb", "dmg"],
         "msx" => &["msx", "msx1", "msx2"],
         "ti99" => &["ti99", "ti-99", "ti994a"],
         "bbc" => &[

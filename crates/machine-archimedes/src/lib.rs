@@ -545,6 +545,8 @@ fn default_cmos() -> Pcf8583 {
 }
 
 pub struct Archimedes {
+    /// The decoder of BBC BASIC V for the BASIC debugger (not machine state).
+    basic: basic_dialects::bbcarm::BbcBasicV,
     cpu: Arm2,
     board: Board,
     disks: Vec<Option<Floppy>>,
@@ -642,6 +644,7 @@ impl Archimedes {
             drives: Default::default(),
             slot: None,
             input: InputQueue::new(),
+            basic: basic_dialects::bbcarm::BbcBasicV::new(CPU_SPACE),
         };
         m.start_cpu();
         Ok(m)
@@ -830,6 +833,13 @@ impl Machine for Archimedes {
                 big_endian: false,
             },
         ]
+    }
+
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -1061,6 +1071,8 @@ impl MediaSlot for Archimedes {
         .flush()
     }
 }
+
+basic_dialects::impl_basic_debug!(Archimedes, basic);
 
 impl DebugTarget for Archimedes {
     fn regs(&self) -> RegisterSet {

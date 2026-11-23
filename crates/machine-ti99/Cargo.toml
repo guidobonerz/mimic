@@ -12,6 +12,7 @@ workspace = true
 mimic-core.workspace = true
 cpu-tms9900.workspace = true
 chips-ti.workspace = true
+basic-dialects.workspace = true
 devices-input.workspace = true
 media.workspace = true
 drives-other.workspace = true

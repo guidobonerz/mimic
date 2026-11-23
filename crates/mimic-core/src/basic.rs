@@ -81,7 +81,9 @@ pub struct BasicInfo {
 pub struct BasicState {
     pub mode: BasicMode,
     /// The statement being executed (at a stop point: about to be).
-    /// `None` outside a stored line.
+    /// `None` outside a stored line. [`BasicMode::Running`] without a
+    /// place: a stop point was reached between two statements (on a blank
+    /// or a separator before the next one); the debugger runs on.
     pub pos: Option<BasicPos>,
     /// The interpreter's text pointer, where it has one.
     pub text_addr: Option<u32>,

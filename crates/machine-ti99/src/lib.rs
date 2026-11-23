@@ -542,6 +542,8 @@ impl Bus for PeekBus<'_> {
 }
 
 pub struct Ti99 {
+    /// The decoder of TI BASIC for the BASIC debugger (not machine state).
+    basic: basic_dialects::tibasic::TiBasic,
     model: Model,
     cpu: Tms9900,
     board: Board,
@@ -699,6 +701,7 @@ impl Ti99 {
             console_grom,
             sched: Scheduler::new(),
             input: InputQueue::new(),
+            basic: basic_dialects::tibasic::TiBasic::new(CPU_SPACE, VRAM_SPACE, GROM_SPACE),
             field_done_pending: false,
             overlay_ids: Vec::new(),
             overlay_fresh: false,
@@ -973,6 +976,13 @@ impl Machine for Ti99 {
                 big_endian: false,
             },
         ]
+    }
+
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -1293,6 +1303,8 @@ impl Machine for Ti99 {
         Ok(())
     }
 }
+
+basic_dialects::impl_basic_debug!(Ti99, basic);
 
 impl DebugTarget for Ti99 {
     fn regs(&self) -> RegisterSet {

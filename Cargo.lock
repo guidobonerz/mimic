@@ -918,6 +918,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpu-sm83"
+version = "0.1.0"
+dependencies = [
+ "mimic-core",
+]
+
+[[package]]
 name = "cpu-spc700"
 version = "0.1.0"
 dependencies = [
@@ -2041,6 +2048,7 @@ dependencies = [
 name = "machine-archimedes"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-acorn",
  "cpu-arm",
  "mimic-core",
@@ -2077,6 +2085,7 @@ dependencies = [
 name = "machine-bbc"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-acorn",
  "chips-amstrad",
  "chips-cbm",
@@ -2146,6 +2155,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "machine-gameboy"
+version = "0.1.0"
+dependencies = [
+ "chips-nintendo",
+ "cpu-sm83",
+ "devices-cartridge",
+ "mimic-core",
+]
+
+[[package]]
 name = "machine-imsai"
 version = "0.1.0"
 dependencies = [
@@ -2158,6 +2177,7 @@ dependencies = [
 name = "machine-kc85"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-amstrad",
  "chips-zilog",
  "cpu-z80",
@@ -2194,6 +2214,16 @@ dependencies = [
  "cpu-m68k",
  "devices-input",
  "devices-printer",
+ "drives-other",
+ "media",
+ "mimic-core",
+]
+
+[[package]]
+name = "machine-max80"
+version = "0.1.0"
+dependencies = [
+ "cpu-z80",
  "drives-other",
  "media",
  "mimic-core",
@@ -2336,6 +2366,7 @@ dependencies = [
 name = "machine-ti99"
 version = "0.1.0"
 dependencies = [
+ "basic-dialects",
  "chips-ti",
  "cpu-tms9900",
  "devices-input",
@@ -2550,11 +2581,13 @@ dependencies = [
  "machine-c64",
  "machine-coleco",
  "machine-cpc",
+ "machine-gameboy",
  "machine-imsai",
  "machine-kc85",
  "machine-keypunch",
  "machine-logophor16",
  "machine-mac",
+ "machine-max80",
  "machine-mega65",
  "machine-megadrive",
  "machine-msx",
@@ -2613,11 +2646,13 @@ dependencies = [
  "machine-c128",
  "machine-c64",
  "machine-cpc",
+ "machine-gameboy",
  "machine-imsai",
  "machine-kc85",
  "machine-keypunch",
  "machine-logophor16",
  "machine-mac",
+ "machine-max80",
  "machine-mega65",
  "machine-megadrive",
  "machine-msx",
@@ -2625,6 +2660,7 @@ dependencies = [
  "machine-snes",
  "machine-spectrum",
  "machine-ted",
+ "machine-ti99",
  "machine-trs80",
  "machine-vic20",
  "machine-zx81",

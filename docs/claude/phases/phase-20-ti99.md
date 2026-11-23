@@ -23,3 +23,5 @@ Done 2026-11-10: M1 (`cpu-tms9900`, 19 tests), M2 (`chips-ti::tms9901`, `chips-t
 - M4 the real ROMs: TI BASIC starts; cartridges (ROM + GROM, 8 KB banking); 32 KB expansion.
 - M5 cassette, frontends (desktop, headless, web), debugger targets, graphics views, docs. Gate.
 - M6 Peripheral Expansion Box: TI disk controller (DSR ROM user-supplied, DSK images), speech synthesizer (TMS5220, ROMs user-supplied).
+
+BASIC debugger (2026-11-20, Phase 35 M8): TI BASIC is decoded for the debugger (`basic-dialects::tibasic`, gate test `basic_debug` `ti99`); the stop point is the top of the statement loop in the console ROM (`>1976`), program and variables are read from the video RAM. See `phase-35-basic-debugger.md`.

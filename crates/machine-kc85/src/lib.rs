@@ -450,6 +450,8 @@ impl Sound {
 }
 
 pub struct Kc85 {
+    /// The decoder of HC-BASIC for the BASIC debugger (not machine state).
+    basic: basic_dialects::hcbasic::HcBasic,
     model: Model,
     cpu: Z80,
     mem: Memory,
@@ -571,6 +573,7 @@ impl Kc85 {
             sound: Sound::new(model.cpu_hz()),
             sched: Scheduler::new(),
             input: InputQueue::new(),
+            basic: basic_dialects::hcbasic::HcBasic::new(CPU_SPACE),
             keyboard: keyboard::Keyboard::new(model.cpu_hz()),
             tape: tape::Tape::default(),
             line: 0,
@@ -835,6 +838,13 @@ impl Machine for Kc85 {
             });
         }
         v
+    }
+
+    fn basic(&mut self) -> Option<&mut dyn mimic_core::basic::BasicDebug> {
+        if let Some(found) = self.basic.rescan(&*self) {
+            self.basic = found;
+        }
+        Some(self)
     }
 
     fn chips(&self) -> Vec<ChipInfo> {
@@ -1162,6 +1172,8 @@ impl Machine for Kc85 {
         Ok(())
     }
 }
+
+basic_dialects::impl_basic_debug!(Kc85, basic);
 
 impl DebugTarget for Kc85 {
     fn regs(&self) -> RegisterSet {

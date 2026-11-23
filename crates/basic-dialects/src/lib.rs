@@ -12,11 +12,15 @@
 #![forbid(unsafe_code)]
 
 pub mod atari;
+pub mod bbc;
+pub mod bbcarm;
 pub mod cbm;
+pub mod hcbasic;
 pub mod level1;
 pub mod locomotive;
 pub mod msz80;
 pub mod sinclair;
+pub mod tibasic;
 
 use mimic_core::basic::{
     BasicError, BasicFrame, BasicInfo, BasicLine, BasicState, BasicStopPoint, BasicValue, BasicVar,

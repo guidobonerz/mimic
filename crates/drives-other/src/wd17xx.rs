@@ -3,7 +3,9 @@
 //! tracks ([`media::dmk`]) that turn under the head at 300 rpm, one byte
 //! every 64 µs in single density (FM) and 32 µs in double density (MFM),
 //! so commands find their ID fields, data marks and index pulses where the
-//! track has them.
+//! track has them. With [`Fdc::fast`] the chip runs on the doubled clock
+//! of an 8-inch drive's connector: half those times, and the longer
+//! 8-inch tracks turn at 360 rpm.
 //!
 //! Registers: 0 command (write) / status (read), 1 track, 2 sector, 3 data.
 //! Commands:
@@ -146,6 +148,9 @@ pub struct Fdc {
     pub side: u8,
     /// The selected drive's motor runs and its door is closed.
     pub ready: bool,
+    /// The doubled clock of an 8-inch connector (the machine's wiring, not
+    /// in the savestate: the machine sets it from its own latch).
+    pub fast: bool,
     phase: Phase,
 }
 
@@ -167,23 +172,27 @@ impl Fdc {
             drive: None,
             side: 0,
             ready: false,
+            fast: false,
             phase: Phase::Idle,
         }
     }
 
     pub fn reset(&mut self) {
-        let (chip, clock) = (self.chip, self.clock_hz as u32);
+        let (chip, clock, fast) = (self.chip, self.clock_hz as u32, self.fast);
         *self = Self::new(chip, clock);
+        self.fast = fast;
     }
 
     /// CPU clocks per byte on the disk.
     fn byte_clocks(&self) -> u64 {
-        let us = if self.mfm { 32 } else { 64 };
+        let us = if self.mfm { 32 } else { 64 } >> u32::from(self.fast);
         (self.clock_hz * us / 1_000_000).max(1)
     }
 
+    /// Chip times (step rates, delays) at its 1 MHz clock, halved on the
+    /// doubled one.
     fn clocks_ms(&self, ms: u64) -> u64 {
-        self.clock_hz * ms / 1000
+        (self.clock_hz * ms / 1000) >> u32::from(self.fast)
     }
 
     /// Index of the selected drive's current track in its image, if there
@@ -1188,5 +1197,25 @@ mod tests {
             .step_by(500)
             .filter(|&t| f.peek_status(t, &d) & ST_INDEX != 0);
         assert!(pulses.count() > 0);
+    }
+
+    #[test]
+    fn the_doubled_clock_of_an_8_inch_connector() {
+        let mut f = fdc();
+        f.mfm = true;
+        let dd = f.revolution(media::dmk::DD_TRACK_BYTES);
+        f.fast = true;
+        // 10416 bytes at 16 µs: 360 turns a minute where 6250 at 32 µs
+        // make 300.
+        let eight = f.revolution(media::dmk::DD8_TRACK_BYTES);
+        assert!((dd * 5).abs_diff(u64::from(CLOCK)) < u64::from(CLOCK) / 50);
+        assert!((eight * 6).abs_diff(u64::from(CLOCK)) < u64::from(CLOCK) / 50);
+        // The step rates halve too, and a reset keeps the wiring.
+        assert_eq!(
+            f.clocks_ms(6) * 2,
+            Fdc::new(Chip::Fd1793, CLOCK).clocks_ms(6)
+        );
+        f.reset();
+        assert!(f.fast);
     }
 }

@@ -60,3 +60,5 @@ On the user's report ("lädt nicht sauber von tap", "copy/paste im BASIC-Editor 
 ## Z80 timing (2026-11-19)
 
 On the user's request the KC85 and the D004 run their Z80 with `step_timed` (before: `step`, the rest of the machine caught up after each instruction). The rest catches up before each access that can see it (I/O, interrupt acknowledge, writes to $8000–$BFFF; the D004 before its I/O), not before every access: that cost a third of the speed. Measured (3000 fields, KC85/4, best of 4, interleaved): 1.07 → 1.15 s without the D004, 2.91 → 3.11 s with ML-DOS on the D004 (+7–8 %). All unit tests and the ROM tests (`kc85_boot`: boot, BASIC, tape, `JUMP FC`) unchanged, the boot sector after the same fields (110/80/80); ML-DOS still boots to its prompt.
+
+BASIC debugger (2026-11-20, Phase 35): HC-BASIC is decoded for the debugger on the KC85/3, /4 and /5 (`basic-dialects::hcbasic`, gate test `basic_debug` `kc85`); see `phase-35-basic-debugger.md`.

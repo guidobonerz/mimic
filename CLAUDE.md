@@ -43,6 +43,7 @@ crates/
   cpu-6809/        Motorola 6809 / 68A09 (Vectrex)
   cpu-arm/         Acorn ARM2 (26-bit, Archimedes)
   cpu-8080/        Intel 8080A (IMSAI 8080), machine cycles reported with their status word
+  cpu-sm83/        Sharp SM83 / LR35902 (Game Boy): every machine cycle reported to the bus as read, write or idle
   cpu-tms9900/     TI TMS9900 (TI-99/4A): workspace registers in memory, CRU, wait states from the bus
   cpu-ada/         Ada, the 16-bit RISC CPU of the fictional Logophor 16 (Phase 31)
   asm-ada/         assembler + linker for Ada (tests, Foundry ROM build, host tool)
@@ -57,19 +58,19 @@ crates/
   chips-zilog/     Z80 CTC and PIO with their interrupt daisy chain (KC85)
   chips-sinclair/  ZX81 ULA; ZX Spectrum ULA (display, contention, floating bus, port $FE)
   chips-logophor/ Logophor 16: Babbage (bus arbiter, Jacquard, Lithograph, Stereoscope 3D), Lumière (video, sprites), Calliope (sound), Phonograph (MP3/AAC), Telegraph (I/O, network)
-  chips-nintendo/  NES: PPU 2C02/2C07 with its palette, APU of the 2A03/2A07; SNES: S-PPU, S-DSP
+  chips-nintendo/  NES: PPU 2C02/2C07 with its palette, APU of the 2A03/2A07; SNES: S-PPU, S-DSP; Game Boy: picture unit, sound unit, timer
   drives-cbm/      IEC bus, 1541, 1571, 1581 (each with its own CPU), TCBM bus with the 1551
-  drives-other/    WD FD1771/FD1793 (TRS-80, TI-99/4A disk card, MSX), ATA/IDE hard disks (A1200), Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, MSX cassette, ZX Microdrives
+  drives-other/    WD FD1771/FD1793 (TRS-80, TI-99/4A disk card, MSX, MAX-80; 5.25-inch and 8-inch rates), ATA/IDE hard disks (A1200), Amiga floppy (DF0–DF3, MFM), Atari SIO drives (810/1050), CPC FDC drives, Apple Disk II, Mac IWM + Sony 400K/800K drives, datasettes, Apple cassette, Spectrum cassette, MSX cassette, ZX Microdrives
   devices-input/   Emulated input peripherals: joysticks, paddles, mice (1351, Amiga, AMX, Kempston), light pens, keypads
   devices-cartridge/ Expansion-port cartridges: C64 CRT types (banking, EasyFlash), VIC-20 and C16/Plus/4 ROM carts, MSX ROMs with the MegaROM schemes, battery RAM and the Konami SCC sound chip; the battery RAM (`.srm`) slot
   devices-net/     Devices that reach outside through mimic-core::host: Ultimate 64 command interface (UCI), WiC64
   devices-printer/ Printers: Epson FX-80, NEC P6+ and ImageWriter models with page pictures, Commodore bus end, output through mimic-core::host
-  media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR, MSX CAS, Amiga HDF (RDB), punched-card decks (.deck/.crd/.chx)
+  media/           Image formats: PRG, D64/D71/D81, T64/TAP, CRT, ADF(→MFM), ATR, XEX, CAS, DSK, DMK/JV1/JV3 and ImageDisk IMD (TRS-80, MAX-80), CDT/TZX and Spectrum TAP, Apple DSK/DO/PO(→GCR)/WOZ, Mac DSK/DiskCopy 4.2(→GCR), WAV, MDR, MSX CAS, Amiga HDF (RDB), punched-card decks (.deck/.crd/.chx)
   media-backends/  Where media bytes come from: image file, copy-on-write overlay, host directory, real hardware
   mimic-input/       Host side: gamepads (gilrs), keyboard-as-joystick, mouse capture, mapping profiles
   mimic-profile/     Start profiles (profiles.yaml: settings + named machine setups) for the frontends
   mimic-cheats/      Cheat files with patches, POKE/VICE/code imports, CRC-32 database, memory search
-  basic-dialects/  BASIC interpreters' memory decoded for the BASIC debugger (program, variables, stack, stop points): Commodore BASIC and Applesoft, Microsoft's Z80 BASICs (TRS-80 Level II, MSX), TRS-80 Level I, Sinclair BASIC (ZX81, Spectrum), Atari BASIC, Locomotive BASIC (CPC); linked by the machines
+  basic-dialects/  BASIC interpreters' memory decoded for the BASIC debugger (program, variables, stack, stop points): Commodore BASIC and Applesoft, Microsoft's Z80 BASICs (TRS-80 Level II, MSX), TRS-80 Level I, Sinclair BASIC (ZX81, Spectrum), Atari BASIC, Locomotive BASIC (CPC), BBC BASIC II/IV and V (Archimedes), HC-BASIC (KC85), TI BASIC; linked by the machines
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
   machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-bbc/  machine-mega65/  machine-nes/  machine-snes/  machine-vectrex/
@@ -78,6 +79,8 @@ crates/
   machine-archimedes/ Acorn Archimedes A305, A310, A440, A3000 as models
   machine-imsai/   IMSAI 8080: the picture is the front panel (clickable paddles, lamps by bus duty), serial terminal as second screen; card reader
   machine-keypunch/ IBM 029 card punch: the user types card decks (picture: the card), read back by the IMSAI's card reader
+  machine-gameboy/ Nintendo Game Boy (DMG) and Pocket as models (Phase 40): SM83, picture unit, sound unit and timer (`chips-nintendo::gbppu`/`gbapu`/`gbtimer`), MBC1/2/3/5 with battery RAM, serial port, optional boot ROM
+  machine-max80/   Lobo MAX-80 (Phase 41): Z80B, 128 KB in four banked chunks, the movable 4 KB block (boot ROM, video and font RAM, keyboard, devices), HD46505 picture with the font in RAM, MB8876 floppy controller for 5.25-inch and 8-inch drives, PIO with the MSM5832 clock, beeper
   machine-megadrive/ Sega Mega Drive / Genesis (Phase 37): 68000 + Z80, VDP 315-5313 (`chips-sega::mdvdp`), YM2612 (`chips-yamaha`), SN76489, 3/6-button pads, SRAM/EEPROM, SSF2 mapper, TMSS
   machine-sega8/   Sega SG-1000, SG-1000 II, SC-3000, SC-3000H, Mark III, Master System 1/2 and Game Gear as models (Phase 36): TMS9918A or the SMS VDP, SN76489, YM2413, Sega/Codemasters mappers, 8255 PPI with the SC-3000 keyboard, cassette
   machine-msx/     MSX1 and MSX2 as models: slots, keyboard, joysticks, cassette, SVI-738 disk interface; MSX2 with V9938, memory mapper, sub ROM, RP5C01; C-BIOS or a user-supplied BIOS
@@ -171,7 +174,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35, 36 and 37 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35, 36, 37, 40 and 41 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

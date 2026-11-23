@@ -944,6 +944,15 @@ pub static NES: Keymap = Keymap {
     entries: NES_POSITIONAL,
 };
 
+/// Game Boy: the buttons beside the cross (machine keys 0-3, see
+/// `machine-gameboy::keys`), laid out as on the NES: X = A, Z = B, right
+/// Shift = Select, Enter = Start; the cross is the joystick (cursor keys,
+/// Space also A).
+pub static GAMEBOY: Keymap = Keymap {
+    machine: "gameboy",
+    entries: NES_POSITIONAL,
+};
+
 /// SNES: controller 1's buttons (machine keys 0-7 = B A Select Start Y X
 /// L R, see `machine-snes::keys`): Z = B, X = A, A = Y, S = X, Q = L,
 /// W = R, right Shift = Select, Enter = Start; the cross is the joystick
@@ -1319,6 +1328,89 @@ const TRS80_POSITIONAL: &[(&str, &[u16])] = &[
 pub static TRS80: Keymap = Keymap {
     machine: "trs80",
     entries: TRS80_POSITIONAL,
+};
+
+/// Lobo MAX-80: row · 8 + bit of its 8 × 8 matrix (see
+/// `machine-max80::keyboard`), the TRS-80's with more keys. `@` on `` ` ``,
+/// `:` on `'`, `=` = SHIFT + `-`; Backspace = the key at CLEAR's place
+/// (the systems' backspace), Delete and Home = the same, End and Pause =
+/// BREAK, Insert = `^`, PageDown = `_`.
+const MAX80_POSITIONAL: &[(&str, &[u16])] = &[
+    ("KeyA", &[1]),
+    ("KeyB", &[2]),
+    ("KeyC", &[3]),
+    ("KeyD", &[4]),
+    ("KeyE", &[5]),
+    ("KeyF", &[6]),
+    ("KeyG", &[7]),
+    ("KeyH", &[8]),
+    ("KeyI", &[9]),
+    ("KeyJ", &[10]),
+    ("KeyK", &[11]),
+    ("KeyL", &[12]),
+    ("KeyM", &[13]),
+    ("KeyN", &[14]),
+    ("KeyO", &[15]),
+    ("KeyP", &[16]),
+    ("KeyQ", &[17]),
+    ("KeyR", &[18]),
+    ("KeyS", &[19]),
+    ("KeyT", &[20]),
+    ("KeyU", &[21]),
+    ("KeyV", &[22]),
+    ("KeyW", &[23]),
+    ("KeyX", &[24]),
+    ("KeyY", &[25]),
+    ("KeyZ", &[26]),
+    ("BracketLeft", &[27]),
+    ("Backslash", &[28]),
+    ("BracketRight", &[29]),
+    ("Insert", &[30]),
+    ("PageDown", &[31]),
+    ("Digit0", &[32]),
+    ("Digit1", &[33]),
+    ("Digit2", &[34]),
+    ("Digit3", &[35]),
+    ("Digit4", &[36]),
+    ("Digit5", &[37]),
+    ("Digit6", &[38]),
+    ("Digit7", &[39]),
+    ("Digit8", &[40]),
+    ("Digit9", &[41]),
+    ("Backquote", &[0]),
+    ("Quote", &[42]),
+    ("Semicolon", &[43]),
+    ("Comma", &[44]),
+    ("Minus", &[45]),
+    ("Period", &[46]),
+    ("Slash", &[47]),
+    ("Enter", &[48]),
+    ("NumpadEnter", &[48]),
+    ("Backspace", &[49]),
+    ("Delete", &[49]),
+    ("Home", &[49]),
+    ("End", &[50]),
+    ("Pause", &[50]),
+    ("ArrowUp", &[51]),
+    ("ArrowDown", &[52]),
+    ("ArrowLeft", &[53]),
+    ("ArrowRight", &[54]),
+    ("Space", &[55]),
+    ("ShiftLeft", &[56]),
+    ("ShiftRight", &[56]),
+    ("F1", &[57]),
+    ("F2", &[58]),
+    ("F3", &[59]),
+    ("F4", &[60]),
+    ("Escape", &[61]),
+    ("ControlLeft", &[63]),
+    ("ControlRight", &[63]),
+    ("Equal", &[56, 45]),
+];
+
+pub static MAX80: Keymap = Keymap {
+    machine: "max80",
+    entries: MAX80_POSITIONAL,
 };
 
 /// KC85: the key numbers its keyboard sends (see
@@ -2078,12 +2170,14 @@ pub fn positional(machine: &str) -> Option<&'static Keymap> {
         "bbc" => Some(&BBC),
         "mega65" => Some(&MEGA65),
         "nes" => Some(&NES),
+        "gameboy" => Some(&GAMEBOY),
         "snes" => Some(&SNES),
         "vectrex" => Some(&VECTREX),
         "cpc" => Some(&CPC),
         "amiga" => Some(&AMIGA),
         "zx81" => Some(&ZX81),
         "trs80" => Some(&TRS80),
+        "max80" => Some(&MAX80),
         "kc85" => Some(&KC85),
         "sega8" => Some(&SEGA8),
         "spectrum" => Some(&SPECTRUM),
