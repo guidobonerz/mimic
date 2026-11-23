@@ -188,6 +188,7 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | Machine | Crate | Models | Verification / state | Completeness |
 | --- | --- | --- | --- | --- |
 | Commodore 64 | `machine-c64` | PAL, NTSC | Lorenz 264/264; debugged with VS64 through the VICE monitor | 95 % |
+| Ultimate 64, Commodore 64 Ultimate | `machine-c64` (`ultimate64`) | `u64`, `c64u`; PAL, NTSC | the C64 with the board's turbo CPU (1–48 / 1–64 MHz, turbo registers) and built-in command interface; a rebuilt menu (file browser, tools, turbo settings) and a firmware updater that writes an emulated flash; own unit tests, BASIC timing loop and an update run with the real ROMs; no second drive or multiple SIDs yet; menu layout and register details partly unverified, the real firmware does not run | 50 % |
 | Commodore VIC-20 | `machine-vic20` | PAL, NTSC, RAM expansions | boots BASIC, tape, cartridges | 85 % |
 | Commodore PET | `machine-pet` | 2001, 3032, 4032, 8032 | boots BASIC; IEEE drive virtual only (no true 2031) | 85 % |
 | Commodore C16 / Plus/4 | `machine-ted` | PAL, NTSC | boots BASIC, tape, cartridges | 85 % |

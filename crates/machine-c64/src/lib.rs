@@ -91,6 +91,8 @@ pub mod loader;
 pub mod memory;
 pub use chips_cbm::pla;
 pub mod stub;
+pub mod turbo;
+pub mod u64menu;
 pub mod ultimate;
 
 use chips_cbm::cia::CiaModel;
@@ -156,6 +158,121 @@ pub fn entry() -> MachineEntry {
         models: &[],
         video_formats: mimic_core::registry::PAL_NTSC,
         create: |config| Ok(Box::new(C64::new(config)?)),
+    }
+}
+
+/// The Ultimate 64 (Gideon's Logic) and the Commodore 64 Ultimate built on
+/// its Elite II board: this C64 with the board's own parts. Models "u64"
+/// (default) and "c64u".
+///
+/// - The command interface is part of the board: `uci` is "on" unless
+///   switched off. The REU stays an option (`reu`), as in the board's menu.
+/// - The turbo CPU ([`turbo`]): `options["turbo"]` = "off" (default),
+///   "manual", "registers" or "enablebit"; `["cpu_speed"]` the menu's
+///   speed in MHz (1 … 48 on the u64, 1 … 64 on the c64u; default 1);
+///   `["badlines"]` = "on" (default) or "off". Chip "turbo" in the
+///   debugger's chip list.
+///
+/// - The menu ([`u64menu`]): panel control 5 "MENU" is the multi button,
+///   pressed briefly. The menu freezes the C64, takes the keyboard and is
+///   drawn over the picture; it browses the frontend's file area (the
+///   command interface's folder), loads programs, mounts disks, starts
+///   cartridges, sets the turbo and runs the firmware updater, which
+///   writes an update file into an emulated flash.
+///
+/// ROMs are the C64's (the frontends look in the `c64` ROM folder).
+/// Not built: the real firmware (the menu is rebuilt), the second drive,
+/// more than one SID, the HDMI output's scaler (the picture is the
+/// VIC-II's).
+pub fn ultimate64_entry() -> MachineEntry {
+    MachineEntry {
+        id: "ultimate64",
+        name: "Ultimate 64",
+        models: &["u64", "c64u"],
+        video_formats: mimic_core::registry::PAL_NTSC,
+        create: |config| Ok(Box::new(C64::new_ultimate(config)?)),
+    }
+}
+
+/// The board the C64 is built on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Board {
+    C64,
+    /// Ultimate 64 / Ultimate 64 Elite.
+    Ultimate64,
+    /// Commodore 64 Ultimate (Elite II board).
+    C64Ultimate,
+}
+
+/// The debug checks after a CPU cycle: an interrupt entered, an
+/// instruction finished.
+fn instr_hooks(
+    dbg: &mut DebugHooks,
+    entered: Option<mimic_core::InterruptKind>,
+    result: CycleResult,
+    beam: BeamPos,
+) {
+    if let Some(kind) = entered {
+        if dbg.interrupt_armed(kind) {
+            dbg.check_interrupt(kind);
+        }
+    }
+    if let CycleResult::InstrDone { next_pc } = result {
+        if dbg.trace_instr_armed() {
+            dbg.trace_instr(CPU, next_pc, beam);
+        }
+        if dbg.instr_step_armed() {
+            dbg.check_instr_step();
+        }
+        if dbg.exec_armed(CPU_SPACE) {
+            dbg.check_exec(CPU_SPACE, next_pc);
+        }
+    }
+}
+
+/// The bus of a turbo cycle: only what is inside the Ultimate 64's FPGA
+/// answers at turbo speed (RAM, the KERNAL, BASIC and character ROMs, the
+/// 6510 port). An access to anything else (I/O, cartridge ROM) is not
+/// made and noted; the machine takes the CPU cycle back and makes it in
+/// the next 1 MHz cycle.
+struct TurboBus<'a, 'b, 'c> {
+    bus: &'a mut HookedC64Bus<'b, 'c>,
+    external: bool,
+}
+
+impl TurboBus<'_, '_, '_> {
+    fn internal(&self, addr: u32) -> bool {
+        matches!(
+            self.bus.bus.mem.bank(addr as u16),
+            Bank::Ram | Bank::Basic | Bank::Kernal | Bank::Char
+        )
+    }
+}
+
+impl Bus for TurboBus<'_, '_, '_> {
+    fn read(&mut self, addr: u32, size: Size) -> u32 {
+        if self.internal(addr) {
+            self.bus.read(addr, size)
+        } else {
+            self.external = true;
+            0
+        }
+    }
+
+    fn peek(&self, addr: u32, size: Size) -> u32 {
+        self.bus.peek(addr, size)
+    }
+
+    fn write(&mut self, addr: u32, size: Size, v: u32) {
+        if self.internal(addr) {
+            self.bus.write(addr, size, v);
+        } else {
+            self.external = true;
+        }
+    }
+
+    fn addr_bits(&self) -> u8 {
+        16
     }
 }
 
@@ -567,6 +684,14 @@ pub struct C64 {
     fastload: bool,
     /// A trapped exchange with the virtual drive is in progress.
     fast_serving: bool,
+    /// The Ultimate boards' menu ([`u64menu`]); `None` on a C64.
+    menu: Option<Box<u64menu::Menu>>,
+    /// The menu is open: the C64's CPU stands still (kept beside the menu
+    /// for the cycle loop).
+    frozen: bool,
+    /// The picture with the menu drawn over it, made once a frame while
+    /// the menu is open (output, not state).
+    menu_frame: Vec<u8>,
 }
 
 /// The clonable part of the machine, for atomic savestate loading.
@@ -582,12 +707,26 @@ struct Snapshot {
 
 impl C64 {
     pub fn new(config: &MachineConfig) -> Result<Self, ConfigError> {
-        // `options["vicii"]`: the VIC-II type, "6569"/"8565" (PAL) or
-        // "6567"/"8562" (NTSC; the 6567R8); without it the model's old
-        // type. The HMOS-II types 8565/8562 (C64C) show the grey dot.
         if let Some(other) = config.model.as_deref() {
             return Err(ConfigError::UnknownModel(other.into()));
         }
+        Self::with_board(config, Board::C64)
+    }
+
+    /// The machine "ultimate64" (see [`ultimate64_entry`]).
+    pub fn new_ultimate(config: &MachineConfig) -> Result<Self, ConfigError> {
+        let board = match config.model.as_deref() {
+            None | Some("u64") => Board::Ultimate64,
+            Some("c64u") => Board::C64Ultimate,
+            Some(other) => return Err(ConfigError::UnknownModel(other.into())),
+        };
+        Self::with_board(config, board)
+    }
+
+    fn with_board(config: &MachineConfig, board: Board) -> Result<Self, ConfigError> {
+        // `options["vicii"]`: the VIC-II type, "6569"/"8565" (PAL) or
+        // "6567"/"8562" (NTSC; the 6567R8); without it the model's old
+        // type. The HMOS-II types 8565/8562 (C64C) show the grey dot.
         let vic = match (
             config.video_format,
             config.options.get("vicii").map(String::as_str),
@@ -679,10 +818,16 @@ impl C64 {
             ));
         }
         let sd2iec = sd2iec_on.then(|| Sd2iec::new(sd2iec_device, cpu_hz));
-        let uci = match option("uci") {
-            None | Some("off") => None,
-            Some("on") => Some(Uci::new()),
-            Some(other) => return Err(ConfigError::Invalid(format!("uci option '{other}'"))),
+        // On the Ultimate boards the command interface is built in.
+        let uci = match (option("uci"), board) {
+            (None, Board::C64) | (Some("off"), _) => None,
+            (None, _) | (Some("on"), _) => Some(Uci::new()),
+            (Some(other), _) => return Err(ConfigError::Invalid(format!("uci option '{other}'"))),
+        };
+        let turbo = match board {
+            Board::C64 => None,
+            Board::Ultimate64 => Some(turbo::Turbo::from_options(&turbo::SPEEDS_U64, option)?),
+            Board::C64Ultimate => Some(turbo::Turbo::from_options(&turbo::SPEEDS_U64E2, option)?),
         };
         let reu = match option("reu") {
             None | Some("off") => None,
@@ -754,8 +899,16 @@ impl C64 {
             boot_frame: 0,
             fastload,
             fast_serving: false,
+            menu: match board {
+                Board::C64 => None,
+                Board::Ultimate64 => Some(Box::new(u64menu::Menu::new(u64menu::U64))),
+                Board::C64Ultimate => Some(Box::new(u64menu::Menu::new(u64menu::C64U))),
+            },
+            frozen: false,
+            menu_frame: Vec::new(),
         };
         m.io.debugcart = debugcart;
+        m.io.turbo = turbo;
         // The devices' lines from the start (paddles sit at mid travel).
         m.refresh_port(PortId(0));
         m.refresh_port(PortId(1));
@@ -884,7 +1037,8 @@ impl C64 {
                 r.step(&mut bus);
             }
             CycleResult::Busy
-        } else if !self.io.vic.aec() {
+        } else if !self.io.vic.aec() || self.frozen {
+            // (Also while the Ultimate's menu holds the C64.)
             self.cpu.stall_off_bus();
             CycleResult::Busy
         } else {
@@ -915,7 +1069,19 @@ impl C64 {
             }
             result
         };
-        let entered = self.cpu.take_interrupt();
+        let mut result = result;
+        let mut entered = self.cpu.take_interrupt();
+        if self.io.turbo.is_some() {
+            let extra = self.turbo_extra();
+            if extra > 0 {
+                // The 1 MHz cycle's checks come first: a breakpoint it
+                // hit stops the turbo cycles.
+                if let Some(d) = dbg.as_deref_mut() {
+                    instr_hooks(d, entered.take(), result, beam);
+                }
+                result = self.turbo_cycles(extra, result, dbg.as_deref_mut(), beam);
+            }
+        }
         // LP is also CIA 1 PB4: driving it low as an output pulls the line
         // like the fire button of control port 1 (VICE test programs
         // VICII/lp-trigger).
@@ -996,22 +1162,7 @@ impl C64 {
         }
 
         if let Some(dbg) = dbg {
-            if let Some(kind) = entered {
-                if dbg.interrupt_armed(kind) {
-                    dbg.check_interrupt(kind);
-                }
-            }
-            if let CycleResult::InstrDone { next_pc } = result {
-                if dbg.trace_instr_armed() {
-                    dbg.trace_instr(CPU, next_pc, self.beam_pos());
-                }
-                if dbg.instr_step_armed() {
-                    dbg.check_instr_step();
-                }
-                if dbg.exec_armed(CPU_SPACE) {
-                    dbg.check_exec(CPU_SPACE, next_pc);
-                }
-            }
+            instr_hooks(dbg, entered, result, self.beam_pos());
             if dbg.raster_armed() {
                 let b = self.beam_pos();
                 dbg.check_raster(b.line, b.cycle);
@@ -1035,11 +1186,99 @@ impl C64 {
         }
     }
 
+    /// How many CPU cycles the Ultimate 64's turbo adds to this VIC-II
+    /// cycle. With bad line timing the CPU runs only while it has the bus
+    /// (BA and AEC high); without, it runs on through the VIC-II's DMA,
+    /// one cycle more where the 1 MHz cycle was lost to it. The REU's DMA
+    /// stops it in both cases.
+    fn turbo_extra(&self) -> u8 {
+        let Some(t) = self.io.turbo.as_ref().filter(|t| !t.idle()) else {
+            return 0;
+        };
+        if self.frozen || self.reu.as_ref().is_some_and(|r| r.dma_active()) {
+            return 0;
+        }
+        let free = self.io.vic.ba() && self.io.vic.aec();
+        match (t.badlines(), free) {
+            (_, true) => t.factor() - 1,
+            (true, false) => 0,
+            (false, false) => t.factor(),
+        }
+    }
+
+    /// The turbo's CPU cycles within one VIC-II cycle, after the 1 MHz
+    /// cycle (result `first`). They reach only the board's internal memory
+    /// ([`TurboBus`]); the first access to anything else ends them, and
+    /// the CPU makes it in the next 1 MHz cycle, as on the board, where
+    /// external accesses keep the C64's bus timing (1541 Ultimate
+    /// documentation, "Turbo Mode"). The chips do not advance in between.
+    fn turbo_cycles(
+        &mut self,
+        extra: u8,
+        first: CycleResult,
+        mut dbg: Option<&mut DebugHooks>,
+        beam: BeamPos,
+    ) -> CycleResult {
+        if first == CycleResult::Jammed {
+            return first;
+        }
+        self.cpu.set_rdy(true);
+        for _ in 0..extra {
+            if dbg.as_deref().is_some_and(DebugHooks::stop_pending)
+                || self.reu.as_ref().is_some_and(|r| r.dma_active())
+            {
+                break;
+            }
+            if self.fastload && self.cpu.at_instruction_boundary() {
+                self.fastload_trap();
+            }
+            let before = self.cpu.clone();
+            let mut bus = C64Bus {
+                mem: &mut self.mem,
+                io: &mut self.io,
+                cart: self.cart.cart_mut().map(|c| c.as_mut()),
+                uci: self.uci.as_mut(),
+                reu: self.reu.as_mut(),
+            };
+            let mut hooked = HookedC64Bus {
+                bus: &mut bus,
+                dbg: dbg.as_deref_mut(),
+                beam,
+            };
+            let mut turbo = TurboBus {
+                bus: &mut hooked,
+                external: false,
+            };
+            let result = self.cpu.tick(&mut turbo);
+            if turbo.external {
+                self.cpu = before;
+                break;
+            }
+            let entered = self.cpu.take_interrupt();
+            if let Some(d) = dbg.as_deref_mut() {
+                instr_hooks(d, entered, result, beam);
+            }
+            if result == CycleResult::Jammed {
+                return result;
+            }
+        }
+        CycleResult::Busy
+    }
+
     fn apply_input(&mut self, ev: TimedInput) {
         match ev.target {
             InputTarget::Keyboard => {
                 if let mimic_core::input::InputEvent::Key { machine_key, down } = ev.event {
-                    self.io.keyboard.set(machine_key, down);
+                    // An open menu takes the keys; releases still reach
+                    // the matrix, so no key stays down in the C64.
+                    if self.frozen {
+                        self.menu_key(machine_key, down);
+                        if !down {
+                            self.io.keyboard.set(machine_key, false);
+                        }
+                    } else {
+                        self.io.keyboard.set(machine_key, down);
+                    }
                 }
             }
             InputTarget::Port(p) if p.0 > USER_PORT.0 => {
@@ -1069,6 +1308,14 @@ impl C64 {
             1 if value == 1 => mimic_core::Machine::reset(self, mimic_core::ResetKind::Soft),
             2 => {
                 self.io.keyboard.set(keyboard::RESTORE, value == 1);
+            }
+            // The Ultimate's multi button, pressed briefly.
+            5 if value == 1 => {
+                let host = self.device_host();
+                if let Some(m) = &mut self.menu {
+                    m.button(&host);
+                    self.frozen = m.is_open();
+                }
             }
             // The SD2IEC's disk change buttons (swap lists).
             3 | 4 => {
@@ -1126,9 +1373,145 @@ impl C64 {
     }
 
     /// Program injection and autostart, once BASIC has booted.
+    /// A key for the open menu, and what the menu wants done.
+    fn menu_key(&mut self, key: mimic_core::input::MachineKey, down: bool) {
+        let host = self.device_host();
+        let (Some(m), Some(t)) = (&mut self.menu, &mut self.io.turbo) else {
+            return;
+        };
+        let action = m.key(key, down, &host, t);
+        self.frozen = m.is_open();
+        self.menu_action(action);
+    }
+
+    /// A file of the frontend's file area as a medium.
+    fn folder_media(
+        &self,
+        path: &str,
+        kind: MediaKind,
+    ) -> Result<mimic_core::media::Media, String> {
+        let files = self.device_host().files.ok_or("No storage attached")?;
+        let image = devices_net::uci::FolderImage::open(&files, path).map_err(|e| e.to_string())?;
+        Ok(mimic_core::media::Media {
+            name: path.rsplit('/').next().unwrap_or(path).to_string(),
+            kind,
+            backend: Box::new(image),
+        })
+    }
+
+    fn menu_action(&mut self, action: u64menu::Action) {
+        use u64menu::Action;
+        let done: Result<(), String> = match action {
+            Action::None => Ok(()),
+            Action::Reset => {
+                self.reset(ResetKind::Soft);
+                Ok(())
+            }
+            Action::Reboot => {
+                self.reset(ResetKind::Hard);
+                Ok(())
+            }
+            Action::Eject => {
+                if let Some(d) = &mut self.drive {
+                    let slot = d.media_slot();
+                    let _ = slot.flush();
+                    slot.eject();
+                }
+                Ok(())
+            }
+            Action::Mount { path, run } => {
+                self.folder_media(&path, MediaKind::Disk).and_then(|m| {
+                    let d = self.drive.as_mut().ok_or("No drive A")?;
+                    let slot = d.media_slot();
+                    let _ = slot.flush();
+                    slot.eject();
+                    slot.insert(m).map_err(|e| e.to_string())?;
+                    if run {
+                        self.reset(ResetKind::Soft);
+                        self.autostart = Autostart::Armed;
+                    }
+                    Ok(())
+                })
+            }
+            Action::Cart { path } => self
+                .folder_media(&path, MediaKind::Cartridge)
+                .and_then(|m| self.cart.insert(m).map_err(|e| e.to_string())),
+            Action::Prg { path, run } => self
+                .device_host()
+                .files
+                .ok_or_else(|| "No storage attached".to_string())
+                .and_then(|f| {
+                    devices_net::uci::read_file(&mut *mimic_core::host::lock(&f), &path)
+                        .map_err(|e| e.to_string())
+                })
+                .and_then(|bytes| media::Prg::parse(&bytes).map_err(|e| e.to_string()))
+                .and_then(|prg| {
+                    if usize::from(prg.load) + prg.data.len() > 0x1_0000 {
+                        return Err("The program does not fit the memory".into());
+                    }
+                    self.inject(&prg);
+                    if run {
+                        self.type_text("RUN\r");
+                    }
+                    Ok(())
+                }),
+        };
+        if let (Err(why), Some(m)) = (done, &mut self.menu) {
+            m.failed(&why);
+        }
+        self.frozen = self.menu.as_ref().is_some_and(|m| m.is_open());
+    }
+
+    /// The Ultimate's menu once a frame: its updater runs, and the
+    /// picture with the menu over it is made.
+    fn menu_frame_tasks(&mut self) {
+        let host = self.device_host();
+        let Some(m) = &mut self.menu else {
+            return;
+        };
+        let action = m.frame(&host);
+        if action != u64menu::Action::None {
+            // The updater switches the machine off and on again.
+            self.menu_action(action);
+            return;
+        }
+        let Some(m) = &mut self.menu else {
+            return;
+        };
+        self.frozen = m.is_open();
+        if !self.frozen {
+            return;
+        }
+        let Some(t) = &self.io.turbo else {
+            return;
+        };
+        let timing = self.io.vic.timing();
+        let status = u64menu::Status {
+            ntsc: matches!(
+                self.io.vic.model(),
+                vic2::Model::Mos6567R8 | vic2::Model::Mos8562
+            ),
+            uci: self.uci.is_some(),
+            reu: self.reu.as_ref().map(Reu::size),
+            disk: self.drive.as_ref().is_some_and(|d| d.has_disk()),
+        };
+        self.menu_frame.clear();
+        self.menu_frame.extend_from_slice(self.io.vic.pixels());
+        m.render(
+            t,
+            &status,
+            &mut self.menu_frame,
+            timing.width as usize,
+            timing.height as usize,
+        );
+    }
+
     fn frame_tasks(&mut self) {
         if let Some(p) = &mut self.printer {
             p.printer.frame();
+        }
+        if self.menu.is_some() {
+            self.menu_frame_tasks();
         }
         if self.io.vic.beam().frame.saturating_sub(self.boot_frame) < BOOT_FRAMES {
             return;
@@ -1308,6 +1691,14 @@ impl Machine for C64 {
             self.autostart = Autostart::Done;
         }
         self.fast_serving = false;
+        if let Some(m) = &mut self.menu {
+            if hard {
+                m.power_on();
+            } else {
+                m.reset();
+            }
+            self.frozen = m.is_open();
+        }
         self.field_done_pending = false;
         self.boot_frame = self.io.vic.beam().frame;
         self.sync_light_pen();
@@ -1319,7 +1710,11 @@ impl Machine for C64 {
             width: t.width,
             height: t.height,
             pixels: PixelData::Indexed {
-                pixels: self.io.vic.pixels(),
+                pixels: if self.frozen && self.menu_frame.len() == self.io.vic.pixels().len() {
+                    &self.menu_frame
+                } else {
+                    self.io.vic.pixels()
+                },
                 palette: &self.palette,
             },
             luma_chroma: None,
@@ -1521,6 +1916,17 @@ impl Machine for C64 {
                     .collect(),
             });
         }
+        if let Some(t) = &self.io.turbo {
+            chips.push(ChipInfo {
+                name: "turbo",
+                regs: vec![
+                    reg("ENABLE", Some(0xd030), t.peek(0xd030).unwrap_or(0xff), 8),
+                    reg("CONTROL", Some(0xd031), t.d031(), 8),
+                    reg("MHZ", None, t.factor(), 8),
+                    reg("BADLINES", None, u8::from(t.badlines()), 1),
+                ],
+            });
+        }
         if self.io.debugcart {
             let exit = self.io.debugcart_exit;
             chips.push(ChipInfo {
@@ -1601,6 +2007,9 @@ impl Machine for C64 {
         if let Some(sd) = &self.sd2iec {
             controls.push(ControlInfo::button(3, "SD2IEC NEXT", sd.button_held(false)));
             controls.push(ControlInfo::button(4, "SD2IEC PREV", sd.button_held(true)));
+        }
+        if self.menu.is_some() {
+            controls.push(ControlInfo::button(5, "MENU", false));
         }
         controls
     }
@@ -1810,6 +2219,13 @@ impl Machine for C64 {
         if let Some(sd) = &self.sd2iec {
             sd.save(&mut w);
         }
+        // The Ultimate 64's turbo registers, last (a C64 has none).
+        if let Some(t) = &self.io.turbo {
+            t.save(&mut w);
+        }
+        if let Some(m) = &self.menu {
+            m.save(&mut w);
+        }
         w.into_bytes()
     }
 
@@ -1856,6 +2272,22 @@ impl Machine for C64 {
         next.cpu.load(&mut r)?;
         next.mem.load(&mut r)?;
         next.io.load(&mut r)?;
+        // The turbo registers sit at the end of the state.
+        if let Some(t) = &mut next.io.turbo {
+            t.load(&mut StateReader::new(s))?;
+        }
+        // The menu likewise (states from before the menu have none).
+        let next_menu = match &self.menu {
+            Some(m) => {
+                let mut m = m.clone();
+                match m.load(&mut StateReader::new(s)) {
+                    Ok(()) => Some(m),
+                    Err(StateError::Missing(_)) => None,
+                    Err(e) => return Err(e),
+                }
+            }
+            None => None,
+        };
         next.sched.load(&mut r)?;
         next.input.load(&mut r)?;
         // The datasette (not clonable): from version 5, restored if a later
@@ -2083,6 +2515,11 @@ impl Machine for C64 {
         self.autostart = autostart;
         self.boot_frame = boot_frame;
         self.fast_serving = fast_serving;
+        if let Some(m) = next_menu {
+            self.menu = Some(m);
+        }
+        self.frozen = self.menu.as_ref().is_some_and(|m| m.is_open());
+        self.menu_frame.clear();
         self.sync_light_pen();
         if let Some(p) = &mut self.printer {
             p.load_chunk(s);
@@ -2216,3 +2653,5 @@ mod tests_fourplayer;
 mod tests_net;
 #[cfg(test)]
 mod tests_ultimate;
+#[cfg(test)]
+mod tests_ultimate64;

@@ -14,7 +14,7 @@ A cycle-accurate, multi-machine emulator for classic home computers — the whol
 4. **Cycle granularity:** emulation advances per CPU cycle (and per DMA slot on the Amiga), not per instruction.
 5. **Hot path stays cheap:** breakpoint checks use per-address-space bitmaps; with no active breakpoints the debug overhead must be ~0. Benchmark before/after when touching `tick` paths.
 6. **No ROMs in the repo.** Kernal, BASIC, Kickstart, Atari OS, AMSDOS are user-supplied. Tests that need ROMs are `#[ignore]`; they find the ROMs in `EMU_ROM_DIR`, else in the user's `~/.mimic/roms`. Free replacements (AROS Kickstart, Altirra OS) may be supported as optional downloads, never committed.
-7. **Licensing:** do not copy code from VICE, WinUAE, FS-UAE, vAmiga, Atari800, Caprice32 or Arnold (GPL/other). Use their documentation and observable behavior only.
+7. **Licensing:** never copy code, tables or comments from sources under the GPL or another licence that does not fit (VICE, WinUAE, FS-UAE, vAmiga, Atari800, Caprice32, Arnold, the 1541 Ultimate firmware …). Their sources may be read for facts — file formats, register layouts, procedures, constants a format or protocol fixes — which are then described in own words and implemented anew; documentation and observable behaviour remain the first choice. Every source file read goes into `docs/sources.md` with what was taken from it (the user's decision of 2026-11-23; before that, reading the sources was not allowed either).
 8. **Savestates for everything:** every chip/device struct implements state serialization from day one. A component without savestate support is not done.
 9. **CRT emulation is post-processing.** Machines output raw frames plus signal metadata; CRT/monitor effects run afterwards in `video-crt`. Regression tests and the debugger always compare/see raw frames. Exception: effects that change *what the guest can produce* (NTSC artifact colors, PAL delay-line color blending) are part of the optional composite signal path, still outside the machine crates.
 10. **Machines never see host devices.** No `gilrs`, `winit`, file-system or USB code inside `machine-*`, `chips-*` or `devices-*`. Host input and host storage enter only through the port/media abstractions in `mimic-core` (see `docs/claude/devices.md`).
@@ -73,6 +73,7 @@ crates/
   basic-dialects/  BASIC interpreters' memory decoded for the BASIC debugger (program, variables, stack, stop points): Commodore BASIC and Applesoft, Microsoft's Z80 BASICs (TRS-80 Level II, MSX), TRS-80 Level I, Sinclair BASIC (ZX81, Spectrum), Atari BASIC, Locomotive BASIC (CPC), BBC BASIC II/IV and V (Archimedes), HC-BASIC (KC85), TI BASIC; linked by the machines
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
+                   machine-c64 also registers `ultimate64` (Phase 42): Ultimate 64 and Commodore 64 Ultimate as models, turbo CPU (`turbo`), built-in UCI
   machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-bbc/  machine-mega65/  machine-nes/  machine-snes/  machine-vectrex/
   machine-apple2/  Apple II, II+, IIe (enhanced and unenhanced) as models; Mockingboard in slot 4
   machine-mac/     Macintosh 128K, 512K, Plus, SE as models: RTC, keyboard, ADB, SCC 8530, SCSI 5380 with hard disks
@@ -174,7 +175,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35, 36, 37, 40 and 41 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35, 36, 37, 40, 41 and 42 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 
@@ -188,5 +189,5 @@ python tools/check-deps.py                   # dependency direction (golden rule
 
 ## When unsure
 
-- Accuracy questions: consult hardware docs (C64 Programmer's Reference, "VIC-II article" by Christian Bauer, Amiga Hardware Reference Manual, Altirra Hardware Reference, CPC CRTC docs) — not other emulators' source.
+- Accuracy questions: consult hardware docs (C64 Programmer's Reference, "VIC-II article" by Christian Bauer, Amiga Hardware Reference Manual, Altirra Hardware Reference, CPC CRTC docs) first; other emulators' sources only for facts, never for code (golden rule 7).
 - Architecture questions: prefer extending `mimic-core` traits over special-casing in debugger/preview. Ask before changing a core trait signature.
