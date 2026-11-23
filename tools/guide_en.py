@@ -24,6 +24,7 @@ debugging tools.""")
 h2("Supported machines")
 table(["Machine id", "Machine", "Models (`--model`)", "Video (`--videoformat`)"], [
     ["`c64`", "Commodore 64", "–", "`pal` (default), `ntsc`"],
+    ["`ultimate64`", "Ultimate 64, Commodore 64 Ultimate", "`u64` (default), `c64u`", "`pal` (default), `ntsc`"],
     ["`vic20`", "Commodore VIC-20", "–", "`pal` (default), `ntsc`"],
     ["`pet`", "Commodore PET", "`4032` (default), `2001`, `3032`, `8032`", "–"],
     ["`c16`, `plus4`", "Commodore 16, Plus/4", "–", "`pal` (default), `ntsc`"],
@@ -138,7 +139,7 @@ bullets(
 )
 h2("ROM table")
 table(["Folder", "Machine", "ROMs (example names and sizes)"], [
-    ["`c64/`", "C64", "`kernal` (8 KB), `basic` (8 KB), `chargen` or `characters` (4 KB)"],
+    ["`c64/`", "C64, Ultimate 64", "`kernal` (8 KB), `basic` (8 KB), `chargen` or `characters` (4 KB)"],
     ["`vic20/`", "VIC-20", "KERNAL, BASIC, character ROM"],
     ["`pet/`", "PET", "BASIC, editor, KERNAL and character ROM for each model"],
     ["`plus4/`", "C16, Plus/4", "KERNAL, BASIC; optional 3-plus-1"],
@@ -208,7 +209,7 @@ h2("The console panel")
 p("""At the left of the picture, a panel shows the buttons and switches of
 the machine's case one under the other (Shift+Alt+Left or a click on its
 handle opens and closes it): POWER and RESET, the Atari 2600 console switches, START/SELECT/OPTION
-of the 800XL, RESTORE of the C64 and VIC-20, 40/80 and CAPS LOCK of the
+of the 800XL, RESTORE of the C64 and VIC-20, MENU of the Ultimate 64, 40/80 and CAPS LOCK of the
 C128, and so on. A button is pressed for as long as you hold the mouse
 button on it; clicking a switch position moves the switch.""")
 bullets(
@@ -443,6 +444,64 @@ together go to the first entry, and without a list they write an
 `AUTOSWAP.GEN` with the folder's images), `XI`, `XD`, `XR` and the usual
 `M-R` drive detection. A disk image in the "sd2iec" media slot stays
 mounted until ejected.""")
+
+h2("Ultimate 64 and Commodore 64 Ultimate")
+p("""The machine `ultimate64` is the C64 above on Gideon's Logic's FPGA
+board: `--model u64` (default; Ultimate 64 and Elite) or `--model c64u`
+(the Elite II board: Ultimate 64 Elite-II and the Commodore 64 Ultimate).
+It uses the C64's ROMs (folder `c64`) and takes every C64 option. The
+command interface is part of the board (`uci` is on; `--option uci=off`
+removes it).""")
+table(["Option", "Values"], [
+    ["`turbo`", "who sets the CPU speed: `off` (default, 1 MHz), `manual` (the settings "
+     "`cpu_speed` and `badlines`), `registers` (the program, through $D031), `enablebit` "
+     "($D031 while bit 0 of $D030 is set)"],
+    ["`cpu_speed`", "the speed in MHz: 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 24, 32, 40, 48 "
+     "(`c64u`: no 5, up to 64)"],
+    ["`badlines`", "`on` (default) or `off`: without bad line timing the CPU runs on while "
+     "the VIC-II holds the bus"],
+], [0.2, 0.8])
+p("""In turbo only memory inside the board runs faster (RAM, KERNAL, BASIC,
+character ROM); every access to the VIC-II, SID, CIAs or a cartridge keeps
+the C64's bus timing. Programs set the speed with $D031 (bits 0-3 the
+speed's number in the list above, bit 7 set switches the bad lines off) and
+$D07A/$D07B (normal speed / 20 MHz).""")
+p("""**The menu.** The panel button MENU is the board's multi button. It
+freezes the C64 and shows the menu over the picture; the C64's keyboard
+works it: cursor up/down move, RETURN or cursor right open a folder or a
+file's actions, DEL or cursor left go up a level, F1/F7 page, F2 opens the
+configuration (Turbo Control, CPU Speed, Badline Timing; change with cursor
+left/right or + and -), F5 the tools (Reset C64, Reboot C64, remove the
+disk, System Information), F3 the key help, RUN/STOP leaves. The file
+browser shows the Ultimate folder (`--uci-dir`, default `.mimic/ultimate` in
+your user folder): disk images offer "Run Disk" and "Mount Disk", programs
+"Run" and "Load", cartridge images "Run Cart". The menu is rebuilt, not the
+board's firmware: its keys and several texts are the original's, layout and
+the choice of entries are not.""")
+p("""**Trying a firmware update.** Put an update file into the Ultimate
+folder, press RETURN on it and choose "Run Update". As on the board the
+entry exists only for the product's own files (`.u64` on the `u64`, `.ue2`
+on the `c64u`) and for `.cfw` files. The updater goes through the file as
+the firmware's loader does, checks a `.cfw` file's fingerprint, product
+family ("U64MK1" for the `u64`, "U64MK2" for the `c64u`) and product name,
+shows the version it finds, asks "About to update. Continue?" (RETURN yes,
+RUN/STOP no), then erases, programs and verifies an emulated flash and
+switches the machine off and on again five seconds after "Done!". The
+menu's title and System Information then show the installed version.""")
+bullets(
+    "The flash is the file `Flash/.firmware` in the Ultimate folder. Delete it to get "
+    "the factory state back.",
+    "Switching off while the updater writes (POWER, or closing the emulator) leaves a "
+    "damaged flash: the board then shows NO VALID FIRMWARE at every start until the "
+    "file is deleted. A real board would need its recovery procedure.",
+    "The firmware's own messages are \"Invalid Update Image\", \"Wrong Product Family\" "
+    "and \"Update for Wrong Product\". A file that is cut short or has no usable start "
+    "address is refused with a message of the emulator; a real board would load and "
+    "start it unchecked.",
+    "What this does not test: the update is not run. The checksums of the FPGA image "
+    "and the application inside the file are not checked, and no core is started from "
+    "it.",
+)
 
 h2("Commodore VIC-20, C16/Plus/4, PET and C128")
 h3("VIC-20")
@@ -1256,6 +1315,7 @@ table(["Flag", "Meaning"], [
 h2("Machines and models")
 table(["Machine id", "Machine", "Models (`--model`)", "Video formats (`--videoformat`)"], [
     ["`c64`", "Commodore 64", "–", "`pal` (default), `ntsc`"],
+    ["`ultimate64`", "Ultimate 64, Commodore 64 Ultimate", "`u64` (default), `c64u`", "`pal` (default), `ntsc`"],
     ["`vic20`", "Commodore VIC-20", "–", "`pal` (default), `ntsc`"],
     ["`pet`", "Commodore PET", "`4032` (default), `2001`, `3032`, `8032`", "–"],
     ["`c16`, `plus4`", "Commodore 16, Plus/4", "–", "`pal` (default), `ntsc`"],
@@ -1535,6 +1595,9 @@ table(["Key", "Machine", "Values"], [
      "the C128 `1571`/`1581`; the C16/Plus/4 also `1551` on the TCBM bus), `virtual` "
      "(KERNAL-level file access, the default without a DOS ROM), `none`"],
     ["`drive8_ppm`", "C64", "the drive crystal's deviation in ppm"],
+    ["`turbo`", "Ultimate 64", "`off` (default), `manual`, `registers`, `enablebit`: who sets the CPU speed"],
+    ["`cpu_speed`", "Ultimate 64", "MHz: 1 to 48 (`u64`) or 1 to 64 (`c64u`), a value of the board's list"],
+    ["`badlines`", "Ultimate 64", "`on` (default), `off`"],
     ["`fastload`", "C64", "`on`: the virtual drive serves the KERNAL's serial routines "
      "without bus time"],
     ["`debugcart`", "C64", "`on`: the test-bench debug cartridge at `$D7FF`"],
