@@ -338,12 +338,21 @@ fn the_real_update_and_firmware() {
     assert!(text(&m).contains("Continue?"), "{}", text(&m));
     key(&mut m, y);
     // "Reset Configuration?"
-    for _ in 0..200 {
+    let mut module_flashed = false;
+    for _ in 0..300 {
         frames(&mut m, 50);
-        if text(&m).contains("Reset Configuration?") {
+        let t = text(&m);
+        if t.contains("Reset Configuration?") {
             break;
         }
+        // The WiFi module had another version: the updater flashed it
+        // through the ESP32's ROM loader and says so.
+        if t.contains("Flashing ESP32 Success!") {
+            module_flashed = true;
+            key(&mut m, mimic_core::input::MachineKey(1));
+        }
     }
+    assert!(module_flashed, "{}", text(&m));
     assert!(text(&m).contains("Reset Configuration?"), "{}", text(&m));
     key(&mut m, y);
     for _ in 0..100 {
@@ -656,6 +665,55 @@ mod board_cartridge {
         let mut m = machine();
         assert!(m.media_slots().iter().all(|s| s.id != SLOT_CARTRIDGE));
         assert!(m.media_slot(SLOT_CARTRIDGE).is_none());
+    }
+}
+
+/// The board's stop holds the 6510 wherever it is, also in the middle of
+/// an instruction. An IRQ line that is low meanwhile must not get past the
+/// I flag (the firmware's SID player waits for its DMA load inside an
+/// interrupt handler, the CIA's next timer interrupt already pending; the
+/// hold once went on with the interrupt polls of a read stopped by RDY,
+/// with stale flags, and the IRQ went to the vector in RAM under the
+/// KERNAL: a jam at `$0009`).
+#[test]
+fn a_stop_in_mid_instruction_lets_no_irq_past_the_i_flag() {
+    let mut c = config(&[]);
+    let mut kernal = vec![0xea; KERNAL_SIZE];
+    // $E000: SEI; BIT $0162; BPL to the BIT (the player's wait loop).
+    kernal[..6].copy_from_slice(&[0x78, 0x2c, 0x62, 0x01, 0x10, 0xfb]);
+    // $F000, IRQ and NMI: INC $10; JMP to itself.
+    kernal[0x1000..0x1005].copy_from_slice(&[0xe6, 0x10, 0x4c, 0x02, 0xf0]);
+    kernal[0x1ffa..].copy_from_slice(&[0x00, 0xf0, 0x00, 0xe0, 0x00, 0xf0]);
+    c.roms.insert("kernal".into(), kernal);
+    // A source nothing else drives.
+    const TEST_SOURCE: u8 = 1 << 7;
+    // Every cycle of the loop's two instructions.
+    for offset in 0..8 {
+        let mut m = C64::new_ultimate(&c).unwrap();
+        m.attach_host(HostServices::new(None, Some(Box::new(MemFileHost::new()))));
+        for _ in 0..40 + offset {
+            m.step_cycle();
+        }
+        assert!((0xe001..=0xe006).contains(&m.cpu.pc()), "in the loop");
+        m.interrupts_mut().set_irq(TEST_SOURCE, true);
+        m.board.as_mut().unwrap().lines.stop = true;
+        let pc = m.cpu.pc();
+        for _ in 0..50 {
+            m.step_cycle();
+        }
+        assert_eq!(m.cpu.pc(), pc, "the 6510 stands");
+        m.board.as_mut().unwrap().lines.stop = false;
+        for _ in 0..50 {
+            m.step_cycle();
+        }
+        assert_eq!(m.mem.ram[0x10], 0, "no interrupt, offset {offset}");
+        assert!((0xe001..=0xe006).contains(&m.cpu.pc()), "offset {offset}");
+        // With I clear the same line gets through.
+        m.cpu.set_reg("P", 0x20);
+        for _ in 0..20 {
+            m.step_cycle();
+        }
+        assert_eq!(m.mem.ram[0x10], 1, "offset {offset}");
     }
 }
 

@@ -296,6 +296,11 @@ impl BoardPart {
         format!("{FOLDER}/{}-flash.bin", self.name())
     }
 
+    /// The WiFi module's software version, as last flashed.
+    fn module_path(&self) -> String {
+        format!("{FOLDER}/{}-esp32.ver", self.name())
+    }
+
     fn registers_path(&self) -> String {
         format!("{FOLDER}/{}-flash.reg", self.name())
     }
@@ -514,6 +519,12 @@ impl C64 {
                 &part.board.flash.nv_registers(),
             );
         }
+        // An updater flashed the WiFi module: its version is kept.
+        if let Some((major, minor)) = part.board.wifi.take_identity_changed() {
+            let mut v = major.to_le_bytes().to_vec();
+            v.extend_from_slice(&minor.to_le_bytes());
+            write_file(&host, &part.module_path(), 0, &v);
+        }
         if !part.board.overlay.active() {
             part.frame.clear();
             return;
@@ -566,6 +577,14 @@ impl C64 {
             if let Some(reg) = read_file(&host, &part.registers_path()) {
                 if let Ok(reg) = <[u8; 4]>::try_from(&reg[..]) {
                     part.board.flash.set_nv_registers(reg);
+                }
+            }
+            if let Some(v) = read_file(&host, &part.module_path()) {
+                if let Ok(v) = <[u8; 4]>::try_from(&v[..]) {
+                    part.board.wifi.set_identity(
+                        u16::from_le_bytes([v[0], v[1]]),
+                        u16::from_le_bytes([v[2], v[3]]),
+                    );
                 }
             }
             // The overlay's own font, if the user has it.

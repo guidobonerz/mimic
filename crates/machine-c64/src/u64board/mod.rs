@@ -437,11 +437,6 @@ impl Elite2 {
         self.c64.apply_lines(side);
         let start = match update {
             Some(file) => {
-                // The module's software as new as the one in the file, so
-                // the updater leaves the WiFi module alone.
-                if let Some((major, minor)) = chips_ultimate::wifi::identity_in_image(file) {
-                    self.wifi.set_identity(major, minor);
-                }
                 loader::records(file).and_then(|r| loader::load_records(&mut self.ram, &r))
             }
             None => {

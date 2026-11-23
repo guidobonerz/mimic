@@ -1070,8 +1070,15 @@ impl C64 {
                 r.step(&mut bus);
             }
             CycleResult::Busy
-        } else if !self.io.vic.aec() || self.board.as_ref().is_some_and(|b| b.holds()) {
-            // (Also while the Ultimate board holds the 6510.)
+        } else if self.board.as_ref().is_some_and(|b| b.holds()) {
+            // The Ultimate board holds the 6510: it stands as it is, in
+            // whatever cycle of its instruction, and looks at nothing. (Not
+            // `stall_off_bus`: that goes on with the interrupt polls of a
+            // read RDY stopped, with the flags of that read. Here no such
+            // read was made, and the flags kept from some earlier one let
+            // an IRQ through with I set.) An NMI edge is kept by `set_nmi`.
+            CycleResult::Busy
+        } else if !self.io.vic.aec() {
             self.cpu.stall_off_bus();
             CycleResult::Busy
         } else {
