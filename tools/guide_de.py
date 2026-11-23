@@ -141,7 +141,7 @@ bullets(
 )
 h2("ROM-Tabelle")
 table(["Ordner", "Maschine", "ROMs (Beispielnamen und Größen)"], [
-    ["`c64/`", "C64", "`kernal` (8 KB), `basic` (8 KB), `chargen` oder `characters` (4 KB)"],
+    ["`c64/`", "C64, Ultimate 64", "`kernal` (8 KB), `basic` (8 KB), `chargen` oder `characters` (4 KB)"],
     ["`vic20/`", "VIC-20", "KERNAL, BASIC, Zeichen-ROM"],
     ["`pet/`", "PET", "BASIC, Editor, KERNAL und Zeichen-ROM je Modell"],
     ["`plus4/`", "C16, Plus/4", "KERNAL, BASIC; optional 3-plus-1"],
@@ -215,7 +215,8 @@ schließt es): POWER und RESET, die Konsolenschalter des Atari 2600,
 START/SELECT/OPTION des 800XL, RESTORE des C64 und VIC-20, MENU des Ultimate 64, 40/80 und CAPS
 LOCK des C128 und so weiter. Ein Knopf bleibt gedrückt, solange Sie die
 Maustaste darauf halten; ein Klick auf eine Schalterstellung legt den
-Schalter um.""")
+Schalter um. Lampen der Maschine stehen darunter: die LED-Leiste des
+Ultimate 64 als Reihen farbiger Felder.""")
 bullets(
     "**PAUSE** (oben) hält die ganze Maschine an und lässt sie weiterlaufen. Es "
     "leuchtet, solange die Maschine steht — auch wenn ein Debugger sie angehalten "
@@ -1439,12 +1440,16 @@ table(["Option", "Bedeutung"], [
     ["`--input DATEI`", "Nur Desktop: ein Joystick-Zuordnungsprofil (TOML, wie SAVE MAPPING es "
      "in `<Benutzerordner>/input/<maschine>.toml` speichert)."],
     ["`--net on|off`", "Das Netz des Rechners für Geräte, die es nutzen: WiC64 "
-     "(`userport=wic64`) und Ultimate Command Interface (`uci=on`) des C64. Standard `on`."],
+     "(`userport=wic64`) und Ultimate Command Interface (`uci=on`) des C64 sowie das "
+     "Netzwerk des Ultimate 64 (`off`: kein Kabel). Standard `on`."],
     ["`--uci-dir DIR`", "Der Ordner, in dem das DOS des Ultimate Command Interface arbeitet "
      "(Standard `.mimic/ultimate` im Benutzerordner, beim ersten Schreiben angelegt; "
      "Pfade können ihn nicht verlassen)."],
     ["`--sd2iec-dir DIR`", "Die Karte des C64-SD2IEC (`--option sd2iec=on` oder "
      "`drive8=sd2iec`; Standard `.mimic/sd2iec` im Benutzerordner, beim Start angelegt)."],
+    ["`--sd PFAD`", "Ultimate 64: die SD-Karte, ein Image oder ein Ordner (erscheint als "
+     "FAT32-Laufwerk; Änderungen werden zurückgeschrieben)."],
+    ["`--usb PFAD`", "Ultimate 64: ein USB-Stick, ebenso *(wiederholbar, bis zu drei)*."],
     ["`--uci-mount NAME=DIR`", "Ein Ordner des Rechners als UCI-Laufwerk `/NAME`, wie SD, "
      "Usb0, Usb1, Flash, Temp des Ultimate *(wiederholbar)*."],
     ["`--printer-dir DIR`", "Wohin `--option printer=on` seine Aufträge schreibt (Standard "
@@ -1648,6 +1653,13 @@ table(["Schlüssel", "Maschine", "Werte"], [
     ["`reu`", "C64", "`128k`, `256k`, `512k`, `1m` … `16m`: eine REU (REC 8726)"],
     ["`uci`", "C64", "`on`: das Ultimate-64-Command-Interface bei `$DF1C`–`$DF1F` "
      "(DOS, Netz, Steuerung, Software-IEC, HTTP); siehe `--uci-dir`, `--uci-mount`"],
+    ["`update`", "Ultimate 64", "Name einer Update-Datei (`.ue2`) im Dateibereich: ihr Updater "
+     "wird einmal gestartet und schreibt den Flash"],
+    ["`c64roms`", "Ultimate 64", "`own` (Standard: mimics C64-ROMs), `firmware` (die ROMs, die "
+     "die Firmware lädt)"],
+    ["`netfwd`", "Ultimate 64", "Portweiterleitungen `PC:BOARD,…`; Standard "
+     "`6480:80,6421:21,6423:23,6464:64`"],
+    ["`ledstrip`", "Ultimate 64 (`elite2`)", "Länge der LED-Leiste, 0 bis 84 (Standard 24, 0 = keine)"],
     ["`userport`", "C64, C128, VIC-20", "`wic64` (nur C64): der WiC64 am User-Port; `cga`, `hit`, `kingsoft`, `starbyte`: Vierspieler-Adapter (VIC-20 nur `cga`)"],
     ["`parallel`", "Amiga", "`4player`: Vierspieler-Adapter am Parallelport (Joysticks 3 und 4)"],
     ["`ram`", "VIC-20", "`none`, `3k`, `8k`, `16k`, `24k`, `32k`, `35k`"],

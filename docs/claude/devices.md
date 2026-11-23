@@ -81,3 +81,13 @@ pub trait MediaBackend: Send {                       // where bytes live
 - Amiga floppies are MFM track-based; ADF is converted on insert, written back on flush. Atari SIO and CPC FDC drives follow the same `MediaSlot` contract.
 - Multi-disk sets: a slot can hold a disk list (swap with hotkey / debugger command).
 - **Battery RAM** (`MediaKind::BatteryRam`, since 2026-11-09; SNES): a cartridge's battery-backed SRAM is its own slot, filled with a `.srm` file beside the cartridge image by `media_backends::image::attach_battery_ram` (a plain file backend, no overlay, created empty and sized by the machine; nothing happens for a machine without such a slot or a cartridge without a battery). The machine writes the SRAM through it at the end of every frame the game changed it and keeps it through power cycles. Frontends call the helper after every cartridge insertion (desktop: `--cart`, drop, side panel; headless: `--cart`).
+
+## Ultimate 64 Elite II: the board's media, network and lamps
+
+The machine `ultimate64` (`machine-c64::u64board`) adds three things at this level:
+
+- **Block media**: media slots "sd card" and "usb 1" … "usb 3" (`MediaKind::Disk`, any backend whose length is a multiple of 512 bytes). The board's blocks see them as `chips_ultimate::Storage` (sectors, a generation counter for media changes, write protect). The frontends' `--sd`/`--usb` open an image (`CowOverlay` over the file) or a folder as a FAT32 volume (`media_backends::fat_dir::FatDirBackend`: built at open, file data read lazily, the guest's changes written back on `commit`; deletions go to `.mimic-trash`, files changed on the host are never overwritten). The machine flushes a written medium after 100 quiet frames. Contents are not in the savestate.
+- **Ethernet**: `chips_ultimate::EtherLink` is the cable (whole frames both ways); the machine's end is `devices_net::vrouter::Router`, user-mode NAT onto `NetBackend` (so it is journalled like every host call). `options["net"] = "off"` leaves the socket empty.
+- **Lamps**: `Machine::lights()` returns named groups of colours for panels (the board's LED strip); the desktop's console panel draws them under the controls.
+
+The board's own files (flash image, the flash chip's registers, the WiFi module's version) live in `/Board` of the frontend's file area and are read and written through `FileHost`.

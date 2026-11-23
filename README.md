@@ -6,7 +6,7 @@ The user guide — how to use the emulator plus the complete reference of every 
 
 ## Screenshots
 
-Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test, the BBC Micro's teletext test page and the Master's `*TIME` from the `bbc_boot` tests, the MEGA65's Open ROMs with `--crt lite`); the consoles without a start screen show a game. ROMs and software are not part of this repository.
+Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test, the BBC Micro's teletext test page and the Master's `*TIME` from the `bbc_boot` tests, the MEGA65's Open ROMs with `--crt lite`, the Ultimate 64's menu through the debug server from a flash the user's update file wrote); the consoles without a start screen show a game. ROMs and software are not part of this repository.
 
 ### Home computers
 
@@ -105,6 +105,7 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | SPC700 | Tom Harte | 256 000/256 000 | 🟢 | – |
 | 6809 (Vectrex) | own per-instruction tests (no external suite) | green | 🟡 | no external suite |
 | TMS9900 (TI-99/4A) | own per-instruction tests (results, status bits, datasheet clock cycles), TI BASIC with the real ROMs | 19/19, TI BASIC runs | 🟡 | no external suite; DIV time fixed at 108 cycles |
+| RISC-V RV32IM + Zicsr (Ultimate 64 Elite II board) | own per-instruction tests (every instruction group, CSRs, traps, the interrupt line); the board's real firmware (FreeRTOS) boots and runs | 27/27, firmware 3.15a and 1.2.1 run | 🟡 | no external suite run (riscv-tests need a toolchain) |
 | ARM2 (Archimedes) | own tests, RISC OS boot | green | 🟡 | no external suite |
 | Ada (Logophor 16) | own tests | green | 🟢 | – |
 
@@ -112,7 +113,8 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 
 | Machine | Test suite / check | Result | State | Open |
 | --- | --- | --- | --- | --- |
-| C64 | VICE `c64-testlist.in`, Lorenz | 1173/1240 projected (94.6 %), Lorenz 264/264 | 🟡 | `VICII/` 229/273 (`videomode` 27), `SID/` 155/169, `drive/` 45/51, `C64/` 68/70; REU, GEO-RAM not emulated |
+| C64 | VICE `c64-testlist.in`, Lorenz | 1174/1240 projected (94.7 %), Lorenz 264/264 | 🟡 | `VICII/` 230/273 (`videomode` 27), `SID/` 155/169, `drive/` 45/51, `C64/` 68/70; REU, GEO-RAM not emulated |
+| Ultimate 64 Elite II, Commodore 64 Ultimate | the user's firmware on the emulated board: update file → updater → flash → boot → menu (ignored tests with `MIMIC_U64_UPDATE`/`MIMIC_U64_FLASH`), 91 machine tests | update 3.15a (Elite II) and 1.2.1 (C64U) flash and boot; menu, SD/USB, "Mount Disk", "Run Disk", "Run Update", SID playing (40/40 Assembly 64 tunes ran), network checked on the Elite II | 🟡 | C64U beyond boot/update/menu unchecked; other cartridge types, 1571/1581, turbo, overlay menu not built; the FPGA image of an update is not executed |
 | C128 | VICE `c128-testlist.in` (without 135 ZEXALL parts) | 1976/2015 (98.1 %); `mmu/` 30/30, `c64modemmu` 51/51, `z80/` 1871/1871, `2mhzVIC` 4/4, `vic-mmu`, `burstmode` | 🟡 | `d030tester` 0/33 deferred (VICE's PAL hue shift), `drive/scanner` 1571 (3), `vdcdump` (right result, but ~5 % past the cycle limit), `ifnram`, `c128modezp0001` (test bug: `ldx $d7ff`); ZEXALL never run |
 | VIC-20 | VICE `vic20-testlist.in` | 72/72 | 🟢 | screenshot entries not compared |
 | C16 / Plus/4 | VICE `plus4-testlist.in`, xplus4 traces and pictures | 12/12; FLI, palette, fetch pipeline pixel-equal | 🟡 | TED split (window writes), `flicnt` |
@@ -153,6 +155,8 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | 1571 / 1581 | C128 tests `c128_1571`, `c128_1581` | green | 🟢 | – |
 | 1551 (TCBM) | VICE `Plus4/tcbm`, Promised Land | green | 🟢 | – |
 | SD2IEC (C64) | `c64_sd2iec` with the real KERNAL, bus-level tests | 4/4, 26 unit tests | 🟡 | fast loaders (JiffyDOS), RTC, REL inside images |
+| Ultimate 64 Elite II board blocks (`chips-ultimate`) | own tests per block against the documented register behaviour and the firmware's sequences | 259/259 | 🟡 | no hardware reference; several blocks at boot level only (tape, ACIA, sampler, 1581 controller) |
+| Virtual router (`devices-net`), host folder as FAT32 (`media-backends`) | own tests (DHCP, DNS, TCP/UDP relaying, forwards; build, write-back, damaged volumes) | 45/45, 34/34 | 🟡 | FTP passive data ports, UDP broadcast; firmware writes to a folder not yet checked end to end |
 | TI disk controller (FD1771), TI cassette | `ti99_boot` | SAVE/OLD round trips | 🟡 | double-sided disks through the DSR untested |
 | True 2031 (IEEE-488) | – | – | ⚪ | not built |
 | Amiga floppy, Atari SIO, CPC disc, Disk II, Sony 400K/800K | machine boots with images | green | 🟡 | Mac 1.44 MB |
@@ -185,6 +189,7 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | NEC µPD77C25 | `cpu-upd7725` | SNES DSP-1 to DSP-4 | own tests; DSP-1B program: multiply, sine/cosine, distance, inverse | 85 % |
 | Motorola 6809 (68A09) | `cpu-6809` | Vectrex | own per-instruction tests (cycle counts from the datasheet); the Vectrex executive and Scramble run; no external test suite | 75 % |
 | Texas Instruments TMS9900 | `cpu-tms9900` | TI-99/4A | own per-instruction tests (clock cycles and wait states from the datasheet); TI BASIC and Parsec run; no external test suite | 80 % |
+| RISC-V RV32IM + Zicsr, machine mode (the "rvlite" soft CPU of the Ultimate 64 Elite II's FPGA) | `cpu-rv32` | Ultimate 64 Elite II / Commodore 64 Ultimate (board processor) | own per-instruction tests; the unmodified firmware (FreeRTOS, lwIP, FatFs) runs | 85 % |
 
 ### Machines
 
@@ -265,6 +270,9 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | 2A03 APU | `chips-nintendo` | NES | 85 % |
 | S-PPU | `chips-nintendo` | SNES | 70 % |
 | S-DSP | `chips-nintendo` | SNES | 80 % |
+| Ultimate 64 Elite II board: ITU (interrupts, timers, UART), SPI flash (S25FL128L, W25Q128JV), SD card (SDHC over SPI), USB host (hub, mass storage), Ethernet MAC + PHY, I2C devices, RTC, GCR codec, LED strip controllers, WiFi module stand-in with the ESP32 loader | `chips-ultimate` | Ultimate 64 | 75 % (HLE of the USB controller's program; no HID, no WiFi network) |
+| Ultimate 64 C64 side: stop/reset/DMA, ROM windows, drive registers (1541), cartridge logic (none/normal: boot and SID cartridge), core configuration | `chips-ultimate` | Ultimate 64 | 50 % (other cartridge types, REU, sampler, command interface, 1571/1581, turbo: registers only) |
+| Ultimate 64 overlay (menu over the HDMI picture), keyboard matrix scan | `chips-ultimate` | Ultimate 64 | 70 % (overlay drawn over a stretched C64 picture, not yet seen with the firmware in overlay mode) |
 | ZX81 ULA | `chips-sinclair` | ZX81 | 85 % |
 | WD177x FDC | `drives-cbm` | 1581 | 80 % |
 
@@ -276,6 +284,8 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | 1571, 1581 | `drives-cbm` | 80 % |
 | Virtual IEC/IEEE drives (host folders, images) | `drives-cbm` | 85 % |
 | SD2IEC (host folder as the card, disk images, direct access, REL files, swap lists) | `drives-cbm` | 75 % (no fast loaders) |
+| Ultimate 64 drive A/B: the board's 1541 on GCR tracks in the board's memory, written tracks back to the firmware (image on SD/USB) | `drives-cbm`, `machine-c64` | 75 % (1541 only; drive B unchecked) |
+| Block media for the Ultimate 64's SD card and USB sticks: image file, or a host folder as a FAT32 volume with write-back (`--sd`, `--usb`) | `media-backends` | 75 % (firmware writes into a folder unchecked end to end) |
 | TI disk controller card (FD1771, DSK1–DSK3, TI sector dumps), TI cassette (WAV) | `machine-ti99`, `drives-other` | 75 % |
 | True 2031 (IEEE-488) | – | 0 % |
 | Datasette (TAP, PRG recording) | `drives-other` | 85 % |
@@ -330,6 +340,7 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | --- | --- | --- |
 | Ultimate 64 command interface (C64 `uci=on`): DOS targets on a host folder, network target (TCP/UDP sockets), control identify | `devices-net` | 70 % (Ultimate control commands not offered; error texts and timing partly unverified) |
 | WiC64 on the user port (C64 `userport=wic64`): legacy and protocol 2, HTTP GET/POST, TCP, info, time | `devices-net` | 70 % (no https; handshake timing and some answers unverified) |
+| Virtual router for a machine's Ethernet (Ultimate 64): user-mode NAT onto the host's sockets — ARP, DHCP, DNS, TCP and UDP, host ports forwarded to the machine's servers | `devices-net` | 75 % (no FTP data ports, no broadcast, no bridging) |
 | Four-player adapters: Classical Games / Protovision, Digital Excess / Hitmen, Kingsoft, Starbyte on the user port (C64, C128; VIC-20: Protovision), the Amiga's on the parallel port | `devices-input`, `machine-amiga` | 75 % (own test programs after the documented wiring; no game tried) |
 | Host network and folder (`media-backends`), journalled for exact replays | `mimic-core::host` | 80 % (no TLS; the web frontend has no network) |
 
@@ -342,6 +353,6 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | Graphics data views (sprites, charsets, bitmaps) | – | 0 % |
 | Live preview (snapshots, WebSocket stream, raw stream) | `mimic-preview` | 85 % |
 | CRT emulation (signal stage, scanlines, masks, profiles) | `video-crt` | 70 % (full CRT stage, vector persistence open) |
-| Desktop frontend (window, sound, gamepads, drag & drop) | `mimic-desktop` | 85 % |
+| Desktop frontend (window, sound, gamepads, drag & drop; console panel with the machine's controls and lights, e.g. the Ultimate 64's LED strip) | `mimic-desktop` | 85 % |
 | Headless runner | `mimic-headless` | 95 % |
 | Web frontend (WASM) | `mimic-web` | 5 % |
