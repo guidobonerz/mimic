@@ -24,7 +24,6 @@ Browser-Vorschau und die Debug-Werkzeuge anschließen.""")
 h2("Unterstützte Maschinen")
 table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Video (`--videoformat`)"], [
     ["`c64`", "Commodore 64", "–", "`pal` (Standard), `ntsc`"],
-    ["`ultimate64`", "Ultimate 64, Commodore 64 Ultimate", "`u64` (Standard), `c64u`", "`pal` (Standard), `ntsc`"],
     ["`vic20`", "Commodore VIC-20", "–", "`pal` (Standard), `ntsc`"],
     ["`pet`", "Commodore PET", "`4032` (Standard), `2001`, `3032`, `8032`", "–"],
     ["`c16`, `plus4`", "Commodore 16, Plus/4", "–", "`pal` (Standard), `ntsc`"],
@@ -141,7 +140,7 @@ bullets(
 )
 h2("ROM-Tabelle")
 table(["Ordner", "Maschine", "ROMs (Beispielnamen und Größen)"], [
-    ["`c64/`", "C64, Ultimate 64", "`kernal` (8 KB), `basic` (8 KB), `chargen` oder `characters` (4 KB)"],
+    ["`c64/`", "C64", "`kernal` (8 KB), `basic` (8 KB), `chargen` oder `characters` (4 KB)"],
     ["`vic20/`", "VIC-20", "KERNAL, BASIC, Zeichen-ROM"],
     ["`pet/`", "PET", "BASIC, Editor, KERNAL und Zeichen-ROM je Modell"],
     ["`plus4/`", "C16, Plus/4", "KERNAL, BASIC; optional 3-plus-1"],
@@ -212,7 +211,7 @@ h2("Das Konsolenpanel")
 p("""Links vom Bild zeigt ein Panel die Knöpfe und Schalter des Gehäuses
 untereinander (Umschalt+Alt+Links oder ein Klick auf seinen Griff öffnet und
 schließt es): POWER und RESET, die Konsolenschalter des Atari 2600,
-START/SELECT/OPTION des 800XL, RESTORE des C64 und VIC-20, MENU des Ultimate 64, 40/80 und CAPS
+START/SELECT/OPTION des 800XL, RESTORE des C64 und VIC-20, 40/80 und CAPS
 LOCK des C128 und so weiter. Ein Knopf bleibt gedrückt, solange Sie die
 Maustaste darauf halten; ein Klick auf eine Schalterstellung legt den
 Schalter um.""")
@@ -460,67 +459,6 @@ PREV; beide zusammen springen zum ersten Eintrag, ohne Liste legen sie
 `AUTOSWAP.GEN` mit den Abbildern des Ordners an), `XI`, `XD`, `XR` und die
 übliche Laufwerkserkennung per `M-R`. Ein Abbild im Medienschacht „sd2iec“
 bleibt eingehängt, bis es ausgeworfen wird.""")
-
-h2("Ultimate 64 und Commodore 64 Ultimate")
-p("""Die Maschine `ultimate64` ist der C64 von oben auf dem FPGA-Board von
-Gideon's Logic: `--model u64` (Standard; Ultimate 64 und Elite) oder
-`--model c64u` (das Elite-II-Board: Ultimate 64 Elite-II und Commodore 64
-Ultimate). Sie benutzt die ROMs des C64 (Ordner `c64`) und kennt alle
-C64-Optionen. Das Command Interface gehört zum Board (`uci` ist an;
-`--option uci=off` nimmt es heraus).""")
-table(["Option", "Werte"], [
-    ["`turbo`", "wer das CPU-Tempo bestimmt: `off` (Standard, 1 MHz), `manual` (die "
-     "Einstellungen `cpu_speed` und `badlines`), `registers` (das Programm über $D031), "
-     "`enablebit` ($D031, solange Bit 0 von $D030 gesetzt ist)"],
-    ["`cpu_speed`", "das Tempo in MHz: 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20, 24, 32, 40, 48 "
-     "(`c64u`: ohne 5, dafür bis 64)"],
-    ["`badlines`", "`on` (Standard) oder `off`: ohne Badline-Timing läuft die CPU weiter, "
-     "während der VIC-II den Bus hält"],
-], [0.2, 0.8])
-p("""Im Turbo läuft nur der Speicher im Board schneller (RAM, KERNAL, BASIC,
-Zeichen-ROM); jeder Zugriff auf VIC-II, SID, CIAs oder ein Modul behält den
-Bustakt des C64. Programme stellen das Tempo mit $D031 ein (Bits 0-3 die
-Nummer des Tempos in der Liste oben, Bit 7 gesetzt schaltet die Badlines
-ab) und mit $D07A/$D07B (normales Tempo / 20 MHz).""")
-p("""**Das Menü.** Der Panel-Knopf MENU ist der Multi-Button des Boards. Er
-friert den C64 ein und zeigt das Menü über dem Bild; bedient wird es mit
-der Tastatur des C64: Cursor hoch/runter wählen, RETURN oder Cursor rechts
-öffnen einen Ordner oder die Aktionen einer Datei, DEL oder Cursor links
-gehen eine Ebene zurück, F1/F7 blättern, F2 öffnet die Konfiguration (Turbo
-Control, CPU Speed, Badline Timing; ändern mit Cursor links/rechts oder +
-und -), F5 die Werkzeuge (Reset C64, Reboot C64, Diskette entfernen, System
-Information), F3 die Tastenhilfe, RUN/STOP verlässt das Menü. Der
-Dateibrowser zeigt den Ultimate-Ordner (`--uci-dir`, Standard
-`.mimic/ultimate` im Benutzerordner): Disk-Images bieten „Run Disk“ und
-„Mount Disk“, Programme „Run“ und „Load“, Modul-Images „Run Cart“. Das Menü
-ist nachgebaut, es ist nicht die Firmware des Boards: Tasten und etliche
-Texte sind die des Originals, Aufteilung und Auswahl der Einträge nicht.""")
-p("""**Ein Firmware-Update ausprobieren.** Legen Sie eine Update-Datei in
-den Ultimate-Ordner, drücken Sie RETURN darauf und wählen Sie „Run Update“.
-Wie auf dem Board gibt es den Eintrag nur für die eigenen Dateien des
-Produkts (`.u64` beim `u64`, `.ue2` beim `c64u`) und für `.cfw`-Dateien.
-Der Updater geht die Datei durch wie der Lader der Firmware, prüft bei
-einer `.cfw`-Datei Kennung, Produktfamilie („U64MK1“ beim `u64`, „U64MK2“
-beim `c64u`) und Produktnamen, zeigt die gefundene Version, fragt „About to
-update. Continue?“ (RETURN ja, RUN/STOP nein), löscht, programmiert und
-verifiziert dann einen nachgebildeten Flash und schaltet die Maschine fünf
-Sekunden nach „Done!“ aus und wieder ein. Titelzeile und System Information
-zeigen danach die installierte Version.""")
-bullets(
-    "Der Flash ist die Datei `Flash/.firmware` im Ultimate-Ordner. Löschen Sie sie, um "
-    "den Auslieferungszustand zurückzubekommen.",
-    "Ausschalten, während der Updater schreibt (POWER oder Emulator beenden), "
-    "hinterlässt einen beschädigten Flash: das Board zeigt dann bei jedem Start NO VALID "
-    "FIRMWARE, bis die Datei gelöscht ist. Ein echtes Board bräuchte sein "
-    "Wiederherstellungsverfahren.",
-    "Die Meldungen der Firmware selbst sind „Invalid Update Image“, „Wrong Product "
-    "Family“ und „Update for Wrong Product“. Eine abgeschnittene Datei oder eine ohne "
-    "brauchbare Startadresse lehnt der Emulator mit eigener Meldung ab; ein echtes Board "
-    "würde sie ungeprüft laden und starten.",
-    "Was das nicht prüft: Das Update wird nicht ausgeführt. Die Prüfsummen des "
-    "FPGA-Images und der Anwendung in der Datei werden nicht geprüft, und es wird kein "
-    "Core daraus gestartet.",
-)
 
 h2("Commodore VIC-20, C16/Plus/4, PET und C128")
 h3("VIC-20")
@@ -1363,7 +1301,6 @@ table(["Option", "Bedeutung"], [
 h2("Maschinen und Modelle")
 table(["Maschinen-ID", "Maschine", "Modelle (`--model`)", "Videoformate (`--videoformat`)"], [
     ["`c64`", "Commodore 64", "–", "`pal` (Standard), `ntsc`"],
-    ["`ultimate64`", "Ultimate 64, Commodore 64 Ultimate", "`u64` (Standard), `c64u`", "`pal` (Standard), `ntsc`"],
     ["`vic20`", "Commodore VIC-20", "–", "`pal` (Standard), `ntsc`"],
     ["`pet`", "Commodore PET", "`4032` (Standard), `2001`, `3032`, `8032`", "–"],
     ["`c16`, `plus4`", "Commodore 16, Plus/4", "–", "`pal` (Standard), `ntsc`"],
@@ -1644,9 +1581,6 @@ table(["Schlüssel", "Maschine", "Werte"], [
      "C128 `1571`/`1581`; beim C16/Plus/4 auch `1551` am TCBM-Bus), `virtual` "
      "(Dateizugriff auf KERNAL-Ebene, Standard ohne DOS-ROM), `none`"],
     ["`drive8_ppm`", "C64", "Abweichung des Laufwerksquarzes in ppm"],
-    ["`turbo`", "Ultimate 64", "`off` (Standard), `manual`, `registers`, `enablebit`: wer das CPU-Tempo bestimmt"],
-    ["`cpu_speed`", "Ultimate 64", "MHz: 1 bis 48 (`u64`) oder 1 bis 64 (`c64u`), ein Wert aus der Liste des Boards"],
-    ["`badlines`", "Ultimate 64", "`on` (Standard), `off`"],
     ["`fastload`", "C64", "`on`: das virtuelle Laufwerk bedient die seriellen KERNAL-Routinen "
      "ohne Buszeit"],
     ["`debugcart`", "C64", "`on`: das Debug-Modul der Testumgebung bei `$D7FF`"],

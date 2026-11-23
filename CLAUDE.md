@@ -73,7 +73,6 @@ crates/
   basic-dialects/  BASIC interpreters' memory decoded for the BASIC debugger (program, variables, stack, stop points): Commodore BASIC and Applesoft, Microsoft's Z80 BASICs (TRS-80 Level II, MSX), TRS-80 Level I, Sinclair BASIC (ZX81, Spectrum), Atari BASIC, Locomotive BASIC (CPC), BBC BASIC II/IV and V (Archimedes), HC-BASIC (KC85), TI BASIC; linked by the machines
   video-crt/       CRT/monitor emulation: composite/RGB signal path, WGSL shaders (wgpu), CPU fallback, monitor profiles
   machine-pet/  machine-vic20/  machine-c64/  machine-ted/  machine-c128/
-                   machine-c64 also registers `ultimate64` (Phase 42): Ultimate 64 and Commodore 64 Ultimate as models, turbo CPU (`turbo`), built-in UCI
   machine-amiga/  machine-atari8/  machine-atari2600/  machine-cpc/  machine-coleco/  machine-ti99/  machine-bbc/  machine-mega65/  machine-nes/  machine-snes/  machine-vectrex/
   machine-apple2/  Apple II, II+, IIe (enhanced and unenhanced) as models; Mockingboard in slot 4
   machine-mac/     Macintosh 128K, 512K, Plus, SE as models: RTC, keyboard, ADB, SCC 8530, SCSI 5380 with hard disks
@@ -175,7 +174,7 @@ cargo fmt --all
 python tools/check-deps.py                   # dependency direction (golden rules 1 and 10)
 ```
 
-**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35, 36, 37, 40, 41 and 42 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
+**Current phase: 8** (open); Phases 10, 14–17, 20, 22, 24, 25, 26, 31, 32, 33, 34, 35, 36, 37, 40 and 41 are in progress as well, Phases 1–7, 6b and 9 are done. See `docs/claude/roadmap.md`; when a phase moves, update its file in `docs/claude/phases/` and the summary paragraph in `roadmap.md`.
 
 ## Coding conventions
 

@@ -346,7 +346,7 @@ impl Profile {
         // C16/Plus/4 joystick comes plugged into port 1, as do most Atari
         // games' joysticks.
         let port = match machine {
-            "c64" | "ultimate64" | "c128" => Some(1),
+            "c64" | "c128" => Some(1),
             "vic20" | "c16" | "plus4" | "atari8" | "atari2600" | "cpc" | "coleco" | "nes"
             | "snes" | "vectrex" | "apple2" | "msx" | "sega8" | "megadrive" | "gameboy" => Some(0),
             // The Amiga's joystick port is game port 1 (port 0 is the mouse's),

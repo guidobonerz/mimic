@@ -818,7 +818,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
         "amiga" => AMIGA,
         "atari8" => ATARI800XL,
         "cpc" => CPC,
-        "c64" | "ultimate64" => C64,
+        "c64" => C64,
         "c128" => C128,
         "vic20" => VIC20,
         "pet" => PET,
@@ -831,7 +831,7 @@ pub fn specs(machine: &str) -> &'static [RomSpec] {
 /// The machine's own subfolders of the ROM directory, most specific first.
 fn folders(machine: &str) -> &'static [&'static str] {
     match machine {
-        "c64" | "ultimate64" => &["c64"],
+        "c64" => &["c64"],
         "vic20" => &["vic20"],
         "pet" => &["pet"],
         "c128" => &["c128"],

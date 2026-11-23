@@ -26,7 +26,6 @@ use drives_cbm::IecLines;
 
 use crate::keyboard::Keyboard;
 use crate::memory::Memory;
-use crate::turbo::Turbo;
 
 /// Mains frequency for the TOD input: 50 Hz in PAL countries, 60 Hz in
 /// NTSC countries.
@@ -76,9 +75,6 @@ pub struct Io {
     /// CPU repeats its read, so the value stays; not saved (it is set again
     /// by the next access).
     pub cpu_data: u8,
-    /// The Ultimate 64's turbo registers (`None` on a C64); saved by the
-    /// machine in its own chunk.
-    pub turbo: Option<Turbo>,
 }
 
 /// The VIC-II's view of memory: one 16 KB bank of RAM, with the character
@@ -141,7 +137,6 @@ impl Io {
             debugcart: false,
             debugcart_exit: None,
             cpu_data: 0xff,
-            turbo: None,
         }
     }
 
@@ -151,9 +146,6 @@ impl Io {
         self.cia1.reset();
         self.cia2.reset();
         self.sid = Sid::new(self.sid.model(), self.vic.timing().cpu_hz());
-        if let Some(t) = &mut self.turbo {
-            t.reset();
-        }
         if hard {
             self.vic = Vic2::new(self.vic.model());
         }
@@ -218,10 +210,7 @@ impl Io {
     pub fn read(&mut self, mem: &Memory, addr: u16) -> u8 {
         let reg = addr as u8 & 0x0f;
         match addr {
-            0xd000..=0xd3ff => match self.turbo.as_ref().and_then(|t| t.peek(addr)) {
-                Some(v) => v,
-                None => self.vic.read(addr as u8),
-            },
+            0xd000..=0xd3ff => self.vic.read(addr as u8),
             0xd400..=0xd7ff => self.sid.read(addr as u8),
             0xdc00..=0xdcff => {
                 let (a, b) = self.cia1_ext();
@@ -241,10 +230,7 @@ impl Io {
     pub fn peek(&self, mem: &Memory, addr: u16) -> u8 {
         let reg = addr as u8 & 0x0f;
         match addr {
-            0xd000..=0xd3ff => match self.turbo.as_ref().and_then(|t| t.peek(addr)) {
-                Some(v) => v,
-                None => self.vic.peek(addr as u8),
-            },
+            0xd000..=0xd3ff => self.vic.peek(addr as u8),
             0xd400..=0xd7ff => self.sid.peek(addr as u8),
             // Colour RAM: only 4 bits exist, the upper nibble is open bus.
             0xd800..=0xdbff => (self.open_bus() & 0xf0) | mem.color[usize::from(addr & 0x3ff)],
@@ -264,11 +250,7 @@ impl Io {
     pub fn write(&mut self, mem: &mut Memory, addr: u16, v: u8) {
         let reg = addr as u8 & 0x0f;
         match addr {
-            0xd000..=0xd3ff => {
-                if !self.turbo.as_mut().is_some_and(|t| t.write(addr, v)) {
-                    self.vic.write(addr as u8, v)
-                }
-            }
+            0xd000..=0xd3ff => self.vic.write(addr as u8, v),
             0xd400..=0xd7ff => {
                 if self.debugcart && addr == 0xd7ff {
                     self.debugcart_exit = Some(v);

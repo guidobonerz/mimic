@@ -6,7 +6,7 @@ The user guide — how to use the emulator plus the complete reference of every 
 
 ## Screenshots
 
-Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test, the BBC Micro's teletext test page and the Master's `*TIME` from the `bbc_boot` tests, the MEGA65's Open ROMs with `--crt lite`, the Ultimate 64's menu and updater through the debug server: `polydbg.py panel MENU tap`, `input key`, `picture`); the consoles without a start screen show a game. ROMs and software are not part of this repository.
+Power-on screens and desktops from the emulator itself (`mimic-headless --snapshot`, the TV machines with their pixel aspect; the Archimedes desktop from the `archimedes` test after `*DESKTOP`, the punched card from the `keypunch` test, the BBC Micro's teletext test page and the Master's `*TIME` from the `bbc_boot` tests, the MEGA65's Open ROMs with `--crt lite`); the consoles without a start screen show a game. ROMs and software are not part of this repository.
 
 ### Home computers
 
@@ -59,10 +59,6 @@ Power-on screens and desktops from the emulator itself (`mimic-headless --snapsh
 <tr>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/max80.png" alt="Lobo MAX-80: LDOS 5.1.3"><br><b>Lobo MAX-80</b><br>LDOS 5.1.3</td>
 <td align="center" valign="top" width="33%"><img src="docs/screenshots/kc85-basic.png" alt="Robotron KC85/4: HC-BASIC, the foreground and background colours"><br><b>Robotron KC85/4</b><br>HC-BASIC, the foreground and background colours</td>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/ultimate64-menu.png" alt="Ultimate 64: the menu's file browser over the frozen C64"><br><b>Ultimate 64</b><br>menu: file browser, "Run Update"</td>
-</tr>
-<tr>
-<td align="center" valign="top" width="33%"><img src="docs/screenshots/ultimate64-updater.png" alt="Ultimate 64: the firmware updater programming the emulated flash"><br><b>Ultimate 64</b><br>firmware updater (update 3.15a)</td>
 </tr>
 </table>
 
@@ -192,7 +188,6 @@ Where the project stands against test suites and checks, as of 2026-11-13. 🟢 
 | Machine | Crate | Models | Verification / state | Completeness |
 | --- | --- | --- | --- | --- |
 | Commodore 64 | `machine-c64` | PAL, NTSC | Lorenz 264/264; debugged with VS64 through the VICE monitor | 95 % |
-| Ultimate 64, Commodore 64 Ultimate | `machine-c64` (`ultimate64`) | `u64`, `c64u`; PAL, NTSC | the C64 with the board's turbo CPU (1–48 / 1–64 MHz, turbo registers) and built-in command interface; a rebuilt menu (file browser, tools, turbo settings) and a firmware updater that reads real update files (`.u64`, `.ue2`, `.cfw`: blocks, product family and name, version) and writes an emulated flash; own unit tests (17), BASIC timing loop and update runs with the real ROMs and the 3.15a update files; no second drive or multiple SIDs yet; the real firmware does not run, the images inside an update are not checked, menu layout and register details partly unverified | 50 % |
 | Commodore VIC-20 | `machine-vic20` | PAL, NTSC, RAM expansions | boots BASIC, tape, cartridges | 85 % |
 | Commodore PET | `machine-pet` | 2001, 3032, 4032, 8032 | boots BASIC; IEEE drive virtual only (no true 2031) | 85 % |
 | Commodore C16 / Plus/4 | `machine-ted` | PAL, NTSC | boots BASIC, tape, cartridges | 85 % |
